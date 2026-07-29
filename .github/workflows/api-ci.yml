@@ -41,6 +41,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
   packages: read
 
@@ -49,8 +50,64 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  ci-provenance:
+    name: Resolve CI provenance
+    runs-on: ubuntu-latest
+    outputs:
+      reuse_merge_group: ${{ steps.merge-group.outputs.reuse }}
+    steps:
+      - name: Reuse successful merge-queue verification for the exact main SHA
+        id: merge-group
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            core.setOutput("reuse", "false");
+
+            if (context.eventName !== "push" || context.ref !== "refs/heads/main") {
+              core.notice("Full CI required: this is not a push to main.");
+              return;
+            }
+
+            let data;
+            try {
+              ({ data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: "api-ci.yml",
+                event: "merge_group",
+                head_sha: context.sha,
+                status: "success",
+                per_page: 20,
+              }));
+            } catch (error) {
+              core.warning(`Could not verify merge-group provenance; running full CI: ${error.message}`);
+              return;
+            }
+
+            const source = data.workflow_runs.find((run) =>
+              run.event === "merge_group" &&
+              run.conclusion === "success" &&
+              run.head_sha === context.sha &&
+              run.path === ".github/workflows/api-ci.yml" &&
+              run.head_branch?.startsWith("gh-readonly-queue/main/")
+            );
+
+            if (!source) {
+              core.notice(`Full CI required: no successful main merge-group run proves ${context.sha}.`);
+              return;
+            }
+
+            core.setOutput("reuse", "true");
+            core.notice(`Reusing exact-SHA merge-group verification from ${source.html_url}.`);
+            await core.summary
+              .addHeading("API CI provenance")
+              .addRaw(`Reused successful main merge-group run [${source.id}](${source.html_url}) for exact SHA \`${context.sha}\`.`)
+              .write();
+
   ci-inputs:
     name: Resolve CI inputs
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     outputs:
       core_sha: ${{ steps.core-ref.outputs.sha }}
@@ -99,6 +156,8 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   community-d1-shard:
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -126,6 +185,8 @@ jobs:
         run: bun run test
 
   story-controlled-inclusion-harness:
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -159,7 +220,8 @@ jobs:
   bookings-repository:
     # Real-Postgres tests for the global bookings repositories: provisions
     # PostgreSQL 17 and applies the CANONICAL core b0001 before exercising the repository.
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -293,7 +355,8 @@ jobs:
 
   api-top-level-tests:
     name: top-level-tests (${{ matrix.shard }}/4)
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -358,7 +421,8 @@ jobs:
 
   api-core:
     name: api-core
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -613,7 +677,8 @@ jobs:
 
   api-route-tests:
     name: route-tests (${{ matrix.shard }}/8)
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -692,6 +757,7 @@ jobs:
       - api-route-tests
       - api-top-level-tests
       - bookings-repository
+      - ci-provenance
       - story-controlled-inclusion-harness
     runs-on: ubuntu-latest
     steps:
@@ -701,8 +767,18 @@ jobs:
           API_ROUTE_TESTS_RESULT: ${{ needs.api-route-tests.result }}
           API_TOP_LEVEL_TESTS_RESULT: ${{ needs.api-top-level-tests.result }}
           BOOKINGS_REPOSITORY_RESULT: ${{ needs.bookings-repository.result }}
+          REUSE_MERGE_GROUP: ${{ needs.ci-provenance.outputs.reuse_merge_group }}
           STORY_CONTROLLED_INCLUSION_HARNESS_RESULT: ${{ needs.story-controlled-inclusion-harness.result }}
         run: |
+          if [[ "$REUSE_MERGE_GROUP" == "true" ]]; then
+            test "$API_CORE_RESULT" = "skipped"
+            test "$API_ROUTE_TESTS_RESULT" = "skipped"
+            test "$API_TOP_LEVEL_TESTS_RESULT" = "skipped"
+            test "$BOOKINGS_REPOSITORY_RESULT" = "skipped"
+            test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "skipped"
+            echo "Exact-SHA merge-group verification reused; duplicate main-push jobs stayed skipped."
+            exit 0
+          fi
           test "$API_CORE_RESULT" = "success"
           test "$API_ROUTE_TESTS_RESULT" = "success"
           test "$API_TOP_LEVEL_TESTS_RESULT" = "success"
@@ -710,6 +786,8 @@ jobs:
           test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "success"
 
   cli:
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
 
     steps:
