@@ -122,21 +122,37 @@ describe("operational reads are never cached", () => {
     expect(response.headers.get("cache-control") ?? "").toContain("no-store")
   })
 
-  test("the whole /admin namespace is covered, not just ops", async () => {
-    // Audit finding: /admin/debug exposes authenticated GETs with no
-    // cache-control — the same shape that leaked from /admin/ops. Covering the
-    // namespace means a future admin route is safe by default.
+  // Mount order is load-bearing: Hono matches in registration order, so a route
+  // mounted BEFORE the middleware bypasses it entirely. The first version of
+  // this fix covered /admin/ops only because it happens to be mounted last, and
+  // its tests passed while /admin/debug was completely uncovered.
+  test.each([
+    ["mounted BEFORE the middleware", "http://pirate.test/admin/bot-users"],
+    ["mounted BEFORE the middleware", "http://pirate.test/admin/debug/post-pipeline"],
+    ["mounted AFTER the middleware", "http://pirate.test/admin/ops/wallets"],
+    ["mounted AFTER the middleware", "http://pirate.test/admin/ops/telegram/uncertain-deliveries/count"],
+  ])("covers a route %s: %s", async (_when, url) => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup
 
-    for (const url of [
-      "http://pirate.test/admin/ops/wallets",
+    const response = await Promise.resolve(app.request(url, { headers: { "x-admin-token": ADMIN_TOKEN } }, ctx.env))
+    expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+  })
+
+  // A thrown/returned error builds a fresh Response, which discarded the
+  // middleware headers: /admin/debug/post-pipeline returned 400 with none.
+  test("covers an ERROR response, not just success", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    // Missing the required post_id query parameter.
+    const response = await Promise.resolve(app.request(
       "http://pirate.test/admin/debug/post-pipeline",
-      "http://pirate.test/admin/bot-users",
-    ]) {
-      const response = await Promise.resolve(app.request(url, { headers: { "x-admin-token": ADMIN_TOKEN } }, ctx.env))
-      expect(response.headers.get("cache-control") ?? "").toContain("no-store")
-    }
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    ))
+    expect(response.status).toBeGreaterThanOrEqual(400)
+    expect(response.headers.get("cache-control") ?? "").toContain("no-store")
   })
 
   test("the ops namespace specifically stays covered", async () => {
