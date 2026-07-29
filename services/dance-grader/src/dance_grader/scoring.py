@@ -6,7 +6,7 @@ from .alignment import Alignment, find_global_alignment
 from .calibration import CalibrationArtifact, provisional_calibration
 from .features import FeatureSequence, build_features
 from .fingerprint import canonical_fingerprint_material
-from .integrity import is_exact_reference_feature_replay
+from .integrity import is_exact_reference_feature_replay, is_near_reference_feature_replay
 from .models import (
     AlignmentMetrics,
     ComponentScores,
@@ -85,6 +85,15 @@ def _empty_alignment() -> AlignmentMetrics:
     return AlignmentMetrics(0, 0, 0, 10_000, 0)
 
 
+def _motion_energy(features: FeatureSequence) -> float:
+    energy = np.linalg.norm(np.nan_to_num(features.velocity, nan=0.0), axis=2)
+    confidence = features.velocity_confidence * features.usable[:, None]
+    denominator = float(np.sum(confidence))
+    if denominator <= 1e-8:
+        return 0.0
+    return float(np.sum(energy * confidence) / denominator)
+
+
 def grade_dance(
     reference: PoseSequence,
     attempt: PoseSequence,
@@ -117,7 +126,10 @@ def grade_dance(
             canonical_fingerprint_material_hex=None,
             versions=versions,
         )
-    if enforce_reference_replay and is_exact_reference_feature_replay(reference, attempt, config):
+    if enforce_reference_replay and (
+        is_exact_reference_feature_replay(reference, attempt, config)
+        or is_near_reference_feature_replay(reference, attempt, config)
+    ):
         return GradeResult(
             outcome="rejected",
             reason="reference_replay",
@@ -132,7 +144,27 @@ def grade_dance(
         )
 
     reference_features = build_features(reference, config)
-    variants = [("canonical", build_features(attempt, config))]
+    canonical_attempt_features = build_features(attempt, config)
+    reference_motion = _motion_energy(reference_features)
+    attempt_motion = _motion_energy(canonical_attempt_features)
+    if (
+        reference_motion > 1e-8
+        and attempt_motion / reference_motion < config.min_motion_energy_ratio
+    ):
+        return GradeResult(
+            outcome="rejected",
+            reason="insufficient_motion",
+            score_bps=None,
+            calibration_admitted=calibration.admitted,
+            selected_mirror="canonical",
+            quality=quality,
+            alignment=None,
+            components=None,
+            canonical_fingerprint_material_hex=None,
+            versions=versions,
+        )
+
+    variants = [("canonical", canonical_attempt_features)]
     if mirror_policy == MirrorPolicy.ALLOWED:
         variants.append(("mirrored", build_features(attempt, config, mirrored=True)))
 

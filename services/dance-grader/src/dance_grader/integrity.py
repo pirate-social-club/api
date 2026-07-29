@@ -4,7 +4,7 @@ import hashlib
 
 import numpy as np
 
-from .features import SCORED_LANDMARKS, _normalized_geometry, mirror_landmarks
+from .features import SCORED_LANDMARKS, _normalized_geometry, build_features, mirror_landmarks
 from .models import PoseSequence, ScorerConfig
 
 
@@ -50,3 +50,34 @@ def is_exact_reference_feature_replay(
         _unordered_pose_digest(attempt, config),
         _unordered_pose_digest(attempt, config, mirrored=True),
     }
+
+
+def is_near_reference_feature_replay(
+    reference: PoseSequence,
+    attempt: PoseSequence,
+    config: ScorerConfig,
+) -> bool:
+    """Conservatively reject near-identical canonical or mirrored feature sequences."""
+    reference_features = build_features(reference, config)
+    if abs(len(reference_features.times) - round(attempt.duration_sec * config.target_fps)) > 1:
+        return False
+
+    for mirrored in (False, True):
+        attempt_features = build_features(attempt, config, mirrored=mirrored)
+        if reference_features.positions.shape != attempt_features.positions.shape:
+            continue
+        difference = reference_features.positions - attempt_features.positions
+        confidence = np.minimum(
+            reference_features.position_confidence,
+            attempt_features.position_confidence,
+        )
+        valid = np.isfinite(difference).all(axis=2) & (confidence > 0)
+        if not np.any(valid):
+            continue
+        squared_distance = np.sum(np.square(difference), axis=2)
+        rmse = float(
+            np.sqrt(np.sum(squared_distance[valid] * confidence[valid]) / np.sum(confidence[valid]))
+        )
+        if rmse <= config.max_reference_replay_position_rmse:
+            return True
+    return False

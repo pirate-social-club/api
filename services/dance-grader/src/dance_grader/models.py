@@ -88,6 +88,11 @@ class ScorerConfig:
     max_interpolation_gap_sec: float = 0.20
     max_global_offset_sec: float = 1.50
     min_alignment_overlap: float = 0.80
+    dtw_band_sec: float = 0.80
+    dtw_warp_penalty: float = 0.40
+    dtw_unmatched_penalty: float = 0.06
+    max_reference_replay_position_rmse: float = 0.03
+    min_motion_energy_ratio: float = 0.15
     angle_weight: float = 0.48
     position_weight: float = 0.22
     velocity_weight: float = 0.20

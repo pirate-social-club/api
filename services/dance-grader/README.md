@@ -5,6 +5,11 @@ qualification spec. It consumes pose JSON, not video. MediaPipe extraction and t
 entry point are intentionally deferred until the scorer's adversarial tests and calibration gates
 pass.
 
+The repository corpus is generated deterministically in `tests/conftest.py`; it contains no
+personal video or captured landmarks. It covers honest noise, global delay, moderate tempo changes,
+stillness, truncation, missing detections, zero visibility, mirroring, reference-frame reordering,
+and near-reference jitter.
+
 The default calibration is explicitly provisional. It produces stable basis-point-shaped output
 for corpus analysis, but `calibration_admitted` is false and must never authorize a reward.
 
@@ -21,4 +26,3 @@ PYTHONPATH=src python scripts/evaluate_corpus.py \
   --reference /path/to/reference_pose.json \
   --attempt honest=/path/to/attempt_pose.json
 ```
-
