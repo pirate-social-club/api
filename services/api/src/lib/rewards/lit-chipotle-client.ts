@@ -132,8 +132,10 @@ function networkFailureCategory(error: unknown): LitTransportCategory {
   return categories.find(([needle]) => message.includes(needle))?.[1] ?? "unclassified"
 }
 
-function statusError(status: number): LitChipotleError {
-  const token: LitErrorToken = status === 401 || status === 403
+function statusError(status: number, observedToken?: LitErrorToken): LitChipotleError {
+  const token: LitErrorToken = observedToken && observedToken !== "other"
+    ? observedToken
+    : status === 401 || status === 403
     ? "unauthorized_action"
     : status === 404
       ? "action_fetch_failed"
@@ -193,6 +195,18 @@ function litErrorTokenFromEnvelope(input: LitActionResponse): LitErrorToken {
   return "other"
 }
 
+function litErrorTokenFromPlainText(input: string): LitErrorToken {
+  // Chipotle currently returns action-thrown exceptions as a plain-text HTTP
+  // 500 stack rather than its JSON envelope. Match only the exact, reviewed
+  // policy messages frozen into the registered action; never return, log, or
+  // persist the provider body.
+  const bounded = input.slice(0, 4_000).toLowerCase()
+  return bounded.includes("deadline is outside pinned policy")
+    || bounded.includes("policyversion does not match pinned policy")
+    ? "invalid_params"
+    : "other"
+}
+
 async function defaultSleep(milliseconds: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
@@ -248,11 +262,14 @@ export class LitChipotleClient {
         }
         if (!response.ok && response.status < 500) throw statusError(response.status)
 
+        const responseBody = await response.text()
         let decoded: unknown
         try {
-          decoded = await response.json()
+          decoded = JSON.parse(responseBody)
         } catch {
-          if (!response.ok) throw statusError(response.status)
+          if (!response.ok) {
+            throw statusError(response.status, litErrorTokenFromPlainText(responseBody))
+          }
           throw new LitChipotleError("invalid_response", "Lit action response was not JSON", false)
         }
         if (!responseShape(decoded)) {
