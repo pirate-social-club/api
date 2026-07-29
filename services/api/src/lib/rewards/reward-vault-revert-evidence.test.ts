@@ -155,6 +155,10 @@ describe("gatherRewardVaultRevertEvidence", () => {
     )
     expect(result.disposition).toBe("reconciliation_required")
     expect(result.errorName).toBe(name)
+    expect(result.evidence).toMatchObject({
+      method: "debug_traceTransaction",
+      selector: id(signature).slice(0, 10),
+    })
   })
 
   it.each([null, "0x", "0xdeadbeef"])(

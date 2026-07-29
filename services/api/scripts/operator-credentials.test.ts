@@ -6,6 +6,7 @@ import {
   credentialEnvNameForScopes,
   normalizeOperatorDatabaseUrl,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_REHEARSAL_EXECUTE_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
   STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
@@ -27,6 +28,12 @@ describe("operator credential issuance config", () => {
     expect(ALLOWED_SCOPES.has(REWARD_SETTLEMENT_RESOLVE_SCOPE)).toBe(true)
     expect(credentialEnvNameForScopes([REWARD_SETTLEMENT_RESOLVE_SCOPE]))
       .toBe("PIRATE_REWARD_SETTLEMENT_OPERATOR_CREDENTIAL")
+  })
+
+  test("accepts rehearsal execution with a dedicated secret name", () => {
+    expect(ALLOWED_SCOPES.has(REWARD_REHEARSAL_EXECUTE_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([REWARD_REHEARSAL_EXECUTE_SCOPE]))
+      .toBe("PIRATE_REWARD_REHEARSAL_OPERATOR_CREDENTIAL")
   })
 
   test("uses a dedicated Story settlement repair credential", () => {

@@ -113,4 +113,55 @@ describe("real rewards Lit vault signer wiring", () => {
     expect(first.operationId).toBe(operationIds[0])
     expect(second.operationId).toBe(operationIds[0])
   })
+
+  test("derives deadline and policy mutations only inside staging", async () => {
+    const observed: Array<{ deadline: string; policyVersion: string }> = []
+    globalThis.fetch = (async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as {
+        js_params: { deadline: string; policyVersion: string }
+      }
+      observed.push({
+        deadline: body.js_params.deadline,
+        policyVersion: body.js_params.policyVersion,
+      })
+      return Response.json({
+        response: "request does not match pinned policy",
+        logs: "",
+        has_error: true,
+      })
+    }) as typeof fetch
+    Date.now = () => 2_000_000_000_000
+    const base = {
+      operatorKind: "rewards" as const,
+      effectKind: "reward_cashout" as const,
+      effectId: "cashout_effect_02",
+      to: RECIPIENT,
+      amountAtomic: "500000",
+      nonce: 5,
+      gas: {
+        maxFeePerGas: 2_000_000_000n,
+        maxPriorityFeePerGas: 1_000_000_000n,
+        gasLimit: 100_000n,
+      },
+    }
+    const staging = { ...env(), ENVIRONMENT: "staging" } as Env
+    await expect(realChain.signVerifiedTransfer(staging, {
+      ...base,
+      rehearsalScenario: "deadline_expired",
+    })).rejects.toThrow("preparation failed")
+    await expect(realChain.signVerifiedTransfer(staging, {
+      ...base,
+      rehearsalScenario: "stale_policy",
+    })).rejects.toThrow("preparation failed")
+
+    expect(observed).toEqual([
+      { deadline: "1999999999", policyVersion: "7" },
+      { deadline: "2000000300", policyVersion: "8" },
+    ])
+    await expect(realChain.signVerifiedTransfer({ ...env(), ENVIRONMENT: "production" } as Env, {
+      ...base,
+      rehearsalScenario: "over_limit",
+    })).rejects.toThrow("preparation failed")
+    expect(observed).toHaveLength(2)
+  })
 })

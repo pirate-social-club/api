@@ -116,7 +116,7 @@ export async function gatherRewardVaultRevertEvidence(input: {
   }
 
   const classification = classifyRewardVaultRevert(trace.output)
-  if (classification.disposition !== "capacity_deferred" || !classification.selector) {
+  if (!classification.selector) {
     return {
       disposition: "reconciliation_required",
       reason: `traced root revert was not the capacity condition: ${classification.reason}`,
@@ -125,16 +125,26 @@ export async function gatherRewardVaultRevertEvidence(input: {
     }
   }
 
+  const exactEvidence = {
+    method: "debug_traceTransaction" as const,
+    transactionHash: input.receiptTransactionHash.toLowerCase(),
+    blockHash: input.receiptBlockHash.toLowerCase(),
+    selector: classification.selector,
+    classifiedAt: (input.now ?? (() => new Date()))().toISOString(),
+  }
+  if (classification.disposition !== "capacity_deferred") {
+    return {
+      disposition: "reconciliation_required",
+      reason: classification.reason,
+      errorName: classification.errorName,
+      evidence: exactEvidence,
+    }
+  }
+
   return {
     disposition: "capacity_deferred",
     reason: "exact transaction trace reverted at the vault root with EpochLimitExceeded",
     errorName: classification.errorName,
-    evidence: {
-      method: "debug_traceTransaction",
-      transactionHash: input.receiptTransactionHash.toLowerCase(),
-      blockHash: input.receiptBlockHash.toLowerCase(),
-      selector: classification.selector,
-      classifiedAt: (input.now ?? (() => new Date()))().toISOString(),
-    },
+    evidence: exactEvidence,
   }
 }

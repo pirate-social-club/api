@@ -4,6 +4,7 @@ import {
   authenticateOperatorCredential,
   requireOperatorScope,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_REHEARSAL_EXECUTE_SCOPE,
   REWARD_SETTLEMENT_READ_SCOPE,
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
 } from "../lib/operator-credential-auth"
@@ -36,6 +37,10 @@ import { resolveRewardSettlementManually } from "../lib/rewards/reward-settlemen
 import { getRewardPoolRefundPolicyReadiness } from "../lib/rewards/reward-pool-refund-readiness"
 import { getRewardBackendFlipReadiness } from "../lib/rewards/reward-backend-flip-readiness"
 import { getRewardSolvencyGateStatus } from "../lib/rewards/reward-solvency-gate"
+import {
+  enqueueRewardRehearsalScenario,
+  isRewardRehearsalScenario,
+} from "../lib/rewards/reward-rehearsal"
 
 const rewards = new Hono<AuthenticatedEnv>()
 
@@ -68,6 +73,9 @@ type RewardReadinessRouteServices = Pick<
   RewardOperatorRouteServices,
   "authenticate" | "getBackendFlipReadiness" | "getClient" | "getRefundPolicyReadiness" | "getSolvencyReadiness"
 >
+type RewardRehearsalRouteServices = Pick<RewardOperatorRouteServices, "authenticate"> & {
+  enqueue: typeof enqueueRewardRehearsalScenario
+}
 
 rewards.use("/me/rewards", authenticate)
 rewards.use("/me/rewards/*", authenticate)
@@ -416,6 +424,41 @@ export function createRewardSolvencyReadinessHandler(
   }
 }
 
+export function createRewardRehearsalHandler(
+  services: RewardRehearsalRouteServices = {
+    authenticate: operatorRouteDefaults.authenticate,
+    enqueue: enqueueRewardRehearsalScenario,
+  },
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_REHEARSAL_EXECUTE_SCOPE)
+    const body = await c.req.json<{ scenario?: unknown }>().catch(() => null)
+    if (!body || Object.keys(body).length !== 1 || !isRewardRehearsalScenario(body.scenario)) {
+      throw badRequestError("Rewards rehearsal requires exactly one supported scenario enum")
+    }
+    const result = await services.enqueue({ env: c.env, scenario: body.scenario })
+    console.warn(JSON.stringify({
+      message: "rewards rehearsal scenario invoked",
+      scenario: body.scenario,
+      operator_actor_id: operator.operatorActorId,
+      coordinator_ref: result.idempotencyKey,
+      state: result.state,
+    }))
+    return c.json({
+      scenario: body.scenario,
+      coordinator_ref: result.idempotencyKey,
+      state: result.state,
+    }, 202, {
+      "cache-control": "private, no-store",
+    })
+  }
+}
+
 rewards.post(
   "/operator/reward_campaigns/:campaignId/incidents/:incidentId/recover",
   createRewardCampaignRecoveryHandler(),
@@ -427,5 +470,6 @@ rewards.post(
 rewards.get("/operator/reward_pools/refund_policy_readiness", createRewardRefundPolicyReadinessHandler())
 rewards.get("/operator/reward_settlements/backend_flip_readiness", createRewardBackendFlipReadinessHandler())
 rewards.get("/operator/reward_settlements/solvency_readiness", createRewardSolvencyReadinessHandler())
+rewards.post("/operator/reward_settlements/rehearsal", createRewardRehearsalHandler())
 
 export default rewards
