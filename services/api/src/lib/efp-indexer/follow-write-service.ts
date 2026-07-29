@@ -18,7 +18,13 @@ import {
   type FollowWriteTransaction,
 } from "./follow-contracts"
 import type { Env } from "../../env"
-import { badRequestError, conflictError, eligibilityFailed, rateLimited } from "../errors"
+import {
+  badRequestError,
+  conflictError,
+  eligibilityFailed,
+  rateLimited,
+  retryableConflictError,
+} from "../errors"
 import type { Client, QueryResultRow } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
 import { withTransaction } from "../transactions"
@@ -114,7 +120,15 @@ export async function resolvePrimaryListStorage(
     return user === address
       ? { kind: "found", chainId: storage.chainId, listId, slot: storage.slot }
       : { kind: "unresolved" }
-  } catch {
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error))
+      .replaceAll(/https?:\/\/[^\s)]+/giu, "[redacted-url]")
+      .slice(0, 2_000)
+    console.warn("[efp-follow-write] Primary-list resolution failed", {
+      address,
+      error_name: error instanceof Error ? error.name : typeof error,
+      message,
+    })
     return { kind: "unresolved" }
   }
 }
@@ -277,7 +291,7 @@ export async function prepareProfileFollowWrite(input: {
 
   const resolution = await (input.resolvePrimaryList ?? resolvePrimaryListStorage)(input.env, actorWallet)
   if (resolution.kind === "unresolved") {
-    throw conflictError("Unable to load your follow list right now")
+    throw retryableConflictError("Unable to load your follow list right now")
   }
   const transactions = buildFollowTransactions({
     existingStorage: resolution.kind === "found"
