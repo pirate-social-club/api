@@ -30,3 +30,21 @@ PYTHONPATH=src python scripts/evaluate_corpus.py \
   --reference /path/to/reference_pose.json \
   --attempt honest=/path/to/attempt_pose.json
 ```
+
+## Modal app
+
+`modal_app.py` defines authenticated asynchronous dispatch endpoints backed by
+`extract_reference_features` and `grade_attempt` functions. The functions use presigned
+single-object GET/PUT URLs, verify every content and version binding, sign callbacks, and remove
+temporary media before callback delivery.
+
+Deploy staging and production into separate Modal Environments. Each environment requires a
+`dance-grader-service` secret containing:
+
+- `DANCE_GRADER_DISPATCH_HMAC_KEY`
+- `DANCE_GRADER_DISPATCH_KEY_VERSION`
+- `DANCE_GRADER_CALLBACK_HMAC_KEY`
+- `DANCE_GRADER_CALLBACK_KEY_VERSION`
+
+The app must not be deployed beyond consented staff until the Modal subprocessor/DPA, region,
+no-media-retention, and log-content privacy gates in the approved spec pass.

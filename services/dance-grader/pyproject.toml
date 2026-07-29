@@ -20,6 +20,11 @@ runtime = [
   "av==18.0.0",
   "mediapipe==0.10.35",
 ]
+service = [
+  "fastapi==0.139.2",
+  "httpx==0.28.1",
+  "modal==1.5.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
