@@ -7,8 +7,8 @@ import {
 } from "./reward-rehearsal"
 
 describe("reward rehearsal fixtures", () => {
-  test("accepts only the four scenario enums", () => {
-    expect(["replay", "over_limit", "deadline_expired", "stale_policy"]
+  test("accepts only the five scenario enums", () => {
+    expect(["replay", "over_limit", "deadline_expired", "stale_policy", "refund_while_payouts_paused"]
       .every(isRewardRehearsalScenario)).toBe(true)
     expect(isRewardRehearsalScenario("amount=1")).toBe(false)
   })
@@ -19,6 +19,7 @@ describe("reward rehearsal fixtures", () => {
     const deadline = rewardRehearsalRequest(env, "deadline_expired")
     const overLimit = rewardRehearsalRequest(env, "over_limit")
     const stale = rewardRehearsalRequest(env, "stale_policy")
+    const refund = rewardRehearsalRequest(env, "refund_while_payouts_paused")
 
     expect(replay.payoutEffectId).toBe("rpe_4d49a8ee731d4fa2b6eab990a013c757")
     expect(overLimit.amountCents).toBe(60)
@@ -30,6 +31,15 @@ describe("reward rehearsal fixtures", () => {
       && fixture.userId === replay.userId
       && fixture.effectKind === "reward_cashout"
     )).toBe(true)
+    expect(refund).toEqual({
+      operatorKind: "rewards",
+      fundingEffectId: "rcf_13000000000000000000000020260729",
+      idempotencyKey: "rcf_13000000000000000000000020260729",
+      effectKind: "reward_funding_refund",
+      amountAtomic: "500000",
+      recipientAddress: replay.recipientAddress,
+      rehearsalScenario: "refund_while_payouts_paused",
+    })
   })
 
   test("fails closed outside staging", () => {
