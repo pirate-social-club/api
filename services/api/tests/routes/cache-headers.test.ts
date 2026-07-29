@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import { Hono } from "hono"
 
+import { app } from "../../src/index"
 import {
   isPublicReadCacheRequest,
   PUBLIC_READ_CACHE_CONTROL,
   PUBLIC_READ_CDN_CACHE_CONTROL,
   setPublicReadCacheHeaders,
 } from "../../src/routes/cache-headers"
+import { buildTestEnv } from "../helpers"
 
 async function publicReadCacheHeaderResponse(
   path: string,
@@ -75,5 +77,63 @@ describe("public read cache headers", () => {
 
     expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
     expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("public, max-age=15, stale-while-revalidate=15")
+  })
+})
+
+describe("credential-bearing response cache headers", () => {
+  test.each([
+    "authorization",
+    "x-admin-token",
+    "x-agent-connection-token",
+    "x-very-callback-secret",
+    "x-karaoke-finalize-secret",
+    "x-telegram-bot-secret",
+    "x-telegram-bot-api-secret-token",
+  ])("makes successful requests with %s private and non-cacheable", async (header) => {
+    const response = await app.request("https://api.pirate.test/health", {
+      headers: { [header]: "test-credential" },
+    }, buildTestEnv())
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cache-control")).toContain("private")
+    expect(response.headers.get("cache-control")).toContain("no-store")
+    expect(response.headers.get("pragma")).toBe("no-cache")
+  })
+
+  test("overrides explicit public cache headers on a credential-bearing request", async () => {
+    const response = await app.request(
+      "https://api.pirate.test/.well-known/agent-tools/guest-comment.mjs",
+      { headers: { authorization: "Bearer test-credential" } },
+      buildTestEnv(),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cache-control")).toContain("private")
+    expect(response.headers.get("cache-control")).toContain("no-store")
+    expect(response.headers.get("cloudflare-cdn-cache-control")).toBeNull()
+    expect(response.headers.get("cdn-cache-control")).toBeNull()
+    expect(response.headers.get("cache-tag")).toBeNull()
+  })
+
+  test("makes thrown authentication errors private and non-cacheable", async () => {
+    const response = await app.request("https://api.pirate.test/posts/pst_missing", {
+      headers: { authorization: "Bearer invalid-token" },
+    }, buildTestEnv())
+
+    expect(response.status).toBe(401)
+    expect(response.headers.get("cache-control")).toContain("private")
+    expect(response.headers.get("cache-control")).toContain("no-store")
+    expect(response.headers.get("pragma")).toBe("no-cache")
+  })
+
+  test("does not alter anonymous public cache policy", async () => {
+    const response = await app.request(
+      "https://api.pirate.test/.well-known/agent-tools/guest-comment.mjs",
+      {},
+      buildTestEnv(),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cache-control")).toBe("public, max-age=60, s-maxage=60")
   })
 })
