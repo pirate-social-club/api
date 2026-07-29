@@ -246,15 +246,17 @@ export class LitChipotleClient {
             "other",
           )
         }
-        if (!response.ok) throw statusError(response.status)
+        if (!response.ok && response.status < 500) throw statusError(response.status)
 
         let decoded: unknown
         try {
           decoded = await response.json()
         } catch {
+          if (!response.ok) throw statusError(response.status)
           throw new LitChipotleError("invalid_response", "Lit action response was not JSON", false)
         }
         if (!responseShape(decoded)) {
+          if (!response.ok) throw statusError(response.status)
           throw new LitChipotleError("invalid_response", "Lit action response shape was invalid", false)
         }
         if (decoded.has_error) {
@@ -269,6 +271,7 @@ export class LitChipotleClient {
             litErrorTokenFromEnvelope(decoded),
           )
         }
+        if (!response.ok) throw statusError(response.status)
         return decoded.response
       } catch (error) {
         const classified = this.classify(error)

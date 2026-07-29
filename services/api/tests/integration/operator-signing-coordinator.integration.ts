@@ -282,6 +282,31 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     })
   })
 
+  it("reuses an unsent nonce after preparation fails before signing", async () => {
+    const stub = freshStub()
+    const first = rewardsReq({ payoutEffectId: "rpe_failed", idempotencyKey: "reward:failed" })
+    const second = rewardsReq({ payoutEffectId: "rpe_next", idempotencyKey: "reward:next" })
+    await injectChain(stub, {
+      pending: 7,
+      latest: 7,
+      liveness: {},
+      signFailure: {
+        stage: "lit_response",
+        cause: { status: 500, transportCategory: "unclassified", litErrorToken: "invalid_params" },
+        latencyMs: 100,
+      },
+    })
+    await stub.settle(first)
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(first)).toMatchObject({ state: "failed_preparation", nonce: null })
+
+    await injectChain(stub, { pending: 7, latest: 7, liveness: {} })
+    await stub.settle(second)
+    await runDurableObjectAlarm(stub)
+
+    expect(await stub.lookup(second)).toMatchObject({ state: "broadcast", nonce: 7 })
+  })
+
   it("persists and returns bounded settlement revert evidence", async () => {
     const stub = freshStub()
     const failure = {
