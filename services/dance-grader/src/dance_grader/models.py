@@ -91,7 +91,8 @@ class ScorerConfig:
     dtw_band_sec: float = 0.80
     dtw_warp_penalty: float = 0.40
     dtw_unmatched_penalty: float = 0.06
-    max_reference_replay_position_rmse: float = 0.03
+    # Gate-0 corpus: discrete tempo replays <= 0.06; honest performances >= 0.13.
+    max_reference_replay_position_rmse: float = 0.10
     min_motion_energy_ratio: float = 0.15
     angle_weight: float = 0.48
     position_weight: float = 0.22

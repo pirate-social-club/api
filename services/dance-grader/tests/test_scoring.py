@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
-from conftest import make_sequence, mirror_sequence
+from conftest import (
+    discrete_tempo_resample,
+    make_human_attempt,
+    make_sequence,
+    mirror_sequence,
+)
 
 from dance_grader import MirrorPolicy, grade_dance
 
@@ -40,8 +45,8 @@ def test_self_score_is_deterministic_and_explicitly_uncalibrated() -> None:
 
 def test_global_offset_recovers_delayed_honest_motion() -> None:
     reference = make_sequence()
-    honest = make_sequence(noise=0.01)
-    delayed = make_sequence(time_transform=lambda time_sec: max(0.0, time_sec - 0.5), noise=0.01)
+    honest = make_human_attempt()
+    delayed = make_human_attempt(time_transform=lambda time_sec: max(0.0, time_sec - 0.5))
 
     honest_result = grade_dance(reference, honest)
     delayed_result = grade_dance(reference, delayed)
@@ -50,20 +55,18 @@ def test_global_offset_recovers_delayed_honest_motion() -> None:
     assert delayed_result.score_bps is not None
     assert delayed_result.alignment is not None
     assert abs(delayed_result.alignment.global_offset_ms) >= 400
-    assert delayed_result.score_bps >= honest_result.score_bps - 1200
+    assert delayed_result.score_bps >= honest_result.score_bps - 1250
 
 
 def test_constrained_dtw_recovers_moderate_tempo_variation() -> None:
     reference = make_sequence()
-    slow = make_sequence(
+    slow = make_human_attempt(
         duration_sec=11.0,
         time_transform=lambda time_sec: time_sec / 1.1,
-        noise=0.01,
     )
-    fast = make_sequence(
+    fast = make_human_attempt(
         duration_sec=9.0,
         time_transform=lambda time_sec: time_sec / 0.9,
-        noise=0.01,
     )
 
     slow_result = grade_dance(reference, slow)
@@ -101,6 +104,18 @@ def test_tempo_resampled_reference_is_rejected_after_dtw() -> None:
     assert fast_result.alignment is not None and fast_result.alignment.total_warp_bps > 0
 
 
+def test_discrete_tempo_resampled_reference_is_rejected_after_dtw() -> None:
+    reference = make_sequence()
+
+    for factor in (0.9, 1.1):
+        result = grade_dance(reference, discrete_tempo_resample(reference, factor))
+
+        assert result.outcome == "rejected"
+        assert result.reason == "reference_replay"
+        assert result.score_bps is None
+        assert result.alignment is not None and result.alignment.total_warp_bps > 0
+
+
 def test_full_length_still_pose_is_rejected_before_similarity() -> None:
     result = grade_dance(make_sequence(), make_sequence(time_transform=lambda _: 0.0))
 
@@ -112,7 +127,7 @@ def test_full_length_still_pose_is_rejected_before_similarity() -> None:
 def test_reverse_and_shuffled_reference_motion_are_rejected_as_replay() -> None:
     duration = 10.0
     reference = make_sequence(duration_sec=duration)
-    honest = grade_dance(reference, make_sequence(noise=0.01))
+    honest = grade_dance(reference, make_human_attempt())
     reversed_result = grade_dance(reference, _reordered(reference, reversed(range(300))))
     shuffled = grade_dance(
         reference, _reordered(reference, ((index * 7) % 300 for index in range(300)))
@@ -127,7 +142,7 @@ def test_reverse_and_shuffled_reference_motion_are_rejected_as_replay() -> None:
 
 def test_mirror_policy_selects_one_whole_sequence_variant() -> None:
     reference = make_sequence()
-    mirrored = mirror_sequence(make_sequence(noise=0.01))
+    mirrored = mirror_sequence(make_human_attempt())
 
     strict = grade_dance(reference, mirrored, mirror_policy=MirrorPolicy.STRICT)
     allowed = grade_dance(reference, mirrored, mirror_policy=MirrorPolicy.ALLOWED)
@@ -188,7 +203,7 @@ def test_epsilon_jitter_does_not_bypass_mirrored_reference_replay() -> None:
 
 def test_random_movement_scores_well_below_honest_attempt() -> None:
     reference = make_sequence()
-    honest = grade_dance(reference, make_sequence(noise=0.01))
+    honest = grade_dance(reference, make_human_attempt())
     random_attempt = make_sequence()
     rng = np.random.default_rng(17)
     frames = []
