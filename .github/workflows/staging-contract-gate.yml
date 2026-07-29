@@ -129,73 +129,51 @@ jobs:
             "creates and quotes a global booking hold on staging"
             "creates a real post and comment with a real staging session"
           )
+          live_contract_grep="$(IFS='|'; printf '(%s)' "${titles[*]}")"
+          live_inventory="$(bunx playwright test e2e/live-staging.live.spec.ts --project=live-staging --list --grep "$live_contract_grep" 2>&1)"
           for title in "${titles[@]}"; do
-            count=$(bunx playwright test e2e/live-staging.live.spec.ts --project=live-staging --list --grep "$title" 2>&1 | grep -F -c "$title")
+            count=$(grep -F -c "$title" <<< "$live_inventory" || true)
             test "$count" -eq 1 || { echo "::error::Expected exactly 1 test matching '$title', found $count"; exit 1; }
           done
+          echo "LIVE_CONTRACT_GREP=$live_contract_grep" >> "$GITHUB_ENV"
+
           mobile_titles=(
             "votes in a PoW-only community without joining, using an action-bound proof"
             "comments on a public thread without joining first"
             "keeps public-thread commenting available while membership is unknown"
           )
+          mobile_contract_grep="$(IFS='|'; printf '(%s)' "${mobile_titles[*]}")"
+          mobile_inventory="$(bunx playwright test e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --list --grep "$mobile_contract_grep" 2>&1)"
           for title in "${mobile_titles[@]}"; do
-            count=$(bunx playwright test e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --list --grep "$title" 2>&1 | grep -F -c "$title")
+            count=$(grep -F -c "$title" <<< "$mobile_inventory" || true)
             test "$count" -eq 1 || { echo "::error::Expected exactly 1 test matching '$title', found $count"; exit 1; }
           done
+          echo "MOBILE_CONTRACT_GREP=$mobile_contract_grep" >> "$GITHUB_ENV"
 
-      - name: Verify global booking contract
-        timeout-minutes: 10
+      - name: Verify live staging contracts
+        # The selected live suite is explicitly serial in the Web spec. Keep it
+        # that way: these tests mutate shared staging state. This ceiling covers
+        # every selected test's own timeout, including multipart's 15min, plus
+        # Playwright teardown, trace assembly, and artifact flush.
+        timeout-minutes: 35
         working-directory: web
-        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "creates and quotes a global booking hold on staging"
-
-      - name: Verify gate identity and outcome contract
-        timeout-minutes: 10
-        working-directory: web
-        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "exposes stable gate identity and authoritative outcomes in live join eligibility"
-
-      - name: Verify per-name Courtyard claim contract
-        timeout-minutes: 10
-        working-directory: web
-        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "binds a per-name Courtyard claim rule in live handle quotes"
-
-      - name: Verify community follow contract
-        timeout-minutes: 10
-        working-directory: web
-        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "follows a real staging community and persists after reload"
-
-      - name: Verify direct multipart upload contract
-        # MUST stay above the test's own timeout (currently 15min, set via
-        # testInfo.setTimeout in web's e2e/live-staging.live.spec.ts). When this
-        # ceiling is the lower of the two, the runner kills the step before
-        # Playwright can fail the test, so no trace, screenshot or error-context
-        # is ever written — every hang becomes undiagnosable. That inversion cost
-        # us a full investigation on 2026-07-22: the failing run produced a 214KB
-        # artifact containing only the fixture, against 11.1MB (trace + snapshot)
-        # from a run where the test failed on its own terms.
-        # The 5min margin covers teardown, trace assembly and artifact flush.
-        timeout-minutes: 20
-        working-directory: web
-        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "uploads a public video through direct multipart in a real browser"
-
-      - name: Verify post and comment contract
-        timeout-minutes: 10
-        working-directory: web
-        run: bun run test:e2e:required-gate -- e2e/live-staging.live.spec.ts --project=live-staging --grep "creates a real post and comment with a real staging session"
+        run: |
+          bun run test:e2e:required-gate -- \
+            --expected-count=6 \
+            e2e/live-staging.live.spec.ts \
+            --project=live-staging \
+            --grep "$LIVE_CONTRACT_GREP"
 
       - name: Verify mobile non-member interaction contracts
         timeout-minutes: 10
         working-directory: web
-        shell: bash
         run: |
-          set -euo pipefail
-          titles=(
-            "votes in a PoW-only community without joining, using an action-bound proof"
-            "comments on a public thread without joining first"
-            "keeps public-thread commenting available while membership is unknown"
-          )
-          for title in "${titles[@]}"; do
-            bun run test:e2e:required-gate -- e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --grep "$title"
-          done
+          bun run test:e2e:required-gate -- \
+            --expected-count=3 \
+            e2e/authenticated-nonmember-interactions.spec.ts \
+            --project=chromium \
+            --workers=1 \
+            --grep "$MOBILE_CONTRACT_GREP"
 
       - name: Upload Playwright report
         if: failure()
