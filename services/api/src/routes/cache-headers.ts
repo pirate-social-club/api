@@ -56,6 +56,10 @@ export function setPublicReadCacheHeaders(c: Context, options?: {
 }
 
 export function isPublicReadCacheRequest(request: Request): boolean {
+  // SECURITY BOUNDARY: every path accepted here bypasses the outer
+  // credential-bearing response no-store policy. Additions must be proven
+  // authentication-invariant (the same body with and without credentials),
+  // not merely described as "public".
   if (request.method !== "GET") {
     return false
   }

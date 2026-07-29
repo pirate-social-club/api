@@ -185,6 +185,41 @@ export function expectedCommunityD1ShardSourceVersion(
 
 app.use("*", requestCorrelationMiddleware)
 
+const CREDENTIAL_BEARING_REQUEST_HEADERS = [
+  "authorization",
+  "x-admin-token",
+  "x-agent-connection-token",
+  "x-very-callback-secret",
+  "x-karaoke-finalize-secret",
+  "x-telegram-bot-secret",
+  "x-telegram-bot-api-secret-token",
+] as const
+
+function hasCredentialBearingHeader(request: Request): boolean {
+  return CREDENTIAL_BEARING_REQUEST_HEADERS.some((header) => request.headers.has(header))
+}
+
+app.use("*", async (c, next) => {
+  if (
+    !hasCredentialBearingHeader(c.req.raw)
+    || isPublicReadCacheRequest(c.req.raw)
+  ) {
+    await next()
+    return
+  }
+
+  // A credential-bearing response must never be reusable by another caller.
+  // Explicit public-read routes are the only exception: their response
+  // contract is authentication-invariant even when a client happens to send
+  // an Authorization header. Apply this at the outer app boundary rather than
+  // relying on every authenticated route to remember its own cache policy.
+  try {
+    await next()
+  } finally {
+    applyNoStore(c.res)
+  }
+})
+
 export function buildVersionMetadata(
   env: Pick<Env, "BUILD_GIT_REF" | "BUILD_GIT_SHA" | "BUILD_TIMESTAMP">,
   compiled: BuildVersionMetadata = COMPILED_BUILD_VERSION_METADATA,
@@ -439,6 +474,9 @@ app.route("/bookings", bookings)
 function applyNoStore(response: Response | undefined): void {
   if (!response) return
   try {
+    response.headers.delete("cloudflare-cdn-cache-control")
+    response.headers.delete("cdn-cache-control")
+    response.headers.delete("cache-tag")
     response.headers.set("cache-control", "private, no-store, max-age=0, must-revalidate")
     response.headers.set("pragma", "no-cache")
   } catch {
@@ -541,8 +579,12 @@ app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
 app.onError(async (error, c) => {
   const response = await apiErrorHandler(error, c)
-  // A thrown error inside /admin must not become a cacheable body either.
-  if (new URL(c.req.url).pathname.startsWith("/admin/")) {
+  // A thrown error inside /admin or on any credential-bearing request must not
+  // become a cacheable body either.
+  if (
+    new URL(c.req.url).pathname.startsWith("/admin/")
+    || hasCredentialBearingHeader(c.req.raw)
+  ) {
     applyNoStore(response)
   }
   return response
