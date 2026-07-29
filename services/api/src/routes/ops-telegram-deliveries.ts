@@ -2,10 +2,12 @@ import { Hono, type Context } from "hono"
 import { authenticateAdminToken, authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { enqueueCommunityJob } from "../lib/communities/jobs/store"
+import { processAvailableCommunityJobs } from "../lib/communities/jobs/runner"
 import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { nowIso } from "../lib/helpers"
 import { logPipelineError } from "../lib/observability/pipeline-log"
+import { decodePublicCommunityId } from "../lib/public-ids"
 import {
   countUncertainDeliveries,
   findDeliverySubject,
@@ -71,6 +73,36 @@ opsTelegramDeliveries.get("/synthetic-fixture", async (c) => {
     communityId: c.req.query("community_id") ?? null,
   })
   return c.json(fixture)
+})
+
+// This deterministic staging executor verifies the real queue handler and Bot
+// API path without coupling the Telegram synthetic to cron fleet cadence. Cron
+// liveness is a separate operational property and must be monitored through
+// queue age; a passing synthetic does not certify scheduled-batch frequency.
+opsTelegramDeliveries.post("/synthetic-fixture/drain", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const fixture = await findTelegramSyntheticFixture({
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  const communityRepository = getCommunityRepository(c.env)
+  try {
+    const summary = await processAvailableCommunityJobs({
+      env: c.env,
+      communityRepository,
+      communityIds: [decodePublicCommunityId(fixture.community_id)],
+      maxCommunities: 1,
+      maxJobsPerCommunity: 25,
+    })
+    return c.json({
+      processed_jobs: summary.processed_jobs,
+      failed_communities: summary.failed_communities.length,
+    })
+  } finally {
+    await communityRepository.close?.()
+  }
 })
 
 opsTelegramDeliveries.get("/synthetic-deliveries/:postId", async (c) => {
