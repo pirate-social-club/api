@@ -31,9 +31,10 @@ V1 fixes the following product decisions:
   kind or a mutable field on the song post.
 - Dance scoring and campaign qualification use integer basis points from `0` through `10000`.
 - Dance score terms are versioned independently from karaoke score terms.
-- The first production worker is a CPU Cloudflare Container (`standard-2`) behind the repository's
-  existing Worker-wrapper container pattern, unless a measured benchmark justifies GPU/RunPod or a
-  separately managed VPS.
+- The first production worker is a Modal asynchronous CPU function: the platform-independent
+  `dance_grader` package plus a thin `modal_app.py`, dispatched by the API and reporting back over
+  an HMAC-signed callback. Cloudflare Containers is the named fallback if Modal's benchmark,
+  privacy review, or operational behavior disappoints.
 
 ## Problem
 
@@ -147,7 +148,8 @@ authenticated client
   -> create dance session
   -> direct upload to private attempt bucket
   -> submit session
-  -> dedicated dance grading queue
+  -> durable dispatch record and authenticated Modal dispatch
+  -> Modal spawns the grading function
   -> grader fetches one object with a short-lived signed GET
   -> grader validates, extracts, aligns, scores, and fingerprints
   -> grader sends authenticated idempotent callback
@@ -157,9 +159,13 @@ authenticated client
   -> client polls the attempt resource
 ```
 
-The shared `community_jobs` lane is not used for grading. Dance receives a dedicated queue or
-equivalent worker lane so unrelated community work cannot create multi-minute or multi-hour grading
-latency.
+The shared `community_jobs` lane is not used for grading. Dance receives a dedicated worker lane so
+unrelated community work cannot create multi-minute or multi-hour grading latency.
+
+Dispatch durability lives in the control-plane session (grading dispatch id, bounded attempt
+count), not in any external queue: a sweeper re-dispatches stalled `submitted` sessions with
+backoff and terminalizes them as `scoring_unavailable` when attempts are exhausted. Duplicate
+dispatches remain safe because finalization is idempotent on the attempt id.
 
 ## Resource and data model
 
@@ -776,6 +782,11 @@ exceeds v1 risk limits.
 - Exclude the bucket from durable backup and replication unless a later privacy review explicitly
   approves them.
 
+Grading on Modal makes it a data processor for ephemeral attempt video. Before any pilot beyond
+consented staff: subprocessor/DPA review, confirmation that Modal containers retain no media after
+a job, region selection where available, and verification that Modal-side logs contain no signed
+URLs, frames, or landmarks.
+
 The product statement must promise prompt deletion after grading, not instantaneous erasure. It
 must describe the bounded cleanup fallback accurately.
 
@@ -823,7 +834,7 @@ features across jobs.
 
 Benchmark before selecting capacity. Measure at least:
 
-- `standard-2` versus `standard-3` instance types;
+- 0.5, 1.0, and 2.0 Modal physical cores (a Modal core is roughly two vCPU);
 - 15 and 30 sampled frames per second;
 - supported input resolutions and codecs;
 - 15, 30, and 60 second clips;
@@ -832,21 +843,24 @@ Benchmark before selecting capacity. Measure at least:
 - peak resident memory and temporary disk;
 - cold and warm reference-feature cache.
 
-Run v1 on Cloudflare Containers, reusing the existing Worker-wrapper pattern from
-`services/song-preview-container` and `services/zkpassport-verifier-container`: a
-`services/dance-grader-container` package with a Worker wrapper, a dedicated queue
-(`DANCE_GRADING_QUEUE`, batch size 1, initial concurrency 1), and a private per-environment R2
-attempts bucket. The first benchmark target is one `standard-2` instance (1 vCPU, 6 GiB memory,
-12 GB disk) with `max_instances: 2` in staging. Queue delivery is at-least-once, so
-`dance_attempt_id` remains the idempotency key through dispatch and callback.
+Run v1 grading on Modal asynchronous functions: the platform-independent `dance_grader` package
+plus a thin `modal_app.py` entry point. The API calls a protected Modal dispatch endpoint with a
+request HMAC; the endpoint spawns the grading function and returns immediately; the function
+reports its terminal result through the standard signed callback. Modal-side `modal.Queue` and
+`modal.Dict` are not documented as durably persistent and must not hold business state; durable
+dispatch and attempt state stay in the control plane.
 
-The container image must handle SIGTERM correctly as PID 1 (init shim or explicit signal handling):
-a prior container in this repository never reached sleep because its runtime ignored SIGTERM, which
-silently defeats scale-to-zero and bills allocated memory continuously.
+Give the grading job a short-lived, single-object signed R2 GET. Do not mount the attempt bucket or
+grant Modal persistent list/read credentials. Reference features may be baked into the image or a
+read-only volume once revisions become numerous. Separate Modal staging and production environments
+and secrets are required.
 
-Move to RunPod or another GPU/burst platform only when a real benchmark shows a material end-to-end
-price or backlog-latency advantage. Use a separately managed VPS only if MediaPipe compatibility or
-container cold starts prove problematic; neither is assumed upfront. GPU availability alone is not
+Cloudflare Containers (`standard-2`, the Worker-wrapper pattern of
+`services/song-preview-container`) is the named fallback if Modal's measured latency, privacy
+review, or operational behavior disappoints; if exercised, the image must handle SIGTERM as PID 1 —
+a prior container in this repository never slept because its runtime ignored SIGTERM, billing
+allocated memory continuously. Move to RunPod or another GPU platform only when a real benchmark
+shows a material end-to-end price or backlog-latency advantage. GPU availability alone is not
 evidence that decode and pose extraction are cheaper or faster.
 
 ### Service-level objectives
