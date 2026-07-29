@@ -84,6 +84,7 @@ describe("GET /admin/ops/rewards-settlement-diagnostics", () => {
       { headers: { "x-admin-token": ADMIN_TOKEN } },
       ctx.env,
     )
-    expect(refund.status).toBe(404)
+    expect(refund.status).toBe(503)
+    expect(await json(refund)).toEqual({ error: "coordinator_unavailable" })
   })
 })
