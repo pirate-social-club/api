@@ -244,14 +244,19 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
       INSERT INTO communities VALUES ('cmty_test');
       INSERT INTO song_artifact_bundles VALUES ('sab_song');
     `)
-    const sql = await readFile(resolve(
-      import.meta.dir,
-      "../test-fixtures/db/control-plane/migrations",
+    for (const fileName of [
       "0168_control_plane_dance_choreographies.sql",
-    ), "utf8")
-    for (const statement of splitSqlStatements(sql)) {
-      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
-        database.exec(sqliteStatement)
+      "0169_control_plane_dance_reference_dispatch.sql",
+    ]) {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
       }
     }
 
@@ -315,10 +320,14 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
         );
       `)
       expect(database.query(`
-        SELECT status, mirror_policy
+        SELECT status, mirror_policy, reference_dispatch_attempt_count
         FROM dance_choreography_revisions
         WHERE dance_choreography_revision_id = 'dcr_ready'
-      `).get()).toEqual({ status: "ready", mirror_policy: "allowed" })
+      `).get()).toEqual({
+        status: "ready",
+        mirror_policy: "allowed",
+        reference_dispatch_attempt_count: 0,
+      })
     } finally {
       database.close()
     }
