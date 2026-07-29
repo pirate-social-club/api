@@ -129,7 +129,7 @@ jobs:
             "creates and quotes a global booking hold on staging"
             "creates a real post and comment with a real staging session"
           )
-          live_contract_grep="$(IFS='|'; printf '^(%s)$' "${titles[*]}")"
+          live_contract_grep="$(IFS='|'; printf '(%s)' "${titles[*]}")"
           live_inventory="$(bunx playwright test e2e/live-staging.live.spec.ts --project=live-staging --list --grep "$live_contract_grep" 2>&1)"
           for title in "${titles[@]}"; do
             count=$(grep -F -c "$title" <<< "$live_inventory" || true)
@@ -142,7 +142,7 @@ jobs:
             "comments on a public thread without joining first"
             "keeps public-thread commenting available while membership is unknown"
           )
-          mobile_contract_grep="$(IFS='|'; printf '^(%s)$' "${mobile_titles[*]}")"
+          mobile_contract_grep="$(IFS='|'; printf '(%s)' "${mobile_titles[*]}")"
           mobile_inventory="$(bunx playwright test e2e/authenticated-nonmember-interactions.spec.ts --project=chromium --list --grep "$mobile_contract_grep" 2>&1)"
           for title in "${mobile_titles[@]}"; do
             count=$(grep -F -c "$title" <<< "$mobile_inventory" || true)
