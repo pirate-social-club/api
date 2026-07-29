@@ -13,6 +13,10 @@ and near-reference jitter.
 The default calibration is explicitly provisional. It produces stable basis-point-shaped output
 for corpus analysis, but `calibration_admitted` is false and must never authorize a reward.
 
+The production runtime extra pins MediaPipe and PyAV. The Pose Landmarker model is not committed;
+`models/pose_landmarker_full_float16_v1.json` pins its immutable download URL, byte length, and
+SHA-256. Runtime construction verifies that checksum before importing MediaPipe.
+
 Run the focused suite:
 
 ```bash
