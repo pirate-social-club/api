@@ -889,6 +889,11 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
       return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 2) = '0x' AND substr(${column}, 3) NOT GLOB '*[^0-9a-f]*'`
     },
   )
+  sqliteCompat = sqliteCompat.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^\[0-9a-f\]\{(\d+)\}\$'/g,
+    (_match, column: string, hexLength: string) =>
+      `length(${column}) = ${Number(hexLength)} AND ${column} NOT GLOB '*[^0-9a-f]*'`,
+  )
 
   return [sqliteCompat]
 }
