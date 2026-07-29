@@ -26,6 +26,29 @@ The API service, contracts, CLI, agent connector, and issuer checks use the Type
 
 For focused route work, run the smallest touched route suite after typecheck. For CLI changes, run `rtk bun run check:cli` after `services/cli` dependencies are installed. Use full `agent-ci` only after the focused checks are green.
 
+## CI and Merge Queue
+
+`api-ci` runs the full suite for pull requests and merge-group commits. After a
+merge-queue commit lands unchanged on `main`, the main-push run may reuse that
+successful verification by exact commit SHA:
+
+- `Resolve CI provenance` must identify a successful `merge_group` run from the
+  `main` merge queue whose `head_sha` exactly equals the main-push SHA.
+- On a match, expensive jobs are intentionally skipped and the final required
+  job verifies that every expected duplicate job stayed skipped. A short green
+  main-push run is therefore normal and is the run Web pin eligibility accepts.
+- If the provenance lookup fails, the SHA differs, or no matching successful
+  run exists, CI runs the full suite. It never converts missing provenance into
+  a green shortcut.
+- Do not re-run intentionally skipped main-push jobs merely because they show
+  as skipped. Inspect the provenance summary and final required job instead.
+- `gh pr merge` only enqueues an API PR. Before using its SHA in Web release
+  refs, verify `mergedAt`, obtain the resulting `main` SHA, and wait for the
+  successful `api-ci` main-push run.
+
+Changes to CI inputs, workflow logic, or the merge result itself naturally miss
+the exact-SHA reuse and must pay for a full run.
+
 ## Route Tests
 
 - Keep route groups to at most three primary test files: `routes.test.ts`, `auth.test.ts`, and `lifecycle.test.ts`.
