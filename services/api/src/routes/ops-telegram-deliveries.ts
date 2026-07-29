@@ -15,6 +15,11 @@ import {
   type ResolutionAction,
   type UncertainDeliveryFilters,
 } from "../lib/telegram/uncertain-delivery-ops-service"
+import {
+  cleanupTelegramSyntheticDelivery,
+  findTelegramSyntheticFixture,
+  getTelegramSyntheticDelivery,
+} from "../lib/telegram/telegram-synthetic-ops-service"
 
 // Operator surface for Telegram channel deliveries stranded in 'uncertain'.
 // Nothing scans that state automatically — by design, because retrying an
@@ -50,6 +55,48 @@ function parseFilters(c: Context<AuthenticatedEnv>): UncertainDeliveryFilters {
     olderThanMinutes: olderThan == null ? null : Number.parseInt(olderThan, 10),
   }
 }
+
+function requireStaging(c: Context<AuthenticatedEnv>): Response | null {
+  return c.env.ENVIRONMENT === "staging"
+    ? null
+    : c.json({ error: "not_found" }, 404)
+}
+
+opsTelegramDeliveries.get("/synthetic-fixture", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const fixture = await findTelegramSyntheticFixture({
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  return c.json(fixture)
+})
+
+opsTelegramDeliveries.get("/synthetic-deliveries/:postId", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const delivery = await getTelegramSyntheticDelivery({
+    client: getControlPlaneClient(c.env),
+    postId: c.req.param("postId"),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  return c.json({ delivery })
+})
+
+opsTelegramDeliveries.post("/synthetic-deliveries/:postId/cleanup", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const outcome = await cleanupTelegramSyntheticDelivery({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    postId: c.req.param("postId"),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  return c.json(outcome)
+})
 
 opsTelegramDeliveries.get("/uncertain-deliveries", async (c) => {
   if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
