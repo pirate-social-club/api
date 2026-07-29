@@ -227,6 +227,30 @@ describe("LitChipotleClient", () => {
     }
   })
 
+  test.each([
+    { error: "Uncaught Error: deadline is outside pinned policy" },
+    { message: "Uncaught Error: policyVersion does not match pinned policy" },
+    { error: { message: "Uncaught Error: deadline is outside pinned policy" } },
+  ])("classifies an HTTP error envelope policy rejection without persisting provider text", async (body) => {
+    const client = new LitChipotleClient({
+      usageApiKey: SECRET,
+      maxAttempts: 1,
+      fetchImpl: (async () => response(500, {
+        ...body,
+        unrelated: SECRET,
+      })) as typeof fetch,
+    })
+    try {
+      await client.execute({ ipfsId: "QmPinned", jsParams: null })
+      throw new Error("expected rejection")
+    } catch (error) {
+      expect(error).toBeInstanceOf(LitChipotleError)
+      expect((error as LitChipotleError).status).toBe(500)
+      expect((error as LitChipotleError).litErrorToken).toBe("invalid_params")
+      expect(String(error)).not.toContain(SECRET)
+    }
+  })
+
   test("does not relabel an unrelated plain-text HTTP 500 as invalid params", async () => {
     const client = new LitChipotleClient({
       usageApiKey: SECRET,
@@ -241,7 +265,7 @@ describe("LitChipotleClient", () => {
       throw new Error("expected rejection")
     } catch (error) {
       expect(error).toBeInstanceOf(LitChipotleError)
-      expect((error as LitChipotleError).litErrorToken).toBe("other")
+      expect((error as LitChipotleError).litErrorToken).toBe("other_plain_text")
       expect(String(error)).not.toContain(SECRET)
     }
   })

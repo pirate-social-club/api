@@ -30,6 +30,11 @@ export type LitErrorToken =
   | "action_fetch_failed"
   | "invalid_params"
   | "timeout"
+  | "other_json_error"
+  | "other_json_message"
+  | "other_json_nested_error"
+  | "other_json_unknown"
+  | "other_plain_text"
   | "other"
 
 export class LitChipotleError extends Error {
@@ -207,6 +212,31 @@ function litErrorTokenFromPlainText(input: string): LitErrorToken {
     : "other"
 }
 
+function litErrorTokenFromHttpErrorEnvelope(input: unknown): LitErrorToken {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return "other_json_unknown"
+  const record = input as Record<string, unknown>
+  const candidates = ["error", "message", "detail", "details"]
+    .map((field) => record[field])
+    .filter((value): value is string => typeof value === "string")
+  const nestedError = record.error
+  if (
+    nestedError
+    && typeof nestedError === "object"
+    && !Array.isArray(nestedError)
+    && typeof (nestedError as Record<string, unknown>).message === "string"
+  ) {
+    candidates.push((nestedError as Record<string, string>).message)
+  }
+  const classified = litErrorTokenFromPlainText(candidates.map((value) => value.slice(0, 2_000)).join(" "))
+  if (classified !== "other") return classified
+  if (typeof record.error === "string") return "other_json_error"
+  if (typeof record.message === "string") return "other_json_message"
+  if (nestedError && typeof nestedError === "object" && !Array.isArray(nestedError)) {
+    return "other_json_nested_error"
+  }
+  return "other_json_unknown"
+}
+
 async function defaultSleep(milliseconds: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, milliseconds))
 }
@@ -268,12 +298,15 @@ export class LitChipotleClient {
           decoded = JSON.parse(responseBody)
         } catch {
           if (!response.ok) {
-            throw statusError(response.status, litErrorTokenFromPlainText(responseBody))
+            const token = litErrorTokenFromPlainText(responseBody)
+            throw statusError(response.status, token === "other" ? "other_plain_text" : token)
           }
           throw new LitChipotleError("invalid_response", "Lit action response was not JSON", false)
         }
         if (!responseShape(decoded)) {
-          if (!response.ok) throw statusError(response.status)
+          if (!response.ok) {
+            throw statusError(response.status, litErrorTokenFromHttpErrorEnvelope(decoded))
+          }
           throw new LitChipotleError("invalid_response", "Lit action response shape was invalid", false)
         }
         if (decoded.has_error) {

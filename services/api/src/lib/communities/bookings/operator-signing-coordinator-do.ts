@@ -80,6 +80,11 @@ export type PreparationLitErrorToken =
   | "action_fetch_failed"
   | "invalid_params"
   | "timeout"
+  | "other_json_error"
+  | "other_json_message"
+  | "other_json_nested_error"
+  | "other_json_unknown"
+  | "other_plain_text"
   | "other"
 
 export interface PreparationFailureDiagnostic {
@@ -284,7 +289,9 @@ function boundedPreparationDiagnostic(error: unknown, classifiedAt: number): Pre
     "connection_lost", "redirect", "timeout", "fetch_failed", "unclassified",
   ])
   const litTokens = new Set<PreparationLitErrorToken>([
-    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout", "other",
+    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout",
+    "other_json_error", "other_json_message", "other_json_nested_error",
+    "other_json_unknown", "other_plain_text", "other",
   ])
   const transport = typeof record.transportCategory === "string"
     && transportCategories.has(record.transportCategory as PreparationTransportCategory)
