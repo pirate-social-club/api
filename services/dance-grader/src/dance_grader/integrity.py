@@ -4,7 +4,13 @@ import hashlib
 
 import numpy as np
 
-from .features import SCORED_LANDMARKS, _normalized_geometry, build_features, mirror_landmarks
+from .features import (
+    SCORED_LANDMARKS,
+    FeatureSequence,
+    _normalized_geometry,
+    build_features,
+    mirror_landmarks,
+)
 from .models import PoseSequence, ScorerConfig
 
 
@@ -81,3 +87,26 @@ def is_near_reference_feature_replay(
         if rmse <= config.max_reference_replay_position_rmse:
             return True
     return False
+
+
+def is_post_alignment_reference_replay(
+    reference: FeatureSequence,
+    attempt: FeatureSequence,
+    reference_indices: np.ndarray,
+    attempt_indices: np.ndarray,
+    config: ScorerConfig,
+) -> bool:
+    """Reject near-identical reference geometry after constrained tempo alignment."""
+    difference = reference.positions[reference_indices] - attempt.positions[attempt_indices]
+    confidence = np.minimum(
+        reference.position_confidence[reference_indices],
+        attempt.position_confidence[attempt_indices],
+    )
+    valid = np.isfinite(difference).all(axis=2) & (confidence > 0)
+    if not np.any(valid):
+        return False
+    squared_distance = np.sum(np.square(difference), axis=2)
+    residual_rmse = float(
+        np.sqrt(np.sum(squared_distance[valid] * confidence[valid]) / np.sum(confidence[valid]))
+    )
+    return residual_rmse <= config.max_reference_replay_position_rmse

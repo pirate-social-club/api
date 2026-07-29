@@ -58,23 +58,47 @@ def test_constrained_dtw_recovers_moderate_tempo_variation() -> None:
     slow = make_sequence(
         duration_sec=11.0,
         time_transform=lambda time_sec: time_sec / 1.1,
-        noise=0.002,
+        noise=0.01,
     )
     fast = make_sequence(
         duration_sec=9.0,
         time_transform=lambda time_sec: time_sec / 0.9,
-        noise=0.002,
+        noise=0.01,
     )
 
     slow_result = grade_dance(reference, slow)
     fast_result = grade_dance(reference, fast)
 
-    assert slow_result.score_bps is not None and slow_result.score_bps >= 8000
-    assert fast_result.score_bps is not None and fast_result.score_bps >= 8000
+    assert slow_result.score_bps is not None and slow_result.score_bps >= 7000
+    assert fast_result.score_bps is not None and fast_result.score_bps >= 7000
     assert slow_result.alignment is not None and slow_result.alignment.total_warp_bps > 0
     assert fast_result.alignment is not None and fast_result.alignment.total_warp_bps > 0
     assert slow_result.alignment.total_warp_bps <= 10_000
     assert fast_result.alignment.total_warp_bps <= 10_000
+
+
+def test_tempo_resampled_reference_is_rejected_after_dtw() -> None:
+    reference = make_sequence()
+    slow_replay = make_sequence(
+        duration_sec=11.0,
+        time_transform=lambda time_sec: time_sec / 1.1,
+    )
+    fast_replay = make_sequence(
+        duration_sec=9.0,
+        time_transform=lambda time_sec: time_sec / 0.9,
+    )
+
+    slow_result = grade_dance(reference, slow_replay)
+    fast_result = grade_dance(reference, fast_replay)
+
+    assert slow_result.outcome == "rejected"
+    assert slow_result.reason == "reference_replay"
+    assert slow_result.score_bps is None
+    assert slow_result.alignment is not None and slow_result.alignment.total_warp_bps > 0
+    assert fast_result.outcome == "rejected"
+    assert fast_result.reason == "reference_replay"
+    assert fast_result.score_bps is None
+    assert fast_result.alignment is not None and fast_result.alignment.total_warp_bps > 0
 
 
 def test_full_length_still_pose_is_rejected_before_similarity() -> None:

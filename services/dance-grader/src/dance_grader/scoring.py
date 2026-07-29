@@ -6,7 +6,11 @@ from .alignment import Alignment, find_global_alignment
 from .calibration import CalibrationArtifact, provisional_calibration
 from .features import FeatureSequence, build_features
 from .fingerprint import canonical_fingerprint_material
-from .integrity import is_exact_reference_feature_replay, is_near_reference_feature_replay
+from .integrity import (
+    is_exact_reference_feature_replay,
+    is_near_reference_feature_replay,
+    is_post_alignment_reference_replay,
+)
 from .models import (
     AlignmentMetrics,
     ComponentScores,
@@ -192,6 +196,25 @@ def grade_dance(
         )
 
     raw, name, attempt_features, alignment, components = best
+    if enforce_reference_replay and is_post_alignment_reference_replay(
+        reference_features,
+        attempt_features,
+        alignment.reference_indices,
+        alignment.attempt_indices,
+        config,
+    ):
+        return GradeResult(
+            outcome="rejected",
+            reason="reference_replay",
+            score_bps=None,
+            calibration_admitted=calibration.admitted,
+            selected_mirror=name,
+            quality=quality,
+            alignment=alignment.metrics,
+            components=None,
+            canonical_fingerprint_material_hex=None,
+            versions=versions,
+        )
     return GradeResult(
         outcome="scored",
         reason=None,
