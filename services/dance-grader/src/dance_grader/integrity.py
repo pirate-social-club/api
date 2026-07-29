@@ -4,11 +4,16 @@ import hashlib
 
 import numpy as np
 
-from .features import SCORED_LANDMARKS, _normalized_geometry
+from .features import SCORED_LANDMARKS, _normalized_geometry, mirror_landmarks
 from .models import PoseSequence, ScorerConfig
 
 
-def _unordered_pose_digest(sequence: PoseSequence, config: ScorerConfig) -> str:
+def _unordered_pose_digest(
+    sequence: PoseSequence,
+    config: ScorerConfig,
+    *,
+    mirrored: bool = False,
+) -> str:
     """Detect exact reference-feature reuse even when frames are reordered.
 
     This is intentionally an exact Gate-0 check. A calibrated near-copy detector and video-level
@@ -19,11 +24,12 @@ def _unordered_pose_digest(sequence: PoseSequence, config: ScorerConfig) -> str:
         if frame.landmarks is None:
             rows.append(b"missing")
             continue
-        geometry = _normalized_geometry(frame.landmarks, sequence.width, sequence.height)
+        landmarks = mirror_landmarks(frame.landmarks) if mirrored else frame.landmarks
+        geometry = _normalized_geometry(landmarks, sequence.width, sequence.height)
         if geometry is None:
             rows.append(b"invalid")
             continue
-        quantized = np.rint(geometry[SCORED_LANDMARKS] * 10_000).astype(np.int64)
+        quantized = np.rint(geometry[SCORED_LANDMARKS] * 100_000).astype(np.int64)
         rows.append(quantized.tobytes())
     ordered_rows = sorted(rows)
     digest = hashlib.sha256()
@@ -39,4 +45,8 @@ def is_exact_reference_feature_replay(
 ) -> bool:
     if len(reference.frames) != len(attempt.frames):
         return False
-    return _unordered_pose_digest(reference, config) == _unordered_pose_digest(attempt, config)
+    reference_digest = _unordered_pose_digest(reference, config)
+    return reference_digest in {
+        _unordered_pose_digest(attempt, config),
+        _unordered_pose_digest(attempt, config, mirrored=True),
+    }

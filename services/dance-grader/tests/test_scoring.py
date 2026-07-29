@@ -70,7 +70,7 @@ def test_reverse_and_shuffled_reference_motion_are_rejected_as_replay() -> None:
 
 def test_mirror_policy_selects_one_whole_sequence_variant() -> None:
     reference = make_sequence()
-    mirrored = mirror_sequence(reference)
+    mirrored = mirror_sequence(make_sequence(noise=0.002))
 
     strict = grade_dance(reference, mirrored, mirror_policy=MirrorPolicy.STRICT)
     allowed = grade_dance(reference, mirrored, mirror_policy=MirrorPolicy.ALLOWED)
@@ -79,3 +79,18 @@ def test_mirror_policy_selects_one_whole_sequence_variant() -> None:
     assert allowed.score_bps is not None
     assert allowed.selected_mirror == "mirrored"
     assert allowed.score_bps >= strict.score_bps + 1000
+
+
+def test_mirrored_reference_is_rejected_before_allowed_mirror_scoring() -> None:
+    reference = make_sequence()
+    mirrored_reference = mirror_sequence(reference)
+
+    result = grade_dance(
+        reference,
+        mirrored_reference,
+        mirror_policy=MirrorPolicy.ALLOWED,
+    )
+
+    assert result.outcome == "rejected"
+    assert result.reason == "reference_replay"
+    assert result.score_bps is None
