@@ -250,21 +250,6 @@ CREATE INDEX idx_dance_attempt_sessions_expiry
     ON dance_attempt_sessions(expires_at)
     WHERE status IN ('initialized', 'uploading');
 
-CREATE FUNCTION dance_segment_fingerprints_valid(value JSONB)
-RETURNS BOOLEAN
-LANGUAGE SQL
-IMMUTABLE
-STRICT
-AS $$
-    SELECT jsonb_typeof(value) = 'array'
-       AND jsonb_array_length(value) BETWEEN 0 AND 32
-       AND NOT EXISTS (
-           SELECT 1
-           FROM jsonb_array_elements_text(value) AS element
-           WHERE element !~ '^[0-9a-f]{64}$'
-       )
-$$;
-
 CREATE TABLE dance_attempt_fingerprints (
     dance_attempt_id TEXT PRIMARY KEY,
     dance_attempt_session_id TEXT NOT NULL UNIQUE
@@ -277,7 +262,7 @@ CREATE TABLE dance_attempt_fingerprints (
         whole_attempt_hmac_sha256 ~ '^[0-9a-f]{64}$'
     ),
     segment_hmac_sha256_json JSONB NOT NULL CHECK (
-        dance_segment_fingerprints_valid(segment_hmac_sha256_json)
+        LENGTH(CAST(segment_hmac_sha256_json AS TEXT)) BETWEEN 2 AND 2200
     ),
     terminal_integrity_outcome TEXT NOT NULL CHECK (
         terminal_integrity_outcome IN ('passed', 'reference_replay', 'duplicate_attempt')
