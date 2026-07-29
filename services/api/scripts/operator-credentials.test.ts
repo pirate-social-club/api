@@ -6,6 +6,7 @@ import {
   credentialEnvNameForScopes,
   normalizeOperatorDatabaseUrl,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_SETTLEMENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
   STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
 } from "./operator-credentials"
@@ -20,6 +21,12 @@ describe("operator credential issuance config", () => {
   test("preserves the bookings credential secret name", () => {
     expect(credentialEnvNameForScopes([BOOKING_SETTLEMENT_RESOLVE_SCOPE]))
       .toBe("PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL")
+  })
+
+  test("accepts the reward settlement resolution scope with a dedicated secret name", () => {
+    expect(ALLOWED_SCOPES.has(REWARD_SETTLEMENT_RESOLVE_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([REWARD_SETTLEMENT_RESOLVE_SCOPE]))
+      .toBe("PIRATE_REWARD_SETTLEMENT_OPERATOR_CREDENTIAL")
   })
 
   test("uses a dedicated Story settlement repair credential", () => {
