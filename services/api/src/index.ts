@@ -8,6 +8,7 @@ import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
+import danceChoreographies from "./routes/dance-choreographies"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
@@ -191,6 +192,7 @@ const CREDENTIAL_BEARING_REQUEST_HEADERS = [
   "x-agent-connection-token",
   "x-very-callback-secret",
   "x-karaoke-finalize-secret",
+  "x-dance-grader-signature",
   "x-telegram-bot-secret",
   "x-telegram-bot-api-secret-token",
 ] as const
@@ -470,6 +472,7 @@ app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/bookings", bookings)
+app.route("/dance-choreographies", danceChoreographies)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return

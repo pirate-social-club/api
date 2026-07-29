@@ -10,6 +10,7 @@ export const REWARD_SETTLEMENT_RESOLVE_SCOPE = "rewards:settlement:resolve"
 export const REWARD_REHEARSAL_EXECUTE_SCOPE = "rewards:rehearsal:execute"
 export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
 export const STORY_SETTLEMENT_FEE_REPLACE_SCOPE = "story:settlement:fee-replace"
+export const DANCE_CHOREOGRAPHY_SEED_SCOPE = "dance:choreography:seed"
 
 export const ALLOWED_SCOPES = new Set([
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
@@ -18,6 +19,7 @@ export const ALLOWED_SCOPES = new Set([
   REWARD_REHEARSAL_EXECUTE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
   STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
+  DANCE_CHOREOGRAPHY_SEED_SCOPE,
 ])
 
 export function normalizeOperatorDatabaseUrl(value: string): string {
@@ -32,6 +34,7 @@ const REWARD_SETTLEMENT_CREDENTIAL_ENV_NAME = "PIRATE_REWARD_SETTLEMENT_OPERATOR
 const REWARD_REHEARSAL_CREDENTIAL_ENV_NAME = "PIRATE_REWARD_REHEARSAL_OPERATOR_CREDENTIAL"
 const STORY_SETTLEMENT_CREDENTIAL_ENV_NAME = "PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL"
 const STORY_SETTLEMENT_FEE_REPLACE_CREDENTIAL_ENV_NAME = "PIRATE_STORY_SETTLEMENT_FEE_REPLACE_OPERATOR_CREDENTIAL"
+const DANCE_CHOREOGRAPHY_CREDENTIAL_ENV_NAME = "PIRATE_DANCE_CHOREOGRAPHY_OPERATOR_CREDENTIAL"
 
 type Mode = "issue" | "rotate" | "revoke"
 
@@ -56,6 +59,7 @@ function usage(exitCode = 1): never {
   bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope rewards:settlement:resolve --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope rewards:rehearsal:execute --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope story:settlement:repair --expires-at 2026-08-14T00:00:00Z
+  bun scripts/operator-credentials.ts issue --operator-actor-id svc_... --label "Name" --scope dance:choreography:seed --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts rotate --credential-id opc_... --operator-actor-id svc_... --label "Name" --scope rewards:campaign-incidents:resolve --expires-at 2026-08-14T00:00:00Z
   bun scripts/operator-credentials.ts revoke --credential-id opc_...
 
@@ -102,6 +106,9 @@ export function credentialEnvNameForScopes(scopes: string[], explicitName = ""):
   }
   if (uniqueScopes.length === 1 && uniqueScopes[0] === STORY_SETTLEMENT_FEE_REPLACE_SCOPE) {
     return STORY_SETTLEMENT_FEE_REPLACE_CREDENTIAL_ENV_NAME
+  }
+  if (uniqueScopes.length === 1 && uniqueScopes[0] === DANCE_CHOREOGRAPHY_SEED_SCOPE) {
+    return DANCE_CHOREOGRAPHY_CREDENTIAL_ENV_NAME
   }
   throw new Error("multi-scope credentials require --credential-env-name")
 }

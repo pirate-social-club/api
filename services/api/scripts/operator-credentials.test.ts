@@ -4,6 +4,7 @@ import {
   ALLOWED_SCOPES,
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   credentialEnvNameForScopes,
+  DANCE_CHOREOGRAPHY_SEED_SCOPE,
   normalizeOperatorDatabaseUrl,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
   REWARD_REHEARSAL_EXECUTE_SCOPE,
@@ -46,6 +47,12 @@ describe("operator credential issuance config", () => {
     expect(ALLOWED_SCOPES.has(STORY_SETTLEMENT_FEE_REPLACE_SCOPE)).toBe(true)
     expect(credentialEnvNameForScopes([STORY_SETTLEMENT_FEE_REPLACE_SCOPE]))
       .toBe("PIRATE_STORY_SETTLEMENT_FEE_REPLACE_OPERATOR_CREDENTIAL")
+  })
+
+  test("uses a dedicated dance choreography credential", () => {
+    expect(ALLOWED_SCOPES.has(DANCE_CHOREOGRAPHY_SEED_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([DANCE_CHOREOGRAPHY_SEED_SCOPE]))
+      .toBe("PIRATE_DANCE_CHOREOGRAPHY_OPERATOR_CREDENTIAL")
   })
 
   test("requires an explicit, valid name for a multi-scope credential", () => {
