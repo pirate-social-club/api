@@ -15,6 +15,7 @@ Mounted in `services/api/src/index.ts`:
 - `/oauth`
 - `/analytics`
 - `/bookings`
+- `/dance-choreographies`
 - `/__version`
 - non-production `/__debug/sentry-error`
 - `/` for discovery routes
@@ -102,6 +103,7 @@ Mounted in `services/api/src/index.ts`:
 | `/profiles/*` | `src/routes/profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts` | direct | Includes patch, read, rename, upgrade quote, linked handles, primary handle. |
 | `/api/privy-relay` | `src/routes/privy-relay.ts` | `src/lib/efp-indexer/follow-sponsorship-relay.test.ts` | service | Authenticated route is thin validation over the exact-transaction relay; bootstrap reservation and forwarded Privy payload are covered at the service boundary. |
 | `/bookings/*` | `src/routes/bookings.ts` | `tests/routes/bookings-routes.test.ts`, `src/lib/bookings/*\.pg.test.ts`, `src/lib/bookings/host-config-repository.production-path.pg.test.ts` | direct/service/PG | Global booking API surface. Route suite covers auth, parameter/body normalization, aliases, status mapping, and service wiring; real-Postgres service tests cover durable behavior. |
+| `/dance-choreographies/*` | `src/routes/dance-choreographies.ts` | `src/routes/dance-choreographies.test.ts`, `src/lib/dance/grader-callback-auth.test.ts` | direct | Dark pilot operator seed and Modal reference callback boundary. Covers dedicated operator scope, bounded seed parsing, exact raw-body HMAC verification, revision subject binding, and callback finalization wiring. |
 | `/host-bookings/me/*` | `src/routes/host-bookings.ts` | `tests/routes/host-bookings-routes.test.ts` | direct | Covers host profile upsert, publish/unpublish, availability rules / exceptions / price rules CRUD, hard bounds, FK precondition, and envelope shape. |
 | `/public-profiles/:handleLabel` | `src/routes/public-profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts`, `tests/routes/profiles/public-profiles-routes.test.ts` | direct | Covered alongside profile/global-handle tests. |
 | `/wallet-identities/:chainRef/:walletAddress` | `src/routes/wallet-identities.ts` | `tests/routes/wallet-identities-routes.test.ts` | direct | Covers wallet-owned Pirate-name identity projection, profile redirect for attached wallets, 404 for unknown wallets, and chain/address validation errors. |
