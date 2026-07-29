@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { Interface, Wallet } from "ethers"
 
 import type { Env } from "../../../env"
-import { realChain, settlementGasLimit } from "./operator-chain-real"
+import {
+  createStaticSettlementProvider,
+  realChain,
+  settlementGasLimit,
+} from "./operator-chain-real"
 
 const VAULT = "0x1000000000000000000000000000000000000001"
 const RECIPIENT = "0x2000000000000000000000000000000000000002"
@@ -39,6 +43,15 @@ function env(): Env {
 }
 
 describe("real rewards Lit vault signer wiring", () => {
+  test("trusts the validated settlement chain without an RPC network-detection request", async () => {
+    const provider = createStaticSettlementProvider("https://example.invalid", 84532)
+    try {
+      expect((await provider.getNetwork()).chainId).toBe(84532n)
+    } finally {
+      provider.destroy()
+    }
+  })
+
   test("uses the reviewed Lit vault gas ceiling instead of the local-transfer default", () => {
     expect(settlementGasLimit(env(), "lit_vault")).toBe(300_000n)
     expect(settlementGasLimit(env(), "local")).toBe(100_000n)

@@ -224,7 +224,15 @@ describe("reward settlement rehearsal route", () => {
     }, fixture.env)
     expect(response.status).toBe(202)
     expect(response.headers.get("cache-control")).toBe("private, no-store")
-    expect(seen).toEqual(["over_limit"])
+
+    const refund = await fixture.app.request("/operator/reward_settlements/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "refund_while_payouts_paused" }),
+    }, fixture.env)
+    expect(refund.status).toBe(202)
+    expect(refund.headers.get("cache-control")).toBe("private, no-store")
+    expect(seen).toEqual(["over_limit", "refund_while_payouts_paused"])
   })
 })
 

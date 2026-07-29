@@ -18,7 +18,13 @@ import {
   type FollowWriteTransaction,
 } from "./follow-contracts"
 import type { Env } from "../../env"
-import { badRequestError, conflictError, eligibilityFailed, rateLimited } from "../errors"
+import {
+  badRequestError,
+  conflictError,
+  eligibilityFailed,
+  rateLimited,
+  retryableConflictError,
+} from "../errors"
 import type { Client, QueryResultRow } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
 import { withTransaction } from "../transactions"
@@ -114,7 +120,15 @@ export async function resolvePrimaryListStorage(
     return user === address
       ? { kind: "found", chainId: storage.chainId, listId, slot: storage.slot }
       : { kind: "unresolved" }
-  } catch {
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error))
+      .replaceAll(/https?:\/\/[^\s)]+/giu, "[redacted-url]")
+      .slice(0, 2_000)
+    console.warn("[efp-follow-write] Primary-list resolution failed", {
+      address,
+      error_name: error instanceof Error ? error.name : typeof error,
+      message,
+    })
     return { kind: "unresolved" }
   }
 }
@@ -277,7 +291,7 @@ export async function prepareProfileFollowWrite(input: {
 
   const resolution = await (input.resolvePrimaryList ?? resolvePrimaryListStorage)(input.env, actorWallet)
   if (resolution.kind === "unresolved") {
-    throw conflictError("Unable to load your follow list right now")
+    throw retryableConflictError("Unable to load your follow list right now")
   }
   const transactions = buildFollowTransactions({
     existingStorage: resolution.kind === "found"
@@ -422,14 +436,15 @@ export async function reconcilePendingFollowWrites(input: {
   const pending = await input.client.execute({
     sql: `
       SELECT DISTINCT i.follow_write_intent_id, i.actor_wallet_address,
-             i.target_wallet_address, i.desired_following
+             i.target_wallet_address, i.desired_following,
+             i.updated_at AS intent_updated_at
       FROM efp_follow_write_intents i
       JOIN efp_follow_reconciliation_queue q
         ON q.requested_by_follow_write_intent_id = i.follow_write_intent_id
       WHERE i.status IN ('submitted', 'confirmed')
         AND q.status IN ('pending', 'failed')
         AND q.available_at <= CURRENT_TIMESTAMP
-      ORDER BY i.updated_at ASC
+      ORDER BY intent_updated_at ASC
       LIMIT ?1
     `,
     args: [Math.max(1, Math.min(input.limit ?? 100, 500))],

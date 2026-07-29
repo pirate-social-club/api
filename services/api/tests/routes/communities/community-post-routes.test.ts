@@ -400,6 +400,70 @@ membership_mode: "request",
     expect(postBody.title).toBe("Member post")
   })
 
+  test("published public post creation durably enqueues Telegram channel publication", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-telegram-publish-creator")
+    const namespaceVerificationId = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Pirate Telegram Publish Contract",
+      membership_mode: "request",
+      namespace: {
+        namespace_verification: namespaceVerificationId,
+      },
+    }, ctx.env, creator.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityCreateBody = await json(communityCreate) as {
+      community: { id: string }
+    }
+    const communityId = communityCreateBody.community.id.replace(/^com_/, "")
+
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Telegram publication contract",
+        body: "The canonical publish path must enqueue exactly one delivery job.",
+        idempotency_key: "post-key-telegram-publication-contract",
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const createdPostBody = await json(createdPost) as {
+      id: string
+      status: string
+      visibility: string
+    }
+    expect(createdPostBody.status).toBe("published")
+    expect(createdPostBody.visibility).toBe("public")
+
+    const communityDb = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      const jobs = await communityDb.execute({
+        sql: `
+          SELECT job_type, subject_type, subject_id, status
+          FROM community_jobs
+          WHERE job_type = 'telegram_post_publish'
+            AND subject_type = 'post'
+        `,
+        args: [],
+      })
+      expect(jobs.rows).toHaveLength(1)
+      expect(jobs.rows[0]).toMatchObject({
+        job_type: "telegram_post_publish",
+        subject_type: "post",
+        status: "queued",
+      })
+      expect(String(jobs.rows[0]?.subject_id)).toMatch(/^pst_[a-f0-9]{32}$/)
+    } finally {
+      communityDb.close()
+    }
+  })
+
   test("community post feed marks creator posts with owner role", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

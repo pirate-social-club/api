@@ -99,13 +99,16 @@ describe("sql migration helpers", () => {
     const statement = toSqliteCompatibleStatement(`
       CREATE TABLE observed_funding_receipts (
         token_address TEXT NOT NULL CHECK (token_address ~ '^0x[0-9a-f]{40}$'),
-        tx_hash TEXT NOT NULL CHECK (tx_hash ~ '^0x[0-9a-f]{64}$')
+        tx_hash TEXT NOT NULL CHECK (tx_hash ~ '^0x[0-9a-f]{64}$'),
+        content_sha256 TEXT NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$')
       );
     `)
 
     expect(statement).toContain("length(token_address) = 42")
     expect(statement).toContain("substr(token_address, 3) NOT GLOB '*[^0-9a-f]*'")
     expect(statement).toContain("length(tx_hash) = 66")
+    expect(statement).toContain("length(content_sha256) = 64")
+    expect(statement).toContain("content_sha256 NOT GLOB '*[^0-9a-f]*'")
     expect(statement).not.toContain(" ~ ")
   })
 
@@ -228,6 +231,106 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
     expect(toSqliteCompatibleStatement(
       "ALTER TABLE reward_campaign_monitor_state ALTER COLUMN last_successful_scan_at DROP NOT NULL;",
     )).toBeNull()
+  })
+
+  test("applies the dance choreography fixture with ready-revision completeness", async () => {
+    const database = new Database(":memory:")
+    database.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE users (user_id TEXT PRIMARY KEY);
+      CREATE TABLE communities (community_id TEXT PRIMARY KEY);
+      CREATE TABLE song_artifact_bundles (song_artifact_bundle_id TEXT PRIMARY KEY);
+      INSERT INTO users VALUES ('usr_creator');
+      INSERT INTO communities VALUES ('cmty_test');
+      INSERT INTO song_artifact_bundles VALUES ('sab_song');
+    `)
+    for (const fileName of [
+      "0168_control_plane_dance_choreographies.sql",
+      "0169_control_plane_dance_reference_dispatch.sql",
+    ]) {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+    }
+
+    try {
+      database.exec(`
+        INSERT INTO dance_choreographies (
+          dance_choreography_id, community_id, host_post_id, referenced_song_post_id,
+          song_artifact_bundle_id, creator_user_id, status
+        ) VALUES (
+          'dch_incomplete', 'cmty_test', 'post_incomplete', 'post_song',
+          'sab_song', 'usr_creator', 'ready'
+        );
+      `)
+      expect(database.query(`
+        SELECT COUNT(*) AS count
+        FROM dance_choreographies
+        WHERE dance_choreography_id = 'dch_incomplete'
+      `).get()).toEqual({ count: 0 })
+      database.exec(`
+        INSERT INTO dance_choreographies (
+          dance_choreography_id, community_id, host_post_id, referenced_song_post_id,
+          song_artifact_bundle_id, creator_user_id, status
+        ) VALUES (
+          'dch_test', 'cmty_test', 'post_dance', 'post_song',
+          'sab_song', 'usr_creator', 'processing'
+        );
+      `)
+      database.exec(`
+        INSERT INTO dance_choreography_revisions (
+          dance_choreography_revision_id, dance_choreography_id, revision_number,
+          reference_storage_ref, reference_content_sha256, reference_mime_type,
+          reference_size_bytes, status, ready_at
+        ) VALUES (
+          'dcr_incomplete', 'dch_test', 1,
+          'r2://references/ref.mp4', '${"a".repeat(64)}',
+          'video/mp4', 1024, 'ready', '2026-07-29T00:00:00Z'
+        );
+      `)
+      expect(database.query(`
+        SELECT COUNT(*) AS count
+        FROM dance_choreography_revisions
+        WHERE dance_choreography_revision_id = 'dcr_incomplete'
+      `).get()).toEqual({ count: 0 })
+      database.exec(`
+        INSERT INTO dance_choreography_revisions (
+          dance_choreography_revision_id, dance_choreography_id, revision_number,
+          reference_storage_ref, reference_content_sha256, reference_mime_type,
+          reference_size_bytes, reference_duration_ms, reference_width, reference_height,
+          reference_fps_millihertz, reference_feature_ref, reference_feature_sha256,
+          reference_feature_size_bytes, pose_model_version, pose_model_sha256,
+          pose_runtime_version, feature_schema_version, scorer_version, artifact_version,
+          mirror_policy, status, ready_at
+        ) VALUES (
+          'dcr_ready', 'dch_test', 1,
+          'r2://references/ref.mp4', '${"a".repeat(64)}',
+          'video/mp4', 1024, 10000, 576, 1024, 30000,
+          'r2://features/ref.json', '${"b".repeat(64)}', 2048,
+          'pose_v1', '${"c".repeat(64)}', '0.10.35',
+          'features_v1', 'scorer_v1', 'artifact_v1',
+          'allowed', 'ready', '2026-07-29T00:00:00Z'
+        );
+      `)
+      expect(database.query(`
+        SELECT status, mirror_policy, reference_dispatch_attempt_count
+        FROM dance_choreography_revisions
+        WHERE dance_choreography_revision_id = 'dcr_ready'
+      `).get()).toEqual({
+        status: "ready",
+        mirror_policy: "allowed",
+        reference_dispatch_attempt_count: 0,
+      })
+    } finally {
+      database.close()
+    }
   })
 
   test("applies the verbatim 0153/0154 fixtures to sqlite and preserves root-state coherence", async () => {

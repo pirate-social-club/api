@@ -238,6 +238,23 @@ export function editTelegramMessageCaption(
   return callTelegramBotApi(bot, "editMessageCaption", body)
 }
 
+/**
+ * Delete one or more Telegram messages.
+ *
+ * `deleteMessages` is preferable to calling `deleteMessage` repeatedly for
+ * cleanup: Telegram treats missing message ids as skipped and still returns
+ * success. That makes a cleanup retry safe when the first response was lost.
+ */
+export function deleteTelegramMessages(
+  bot: Env | TelegramBotCredential,
+  body: {
+    chat_id: number | string
+    message_ids: number[]
+  },
+): Promise<true> {
+  return callTelegramBotApi(bot, "deleteMessages", body)
+}
+
 export function setTelegramChatMenuButton(
   bot: Env | TelegramBotCredential,
   body: {

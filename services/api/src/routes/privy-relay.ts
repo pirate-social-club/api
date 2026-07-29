@@ -34,6 +34,7 @@ privyRelay.post("/", async (c) => {
   }
   const request: FollowRelayRequest = {
     authorizationSignature: requiredString(body.authorizationSignature, "authorizationSignature"),
+    requestExpiry: requiredString(body.requestExpiry, "requestExpiry"),
     intentId: requiredString(body.intentId, "intentId"),
     transactionIndex: Number(body.transactionIndex),
     privyWalletId: requiredString(body.privyWalletId, "privyWalletId"),

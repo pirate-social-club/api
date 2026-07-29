@@ -8,6 +8,7 @@ import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
+import danceChoreographies from "./routes/dance-choreographies"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
@@ -98,6 +99,10 @@ import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconc
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
+import {
+  dispatchDueDanceReferences,
+  isDanceReferenceDispatchConfigured,
+} from "./lib/dance/choreography-reference-dispatch"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
@@ -184,6 +189,42 @@ export function expectedCommunityD1ShardSourceVersion(
 }
 
 app.use("*", requestCorrelationMiddleware)
+
+const CREDENTIAL_BEARING_REQUEST_HEADERS = [
+  "authorization",
+  "x-admin-token",
+  "x-agent-connection-token",
+  "x-very-callback-secret",
+  "x-karaoke-finalize-secret",
+  "x-dance-grader-signature",
+  "x-telegram-bot-secret",
+  "x-telegram-bot-api-secret-token",
+] as const
+
+function hasCredentialBearingHeader(request: Request): boolean {
+  return CREDENTIAL_BEARING_REQUEST_HEADERS.some((header) => request.headers.has(header))
+}
+
+app.use("*", async (c, next) => {
+  if (
+    !hasCredentialBearingHeader(c.req.raw)
+    || isPublicReadCacheRequest(c.req.raw)
+  ) {
+    await next()
+    return
+  }
+
+  // A credential-bearing response must never be reusable by another caller.
+  // Explicit public-read routes are the only exception: their response
+  // contract is authentication-invariant even when a client happens to send
+  // an Authorization header. Apply this at the outer app boundary rather than
+  // relying on every authenticated route to remember its own cache policy.
+  try {
+    await next()
+  } finally {
+    applyNoStore(c.res)
+  }
+})
 
 export function buildVersionMetadata(
   env: Pick<Env, "BUILD_GIT_REF" | "BUILD_GIT_SHA" | "BUILD_TIMESTAMP">,
@@ -435,10 +476,14 @@ app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/bookings", bookings)
+app.route("/dance-choreographies", danceChoreographies)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return
   try {
+    response.headers.delete("cloudflare-cdn-cache-control")
+    response.headers.delete("cdn-cache-control")
+    response.headers.delete("cache-tag")
     response.headers.set("cache-control", "private, no-store, max-age=0, must-revalidate")
     response.headers.set("pragma", "no-cache")
   } catch {
@@ -541,8 +586,12 @@ app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
 app.onError(async (error, c) => {
   const response = await apiErrorHandler(error, c)
-  // A thrown error inside /admin must not become a cacheable body either.
-  if (new URL(c.req.url).pathname.startsWith("/admin/")) {
+  // A thrown error inside /admin or on any credential-bearing request must not
+  // become a cacheable body either.
+  if (
+    new URL(c.req.url).pathname.startsWith("/admin/")
+    || hasCredentialBearingHeader(c.req.raw)
+  ) {
     applyNoStore(response)
   }
   return response
@@ -1410,6 +1459,12 @@ export const SCHEDULED_COMMUNITY_JOB_LOCK_NAME = "scheduled-cron-community-jobs"
 // deadline. Bounded so a crashed lane self-heals rather than wedging the lane
 // permanently.
 const SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS = 150_000
+// EFP has an explicit 15-minute freshness gate. Keep its small incremental
+// scans and confirmed-write reconciliation off the deadline-trimmed maintenance
+// tail without adding per-job connections: one lane, one shared scope.
+export const SCHEDULED_EFP_LOCK_NAME = "scheduled-cron-efp"
+const SCHEDULED_EFP_DEADLINE_MS = 45_000
+const SCHEDULED_EFP_LEASE_TTL_MS = 180_000
 
 type ScheduledPriorityJobName =
   | "reconcile_reward_payouts"
@@ -1565,6 +1620,23 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(isDanceReferenceDispatchConfigured(env)
+        ? [{
+            name: "dispatch_dance_references",
+            run: async () => {
+              const summary = await dispatchDueDanceReferences({ env })
+              if (summary.claimed > 0) {
+                console.info("[scheduled] dance reference dispatch", {
+                  claimed: summary.claimed,
+                  dispatched: summary.dispatched,
+                  retry_scheduled: summary.retry_scheduled,
+                  exhausted: summary.exhausted,
+                  claim_lost: summary.claim_lost,
+                })
+              }
+            },
+          }]
+        : []),
       ...(env.CONTROL_PLANE_DATABASE_URL && env.BASE_MAINNET_RPC_URL
         ? [{
             name: "scan_efp_base",
@@ -1628,7 +1700,7 @@ const handler: ExportedHandler<Env> = {
       ctx.waitUntil(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
       return
     }
-    // Two lanes, two leases, run concurrently.
+    // Three lanes, three leases, run concurrently.
     //
     // Community jobs are foreground delivery work — the retry engine for every
     // community job, including Telegram channel publishing. Maintenance
@@ -1696,6 +1768,17 @@ const handler: ExportedHandler<Env> = {
         leaseTtlMs: SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS,
         limit: 1,
         tasks: lanes.community,
+      }),
+      runLane({
+        lane: "efp",
+        lockName: SCHEDULED_EFP_LOCK_NAME,
+        deadlineMs: SCHEDULED_EFP_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_EFP_LEASE_TTL_MS,
+        limit: 1,
+        // The four tasks are one correctness unit: all three expected-chain
+        // cursors plus confirmed-write reconciliation must receive a start.
+        minimumStartsBeforeDeadline: lanes.efp.length,
+        tasks: lanes.efp,
       }),
       runLane({
         lane: "maintenance",

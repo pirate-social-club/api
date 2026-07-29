@@ -14,7 +14,12 @@ const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
 export type OperatorKind = "booking" | "rewards"
 export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
-export type RewardRehearsalScenario = "replay" | "over_limit" | "deadline_expired" | "stale_policy"
+export type RewardRehearsalScenario =
+  | "replay"
+  | "over_limit"
+  | "deadline_expired"
+  | "stale_policy"
+  | "refund_while_payouts_paused"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -80,7 +85,31 @@ export type PreparationLitErrorToken =
   | "action_fetch_failed"
   | "invalid_params"
   | "timeout"
+  | "other_json_error"
+  | "other_json_message"
+  | "other_json_nested_error"
+  | "other_json_unknown"
+  | "other_plain_text"
   | "other"
+  | "request_invalid"
+  | "vault_address_invalid"
+  | "vault_address_mismatch"
+  | "signer_address_invalid"
+  | "signer_address_mismatch"
+  | "chain_id_mismatch"
+  | "policy_version_mismatch"
+  | "method_not_permitted"
+  | "operation_id_invalid"
+  | "amount_invalid"
+  | "deadline_invalid"
+  | "deadline_out_of_policy"
+  | "nonce_invalid"
+  | "gas_policy_missing"
+  | "max_fee_per_gas_invalid"
+  | "max_priority_fee_per_gas_invalid"
+  | "gas_limit_invalid"
+  | "gas_policy_exceeded"
+  | "pkp_signer_mismatch"
 
 export interface PreparationFailureDiagnostic {
   stage: PreparationFailureStage
@@ -284,7 +313,16 @@ function boundedPreparationDiagnostic(error: unknown, classifiedAt: number): Pre
     "connection_lost", "redirect", "timeout", "fetch_failed", "unclassified",
   ])
   const litTokens = new Set<PreparationLitErrorToken>([
-    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout", "other",
+    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout",
+    "other_json_error", "other_json_message", "other_json_nested_error",
+    "other_json_unknown", "other_plain_text", "other",
+    "request_invalid", "vault_address_invalid", "vault_address_mismatch",
+    "signer_address_invalid", "signer_address_mismatch", "chain_id_mismatch",
+    "policy_version_mismatch", "method_not_permitted", "operation_id_invalid",
+    "amount_invalid", "deadline_invalid", "deadline_out_of_policy",
+    "nonce_invalid", "gas_policy_missing", "max_fee_per_gas_invalid",
+    "max_priority_fee_per_gas_invalid", "gas_limit_invalid",
+    "gas_policy_exceeded", "pkp_signer_mismatch",
   ])
   const transport = typeof record.transportCategory === "string"
     && transportCategories.has(record.transportCategory as PreparationTransportCategory)
@@ -1120,7 +1158,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (
       this.env.ENVIRONMENT !== "staging"
       || requestOperatorKind(req) !== "rewards"
-      || req.effectKind !== "reward_cashout"
+      || (
+        req.effectKind !== "reward_cashout"
+        && !(
+          req.effectKind === "reward_funding_refund"
+          && req.rehearsalScenario === "refund_while_payouts_paused"
+        )
+      )
     ) {
       throw badRequestError("Rewards rehearsal fixture is staging-only")
     }

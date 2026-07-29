@@ -2,8 +2,9 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import type { UserRepository } from "../auth/repositories"
+import { HttpError } from "../errors"
 import type { Client, InStatement, QueryResult } from "../sql-client"
-import { prepareProfileFollowWrite } from "./follow-write-service"
+import { prepareProfileFollowWrite, reconcilePendingFollowWrites } from "./follow-write-service"
 
 const VIEWER = "0x1111111111111111111111111111111111111111"
 const TARGET = "0x2222222222222222222222222222222222222222"
@@ -74,7 +75,7 @@ describe("prepareProfileFollowWrite", () => {
   })
 
   test("fails closed when primary-list state is unresolved", async () => {
-    await expect(prepareProfileFollowWrite({
+    const write = prepareProfileFollowWrite({
       actorUserId: "viewer",
       client: client(),
       desiredFollowing: true,
@@ -84,7 +85,12 @@ describe("prepareProfileFollowWrite", () => {
       targetUserId: "target",
       users: users(),
       resolvePrimaryList: async () => ({ kind: "unresolved" }),
-    })).rejects.toThrow("Unable to load your follow list right now")
+    })
+    await expect(write).rejects.toThrow("Unable to load your follow list right now")
+    await write.catch((error) => {
+      expect(error).toBeInstanceOf(HttpError)
+      expect((error as HttpError).retryable).toBe(true)
+    })
   })
 
   test("prepares and records both Base transactions only for a proven absent list", async () => {
@@ -108,5 +114,26 @@ describe("prepareProfileFollowWrite", () => {
     expect(db.inserts).toHaveLength(1)
     expect(db.inserts[0]?.args?.[7]).toBe("none")
     expect(db.inserts[0]?.args?.[11]).toBe(2)
+  })
+})
+
+describe("reconcilePendingFollowWrites", () => {
+  test("selects the ordering expression so PostgreSQL accepts DISTINCT ordering", async () => {
+    let pendingQuery = ""
+    const db = {
+      async execute(statement: string | InStatement) {
+        pendingQuery = typeof statement === "string" ? statement : statement.sql
+        return { rows: [] }
+      },
+      async batch() { return [] },
+      async transaction() { throw new Error("not used") },
+    } satisfies Client
+
+    await expect(reconcilePendingFollowWrites({ client: db })).resolves.toEqual({
+      examined: 0,
+      reflected: 0,
+    })
+    expect(pendingQuery).toContain("i.updated_at AS intent_updated_at")
+    expect(pendingQuery).toContain("ORDER BY intent_updated_at ASC")
   })
 })
