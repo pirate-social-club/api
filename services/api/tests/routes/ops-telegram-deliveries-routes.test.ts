@@ -71,6 +71,43 @@ describe("GET /admin/ops/telegram/uncertain-deliveries", () => {
   })
 })
 
+describe("Telegram staging synthetic routes", () => {
+  test("are invisible outside staging", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "production",
+      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
+    })
+    cleanup = ctx.cleanup
+
+    const response = await Promise.resolve(app.request(
+      "http://pirate.test/admin/ops/telegram/synthetic-fixture",
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    ))
+    expect(response.status).toBe(404)
+  })
+
+  test("require the admin token on staging", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "staging",
+      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
+    })
+    cleanup = ctx.cleanup
+
+    for (const request of [
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-fixture"),
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-deliveries/post_pst_1"),
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-deliveries/post_pst_1/cleanup", {
+        method: "POST",
+      }),
+    ]) {
+      const response = await Promise.resolve(app.request(request, undefined, ctx.env))
+      expect(response.status).toBe(401)
+      expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+    }
+  })
+})
+
 describe("POST /admin/ops/telegram/uncertain-deliveries/:id/resolve", () => {
   test("rejects requests without the admin token", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })

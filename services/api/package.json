@@ -22,6 +22,7 @@
     "deploy": "bun run scripts/deploy-with-version.ts",
     "smoke:community-create": "bun run scripts/smoke-staging-community-create.ts",
     "smoke:song-submit": "bun run scripts/smoke-staging-song-submit-ci.ts",
+    "smoke:telegram-channel": "bun run scripts/smoke-staging-telegram-channel.ts",
     "smoke:paid-booking": "bun run scripts/smoke-paid-booking.ts",
     "smoke:booking-review": "bun run scripts/smoke-booking-settlement-review.ts",
     "smoke:public-feed-cache": "bun run scripts/smoke-public-feed-cache.ts",
