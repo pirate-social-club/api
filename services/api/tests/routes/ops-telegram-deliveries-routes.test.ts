@@ -122,7 +122,24 @@ describe("operational reads are never cached", () => {
     expect(response.headers.get("cache-control") ?? "").toContain("no-store")
   })
 
-  test("the whole /admin/ops namespace is covered, not just telegram", async () => {
+  test("the whole /admin namespace is covered, not just ops", async () => {
+    // Audit finding: /admin/debug exposes authenticated GETs with no
+    // cache-control — the same shape that leaked from /admin/ops. Covering the
+    // namespace means a future admin route is safe by default.
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    for (const url of [
+      "http://pirate.test/admin/ops/wallets",
+      "http://pirate.test/admin/debug/post-pipeline",
+      "http://pirate.test/admin/bot-users",
+    ]) {
+      const response = await Promise.resolve(app.request(url, { headers: { "x-admin-token": ADMIN_TOKEN } }, ctx.env))
+      expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+    }
+  })
+
+  test("the ops namespace specifically stays covered", async () => {
     const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
     cleanup = ctx.cleanup
 
