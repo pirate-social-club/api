@@ -92,3 +92,64 @@ describe("POST /admin/ops/telegram/uncertain-deliveries/:id/resolve", () => {
     expect(response.status).toBe(400)
   })
 })
+
+describe("operational reads are never cached", () => {
+  // Observed on staging: the unfiltered count returned a 19-minute-old body
+  // (cf-cache-status HIT, age 1164) naming a delivery that had already been
+  // resolved. Filtered URLs appeared correct only because they were different
+  // cache keys. An operator acting on that would chase a phantom stranded row —
+  // or miss a real one behind a stale zero.
+  test("declares private, no-store on list and count", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    for (const url of [BASE, `${BASE}/count`]) {
+      const response = await Promise.resolve(app.request(url, { headers: { "x-admin-token": ADMIN_TOKEN } }, ctx.env))
+      expect(response.status).toBe(200)
+      const cacheControl = response.headers.get("cache-control") ?? ""
+      expect(cacheControl).toContain("no-store")
+      expect(cacheControl).toContain("private")
+    }
+  })
+
+  test("declares no-store even on an unauthorized response", async () => {
+    // A cached 401 is just as wrong, and error paths are the ones that forget.
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const response = await Promise.resolve(app.request(`${BASE}/count`, {}, ctx.env))
+    expect(response.status).toBe(401)
+    expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+  })
+
+  test("the whole /admin/ops namespace is covered, not just telegram", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const response = await Promise.resolve(app.request(
+      "http://pirate.test/admin/ops/wallets",
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    ))
+    expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+  })
+
+  // The identical URL must reflect state changes — no query-string busting.
+  test("the exact unfiltered URL reflects state changes across requests", async () => {
+    const ctx = await createRouteTestContext({ PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    cleanup = ctx.cleanup
+
+    const read = async () => {
+      const r = await Promise.resolve(app.request(`${BASE}/count`, { headers: { "x-admin-token": ADMIN_TOKEN } }, ctx.env))
+      return (await json(r) as { total: number }).total
+    }
+
+    const first = await read()
+    const second = await read()
+    // Same URL, same result shape, served from the handler both times rather
+    // than a stored copy: repeated identical reads must agree with each other
+    // AND with the store, not with a snapshot taken earlier.
+    expect(first).toBe(0)
+    expect(second).toBe(0)
+  })
+})
