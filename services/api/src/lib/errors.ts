@@ -74,6 +74,10 @@ export function conflictError(message: string, details: Record<string, unknown> 
   return new HttpError(409, "conflict", message, false, details)
 }
 
+export function retryableConflictError(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(409, "conflict", message, true, details)
+}
+
 /**
  * A 409 that a client can act on programmatically. A money-moving flow must be able to
  * tell "this quote expired, start over" apart from "this transaction was already

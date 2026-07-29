@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import type { UserRepository } from "../auth/repositories"
+import { HttpError } from "../errors"
 import type { Client, InStatement, QueryResult } from "../sql-client"
 import { prepareProfileFollowWrite } from "./follow-write-service"
 
@@ -74,7 +75,7 @@ describe("prepareProfileFollowWrite", () => {
   })
 
   test("fails closed when primary-list state is unresolved", async () => {
-    await expect(prepareProfileFollowWrite({
+    const write = prepareProfileFollowWrite({
       actorUserId: "viewer",
       client: client(),
       desiredFollowing: true,
@@ -84,7 +85,12 @@ describe("prepareProfileFollowWrite", () => {
       targetUserId: "target",
       users: users(),
       resolvePrimaryList: async () => ({ kind: "unresolved" }),
-    })).rejects.toThrow("Unable to load your follow list right now")
+    })
+    await expect(write).rejects.toThrow("Unable to load your follow list right now")
+    await write.catch((error) => {
+      expect(error).toBeInstanceOf(HttpError)
+      expect((error as HttpError).retryable).toBe(true)
+    })
   })
 
   test("prepares and records both Base transactions only for a proven absent list", async () => {
