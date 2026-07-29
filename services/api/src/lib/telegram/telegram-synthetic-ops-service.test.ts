@@ -16,7 +16,7 @@ function client(rowsFor: (query: Query) => unknown[]) {
 const fixtureRow = {
   community_id: "cmt_fixture",
   channel_title: "Synthetic channel",
-  created_by_user_id: "usr_owner",
+  creator_user_id: "usr_owner",
 }
 
 const deliveryRow = {

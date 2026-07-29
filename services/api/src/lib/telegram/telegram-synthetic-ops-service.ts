@@ -35,7 +35,7 @@ export type TelegramSyntheticDelivery = {
 function fixtureFromRow(row: unknown): TelegramSyntheticFixture {
   return {
     community_id: publicCommunityId(String(rowValue(row, "community_id") ?? "")),
-    owner_user_id: String(rowValue(row, "created_by_user_id") ?? ""),
+    owner_user_id: String(rowValue(row, "creator_user_id") ?? ""),
     channel_title: String(rowValue(row, "channel_title") ?? ""),
   }
 }
@@ -57,7 +57,7 @@ export async function findTelegramSyntheticFixture(input: {
     : null
   const result = await input.client.execute({
     sql: `
-      SELECT d.community_id, d.channel_title, c.created_by_user_id
+      SELECT d.community_id, d.channel_title, c.creator_user_id
       FROM telegram_channel_destinations d
       JOIN communities c ON c.community_id = d.community_id
       WHERE d.status = 'active'
