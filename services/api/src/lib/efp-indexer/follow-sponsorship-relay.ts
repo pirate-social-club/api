@@ -9,11 +9,23 @@ type PreparedTransaction = { chain_id: number; data: Hex; to: Address }
 
 export type FollowRelayRequest = {
   authorizationSignature: string
+  requestExpiry: string
   intentId: string
   transactionIndex: number
   privyWalletId: string
   walletAddress: Address
   transaction: { data: Hex; to: Address; value?: string }
+}
+
+type PrivyRelayPayload = {
+  data?: {
+    hash?: unknown
+    transaction_id?: unknown
+    user_operation_hash?: unknown
+  }
+  error?: unknown
+  hash?: unknown
+  message?: unknown
 }
 
 function positiveInteger(value: string | undefined): number | null {
@@ -51,6 +63,66 @@ function exactTransaction(expected: PreparedTransaction, request: FollowRelayReq
     && request.transaction.to.toLowerCase() === expected.to.toLowerCase()
     && request.transaction.data.toLowerCase() === expected.data.toLowerCase()
     && (request.transaction.value == null || request.transaction.value === "0x0" || request.transaction.value === "0")
+}
+
+function validateRequestExpiry(value: string, now: Date): void {
+  if (!/^\d{13}$/u.test(value)) throw badRequestError("Invalid Privy request expiry")
+  const expiry = Number(value)
+  const nowMs = now.getTime()
+  if (!Number.isSafeInteger(expiry) || expiry <= nowMs || expiry > nowMs + 30 * 60 * 1_000) {
+    throw badRequestError("Invalid Privy request expiry")
+  }
+}
+
+function privyErrorMessage(payload: PrivyRelayPayload | null, status: number): string {
+  if (typeof payload?.message === "string" && payload.message.trim()) return payload.message
+  if (typeof payload?.error === "string" && payload.error.trim()) return payload.error
+  if (payload?.error && typeof payload.error === "object") {
+    const error = payload.error as Record<string, unknown>
+    if (typeof error.message === "string" && error.message.trim()) return error.message
+    if (typeof error.error === "string" && error.error.trim()) return error.error
+  }
+  return `Privy relay returned ${status}`
+}
+
+function transactionHash(payload: PrivyRelayPayload | null): string {
+  return String(payload?.data?.hash ?? payload?.hash ?? "").toLowerCase()
+}
+
+async function waitForPrivyTransactionHash(input: {
+  apiUrl: string
+  appId: string
+  appSecret: string
+  transactionId: string
+  fetcher: typeof fetch
+}): Promise<Hex | null> {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    const response = await input.fetcher(
+      `${input.apiUrl}/v1/transactions/${encodeURIComponent(input.transactionId)}`,
+      {
+        headers: {
+          authorization: `Basic ${btoa(`${input.appId}:${input.appSecret}`)}`,
+          "privy-app-id": input.appId,
+        },
+        signal: AbortSignal.timeout(5_000),
+      },
+    )
+    const payload = await response.json().catch(() => null) as {
+      status?: unknown
+      transaction_hash?: unknown
+    } | null
+    const hash = String(payload?.transaction_hash ?? "").toLowerCase()
+    if (response.ok && /^0x[a-f0-9]{64}$/u.test(hash)) return hash as Hex
+    if (
+      response.ok
+      && ["execution_reverted", "failed", "provider_error"].includes(String(payload?.status))
+    ) {
+      return null
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
+  return null
 }
 
 async function loadAndReserve(input: {
@@ -208,6 +280,26 @@ async function releaseReservation(input: {
   })
 }
 
+async function recordProviderPending(input: {
+  client: Client
+  intentId: string
+  now: string
+  transactionId: string
+}): Promise<void> {
+  await input.client.execute({
+    sql: `
+      UPDATE efp_follow_write_intents
+      SET last_error = ?2, updated_at = ?3
+      WHERE follow_write_intent_id = ?1 AND status = 'submitting'
+    `,
+    args: [
+      input.intentId,
+      `Privy transaction accepted and pending: ${input.transactionId}`.slice(0, 1_000),
+      input.now,
+    ],
+  })
+}
+
 async function finalizeSend(input: {
   client: Client
   actorUserId: string
@@ -306,7 +398,11 @@ export async function relaySponsoredFollowTransaction(input: {
     throw badRequestError("Invalid follow transaction index")
   }
   const config = requiredConfig(input.env)
-  const now = (input.now ?? new Date()).toISOString()
+  const nowDate = input.now ?? new Date()
+  validateRequestExpiry(input.request.requestExpiry, nowDate)
+  const now = nowDate.toISOString()
+  const apiUrl = input.env.PRIVY_API_URL?.replace(/\/+$/u, "") || "https://api.privy.io"
+  const fetcher = input.fetcher ?? fetch
   await withTransaction(input.client, "write", (tx) => loadAndReserve({
     tx,
     env: input.env,
@@ -318,8 +414,8 @@ export async function relaySponsoredFollowTransaction(input: {
 
   let response: Response
   try {
-    response = await (input.fetcher ?? fetch)(
-      `${input.env.PRIVY_API_URL?.replace(/\/+$/u, "") || "https://api.privy.io"}/v1/wallets/${encodeURIComponent(input.request.privyWalletId)}/rpc`,
+    response = await fetcher(
+      `${apiUrl}/v1/wallets/${encodeURIComponent(input.request.privyWalletId)}/rpc`,
       {
         method: "POST",
         headers: {
@@ -327,6 +423,7 @@ export async function relaySponsoredFollowTransaction(input: {
           "content-type": "application/json",
           "privy-app-id": config.appId,
           "privy-authorization-signature": input.request.authorizationSignature,
+          "privy-request-expiry": input.request.requestExpiry,
         },
         body: JSON.stringify({
           method: "eth_sendTransaction",
@@ -347,16 +444,37 @@ export async function relaySponsoredFollowTransaction(input: {
     })
     throw eligibilityFailed("Follow sponsorship relay is unavailable")
   }
-  const payload = await response.json().catch(() => null) as {
-    data?: { hash?: unknown }
-    hash?: unknown
-    message?: unknown
-  } | null
-  const txHash = String(payload?.data?.hash ?? payload?.hash ?? "").toLowerCase()
-  if (!response.ok || !/^0x[a-f0-9]{64}$/u.test(txHash)) {
-    const message = typeof payload?.message === "string" ? payload.message : `Privy relay returned ${response.status}`
+  const payload = await response.json().catch(() => null) as PrivyRelayPayload | null
+  if (!response.ok) {
+    const message = privyErrorMessage(payload, response.status)
     await releaseReservation({ client: input.client, intentId: input.request.intentId, now, error: message })
     throw eligibilityFailed("Follow sponsorship relay rejected the transaction")
+  }
+  let txHash = transactionHash(payload)
+  const transactionId = typeof payload?.data?.transaction_id === "string"
+    ? payload.data.transaction_id.trim()
+    : ""
+  if (!/^0x[a-f0-9]{64}$/u.test(txHash) && transactionId) {
+    txHash = await waitForPrivyTransactionHash({
+      apiUrl,
+      appId: config.appId,
+      appSecret: config.appSecret,
+      transactionId,
+      fetcher,
+    }) ?? ""
+  }
+  if (!/^0x[a-f0-9]{64}$/u.test(txHash)) {
+    // Privy accepted the send, so keep the intent in `submitting`. Releasing it
+    // would permit the same prepared transaction to be submitted twice.
+    if (transactionId) {
+      await recordProviderPending({
+        client: input.client,
+        intentId: input.request.intentId,
+        now,
+        transactionId,
+      })
+    }
+    throw eligibilityFailed("Follow sponsorship was accepted but is still awaiting an on-chain hash")
   }
   await finalizeSend({
     client: input.client,
