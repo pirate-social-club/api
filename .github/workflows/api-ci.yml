@@ -3,6 +3,7 @@ name: api-ci
 on:
   pull_request:
     paths:
+      - "AGENTS.md"
       - ".github/workflows/api-ci.yml"
       - ".github/workflows/staging-contract-gate.yml"
       - ".github/ci-refs/core.sha"
@@ -21,6 +22,7 @@ on:
     branches:
       - main
     paths:
+      - "AGENTS.md"
       - ".github/workflows/api-ci.yml"
       - ".github/workflows/staging-contract-gate.yml"
       - ".github/ci-refs/core.sha"
