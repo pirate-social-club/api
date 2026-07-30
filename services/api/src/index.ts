@@ -68,6 +68,7 @@ import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/j
 import { exhaustedCommunityJobs, processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
+import { listActiveTelegramChannelCommunityIds } from "./lib/telegram/channel-destination-service"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
@@ -798,6 +799,18 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     taskDeadlineAtMs,
   )
   try {
+    let priorityCommunityIds: string[] = []
+    try {
+      priorityCommunityIds = await listActiveTelegramChannelCommunityIds({
+        client: getControlPlaneClient(env),
+        limit: 25,
+      })
+    } catch (error) {
+      console.warn(
+        "[community-jobs] failed to load Telegram channel priority hints",
+        error,
+      )
+    }
     const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
       env,
       communityRepository,
@@ -866,6 +879,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
+      priorityCommunityIds,
       // Clamp the drain's tick to the task deadline; the prelude sub-budget
       // normally leaves the full 45s, but an overrun must not push the task
       // past the scheduler lease.

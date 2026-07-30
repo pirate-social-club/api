@@ -281,13 +281,29 @@ export function selectScheduledCommunityJobPollIds(
   communities: Array<{ community_id: string; created_at?: string | null }>,
   maxCommunities: number,
   nowMs: number = Date.now(),
+  priorityCommunityIds: string[] = [],
 ): string[] {
-  if (communities.length <= maxCommunities) {
-    return communities.map((community) => community.community_id)
+  const boundedMax = Math.max(1, Math.trunc(maxCommunities))
+  const communitiesById = new Map(
+    communities.map((community) => [community.community_id, community]),
+  )
+  const selected = new Set<string>()
+  for (const communityId of priorityCommunityIds) {
+    if (communitiesById.has(communityId)) selected.add(communityId)
+    if (selected.size >= boundedMax) return Array.from(selected)
   }
 
-  const recentCount = Math.max(1, Math.min(maxCommunities, Math.ceil(maxCommunities / 4)))
+  if (communities.length <= boundedMax) {
+    for (const community of communities) selected.add(community.community_id)
+    return Array.from(selected)
+  }
+
+  const recentCount = Math.max(
+    0,
+    Math.min(boundedMax - selected.size, Math.ceil(boundedMax / 4)),
+  )
   const newest = communities
+    .filter((community) => !selected.has(community.community_id))
     .slice()
     .sort((left, right) => {
       const createdDiff = createdAtMs(right) - createdAtMs(left)
@@ -295,9 +311,9 @@ export function selectScheduledCommunityJobPollIds(
     })
     .slice(0, recentCount)
 
-  const selected = new Set(newest.map((community) => community.community_id))
+  for (const community of newest) selected.add(community.community_id)
   const remaining = communities.filter((community) => !selected.has(community.community_id))
-  const rotatingCount = maxCommunities - selected.size
+  const rotatingCount = boundedMax - selected.size
   if (rotatingCount <= 0 || remaining.length === 0) {
     return Array.from(selected)
   }
@@ -309,6 +325,20 @@ export function selectScheduledCommunityJobPollIds(
   }
 
   return Array.from(selected)
+}
+
+export function orderScheduledCommunityJobPollIds(
+  selectedCommunityIds: string[],
+  priorityCommunityIds: string[],
+  nowMs: number,
+): string[] {
+  const selected = new Set(selectedCommunityIds)
+  const priority = priorityCommunityIds.filter((communityId, index, ids) => (
+    selected.has(communityId) && ids.indexOf(communityId) === index
+  ))
+  const prioritySet = new Set(priority)
+  const rotating = selectedCommunityIds.filter((communityId) => !prioritySet.has(communityId))
+  return [...priority, ...rotateCommunityJobTickIds(rotating, nowMs)]
 }
 
 /**
@@ -589,6 +619,7 @@ export async function processAvailableCommunityJobs(input: {
   maxCommunities?: number
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
+  priorityCommunityIds?: string[] | null
   deadlineMs?: number | null
   sweepDeadlineMs?: number | null
   now?: () => number
@@ -609,8 +640,14 @@ export async function processAvailableCommunityJobs(input: {
     : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const communityIds = input.communityIds?.length
     ? input.communityIds.slice(0, maxCommunities)
-    : rotateCommunityJobTickIds(
-      selectScheduledCommunityJobPollIds(activeCommunities, maxCommunities, startedAt),
+    : orderScheduledCommunityJobPollIds(
+      selectScheduledCommunityJobPollIds(
+        activeCommunities,
+        maxCommunities,
+        startedAt,
+        input.priorityCommunityIds ?? [],
+      ),
+      input.priorityCommunityIds ?? [],
       startedAt,
     )
   const communities: CommunityJobCommunityProcessingSummary[] = []
