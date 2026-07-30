@@ -20,6 +20,17 @@ REFERENCE_PERMANENT_FAILURE_CODES = frozenset(
     }
 )
 
+ATTEMPT_REJECTION_CODE_MAP = {
+    "video_invalid": "video_invalid",
+    "video_limits_exceeded": "duration_out_of_range",
+    "invalid_timeline": "video_invalid",
+    "multiple_people": "multiple_people",
+    "pose_result_invalid": "video_invalid",
+    "insufficient_pose_presence": "insufficient_pose_presence",
+    "insufficient_coverage": "insufficient_coverage",
+    "insufficient_motion": "insufficient_motion",
+}
+
 
 def reference_failure_reason(error: BaseException) -> str:
     code = getattr(error, "code", None)
@@ -27,6 +38,15 @@ def reference_failure_reason(error: BaseException) -> str:
         code
         if isinstance(code, str) and code in REFERENCE_PERMANENT_FAILURE_CODES
         else ("scoring_unavailable")
+    )
+
+
+def attempt_failure_reason(error: BaseException) -> str:
+    code = getattr(error, "code", None)
+    return (
+        ATTEMPT_REJECTION_CODE_MAP.get(code, "scoring_unavailable")
+        if isinstance(code, str)
+        else "scoring_unavailable"
     )
 
 

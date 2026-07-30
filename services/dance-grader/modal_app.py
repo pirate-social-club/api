@@ -152,7 +152,7 @@ def grade_attempt(payload: dict) -> None:
         ScorerConfig,
         grade_dance_against_features,
     )
-    from dance_grader.service_protocol import download_verified
+    from dance_grader.service_protocol import attempt_failure_reason, download_verified
 
     result: dict
     try:
@@ -212,11 +212,12 @@ def grade_attempt(payload: dict) -> None:
                 "grade": grade.to_dict(),
                 "extraction_metrics": extraction.metrics.__dict__,
             }
-    except Exception:  # noqa: BLE001 - terminal job boundary must callback on all failures
+    except Exception as error:  # noqa: BLE001 - terminal job boundary must callback on all failures
+        reason = attempt_failure_reason(error)
         result = {
             "subject": payload["subject"],
-            "outcome": "failed",
-            "reason": "scoring_unavailable",
+            "outcome": "failed" if reason == "scoring_unavailable" else "rejected",
+            "reason": reason,
         }
     _callback(payload, result)
 
