@@ -25,7 +25,10 @@ function users(): UserRepository {
   }
 }
 
-function client(input?: { reflected?: boolean }): Client & { inserts: InStatement[] } {
+function client(input?: {
+  reflected?: boolean
+  resumableRow?: Record<string, unknown>
+}): Client & { inserts: InStatement[] } {
   const inserts: InStatement[] = []
   return {
     inserts,
@@ -36,6 +39,9 @@ function client(input?: { reflected?: boolean }): Client & { inserts: InStatemen
       }
       if (query.includes("COUNT(*) AS write_count")) return { rows: [{ write_count: 0 }] }
       if (query.includes("WHERE actor_user_id = ?1 AND idempotency_key")) return { rows: [] }
+      if (query.includes("sponsored_transaction_count > 0")) {
+        return { rows: input?.resumableRow ? [input.resumableRow] : [] }
+      }
       if (query.includes("FROM efp_effective_follows")) {
         return { rows: input?.reflected ? [{ edge: 1 }] : [] }
       }
@@ -114,6 +120,41 @@ describe("prepareProfileFollowWrite", () => {
     expect(db.inserts).toHaveLength(1)
     expect(db.inserts[0]?.args?.[7]).toBe("none")
     expect(db.inserts[0]?.args?.[11]).toBe(2)
+  })
+
+  test("resumes only the unsent suffix of an incomplete bootstrap", async () => {
+    const transactions = [
+      { chain_id: 8453, data: "0x01", to: VIEWER },
+      { chain_id: 8453, data: "0x02", to: TARGET },
+    ]
+    const result = await prepareProfileFollowWrite({
+      actorUserId: "viewer",
+      client: client({
+        resumableRow: {
+          expires_at: "2026-07-28T01:00:00.000Z",
+          follow_write_intent_id: "efw_11111111111111111111111111111111",
+          prepared_transactions_json: transactions,
+          sponsored_transaction_count: 1,
+          sponsorship_reserved_transaction_count: 1,
+        },
+      }),
+      desiredFollowing: true,
+      env: ENV,
+      idempotencyKey: "idem-resume",
+      now: new Date("2026-07-28T00:00:00.000Z"),
+      targetPublicUserId: "usr_target",
+      targetUserId: "target",
+      users: users(),
+      resolvePrimaryList: async () => {
+        throw new Error("resolver must not run for a resumable write")
+      },
+    })
+
+    expect(result.intent_id).toBe("efw_11111111111111111111111111111111")
+    expect(result.prepared_transaction_count).toBe(2)
+    expect(result.transaction_index_offset).toBe(1)
+    expect(result.transactions).toEqual([transactions[1]])
+    expect(result.sponsorship.reserved_transaction_count).toBe(1)
   })
 })
 

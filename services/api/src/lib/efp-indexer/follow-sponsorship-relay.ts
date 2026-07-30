@@ -89,6 +89,10 @@ function transactionHash(payload: PrivyRelayPayload | null): string {
   return String(payload?.data?.hash ?? payload?.hash ?? "").toLowerCase()
 }
 
+export function privyFollowRequestId(intentId: string, transactionIndex: number): string {
+  return `${intentId}-${transactionIndex}`
+}
+
 async function waitForPrivyTransactionHash(input: {
   apiUrl: string
   appId: string
@@ -161,13 +165,16 @@ async function loadAndReserve(input: {
   if (String(row.actor_wallet_address) !== input.request.walletAddress.toLowerCase()) {
     throw conflictError("Follow write wallet does not match the authenticated session")
   }
-  if (Date.parse(String(row.expires_at)) <= Date.parse(input.now)) {
+  const sponsoredCount = numberValue(row, "sponsored_transaction_count")
+  if (
+    Date.parse(String(row.expires_at)) <= Date.parse(input.now)
+    && sponsoredCount === 0
+  ) {
     throw conflictError("Follow write intent has expired")
   }
   if (String(row.status) !== "prepared") {
     throw conflictError("Follow write intent is not ready for this transaction")
   }
-  const sponsoredCount = numberValue(row, "sponsored_transaction_count")
   if (input.request.transactionIndex !== sponsoredCount) {
     throw conflictError("Follow transactions must be submitted in order")
   }
@@ -303,7 +310,7 @@ async function recordProviderPending(input: {
 async function finalizeSend(input: {
   client: Client
   actorUserId: string
-  request: FollowRelayRequest
+  intentId: string
   txHash: Hex
   now: string
 }): Promise<void> {
@@ -319,7 +326,7 @@ async function finalizeSend(input: {
           AND status = 'submitting'
         FOR UPDATE
       `,
-      args: [input.request.intentId, input.actorUserId],
+      args: [input.intentId, input.actorUserId],
     })
     const row = result.rows[0]
     if (!row) throw conflictError("Follow write intent lost its sponsorship reservation")
@@ -339,7 +346,7 @@ async function finalizeSend(input: {
             updated_at = ?2
         WHERE budget_date = CAST(?2 AS DATE)
       `,
-      args: [input.request.intentId, input.now],
+      args: [input.intentId, input.now],
     })
     await tx.execute({
       sql: `
@@ -353,7 +360,7 @@ async function finalizeSend(input: {
         WHERE follow_write_intent_id = ?1
       `,
       args: [
-        input.request.intentId,
+        input.intentId,
         nextCount,
         JSON.stringify(hashes),
         complete ? "submitted" : "prepared",
@@ -378,7 +385,7 @@ async function finalizeSend(input: {
               last_error = NULL,
               updated_at = excluded.updated_at
           `,
-          args: [wallet, input.request.intentId, input.now],
+          args: [wallet, input.intentId, input.now],
         })
       }
     }
@@ -403,6 +410,10 @@ export async function relaySponsoredFollowTransaction(input: {
   const now = nowDate.toISOString()
   const apiUrl = input.env.PRIVY_API_URL?.replace(/\/+$/u, "") || "https://api.privy.io"
   const fetcher = input.fetcher ?? fetch
+  const requestId = privyFollowRequestId(
+    input.request.intentId,
+    input.request.transactionIndex,
+  )
   await withTransaction(input.client, "write", (tx) => loadAndReserve({
     tx,
     env: input.env,
@@ -423,12 +434,14 @@ export async function relaySponsoredFollowTransaction(input: {
           "content-type": "application/json",
           "privy-app-id": config.appId,
           "privy-authorization-signature": input.request.authorizationSignature,
+          "privy-idempotency-key": requestId,
           "privy-request-expiry": input.request.requestExpiry,
         },
         body: JSON.stringify({
           method: "eth_sendTransaction",
           caip2: "eip155:8453",
           chain_type: "ethereum",
+          reference_id: requestId,
           sponsor: true,
           params: { transaction: input.request.transaction },
         }),
@@ -436,13 +449,23 @@ export async function relaySponsoredFollowTransaction(input: {
       },
     )
   } catch (error) {
-    await releaseReservation({
+    // Once the provider request has started, a transport timeout is ambiguous:
+    // Privy may have accepted it even though this Worker never received the
+    // response. Keep the reservation and deterministic request ID so recovery
+    // can look it up without permitting a duplicate send.
+    await recordProviderPending({
       client: input.client,
       intentId: input.request.intentId,
       now,
-      error: error instanceof Error ? error.message : String(error),
+      transactionId: requestId,
     })
-    throw eligibilityFailed("Follow sponsorship relay is unavailable")
+    const message = error instanceof Error ? error.message : String(error)
+    console.warn("[efp-follow-sponsorship] Privy send outcome is unknown", {
+      intent_id: input.request.intentId,
+      request_id: requestId,
+      message: message.slice(0, 500),
+    })
+    throw eligibilityFailed("Follow sponsorship was submitted and is awaiting confirmation")
   }
   const payload = await response.json().catch(() => null) as PrivyRelayPayload | null
   if (!response.ok) {
@@ -479,9 +502,91 @@ export async function relaySponsoredFollowTransaction(input: {
   await finalizeSend({
     client: input.client,
     actorUserId: input.actorUserId,
-    request: input.request,
+    intentId: input.request.intentId,
     txHash: txHash as Hex,
     now,
   })
   return { txHash: txHash as Hex, consistency: "accepted_not_yet_reflected" }
+}
+
+function hashFromPrivyLookup(payload: unknown): Hex | null {
+  const candidates = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object"
+      ? [
+          payload,
+          ...(["data", "transactions", "results"].flatMap((key) => {
+            const value = (payload as Record<string, unknown>)[key]
+            return Array.isArray(value) ? value : value ? [value] : []
+          })),
+        ]
+      : []
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object") continue
+    const record = candidate as Record<string, unknown>
+    const hash = String(
+      record.transaction_hash
+        ?? record.hash
+        ?? (record.data && typeof record.data === "object"
+          ? (record.data as Record<string, unknown>).hash
+          : ""),
+    ).toLowerCase()
+    if (/^0x[a-f0-9]{64}$/u.test(hash)) return hash as Hex
+  }
+  return null
+}
+
+export async function reconcilePendingPrivyFollowSubmissions(input: {
+  client: Client
+  env: Env
+  now?: Date
+  limit?: number
+  fetcher?: typeof fetch
+}): Promise<{ examined: number; recovered: number }> {
+  const config = requiredConfig(input.env)
+  const pending = await input.client.execute({
+    sql: `
+      SELECT follow_write_intent_id, actor_user_id, sponsored_transaction_count
+      FROM efp_follow_write_intents
+      WHERE status = 'submitting'
+        AND updated_at <= CURRENT_TIMESTAMP - INTERVAL '30 seconds'
+      ORDER BY updated_at ASC
+      LIMIT ?1
+    `,
+    args: [Math.max(1, Math.min(input.limit ?? 100, 500))],
+  })
+  const apiUrl = input.env.PRIVY_API_URL?.replace(/\/+$/u, "") || "https://api.privy.io"
+  const fetcher = input.fetcher ?? fetch
+  const now = (input.now ?? new Date()).toISOString()
+  let recovered = 0
+  for (const row of pending.rows) {
+    const intentId = String(row.follow_write_intent_id)
+    const actorUserId = String(row.actor_user_id)
+    const requestId = privyFollowRequestId(
+      intentId,
+      numberValue(row, "sponsored_transaction_count"),
+    )
+    const response = await fetcher(
+      `${apiUrl}/v1/transactions?reference_id=${encodeURIComponent(requestId)}`,
+      {
+        headers: {
+          authorization: `Basic ${btoa(`${config.appId}:${config.appSecret}`)}`,
+          "privy-app-id": config.appId,
+        },
+        signal: AbortSignal.timeout(5_000),
+      },
+    ).catch(() => null)
+    if (!response?.ok) continue
+    const hash = hashFromPrivyLookup(await response.json().catch(() => null))
+    if (!hash) continue
+    await finalizeSend({
+      client: input.client,
+      actorUserId,
+      intentId,
+      txHash: hash,
+      now,
+    })
+    recovered += 1
+  }
+  return { examined: pending.rows.length, recovered }
 }

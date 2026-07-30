@@ -92,6 +92,7 @@ import {
   reconcilePendingFollowWrites,
   recordEfpFollowAdoptionSnapshot,
 } from "./lib/efp-indexer/follow-write-service"
+import { reconcilePendingPrivyFollowSubmissions } from "./lib/efp-indexer/follow-sponsorship-relay"
 import {
   isHnsRootObserverEnabled,
   observeDueHnsRoots,
@@ -776,15 +777,21 @@ async function scanScheduledEfpChain(
 }
 
 async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
+  const sponsorship = await reconcilePendingPrivyFollowSubmissions({
+    client: getControlPlaneClient(env),
+    env,
+    limit: 100,
+  })
   const summary = await reconcilePendingFollowWrites({
     client: getControlPlaneClient(env),
     limit: 100,
   })
   await recordEfpFollowAdoptionSnapshot({ client: getControlPlaneClient(env) })
-  if (summary.examined > 0) {
+  if (summary.examined > 0 || sponsorship.examined > 0) {
     console.info(JSON.stringify({
       component: "efp_follow_writes",
       operation: "reconcile_projection",
+      sponsorship,
       ...summary,
     }))
   }
