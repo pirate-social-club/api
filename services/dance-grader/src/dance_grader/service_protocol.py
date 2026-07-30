@@ -21,6 +21,8 @@ REFERENCE_PERMANENT_FAILURE_CODES = frozenset(
 )
 
 ATTEMPT_REJECTION_CODE_MAP = {
+    "content_hash_mismatch": "upload_invalid",
+    "download_limit_exceeded": "upload_invalid",
     "video_invalid": "video_invalid",
     "video_limits_exceeded": "duration_out_of_range",
     "invalid_timeline": "video_invalid",
@@ -30,6 +32,11 @@ ATTEMPT_REJECTION_CODE_MAP = {
     "insufficient_coverage": "insufficient_coverage",
     "insufficient_motion": "insufficient_motion",
 }
+
+class DownloadVerificationError(ValueError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def reference_failure_reason(error: BaseException) -> str:
@@ -129,12 +136,17 @@ def download_verified(
             for chunk in response.iter_bytes():
                 size += len(chunk)
                 if size > max_bytes:
-                    raise ValueError("download exceeds byte cap")
+                    raise DownloadVerificationError(
+                        "download_limit_exceeded", "download exceeds byte cap"
+                    )
                 digest.update(chunk)
                 output.write(chunk)
     if digest.hexdigest() != expected_sha256:
         destination.unlink(missing_ok=True)
-        raise ValueError("download SHA-256 does not match expected content")
+        raise DownloadVerificationError(
+            "content_hash_mismatch",
+            "download SHA-256 does not match expected content",
+        )
     return size
 
 

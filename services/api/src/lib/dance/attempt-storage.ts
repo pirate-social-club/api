@@ -7,6 +7,11 @@ const SHA256 = /^[0-9a-f]{64}$/
 const SESSION_ID = /^[a-zA-Z0-9_-]{1,100}$/
 const MAX_ATTEMPT_BYTES = 64 * 1024 * 1024
 
+export class DanceAttemptUploadInvalidError extends Error {
+  readonly code = "upload_invalid"
+  readonly retryable = false
+}
+
 function required(value: string | undefined, name: string): string {
   const normalized = String(value ?? "").trim()
   if (!normalized) throw internalError(`${name} is not configured`)
@@ -93,7 +98,9 @@ export async function verifyDanceAttemptUpload(input: {
     || contentSha256 !== input.expectedContentSha256
     || !etag
   ) {
-    throw providerUnavailable("Dance attempt upload metadata does not match its intent")
+    throw new DanceAttemptUploadInvalidError(
+      "Dance attempt upload metadata does not match its intent",
+    )
   }
   return { etag }
 }

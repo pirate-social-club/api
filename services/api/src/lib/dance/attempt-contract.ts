@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { badRequestError, conflictError } from "../errors"
 
 export const DANCE_ATTEMPT_REJECTION_CODES = [
+  "upload_invalid",
   "video_invalid",
   "duration_out_of_range",
   "insufficient_pose_presence",
@@ -123,6 +124,7 @@ const SHA256 = /^[0-9a-f]{64}$/
 const FINGERPRINT_MATERIAL = /^(?:[0-9a-f]{2}){1,64}$/
 const REJECTIONS = new Set<string>(DANCE_ATTEMPT_REJECTION_CODES)
 const PREGRADE_REJECTIONS = new Set<string>([
+  "upload_invalid",
   "video_invalid",
   "duration_out_of_range",
   "insufficient_pose_presence",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dance_grader.service_protocol import (
+    DownloadVerificationError,
     attempt_failure_reason,
     canonical_json,
     reference_failure_reason,
@@ -85,4 +86,10 @@ def test_attempt_failure_contract_maps_extraction_errors_to_public_rejections() 
         == "insufficient_pose_presence"
     )
     assert attempt_failure_reason(ErrorWithCode("unknown")) == "scoring_unavailable"
+    assert (
+        attempt_failure_reason(
+            DownloadVerificationError("content_hash_mismatch", "mismatch")
+        )
+        == "upload_invalid"
+    )
     assert attempt_failure_reason(RuntimeError("network")) == "scoring_unavailable"

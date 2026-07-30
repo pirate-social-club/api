@@ -9,6 +9,7 @@ import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
 import danceChoreographies from "./routes/dance-choreographies"
+import danceSessions from "./routes/dance-sessions"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
@@ -477,6 +478,7 @@ app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/bookings", bookings)
 app.route("/dance-choreographies", danceChoreographies)
+app.route("/dance-sessions", danceSessions)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return
