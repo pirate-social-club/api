@@ -50,7 +50,7 @@ import {
   verifyTelegramMiniAppInitData,
 } from "../lib/telegram/mini-app-auth"
 import { trackApiEvent } from "../lib/analytics/track"
-import { authError, badRequestError, HttpError } from "../lib/errors"
+import { authError, badRequestError, HttpError, telegramStudyUnavailable } from "../lib/errors"
 import { publicCommunityId } from "../lib/public-ids"
 import { getTelegramCopy } from "../lib/telegram/telegram-copy"
 import {
@@ -73,6 +73,7 @@ import {
   type TelegramWebhookMessage,
   type TelegramWebhookUpdate,
 } from "../lib/telegram/webhook-parsing"
+import { handleTelegramStudyVoiceMessage } from "../lib/telegram/study-voice-service"
 import {
   directAssistantFailureMessage,
   getTelegramDirectAssistantPolicy,
@@ -88,6 +89,7 @@ import {
   transcribeTelegramGroupAssistantVoice,
 } from "./telegram-assistant-workflow"
 import { completeTelegramChannelSetupByRequest } from "../lib/telegram/channel-destination-service"
+import { getWaitUntil } from "./execution-context"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
@@ -139,6 +141,17 @@ async function telegramAutoExchangeMiniAppVerificationTokens(env: Env, community
     return [communityBot.token]
   }
   return telegramPlatformMiniAppVerificationTokens(env)
+}
+
+async function telegramStudyMiniAppVerificationTokens(env: Env, communityId: string): Promise<string[]> {
+  const communityBot = await decryptActiveCommunityTelegramBotOrNull({
+    env,
+    communityId,
+  })
+  if (!communityBot) {
+    throw telegramStudyUnavailable()
+  }
+  return [communityBot.token]
 }
 
 function summarizeTelegramJoinGrantApprovalResults(
@@ -1086,7 +1099,12 @@ async function handleChatJoinRequest(env: Env, joinRequest: TelegramWebhookChatJ
   }
 }
 
-async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpdate, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+async function handleTelegramWebhookUpdate(
+  env: Env,
+  update: TelegramWebhookUpdate,
+  bot: Env | TelegramCommunityBotCredential = env,
+  waitUntil?: (promise: Promise<void>) => void,
+): Promise<void> {
   if (update.chat_join_request) {
     await handleChatJoinRequest(env, update.chat_join_request, bot)
     return
@@ -1105,6 +1123,9 @@ async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpda
   }
   if (isPrivateChat(message.chat?.type)) {
     if (isCommunityBot(bot)) {
+      if (await handleTelegramStudyVoiceMessage({ bot, env, message, waitUntil })) {
+        return
+      }
       await handleDirectAssistantMessage(env, message, bot)
     } else {
       await handleStartMessage(env, message, bot)
@@ -1136,11 +1157,19 @@ telegram.post("/session/exchange", async (c) => {
 })
 
 telegram.post("/session/auto-exchange", async (c) => {
-  const body = await c.req.json<{ community_id?: unknown; init_data?: unknown }>().catch(() => null)
+  const body = await c.req.json<{
+    community_id?: unknown
+    context?: unknown
+    init_data?: unknown
+  }>().catch(() => null)
   const communityIdentifier = typeof body?.community_id === "string" ? body.community_id.trim() : ""
+  const context = body?.context === undefined ? "default" : body.context
   const initData = typeof body?.init_data === "string" ? body.init_data.trim() : ""
   if (!communityIdentifier || !initData) {
     throw badRequestError("community_id and init_data are required")
+  }
+  if (context !== "default" && context !== "study") {
+    throw badRequestError("context must be default or study")
   }
 
   const communityRepository = getCommunityRepository(c.env)
@@ -1150,7 +1179,9 @@ telegram.post("/session/auto-exchange", async (c) => {
   }
 
   const telegramUser = verifyTelegramMiniAppInitData({
-    botTokens: await telegramAutoExchangeMiniAppVerificationTokens(c.env, communityId),
+    botTokens: context === "study"
+      ? await telegramStudyMiniAppVerificationTokens(c.env, communityId)
+      : await telegramAutoExchangeMiniAppVerificationTokens(c.env, communityId),
     initData,
     maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(c.env),
   })
@@ -1197,7 +1228,10 @@ telegram.post("/session/auto-exchange", async (c) => {
   await trackApiEvent(c.env, c.req, {
     eventName: "auth_session_exchanged",
     userId,
-    properties: { provider: "telegram", mode: "mini_app_auto" },
+    properties: {
+      provider: "telegram",
+      mode: context === "study" ? "mini_app_study" : "mini_app_auto",
+    },
   })
 
   return c.json({
@@ -1252,7 +1286,7 @@ telegram.post("/community-bots/:webhookId/webhook", async (c) => {
     return c.json({ ok: true }, 200)
   }
   try {
-    await handleTelegramWebhookUpdate(c.env, body, bot)
+    await handleTelegramWebhookUpdate(c.env, body, bot, getWaitUntil(c))
   } catch (error) {
     console.warn("[telegram-community-webhook] update handling failed", {
       error: error instanceof Error ? error.message : String(error),

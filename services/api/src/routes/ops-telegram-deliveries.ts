@@ -2,10 +2,13 @@ import { Hono, type Context } from "hono"
 import { authenticateAdminToken, authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { enqueueCommunityJob } from "../lib/communities/jobs/store"
+import { processAvailableCommunityJobs } from "../lib/communities/jobs/runner"
 import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { nowIso } from "../lib/helpers"
 import { logPipelineError } from "../lib/observability/pipeline-log"
+import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
+import { getPostById } from "../lib/posts/community-post-query-store"
 import {
   countUncertainDeliveries,
   findDeliverySubject,
@@ -15,6 +18,12 @@ import {
   type ResolutionAction,
   type UncertainDeliveryFilters,
 } from "../lib/telegram/uncertain-delivery-ops-service"
+import {
+  cleanupTelegramSyntheticDelivery,
+  findTelegramSyntheticFixture,
+  getTelegramSyntheticDelivery,
+} from "../lib/telegram/telegram-synthetic-ops-service"
+import { assertTelegramSyntheticCleanupPost } from "../lib/telegram/telegram-synthetic-contract"
 
 // Operator surface for Telegram channel deliveries stranded in 'uncertain'.
 // Nothing scans that state automatically — by design, because retrying an
@@ -50,6 +59,98 @@ function parseFilters(c: Context<AuthenticatedEnv>): UncertainDeliveryFilters {
     olderThanMinutes: olderThan == null ? null : Number.parseInt(olderThan, 10),
   }
 }
+
+function requireStaging(c: Context<AuthenticatedEnv>): Response | null {
+  return c.env.ENVIRONMENT === "staging"
+    ? null
+    : c.json({ error: "not_found" }, 404)
+}
+
+opsTelegramDeliveries.get("/synthetic-fixture", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const fixture = await findTelegramSyntheticFixture({
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  return c.json(fixture)
+})
+
+// This deterministic staging executor verifies the real queue handler and Bot
+// API path without coupling the Telegram synthetic to cron fleet cadence. Cron
+// liveness is a separate operational property and must be monitored through
+// queue age; a passing synthetic does not certify scheduled-batch frequency.
+opsTelegramDeliveries.post("/synthetic-fixture/drain", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const fixture = await findTelegramSyntheticFixture({
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  const communityRepository = getCommunityRepository(c.env)
+  try {
+    const summary = await processAvailableCommunityJobs({
+      env: c.env,
+      communityRepository,
+      communityIds: [decodePublicCommunityId(fixture.community_id)],
+      maxCommunities: 1,
+      maxJobsPerCommunity: 25,
+    })
+    return c.json({
+      processed_jobs: summary.processed_jobs,
+      failed_communities: summary.failed_communities.length,
+    })
+  } finally {
+    await communityRepository.close?.()
+  }
+})
+
+opsTelegramDeliveries.get("/synthetic-deliveries/:postId", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const delivery = await getTelegramSyntheticDelivery({
+    client: getControlPlaneClient(c.env),
+    postId: c.req.param("postId"),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  return c.json({ delivery })
+})
+
+opsTelegramDeliveries.post("/synthetic-deliveries/:postId/cleanup", async (c) => {
+  const unavailable = requireStaging(c)
+  if (unavailable) return unavailable
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const fixture = await findTelegramSyntheticFixture({
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  const communityId = decodePublicCommunityId(fixture.community_id)
+  const postId = decodePublicPostId(c.req.param("postId"))
+  const handle = await openCommunityWriteClient(
+    c.env,
+    getCommunityRepository(c.env),
+    communityId,
+  )
+  try {
+    assertTelegramSyntheticCleanupPost({
+      post: await getPostById(handle.client, postId),
+      communityId,
+      ownerUserId: fixture.owner_user_id,
+    })
+  } finally {
+    await handle.close()
+  }
+  const outcome = await cleanupTelegramSyntheticDelivery({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    postId,
+    communityId: fixture.community_id,
+  })
+  return c.json(outcome)
+})
 
 opsTelegramDeliveries.get("/uncertain-deliveries", async (c) => {
   if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)

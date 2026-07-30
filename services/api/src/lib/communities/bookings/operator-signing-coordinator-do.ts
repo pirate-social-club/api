@@ -14,7 +14,13 @@ const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
 export type OperatorKind = "booking" | "rewards"
 export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
-export type RewardRehearsalScenario = "replay" | "over_limit" | "deadline_expired" | "stale_policy"
+export type RewardRehearsalScenario =
+  | "eoa_first_payout"
+  | "replay"
+  | "over_limit"
+  | "deadline_expired"
+  | "stale_policy"
+  | "refund_while_payouts_paused"
 
 export function operatorSigningCoordinatorName(operatorAddress: string, chainId: number, operatorKind: OperatorKind = "booking"): string {
   const a = String(operatorAddress || "").trim()
@@ -80,7 +86,31 @@ export type PreparationLitErrorToken =
   | "action_fetch_failed"
   | "invalid_params"
   | "timeout"
+  | "other_json_error"
+  | "other_json_message"
+  | "other_json_nested_error"
+  | "other_json_unknown"
+  | "other_plain_text"
   | "other"
+  | "request_invalid"
+  | "vault_address_invalid"
+  | "vault_address_mismatch"
+  | "signer_address_invalid"
+  | "signer_address_mismatch"
+  | "chain_id_mismatch"
+  | "policy_version_mismatch"
+  | "method_not_permitted"
+  | "operation_id_invalid"
+  | "amount_invalid"
+  | "deadline_invalid"
+  | "deadline_out_of_policy"
+  | "nonce_invalid"
+  | "gas_policy_missing"
+  | "max_fee_per_gas_invalid"
+  | "max_priority_fee_per_gas_invalid"
+  | "gas_limit_invalid"
+  | "gas_policy_exceeded"
+  | "pkp_signer_mismatch"
 
 export interface PreparationFailureDiagnostic {
   stage: PreparationFailureStage
@@ -284,7 +314,16 @@ function boundedPreparationDiagnostic(error: unknown, classifiedAt: number): Pre
     "connection_lost", "redirect", "timeout", "fetch_failed", "unclassified",
   ])
   const litTokens = new Set<PreparationLitErrorToken>([
-    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout", "other",
+    "unauthorized_action", "action_fetch_failed", "invalid_params", "timeout",
+    "other_json_error", "other_json_message", "other_json_nested_error",
+    "other_json_unknown", "other_plain_text", "other",
+    "request_invalid", "vault_address_invalid", "vault_address_mismatch",
+    "signer_address_invalid", "signer_address_mismatch", "chain_id_mismatch",
+    "policy_version_mismatch", "method_not_permitted", "operation_id_invalid",
+    "amount_invalid", "deadline_invalid", "deadline_out_of_policy",
+    "nonce_invalid", "gas_policy_missing", "max_fee_per_gas_invalid",
+    "max_priority_fee_per_gas_invalid", "gas_limit_invalid",
+    "gas_policy_exceeded", "pkp_signer_mismatch",
   ])
   const transport = typeof record.transportCategory === "string"
     && transportCategories.has(record.transportCategory as PreparationTransportCategory)
@@ -569,7 +608,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     // The manual route uses the SAME verifier-first decision as reconciliation,
     // so the human override can never rest on weaker evidence than the
     // automated path it overrides.
-    const decision = this.usesLitVault() ? await this.decideRewardVaultReceipt(row) : undefined
+    const decision = this.usesRewardVault() ? await this.decideRewardVaultReceipt(row) : undefined
     assertManualRewardResolutionEvidence({
       resolution: input.resolution,
       liveness,
@@ -679,7 +718,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const operatorKind = this.operatorKind(row)
     const liveness = await chain().txLiveness(this.env, row.tx_hash, operatorKind)
     if (liveness === "success") {
-      if (this.operatorKind(row) === "rewards" && this.usesLitVault()) {
+      if (this.operatorKind(row) === "rewards" && this.usesRewardVault()) {
         const decision = await this.decideRewardVaultReceipt(row)
         if (decision.disposition === "capacity_deferred") {
           // Non-terminal. The operation id was never consumed on chain, so the
@@ -743,7 +782,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       }) ?? this.read(row.idempotency_key)!
     }
     if (liveness === "failed") {
-      if (operatorKind === "rewards" && this.usesLitVault()) {
+      if (operatorKind === "rewards" && this.usesRewardVault()) {
         const observe = chain().rewardVaultFailureEvidence
         if (!observe) {
           return this.cas(row.idempotency_key, row.version, {
@@ -863,8 +902,10 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return row.effect_kind === "reward_cashout" || row.effect_kind === "reward_funding_refund" ? "rewards" : "booking"
   }
 
-  private usesLitVault(): boolean {
-    return String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim() === "lit_vault"
+  private usesRewardVault(): boolean {
+    return ["lit_vault", "eoa_vault"].includes(
+      String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim(),
+    )
   }
 
   /**
@@ -1076,7 +1117,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       if (!nonceConsumed) throw error // alarm records bounded backoff; signed transaction stays prepared
       const liveness = await chain().txLiveness(this.env, row.tx_hash, this.operatorKind(row))
       const rewardsVaultFailure = this.operatorKind(row) === "rewards"
-        && this.usesLitVault()
+        && this.usesRewardVault()
         && liveness === "failed"
       const next: OperatorSettleState = liveness === "success" || liveness === "pending"
         ? "broadcast"
@@ -1120,7 +1161,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     if (
       this.env.ENVIRONMENT !== "staging"
       || requestOperatorKind(req) !== "rewards"
-      || req.effectKind !== "reward_cashout"
+      || (
+        req.effectKind !== "reward_cashout"
+        && !(
+          req.effectKind === "reward_funding_refund"
+          && req.rehearsalScenario === "refund_while_payouts_paused"
+        )
+      )
     ) {
       throw badRequestError("Rewards rehearsal fixture is staging-only")
     }

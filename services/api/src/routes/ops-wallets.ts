@@ -30,7 +30,7 @@ opsWallets.get("/rewards-settlement-diagnostics", async (c) => {
   if (
     !Array.isArray(parsed)
     || parsed.length !== 2
-    || parsed[0] !== "reward_payout"
+    || (parsed[0] !== "reward_payout" && parsed[0] !== "reward_funding_refund")
     || typeof parsed[1] !== "string"
     || parsed[1].length < 1
     || parsed[1].length > 500

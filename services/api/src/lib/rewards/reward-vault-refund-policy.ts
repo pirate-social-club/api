@@ -32,7 +32,7 @@ export const observeRewardVaultRefundPolicy: RewardVaultRefundPolicyObserver = a
   env,
   now,
 ) => {
-  if (resolveRewardsSettlementBackend(env) !== "lit_vault") return null
+  if (resolveRewardsSettlementBackend(env) === "local") return null
 
   try {
     const expected = resolveRewardVaultLitConfig(env)

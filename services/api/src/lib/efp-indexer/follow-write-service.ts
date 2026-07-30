@@ -18,7 +18,13 @@ import {
   type FollowWriteTransaction,
 } from "./follow-contracts"
 import type { Env } from "../../env"
-import { badRequestError, conflictError, eligibilityFailed, rateLimited } from "../errors"
+import {
+  badRequestError,
+  conflictError,
+  eligibilityFailed,
+  rateLimited,
+  retryableConflictError,
+} from "../errors"
 import type { Client, QueryResultRow } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
 import { withTransaction } from "../transactions"
@@ -59,6 +65,8 @@ export type PreparedFollowWrite = {
     eligible: boolean
     reserved_transaction_count: number
   }
+  prepared_transaction_count: number
+  transaction_index_offset: number
   transactions: PreparedTransaction[]
   expires_at: string | null
 }
@@ -114,7 +122,15 @@ export async function resolvePrimaryListStorage(
     return user === address
       ? { kind: "found", chainId: storage.chainId, listId, slot: storage.slot }
       : { kind: "unresolved" }
-  } catch {
+  } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error))
+      .replaceAll(/https?:\/\/[^\s)]+/giu, "[redacted-url]")
+      .slice(0, 2_000)
+    console.warn("[efp-follow-write] Primary-list resolution failed", {
+      address,
+      error_name: error instanceof Error ? error.name : typeof error,
+      message,
+    })
     return { kind: "unresolved" }
   }
 }
@@ -122,6 +138,43 @@ export async function resolvePrimaryListStorage(
 function rowInteger(row: QueryResultRow | undefined, key: string): number {
   const value = Number(row?.[key])
   return Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+function preparedTransactions(value: unknown): PreparedTransaction[] {
+  const parsed = typeof value === "string" ? JSON.parse(value) : value
+  if (!Array.isArray(parsed)) throw conflictError("Prepared follow transaction is invalid")
+  return parsed as PreparedTransaction[]
+}
+
+function resumableWrite(input: {
+  row: QueryResultRow
+  sponsorshipEligible: boolean
+  targetPublicUserId: string
+  desiredFollowing: boolean
+}): PreparedFollowWrite {
+  const allTransactions = preparedTransactions(input.row.prepared_transactions_json)
+  const offset = rowInteger(input.row, "sponsored_transaction_count")
+  if (offset > allTransactions.length) {
+    throw conflictError("Follow write progress is invalid")
+  }
+  return {
+    object: "profile_follow_write",
+    intent_id: String(input.row.follow_write_intent_id),
+    target_user_id: input.targetPublicUserId,
+    desired_following: input.desiredFollowing,
+    consistency: { status: "accepted_not_yet_reflected" },
+    sponsorship: {
+      eligible: input.sponsorshipEligible,
+      reserved_transaction_count: rowInteger(
+        input.row,
+        "sponsorship_reserved_transaction_count",
+      ),
+    },
+    prepared_transaction_count: allTransactions.length,
+    transaction_index_offset: offset,
+    transactions: allTransactions.slice(offset),
+    expires_at: String(input.row.expires_at),
+  }
 }
 
 async function requireActorStanding(input: {
@@ -216,7 +269,8 @@ export async function prepareProfileFollowWrite(input: {
   const existing = await input.client.execute({
     sql: `
       SELECT desired_following, prepared_transactions_json, follow_write_intent_id,
-             target_user_id, expires_at, sponsorship_reserved_transaction_count
+             target_user_id, expires_at, sponsorship_reserved_transaction_count,
+             sponsored_transaction_count
       FROM efp_follow_write_intents
       WHERE actor_user_id = ?1 AND idempotency_key = ?2
       LIMIT 1
@@ -231,19 +285,43 @@ export async function prepareProfileFollowWrite(input: {
     ) {
       throw conflictError("Idempotency key was reused for a different follow action")
     }
-    return {
-      object: "profile_follow_write",
-      intent_id: String(row.follow_write_intent_id),
-      target_user_id: input.targetPublicUserId,
-      desired_following: input.desiredFollowing,
-      consistency: { status: "accepted_not_yet_reflected" },
-      sponsorship: {
-        eligible: sponsorshipEligible,
-        reserved_transaction_count: rowInteger(row, "sponsorship_reserved_transaction_count"),
-      },
-      transactions: row.prepared_transactions_json as PreparedTransaction[],
-      expires_at: String(row.expires_at),
-    }
+    return resumableWrite({
+      row,
+      sponsorshipEligible,
+      targetPublicUserId: input.targetPublicUserId,
+      desiredFollowing: input.desiredFollowing,
+    })
+  }
+
+  const resumable = await input.client.execute({
+    sql: `
+      SELECT prepared_transactions_json, follow_write_intent_id, expires_at,
+             sponsorship_reserved_transaction_count, sponsored_transaction_count
+      FROM efp_follow_write_intents
+      WHERE actor_user_id = ?1
+        AND target_user_id = ?2
+        AND desired_following = ?3
+        AND status = 'prepared'
+        AND (expires_at > ?4 OR sponsored_transaction_count > 0)
+        AND sponsored_transaction_count > 0
+        AND sponsored_transaction_count < prepared_transaction_count
+      ORDER BY created_at DESC
+      LIMIT 1
+    `,
+    args: [
+      input.actorUserId,
+      input.targetUserId,
+      input.desiredFollowing ? 1 : 0,
+      nowIso,
+    ],
+  })
+  if (resumable.rows[0]) {
+    return resumableWrite({
+      row: resumable.rows[0],
+      sponsorshipEligible,
+      targetPublicUserId: input.targetPublicUserId,
+      desiredFollowing: input.desiredFollowing,
+    })
   }
   await enforceAccountRateLimit({
     client: input.client,
@@ -270,6 +348,8 @@ export async function prepareProfileFollowWrite(input: {
       desired_following: input.desiredFollowing,
       consistency: { status: "already_reflected" },
       sponsorship: { eligible: false, reserved_transaction_count: 0 },
+      prepared_transaction_count: 0,
+      transaction_index_offset: 0,
       transactions: [],
       expires_at: null,
     }
@@ -277,7 +357,7 @@ export async function prepareProfileFollowWrite(input: {
 
   const resolution = await (input.resolvePrimaryList ?? resolvePrimaryListStorage)(input.env, actorWallet)
   if (resolution.kind === "unresolved") {
-    throw conflictError("Unable to load your follow list right now")
+    throw retryableConflictError("Unable to load your follow list right now")
   }
   const transactions = buildFollowTransactions({
     existingStorage: resolution.kind === "found"
@@ -330,6 +410,8 @@ export async function prepareProfileFollowWrite(input: {
       eligible: sponsorshipEligible && transactions.every((tx) => tx.chainId === BASE_CHAIN_ID),
       reserved_transaction_count: 0,
     },
+    prepared_transaction_count: prepared.length,
+    transaction_index_offset: 0,
     transactions: prepared,
     expires_at: expiresAt,
   }
@@ -422,14 +504,15 @@ export async function reconcilePendingFollowWrites(input: {
   const pending = await input.client.execute({
     sql: `
       SELECT DISTINCT i.follow_write_intent_id, i.actor_wallet_address,
-             i.target_wallet_address, i.desired_following
+             i.target_wallet_address, i.desired_following,
+             i.updated_at AS intent_updated_at
       FROM efp_follow_write_intents i
       JOIN efp_follow_reconciliation_queue q
         ON q.requested_by_follow_write_intent_id = i.follow_write_intent_id
       WHERE i.status IN ('submitted', 'confirmed')
         AND q.status IN ('pending', 'failed')
         AND q.available_at <= CURRENT_TIMESTAMP
-      ORDER BY i.updated_at ASC
+      ORDER BY intent_updated_at ASC
       LIMIT ?1
     `,
     args: [Math.max(1, Math.min(input.limit ?? 100, 500))],

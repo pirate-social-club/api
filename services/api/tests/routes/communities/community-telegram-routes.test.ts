@@ -3323,6 +3323,7 @@ describe("community Telegram routes", () => {
       env: ctx.env,
       body: {
         community_id: `com_${communityId}`,
+        context: "study",
         init_data: signedTelegramInitData({
           botToken: communityBotToken,
           user: {
@@ -3338,6 +3339,7 @@ describe("community Telegram routes", () => {
       env: ctx.env,
       body: {
         community_id: `com_${communityId}`,
+        context: "study",
         init_data: signedTelegramInitData({
           botToken: "987654:platform-token",
           user: {
@@ -3384,6 +3386,26 @@ describe("community Telegram routes", () => {
       },
     })
     expect(exchangeResponse.status).toBe(200)
+
+    const studyExchangeResponse = await telegramSessionAutoExchange({
+      env: ctx.env,
+      body: {
+        community_id: `com_${communityId}`,
+        context: "study",
+        init_data: signedTelegramInitData({
+          botToken: "987654:platform-token",
+          user: {
+            id: 779124,
+            username: "platformstudyrejected",
+          },
+        }),
+      },
+    })
+    expect(studyExchangeResponse.status).toBe(409)
+    expect(await json(studyExchangeResponse)).toMatchObject({
+      code: "telegram_study_unavailable",
+      retryable: false,
+    })
   })
 
   test("community bot private DM prompts non-members to verify when preview is unavailable", async () => {

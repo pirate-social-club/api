@@ -616,8 +616,8 @@ export async function runShardBind(
  *     `resolveProvisioningRetryAction` calls this twice for the same community
  *     — the second call returns `loaded: false` with `rowsAffected: 0` and
  *     leaves `last_loaded_at` unchanged.
- *  3. **Bootstrap guard.** Schema DDL is allowed here (CREATE TABLE IF NOT
- *     EXISTS + INSERT only) via `isBootstrapAllowedStatement`; the existing
+ *  3. **Bootstrap guard.** Schema DDL is allowed here (CREATE TABLE/INDEX/
+ *     TRIGGER + INSERT only) via `isBootstrapAllowedStatement`; the existing
  *     `isWriteAllowedStatement` (used by `runShardWrite`) rejects DDL by
  *     design.
  *

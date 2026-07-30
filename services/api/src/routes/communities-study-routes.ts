@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { decodePublicPostId } from "../lib/public-ids"
 import {
@@ -12,10 +11,12 @@ import {
   type SongStudyAttemptRequest,
 } from "../lib/posts/post-study-service"
 import { badRequestError } from "../lib/errors"
+import { createTelegramStudyVoiceIntent } from "../lib/telegram/study-voice-service"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { getWaitUntil } from "./execution-context"
 
 function parseLeaderboardLimit(value: string | undefined): number | undefined {
   if (value == null || value.trim() === "") return undefined
@@ -24,15 +25,6 @@ function parseLeaderboardLimit(value: string | undefined): number | undefined {
     throw badRequestError("limit must be an integer between 1 and 100")
   }
   return limit
-}
-
-function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
-  try {
-    const executionCtx = c.executionCtx
-    return (promise) => executionCtx.waitUntil(promise)
-  } catch {
-    return undefined
-  }
 }
 
 export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>): void {
@@ -88,6 +80,29 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       c.header("server-timing", `song-study-attempt;dur=${timing.total_ms}`)
     }
     return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/posts/:postId/study/telegram_voice_intents", async (c) => {
+    const { actor, communityId } = await getResolvedCommunityRouteContext(c)
+    const postId = decodePublicPostId(c.req.param("postId"))
+    const body = await requireJsonBody<{
+      exercise_id?: unknown
+      target_language?: unknown
+    }>(c, "Invalid Telegram study voice intent payload")
+    const exerciseId = typeof body.exercise_id === "string" ? body.exercise_id.trim() : ""
+    const targetLanguage = typeof body.target_language === "string" ? body.target_language.trim() : null
+    if (!exerciseId) {
+      throw badRequestError("exercise_id is required")
+    }
+    const intent = await createTelegramStudyVoiceIntent({
+      actor,
+      communityId,
+      env: c.env,
+      exerciseId,
+      postId,
+      targetLanguage,
+    })
+    return c.json(intent, 201)
   })
 
   communities.post("/:communityId/posts/:postId/study/transcriptions", async (c) => {

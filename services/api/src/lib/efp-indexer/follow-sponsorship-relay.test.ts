@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client"
-import { relaySponsoredFollowTransaction } from "./follow-sponsorship-relay"
+import {
+  reconcilePendingPrivyFollowSubmissions,
+  relaySponsoredFollowTransaction,
+} from "./follow-sponsorship-relay"
 
 const VIEWER = "0x1111111111111111111111111111111111111111"
 const TARGET = "0x2222222222222222222222222222222222222222"
@@ -43,7 +46,6 @@ function relayClient(): Client & { statements: InStatement[] } {
           return { rows: [{ transaction_limit: 100, reserved_transactions: 0, consumed_transactions: 0 }] }
         }
         if (normalized.sql.includes("SELECT prepared_transaction_count")) {
-          expect(transactionNumber).toBe(2)
           return {
             rows: [{
               prepared_transaction_count: 2,
@@ -86,6 +88,7 @@ describe("relaySponsoredFollowTransaction", () => {
       now: new Date("2026-07-28T12:00:00.000Z"),
       request: {
         authorizationSignature: "signature",
+        requestExpiry: String(new Date("2026-07-28T12:15:00.000Z").getTime()),
         intentId: `efw_${"b".repeat(32)}`,
         transactionIndex: 0,
         privyWalletId: "wallet-id",
@@ -97,9 +100,16 @@ describe("relaySponsoredFollowTransaction", () => {
         expect(body).toMatchObject({
           caip2: "eip155:8453",
           chain_type: "ethereum",
+          reference_id: `efw_${"b".repeat(32)}-0`,
           sponsor: true,
           params: { transaction: { data: DATA_ONE, to: RECORDS } },
         })
+        expect(new Headers(init?.headers).get("privy-request-expiry")).toBe(
+          String(new Date("2026-07-28T12:15:00.000Z").getTime()),
+        )
+        expect(new Headers(init?.headers).get("privy-idempotency-key")).toBe(
+          `efw_${"b".repeat(32)}-0`,
+        )
         return Response.json({ data: { hash: HASH } })
       },
     })
@@ -116,5 +126,81 @@ describe("relaySponsoredFollowTransaction", () => {
       statement.sql.includes("sponsorship_reserved_transaction_count = ?6")
     )
     expect(finalizedIntent?.args?.[5]).toBe(1)
+  })
+
+  test("polls an accepted sponsored transaction until Privy exposes its on-chain hash", async () => {
+    const client = relayClient()
+    let calls = 0
+    const result = await relaySponsoredFollowTransaction({
+      actorUserId: "viewer",
+      client,
+      env: {
+        PRIVY_APP_ID: "app",
+        PRIVY_APP_SECRET: "secret",
+        EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT: "100",
+        EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION: "800",
+      } as Env,
+      now: new Date("2026-07-28T12:00:00.000Z"),
+      request: {
+        authorizationSignature: "signature",
+        requestExpiry: String(new Date("2026-07-28T12:15:00.000Z").getTime()),
+        intentId: `efw_${"b".repeat(32)}`,
+        transactionIndex: 0,
+        privyWalletId: "wallet-id",
+        walletAddress: VIEWER,
+        transaction: { data: DATA_ONE, to: RECORDS },
+      },
+      fetcher: async (url) => {
+        calls += 1
+        if (String(url).includes("/rpc")) {
+          return Response.json({
+            data: { hash: "", transaction_id: "privy-transaction-id", user_operation_hash: HASH },
+          })
+        }
+        expect(String(url)).toContain("/v1/transactions/privy-transaction-id")
+        return Response.json({ status: "broadcasted", transaction_hash: HASH })
+      },
+    })
+    expect(calls).toBe(2)
+    expect(result.txHash).toBe(HASH)
+  })
+
+  test("recovers an ambiguously accepted send by deterministic Privy reference id", async () => {
+    const client = relayClient()
+    client.execute = async (statement): Promise<QueryResult> => {
+      const query = typeof statement === "string" ? statement : statement.sql
+      expect(query).toContain("status = 'submitting'")
+      return {
+        rows: [{
+          actor_user_id: "viewer",
+          follow_write_intent_id: `efw_${"b".repeat(32)}`,
+          sponsored_transaction_count: 0,
+        }],
+      }
+    }
+    const urls: string[] = []
+    const result = await reconcilePendingPrivyFollowSubmissions({
+      client,
+      env: {
+        PRIVY_APP_ID: "app",
+        PRIVY_APP_SECRET: "secret",
+        EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT: "100",
+        EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION: "800",
+      } as Env,
+      now: new Date("2026-07-28T12:01:00.000Z"),
+      fetcher: async (url) => {
+        urls.push(String(url))
+        return Response.json({
+          data: [{
+            reference_id: `efw_${"b".repeat(32)}-0`,
+            transaction_hash: HASH,
+          }],
+        })
+      },
+    })
+    expect(result).toEqual({ examined: 1, recovered: 1 })
+    expect(urls[0]).toContain(
+      `reference_id=${encodeURIComponent(`efw_${"b".repeat(32)}-0`)}`,
+    )
   })
 })

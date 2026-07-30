@@ -8,6 +8,9 @@ import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
+import danceChoreographies from "./routes/dance-choreographies"
+import danceSessions from "./routes/dance-sessions"
+import danceAttempts from "./routes/dance-attempts"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
@@ -65,6 +68,7 @@ import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/j
 import { exhaustedCommunityJobs, processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
+import { listActiveTelegramChannelCommunityIds } from "./lib/telegram/channel-destination-service"
 import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communities/membership/projection-service"
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
@@ -88,6 +92,7 @@ import {
   reconcilePendingFollowWrites,
   recordEfpFollowAdoptionSnapshot,
 } from "./lib/efp-indexer/follow-write-service"
+import { reconcilePendingPrivyFollowSubmissions } from "./lib/efp-indexer/follow-sponsorship-relay"
 import {
   isHnsRootObserverEnabled,
   observeDueHnsRoots,
@@ -98,7 +103,19 @@ import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconc
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
+import { reconcileConfirmingRewardCampaignFunding } from "./lib/rewards/reward-funding-confirmation-reconciler"
+import {
+  dispatchDueDanceReferences,
+  isDanceReferenceDispatchConfigured,
+} from "./lib/dance/choreography-reference-dispatch"
+import {
+  dispatchDueDanceAttempts,
+  isDanceAttemptDispatchConfigured,
+} from "./lib/dance/attempt-dispatch"
+import { cleanupDueDanceAttempts } from "./lib/dance/attempt-cleanup"
+import { terminalizeExhaustedDanceAttempts } from "./lib/dance/attempt-lifecycle"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
+import { runRewardCampaignMonitorCycle } from "./lib/rewards/reward-campaign-monitor-cycle"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
 import { monitorRewardCampaignTreasurySolvency } from "./lib/rewards/reward-campaign-solvency-monitor"
@@ -184,6 +201,42 @@ export function expectedCommunityD1ShardSourceVersion(
 }
 
 app.use("*", requestCorrelationMiddleware)
+
+const CREDENTIAL_BEARING_REQUEST_HEADERS = [
+  "authorization",
+  "x-admin-token",
+  "x-agent-connection-token",
+  "x-very-callback-secret",
+  "x-karaoke-finalize-secret",
+  "x-dance-grader-signature",
+  "x-telegram-bot-secret",
+  "x-telegram-bot-api-secret-token",
+] as const
+
+function hasCredentialBearingHeader(request: Request): boolean {
+  return CREDENTIAL_BEARING_REQUEST_HEADERS.some((header) => request.headers.has(header))
+}
+
+app.use("*", async (c, next) => {
+  if (
+    !hasCredentialBearingHeader(c.req.raw)
+    || isPublicReadCacheRequest(c.req.raw)
+  ) {
+    await next()
+    return
+  }
+
+  // A credential-bearing response must never be reusable by another caller.
+  // Explicit public-read routes are the only exception: their response
+  // contract is authentication-invariant even when a client happens to send
+  // an Authorization header. Apply this at the outer app boundary rather than
+  // relying on every authenticated route to remember its own cache policy.
+  try {
+    await next()
+  } finally {
+    applyNoStore(c.res)
+  }
+})
 
 export function buildVersionMetadata(
   env: Pick<Env, "BUILD_GIT_REF" | "BUILD_GIT_SHA" | "BUILD_TIMESTAMP">,
@@ -435,10 +488,16 @@ app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/bookings", bookings)
+app.route("/dance-choreographies", danceChoreographies)
+app.route("/dance-sessions", danceSessions)
+app.route("/dance-attempts", danceAttempts)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return
   try {
+    response.headers.delete("cloudflare-cdn-cache-control")
+    response.headers.delete("cdn-cache-control")
+    response.headers.delete("cache-tag")
     response.headers.set("cache-control", "private, no-store, max-age=0, must-revalidate")
     response.headers.set("pragma", "no-cache")
   } catch {
@@ -541,8 +600,12 @@ app.notFound((c) => c.json({ code: "not_found", message: "Not found" }, 404))
 
 app.onError(async (error, c) => {
   const response = await apiErrorHandler(error, c)
-  // A thrown error inside /admin must not become a cacheable body either.
-  if (new URL(c.req.url).pathname.startsWith("/admin/")) {
+  // A thrown error inside /admin or on any credential-bearing request must not
+  // become a cacheable body either.
+  if (
+    new URL(c.req.url).pathname.startsWith("/admin/")
+    || hasCredentialBearingHeader(c.req.raw)
+  ) {
     applyNoStore(response)
   }
   return response
@@ -714,15 +777,21 @@ async function scanScheduledEfpChain(
 }
 
 async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
+  const sponsorship = await reconcilePendingPrivyFollowSubmissions({
+    client: getControlPlaneClient(env),
+    env,
+    limit: 100,
+  })
   const summary = await reconcilePendingFollowWrites({
     client: getControlPlaneClient(env),
     limit: 100,
   })
   await recordEfpFollowAdoptionSnapshot({ client: getControlPlaneClient(env) })
-  if (summary.examined > 0) {
+  if (summary.examined > 0 || sponsorship.examined > 0) {
     console.info(JSON.stringify({
       component: "efp_follow_writes",
       operation: "reconcile_projection",
+      sponsorship,
       ...summary,
     }))
   }
@@ -737,6 +806,18 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
     taskDeadlineAtMs,
   )
   try {
+    let priorityCommunityIds: string[] = []
+    try {
+      priorityCommunityIds = await listActiveTelegramChannelCommunityIds({
+        client: getControlPlaneClient(env),
+        limit: 25,
+      })
+    } catch (error) {
+      console.warn(
+        "[community-jobs] failed to load Telegram channel priority hints",
+        error,
+      )
+    }
     const reconciledLockedDelivery = await reconcileRequestedLockedAssetDeliveryJobs({
       env,
       communityRepository,
@@ -805,6 +886,7 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
+      priorityCommunityIds,
       // Clamp the drain's tick to the task deadline; the prelude sub-budget
       // normally leaves the full 45s, but an overrun must not push the task
       // past the scheduler lease.
@@ -1146,7 +1228,33 @@ async function monitorScheduledRewardCampaignTreasurySolvency(env: Env): Promise
 async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
-    const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
+    const summary = await runRewardCampaignMonitorCycle({
+      reconcileFunding: async () => {
+        const funding = await reconcileConfirmingRewardCampaignFunding({
+          env,
+          client,
+          limit: 100,
+        })
+        if (funding.errors > 0) {
+          await captureScheduledWarning(
+            env,
+            "Submitted reward funding could not be reconciled",
+            "reward_campaign_funding_confirmation_reconciliation",
+            {
+              errors: funding.errors,
+              scanned: funding.scanned,
+              pending: funding.pending,
+            },
+            { urgency: "high" },
+          )
+        }
+      },
+      onFundingError: async (error) => {
+        console.error("[reward-campaigns] funding confirmation reconciliation failed", error)
+        await captureScheduledError(env, error, "reward_campaign_funding_confirmation_reconciliation")
+      },
+      monitorIntegrity: () => monitorRewardCampaigns({ env, client, limit: 100 }),
+    })
     if (!summary.enabled) return
     if (summary.liveness_stale) {
       await captureScheduledWarning(
@@ -1410,6 +1518,12 @@ export const SCHEDULED_COMMUNITY_JOB_LOCK_NAME = "scheduled-cron-community-jobs"
 // deadline. Bounded so a crashed lane self-heals rather than wedging the lane
 // permanently.
 const SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS = 150_000
+// EFP has an explicit 15-minute freshness gate. Keep its small incremental
+// scans and confirmed-write reconciliation off the deadline-trimmed maintenance
+// tail without adding per-job connections: one lane, one shared scope.
+export const SCHEDULED_EFP_LOCK_NAME = "scheduled-cron-efp"
+const SCHEDULED_EFP_DEADLINE_MS = 45_000
+const SCHEDULED_EFP_LEASE_TTL_MS = 180_000
 
 type ScheduledPriorityJobName =
   | "reconcile_reward_payouts"
@@ -1565,6 +1679,64 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(env.CONTROL_PLANE_DATABASE_URL
+        ? [{
+            name: "terminalize_exhausted_dance_attempts",
+            run: async () => {
+              const summary = await terminalizeExhaustedDanceAttempts({ env })
+              if (summary.terminalized > 0 || summary.failed > 0) {
+                console.info(
+                  "[scheduled] exhausted dance attempt terminalization",
+                  summary,
+                )
+              }
+            },
+          }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL && env.DANCE_ATTEMPT_S3_ENDPOINT
+          && env.DANCE_ATTEMPT_S3_ACCESS_KEY && env.DANCE_ATTEMPT_S3_SECRET_KEY
+          && env.DANCE_ATTEMPT_S3_BUCKET
+        ? [{
+            name: "cleanup_dance_attempts",
+            run: async () => {
+              const summary = await cleanupDueDanceAttempts({ env })
+              if (
+                summary.claimed > 0 || summary.expired > 0
+                || summary.expired_fingerprints > 0
+              ) {
+                console.info("[scheduled] dance attempt cleanup", summary)
+              }
+            },
+          }]
+        : []),
+      ...(isDanceAttemptDispatchConfigured(env)
+        ? [{
+            name: "dispatch_dance_attempts",
+            run: async () => {
+              const summary = await dispatchDueDanceAttempts({ env })
+              if (summary.claimed > 0) {
+                console.info("[scheduled] dance attempt dispatch", summary)
+              }
+            },
+          }]
+        : []),
+      ...(isDanceReferenceDispatchConfigured(env)
+        ? [{
+            name: "dispatch_dance_references",
+            run: async () => {
+              const summary = await dispatchDueDanceReferences({ env })
+              if (summary.claimed > 0) {
+                console.info("[scheduled] dance reference dispatch", {
+                  claimed: summary.claimed,
+                  dispatched: summary.dispatched,
+                  retry_scheduled: summary.retry_scheduled,
+                  exhausted: summary.exhausted,
+                  claim_lost: summary.claim_lost,
+                })
+              }
+            },
+          }]
+        : []),
       ...(env.CONTROL_PLANE_DATABASE_URL && env.BASE_MAINNET_RPC_URL
         ? [{
             name: "scan_efp_base",
@@ -1628,7 +1800,7 @@ const handler: ExportedHandler<Env> = {
       ctx.waitUntil(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
       return
     }
-    // Two lanes, two leases, run concurrently.
+    // Three lanes, three leases, run concurrently.
     //
     // Community jobs are foreground delivery work — the retry engine for every
     // community job, including Telegram channel publishing. Maintenance
@@ -1696,6 +1868,17 @@ const handler: ExportedHandler<Env> = {
         leaseTtlMs: SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS,
         limit: 1,
         tasks: lanes.community,
+      }),
+      runLane({
+        lane: "efp",
+        lockName: SCHEDULED_EFP_LOCK_NAME,
+        deadlineMs: SCHEDULED_EFP_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_EFP_LEASE_TTL_MS,
+        limit: 1,
+        // The four tasks are one correctness unit: all three expected-chain
+        // cursors plus confirmed-write reconciliation must receive a start.
+        minimumStartsBeforeDeadline: lanes.efp.length,
+        tasks: lanes.efp,
       }),
       runLane({
         lane: "maintenance",

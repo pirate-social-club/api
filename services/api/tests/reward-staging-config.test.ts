@@ -30,20 +30,20 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
-      REWARDS_MIN_CASHOUT_CENTS: "50",
+      REWARDS_MIN_CASHOUT_CENTS: "500",
       REWARDS_IDENTITY_PROVIDER: "very",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x01c84e513CC823255A9651885Fb59E363B47d55a",
       REWARDS_CAMPAIGN_RPC_URL: "https://sepolia.base.org",
-      PIRATE_REWARDS_SETTLEMENT_BACKEND: "lit_vault",
-      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x6a1C1a6C780E9F2eb23E564C04B6316864468c46",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xf536b0DAfD04AE1E5ADB8C170880c7996Fa26c5C",
       PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://sepolia.base.org",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
       REWARDS_TREASURY_VAULT_ADDRESS: "0x01c84e513CC823255A9651885Fb59E363B47d55a",
-      REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
+      REWARDS_TREASURY_VAULT_POLICY_VERSION: "2",
       LIT_REWARDS_ACTION_IPFS_ID: "QmR9EqhLEK7jE1wp44wLanmeJwK3Wr3kPtsfD4pjAmogm7",
       LIT_REWARDS_SIGNING_DEADLINE_SECONDS: "300",
       LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
@@ -64,7 +64,7 @@ describe("staging reward money-loop configuration", () => {
     )
   })
 
-  test("enables the coordinated production pilot while keeping legacy accrual dark", () => {
+  test("arms production settlement on Base mainnet without testnet custody config", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
     expectCampaignEnablementIsCoordinated(vars)
     expect(vars).toMatchObject({
@@ -73,17 +73,43 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_READS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_MIN_CASHOUT_CENTS: "500",
       REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "false",
       REWARDS_IDENTITY_PROVIDER: "self",
-      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
-      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xC74e72CE521674BcAea66c99874fe9d5984E12Be",
-      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xC74e72CE521674BcAea66c99874fe9d5984E12Be",
-      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
+      REWARDS_CAMPAIGN_RPC_URL: "https://mainnet.base.org",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x43bbA97370B00E9930994EA427DAEE400846617B",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://mainnet.base.org",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "8453",
+      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
+      REWARDS_TREASURY_VAULT_ADDRESS: "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
+      REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
+      LIT_REWARDS_SIGNING_DEADLINE_SECONDS: "300",
+      LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+      LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+      LIT_REWARDS_MAX_GAS_LIMIT: "300000",
     })
-    // Empty/absent => no restriction (resolveRewardCampaignConfig treats a blank
-    // allowlist as null): the pilot post-scoping has been deliberately removed so
-    // any eligible published song can carry a funded bounty.
-    expect(vars.REWARDS_CAMPAIGN_POST_ALLOWLIST ?? "").toBe("")
-    expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS)
+
+    const productionRewardVars = Object.fromEntries(
+      Object.entries(vars).filter(([key]) => (
+        key.startsWith("REWARDS_CAMPAIGN_")
+        || key.startsWith("PIRATE_REWARDS_SETTLEMENT_")
+        || key === "REWARDS_TREASURY_VAULT_ADDRESS"
+      )),
+    )
+    const serialized = JSON.stringify(productionRewardVars).toLowerCase()
+
+    expect(serialized).not.toContain("84532")
+    expect(serialized).not.toContain("sepolia")
+    expect(serialized).not.toContain("0x036cbd53842c5426634e7929541ec2318f3dcf7e")
+    expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.REWARDS_TREASURY_VAULT_ADDRESS)
+    expect(vars.REWARDS_CAMPAIGN_CHAIN_ID).toBe(vars.PIRATE_REWARDS_SETTLEMENT_CHAIN_ID)
+    expect(vars.REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS).toBe(
+      vars.PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS,
+    )
   })
 })

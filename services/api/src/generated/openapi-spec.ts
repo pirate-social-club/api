@@ -1501,6 +1501,84 @@ const spec = {
         "operationId": "put_users_me_identity_wallet"
       }
     },
+    "/users/me/telegram-account-link-intents": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Start linking a Telegram Mini App identity to an existing Pirate account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTelegramAccountLinkIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountLinkIntentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_users_me_telegram_account_link_intents"
+      }
+    },
+    "/users/me/telegram-account-link-intents/consume": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Consume a Telegram account link from an authenticated Pirate browser",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumeTelegramAccountLinkIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountLinkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_users_me_telegram_account_link_intents_consume"
+      }
+    },
     "/profiles/me": {
       "get": {
         "tags": [
@@ -3978,6 +4056,65 @@ const spec = {
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_study_attempts"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/study/telegram_voice_intents": {
+      "post": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Continue a say-it-back exercise as a native Telegram voice message",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramStudyVoiceIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramStudyVoiceIntent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_study_telegram_voice_intents"
       }
     },
     "/communities/{community_id}/posts/{post_id}/study/transcriptions": {
@@ -7442,6 +7579,99 @@ const spec = {
         ]
       }
     },
+    "/operator/reward_pools/refund_policy_readiness": {
+      "get": {
+        "operationId": "operator_reward_pool_refund_policy_readiness",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Check whether a proposed vault refund limit preserves outstanding contribution lots",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "proposed_max_refund_atomic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardPoolRefundPolicyReadiness"
+                }
+              }
+            }
+          },
+          "400": {},
+          "401": {},
+          "403": {}
+        }
+      }
+    },
+    "/operator/reward_settlements/backend_flip_readiness": {
+      "get": {
+        "operationId": "operator_reward_settlement_backend_flip_readiness",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Check whether rewards custody can switch without stranding in-flight effects",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardBackendFlipReadiness"
+                }
+              }
+            }
+          },
+          "401": {},
+          "403": {}
+        }
+      }
+    },
+    "/operator/reward_settlements/solvency_readiness": {
+      "get": {
+        "operationId": "operator_reward_settlement_solvency_readiness",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Read the freshness-gated rewards solvency admission decision",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardSolvencyReadiness"
+                }
+              }
+            }
+          },
+          "401": {},
+          "403": {}
+        }
+      }
+    },
     "/reward_campaigns/{campaign_id}/funding_quotes": {
       "parameters": [
         {
@@ -10185,6 +10415,64 @@ const spec = {
             "type": "string"
           }
         }
+      },
+      "CreateTelegramAccountLinkIntentRequest": {
+        "type": "object",
+        "required": [
+          "community_id"
+        ],
+        "properties": {
+          "community_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramAccountLinkIntentResponse": {
+        "type": "object",
+        "required": [
+          "expires_at",
+          "link_url"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "link_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConsumeTelegramAccountLinkIntentRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramAccountLinkResult": {
+        "type": "object",
+        "required": [
+          "linked"
+        ],
+        "properties": {
+          "linked": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "Profile": {
         "type": "object",
@@ -14778,6 +15066,59 @@ const spec = {
         },
         "additionalProperties": false
       },
+      "TelegramStudyVoiceIntentRequest": {
+        "type": "object",
+        "required": [
+          "exercise_id"
+        ],
+        "properties": {
+          "exercise_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_language": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramStudyVoiceIntent": {
+        "type": "object",
+        "required": [
+          "created",
+          "expires_at",
+          "id",
+          "object",
+          "status"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "telegram_study_voice_intent"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStudyTranscriptionResponse": {
         "type": "object",
         "required": [
@@ -15722,6 +16063,7 @@ const spec = {
               "verifying",
               "verified",
               "verification_failed",
+              "custody_refund_pending",
               "consumed"
             ]
           },
@@ -15761,6 +16103,14 @@ const spec = {
           "booking_id": {
             "type": "string",
             "nullable": true
+          },
+          "custody_refund": {
+            "allOf": [
+              {
+                "$ref": "#/BookingCustodyRefund"
+              }
+            ],
+            "nullable": true
           }
         }
       },
@@ -15797,7 +16147,9 @@ const spec = {
             "enum": [
               "verifying",
               "verified",
-              "verification_failed"
+              "verification_failed",
+              "custody_refund_pending",
+              "custody_operator_incident"
             ]
           },
           "hold_status": {
@@ -15822,6 +16174,22 @@ const spec = {
           "unresolved_age_seconds": {
             "type": "integer",
             "minimum": 0
+          },
+          "custody_refund": {
+            "allOf": [
+              {
+                "$ref": "#/BookingCustodyRefund"
+              }
+            ],
+            "nullable": true
+          },
+          "custody_incident": {
+            "allOf": [
+              {
+                "$ref": "#/BookingCustodyIncident"
+              }
+            ],
+            "nullable": true
           }
         }
       },
@@ -17047,6 +17415,7 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "campaign",
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
@@ -17054,6 +17423,9 @@ const spec = {
           "ends_at"
         ],
         "properties": {
+          "campaign": {
+            "type": "string"
+          },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
           },
@@ -17129,6 +17501,7 @@ const spec = {
           "song_artifact_bundle",
           "song_owner",
           "status",
+          "funding_tx_hash",
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
@@ -17254,6 +17627,10 @@ const spec = {
             "format": "int64",
             "nullable": true
           },
+          "funding_tx_hash": {
+            "type": "string",
+            "nullable": true
+          },
           "created": {
             "type": "integer",
             "format": "int64"
@@ -17292,6 +17669,113 @@ const spec = {
           },
           "status": {
             "$ref": "#/components/schemas/RewardCampaignStatus"
+          }
+        }
+      },
+      "RewardPoolRefundPolicyReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "largest_outstanding_lot_remainder_cents",
+          "largest_outstanding_lot_remainder_atomic",
+          "proposed_max_refund_atomic",
+          "proposal_safe"
+        ],
+        "properties": {
+          "largest_outstanding_lot_remainder_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "largest_outstanding_lot_remainder_atomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "proposed_max_refund_atomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "nullable": true
+          },
+          "proposal_safe": {
+            "type": "boolean",
+            "nullable": true
+          }
+        }
+      },
+      "RewardBackendFlipReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ready",
+          "non_terminal_cashouts",
+          "non_terminal_refunds",
+          "reconciliation_required"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "non_terminal_cashouts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "non_terminal_refunds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reconciliation_required": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RewardSolvencyReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "admitting",
+          "reason",
+          "observedAt",
+          "ageSeconds",
+          "balanceAtomic",
+          "liabilityAtomic"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "admitting": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "healthy",
+              "unknown_observation",
+              "stale_observation",
+              "insufficient_float"
+            ]
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "balanceAtomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "nullable": true
+          },
+          "liabilityAtomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "nullable": true
           }
         }
       },
@@ -22247,6 +22731,7 @@ const spec = {
           "confirmed",
           "failed",
           "refund_pending",
+          "operator_incident",
           "refunded"
         ]
       },

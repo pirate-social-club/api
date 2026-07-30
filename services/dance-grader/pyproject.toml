@@ -1,0 +1,38 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pirate-dance-grader"
+version = "0.1.0"
+description = "Platform-independent pose-sequence grading core for Pirate dance rewards"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.12,<1",
+]
+runtime = [
+  "av==18.0.0",
+  "mediapipe==0.10.35",
+]
+service = [
+  "fastapi==0.139.2",
+  "httpx==0.28.1",
+  "modal==1.5.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dance_grader"]

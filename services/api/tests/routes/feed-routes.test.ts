@@ -454,6 +454,15 @@ describe("feed routes", () => {
     expect(body.top_communities).toEqual([])
     expect(body.next_cursor).toBeNull()
     expect(Object.keys(body)).toEqual(["items", "top_communities", "next_cursor"])
+
+    const anonymousResponse = await app.request(
+      "http://pirate.test/feed/home/public?sort=best&locale=en",
+      {},
+      ctx.env,
+    )
+    expect(anonymousResponse.status).toBe(200)
+    expect(anonymousResponse.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+    expect(await json(anonymousResponse)).toEqual(body)
   })
 
   test("GET /feed/home/public skips projected communities with missing routing", async () => {

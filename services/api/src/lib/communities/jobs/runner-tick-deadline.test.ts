@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test"
 import {
+  orderScheduledCommunityJobPollIds,
   processAvailableCommunityJobs,
   processCommunityJobsForCommunity,
   rotateCommunityJobTickIds,
+  selectScheduledCommunityJobPollIds,
 } from "./runner"
 import type { Env } from "../../../env"
 import type { CommunityJobRepository } from "./runner-types"
@@ -160,5 +162,28 @@ describe("processAvailableCommunityJobs tick deadline", () => {
       "cmt_3",
       "cmt_1",
     ])
+  })
+
+  it("keeps active delivery communities in every bounded fleet poll", () => {
+    const communities = Array.from({ length: 1_000 }, (_, index) => ({
+      community_id: `cmt_${String(index).padStart(4, "0")}`,
+      created_at: new Date(index * 1_000).toISOString(),
+    }))
+    const priority = ["cmt_0001", "cmt_0500"]
+    const selected = selectScheduledCommunityJobPollIds(
+      communities,
+      100,
+      60_000,
+      priority,
+    )
+    const ordered = orderScheduledCommunityJobPollIds(
+      selected,
+      priority,
+      60_000,
+    )
+
+    expect(selected).toHaveLength(100)
+    expect(ordered.slice(0, priority.length)).toEqual(priority)
+    expect(new Set(ordered).size).toBe(ordered.length)
   })
 })

@@ -50,6 +50,7 @@ export type Env = {
   HNS_EDGE_ALERT_TOKEN?: string
   OPS_ALERT_MAX_COMMUNITIES?: string
   OPS_ALERT_LOOKBACK_MS?: string
+  COMMUNITY_JOB_PICKUP_ALERT_MS?: string
   OPS_ALERT_BUCKET_MS?: string
   OPS_ALERT_HIGH_BUCKET_MS?: string
   OPS_ALERT_MEDIUM_BUCKET_MS?: string
@@ -223,7 +224,7 @@ export type Env = {
   // Opt out of the canonical-USDC pin (only honor a non-canonical token override when "true").
   PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
   // Rewards use the raw-key operator/treasury only in the local backend.
-  // lit_vault splits the gas-only PKP signer from the vault custody address.
+  // lit_vault and eoa_vault split the gas-only signer from vault custody.
   PIRATE_REWARDS_SETTLEMENT_BACKEND?: string
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS?: string
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY?: string
@@ -233,6 +234,7 @@ export type Env = {
   PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
   REWARDS_TREASURY_VAULT_ADDRESS?: string
   REWARDS_TREASURY_VAULT_POLICY_VERSION?: string
+  REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI?: string
   LIT_REWARDS_API_URL?: string
   LIT_REWARDS_USAGE_API_KEY?: string
   LIT_REWARDS_ACTION_IPFS_ID?: string
@@ -291,6 +293,19 @@ export type Env = {
   SONG_PREVIEW_SERVICE_URL?: string
   SONG_PREVIEW_SHARED_SECRET?: string
   SONG_PREVIEW_SERVICE_TIMEOUT_MS?: string
+  DANCE_GRADER_CALLBACK_HMAC_KEY?: string
+  DANCE_GRADER_CALLBACK_KEY_VERSION?: string
+  DANCE_GRADER_DISPATCH_URL?: string
+  DANCE_GRADER_DISPATCH_HMAC_KEY?: string
+  DANCE_GRADER_DISPATCH_KEY_VERSION?: string
+  DANCE_GRADER_ATTEMPT_DISPATCH_URL?: string
+  DANCE_ATTEMPT_FINGERPRINT_HMAC_KEY?: string
+  DANCE_ATTEMPT_S3_ENDPOINT?: string
+  DANCE_ATTEMPT_S3_ACCESS_KEY?: string
+  DANCE_ATTEMPT_S3_SECRET_KEY?: string
+  DANCE_ATTEMPT_S3_BUCKET?: string
+  DANCE_ATTEMPT_S3_REGION?: string
+  DANCE_CAPTURE_ENABLED?: string
   SONG_PREVIEW_FFMPEG_BIN?: string
   VIDEO_ANALYSIS_MAX_SOURCE_BYTES?: string
   VIDEO_MEDIA_ANALYSIS_ENABLED?: string
@@ -462,6 +477,8 @@ export type Env = {
   SONG_STUDY_ATTEMPT_TIMING_LOGS?: string
   SONG_STUDY_DUE_REVIEW_SERVING_ENABLED?: string
   SONG_STUDY_STREAK_WRITES_ENABLED?: string
+  TELEGRAM_STUDY_VOICE_ENABLED?: string
+  TELEGRAM_STUDY_VOICE_COMMUNITY_IDS?: string
   OPENROUTER_TIMEOUT_MS?: string
   OPENROUTER_VISUAL_POLICY_MODEL?: string
   OPENROUTER_VISUAL_POLICY_TIMEOUT_MS?: string

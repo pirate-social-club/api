@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
+import { isBootstrapAllowedStatement } from "@pirate/api-shared"
 import { localCommunityShardStatements } from "./repository"
 import type { Env } from "../../../types"
 
@@ -35,6 +36,13 @@ describe.skipIf(isMocked)("localCommunityShardStatements (§8.7 translator)", ()
     const verbs = new Set(stmts.map((s) => s.sql.trim().split(/\s+/)[0].toUpperCase()))
     // guard-compatible: only CREATE + INSERT reach the shard
     expect([...verbs].sort()).toEqual(["CREATE", "INSERT"])
+    // The leading-verb check above is NOT what makes this guard-compatible —
+    // migration 1147's CREATE TRIGGERs pass it while their BEGIN ... END body
+    // semicolons were rejected by the real shard guard, taking down d1_native
+    // provisioning in production. Assert every statement against the guard
+    // itself; that is the contract the shard enforces.
+    const guardRejected = stmts.filter((s) => !isBootstrapAllowedStatement(s.sql))
+    expect(guardRejected).toEqual([])
     // schema (CREATE) + migrations seed + data seed present
     expect(stmts.filter((s) => /^\s*CREATE/i.test(s.sql)).length).toBeGreaterThan(150)
     expect(schemaMigrationSeedCount(stmts)).toBeGreaterThan(100)

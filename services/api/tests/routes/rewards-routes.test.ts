@@ -403,7 +403,15 @@ describe("rewards routes", () => {
       body: JSON.stringify(createBody),
     }, ctx.env)
     expect(create.status).toBe(201)
-    const campaign = await json(create) as { id: string; status: string; song_owner: string; eligible_activity: string; min_score_bps: number }
+    const campaign = await json(create) as {
+      id: string
+      status: string
+      song_owner: string
+      eligible_activity: string
+      min_score_bps: number
+      starts_at: number
+      ends_at: number
+    }
     expect(campaign).toMatchObject({
       community: "cmt_rewards_route",
       post: "pst_reward_campaign_song",
@@ -481,16 +489,27 @@ describe("rewards routes", () => {
     const read = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(read)).toMatchObject({
+    const activeCampaign = await json(read) as {
+      id: string
+      status: string
+      starts_at: number
+      ends_at: number
+      funding_tx_hash: string | null
+    }
+    expect(activeCampaign).toMatchObject({
       id: campaign.id,
       status: "active",
       budget_cents: 100000,
       funded_cents: 100000,
       remaining_cents: 100000,
+      funding_tx_hash: txHash,
     })
+    expect(activeCampaign.starts_at).toBeGreaterThan(campaign.starts_at)
+    expect(activeCampaign.ends_at - activeCampaign.starts_at).toBe(campaign.ends_at - campaign.starts_at)
     const publicOffer = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
     expect(publicOffer.status).toBe(200)
     expect(await json(publicOffer)).toEqual({
+      campaign: campaign.id,
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
@@ -506,6 +525,7 @@ describe("rewards routes", () => {
     )
     expect(songOffer.status).toBe(200)
     expect(await json(songOffer)).toEqual({
+      campaign: campaign.id,
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
