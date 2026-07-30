@@ -104,6 +104,10 @@ import {
   dispatchDueDanceReferences,
   isDanceReferenceDispatchConfigured,
 } from "./lib/dance/choreography-reference-dispatch"
+import {
+  dispatchDueDanceAttempts,
+  isDanceAttemptDispatchConfigured,
+} from "./lib/dance/attempt-dispatch"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
@@ -1622,6 +1626,17 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(isDanceAttemptDispatchConfigured(env)
+        ? [{
+            name: "dispatch_dance_attempts",
+            run: async () => {
+              const summary = await dispatchDueDanceAttempts({ env })
+              if (summary.claimed > 0) {
+                console.info("[scheduled] dance attempt dispatch", summary)
+              }
+            },
+          }]
+        : []),
       ...(isDanceReferenceDispatchConfigured(env)
         ? [{
             name: "dispatch_dance_references",

@@ -104,3 +104,39 @@ export async function verifyDanceAttemptUpload(input: {
   }
   return { etag }
 }
+
+export async function buildDanceAttemptDownloadUrl(input: {
+  env: Env
+  objectKey: string
+  now: Date
+  expiresInSeconds?: number
+}): Promise<string> {
+  const url = await buildS3PresignedUrl({
+    method: "GET",
+    config: resolveDanceAttemptStorageConfig(input.env),
+    objectKey: input.objectKey,
+    bodyHashMode: "unsigned",
+    expiresInSeconds: input.expiresInSeconds ?? 900,
+    now: input.now,
+  })
+  return url.toString()
+}
+
+export async function deleteDanceAttemptUpload(input: {
+  env: Env
+  objectKey: string
+  fetchFn?: typeof fetch
+  now?: Date
+}): Promise<void> {
+  const request = await buildS3SignedRequest({
+    method: "DELETE",
+    config: resolveDanceAttemptStorageConfig(input.env),
+    objectKey: input.objectKey,
+    bodyHashMode: "empty",
+    now: input.now,
+  })
+  const response = await (input.fetchFn ?? fetch)(request)
+  if (!response.ok && response.status !== 404) {
+    throw providerUnavailable(`Dance attempt upload delete failed (${response.status})`)
+  }
+}
