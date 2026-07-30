@@ -15,6 +15,13 @@ function stableJson(value: unknown): string {
   ).join(",")}}`
 }
 
+function withDigest(value: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...value,
+    result_digest: createHash("sha256").update(stableJson(value)).digest("hex"),
+  }
+}
+
 function signedResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const result: Record<string, unknown> = {
     subject: "dat_1",
@@ -119,6 +126,30 @@ describe("dance attempt callback contract", () => {
       reason: "made_up",
       grade: { ...rejectedGrade, reason: "made_up" },
     }))).toThrow("grade.reason")
+  })
+
+  test("accepts bounded extraction rejections without invented scoring facts", () => {
+    const payload = withDigest({
+      subject: "attempt_123",
+      outcome: "rejected",
+      reason: "video_invalid",
+      completed_at: 1_800_000_000,
+    })
+    expect(parseDanceAttemptTerminalFacts(payload)).toEqual({
+      outcome: "rejected",
+      reason: "video_invalid",
+      scoreBps: null,
+      pregrade: true,
+      completedAt: 1_800_000_000,
+      resultDigest: payload.result_digest,
+    })
+
+    expect(() => parseDanceAttemptTerminalFacts(withDigest({
+      subject: "attempt_123",
+      outcome: "rejected",
+      reason: "reference_replay",
+      completed_at: 1_800_000_000,
+    }))).toThrow("pregrade rejection reason is invalid")
   })
 
   test("terminal replay is idempotent only for the identical grader digest", () => {

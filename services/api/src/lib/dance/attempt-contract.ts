@@ -3,11 +3,13 @@ import { createHash } from "node:crypto"
 import { badRequestError, conflictError } from "../errors"
 
 export const DANCE_ATTEMPT_REJECTION_CODES = [
+  "video_invalid",
   "duration_out_of_range",
   "insufficient_pose_presence",
   "insufficient_coverage",
   "insufficient_motion",
   "insufficient_alignment",
+  "multiple_people",
   "reference_replay",
 ] as const
 
@@ -95,6 +97,15 @@ export type DanceAttemptRejectedFacts = {
   resultDigest: string
 }
 
+export type DanceAttemptPregradeRejectedFacts = {
+  outcome: "rejected"
+  reason: Exclude<DanceAttemptRejectionCode, "insufficient_alignment" | "reference_replay">
+  scoreBps: null
+  pregrade: true
+  completedAt: number
+  resultDigest: string
+}
+
 export type DanceAttemptFailedFacts = {
   outcome: "failed"
   reason: "scoring_unavailable"
@@ -105,11 +116,20 @@ export type DanceAttemptFailedFacts = {
 export type DanceAttemptTerminalFacts =
   | DanceAttemptScoredFacts
   | DanceAttemptRejectedFacts
+  | DanceAttemptPregradeRejectedFacts
   | DanceAttemptFailedFacts
 
 const SHA256 = /^[0-9a-f]{64}$/
 const FINGERPRINT_MATERIAL = /^(?:[0-9a-f]{2}){1,64}$/
 const REJECTIONS = new Set<string>(DANCE_ATTEMPT_REJECTION_CODES)
+const PREGRADE_REJECTIONS = new Set<string>([
+  "video_invalid",
+  "duration_out_of_range",
+  "insufficient_pose_presence",
+  "insufficient_coverage",
+  "insufficient_motion",
+  "multiple_people",
+])
 
 function record(value: unknown, field: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -303,6 +323,20 @@ export function parseDanceAttemptTerminalFacts(
   }
   if (value.outcome !== "scored" && value.outcome !== "rejected") {
     throw badRequestError("outcome is invalid")
+  }
+  if (value.outcome === "rejected" && value.grade === undefined) {
+    const reason = rejection(value.reason)
+    if (!PREGRADE_REJECTIONS.has(reason)) {
+      throw badRequestError("pregrade rejection reason is invalid")
+    }
+    return {
+      outcome: "rejected",
+      reason: reason as DanceAttemptPregradeRejectedFacts["reason"],
+      scoreBps: null,
+      pregrade: true,
+      completedAt,
+      resultDigest,
+    }
   }
 
   const grade = record(value.grade, "grade")

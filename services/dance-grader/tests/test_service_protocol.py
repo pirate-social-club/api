@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dance_grader.service_protocol import (
+    attempt_failure_reason,
     canonical_json,
     reference_failure_reason,
     sign_request,
@@ -64,3 +65,24 @@ def test_reference_failure_contract_only_terminalizes_known_media_failures() -> 
     assert reference_failure_reason(ErrorWithCode("unknown_future_code")) == "scoring_unavailable"
     assert reference_failure_reason(ErrorWithCode(503)) == "scoring_unavailable"
     assert reference_failure_reason(RuntimeError("network")) == "scoring_unavailable"
+
+
+def test_attempt_failure_contract_maps_extraction_errors_to_public_rejections() -> None:
+    class ErrorWithCode(RuntimeError):
+        def __init__(self, code):
+            super().__init__("test")
+            self.code = code
+
+    assert attempt_failure_reason(ErrorWithCode("video_invalid")) == "video_invalid"
+    assert (
+        attempt_failure_reason(ErrorWithCode("video_limits_exceeded"))
+        == "duration_out_of_range"
+    )
+    assert attempt_failure_reason(ErrorWithCode("pose_result_invalid")) == "video_invalid"
+    assert attempt_failure_reason(ErrorWithCode("multiple_people")) == "multiple_people"
+    assert (
+        attempt_failure_reason(ErrorWithCode("insufficient_pose_presence"))
+        == "insufficient_pose_presence"
+    )
+    assert attempt_failure_reason(ErrorWithCode("unknown")) == "scoring_unavailable"
+    assert attempt_failure_reason(RuntimeError("network")) == "scoring_unavailable"
