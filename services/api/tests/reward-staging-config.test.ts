@@ -64,26 +64,38 @@ describe("staging reward money-loop configuration", () => {
     )
   })
 
-  test("enables the coordinated production pilot while keeping legacy accrual dark", () => {
+  test("keeps production settlement dark and contains no testnet reward custody config", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
-    expectCampaignEnablementIsCoordinated(vars)
     expect(vars).toMatchObject({
-      REWARDS_CAMPAIGNS_ENABLED: "true",
-      REWARDS_REFUNDS_ENABLED: "true",
+      REWARDS_CAMPAIGNS_ENABLED: "false",
+      REWARDS_REFUNDS_ENABLED: "false",
       REWARDS_READS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
-      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "false",
       REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "false",
       REWARDS_IDENTITY_PROVIDER: "self",
-      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
-      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xC74e72CE521674BcAea66c99874fe9d5984E12Be",
-      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xC74e72CE521674BcAea66c99874fe9d5984E12Be",
-      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
     })
-    // Empty/absent => no restriction (resolveRewardCampaignConfig treats a blank
-    // allowlist as null): the pilot post-scoping has been deliberately removed so
-    // any eligible published song can carry a funded bounty.
-    expect(vars.REWARDS_CAMPAIGN_POST_ALLOWLIST ?? "").toBe("")
-    expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS)
+
+    const productionRewardVars = Object.fromEntries(
+      Object.entries(vars).filter(([key]) => (
+        key.startsWith("REWARDS_CAMPAIGN_")
+        || key.startsWith("PIRATE_REWARDS_SETTLEMENT_")
+        || key === "REWARDS_TREASURY_VAULT_ADDRESS"
+      )),
+    )
+    const serialized = JSON.stringify(productionRewardVars).toLowerCase()
+
+    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_CHAIN_ID")
+    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS")
+    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_TREASURY_ADDRESS")
+    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_RPC_URL")
+    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_CHAIN_ID")
+    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS")
+    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS")
+    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_RPC_URL")
+    expect(productionRewardVars).not.toHaveProperty("REWARDS_TREASURY_VAULT_ADDRESS")
+    expect(serialized).not.toContain("84532")
+    expect(serialized).not.toContain("sepolia")
+    expect(serialized).not.toContain("0x036cbd53842c5426634e7929541ec2318f3dcf7e")
   })
 })
