@@ -76,6 +76,32 @@ async function activeDestination(env: Env, communityId: string): Promise<Destina
   return toDestination(result.rows[0])
 }
 
+export async function listActiveTelegramChannelCommunityIds(input: {
+  client: {
+    execute: (query: {
+      sql: string
+      args: unknown[]
+    }) => Promise<{ rows: unknown[] }>
+  }
+  limit?: number
+}): Promise<string[]> {
+  const limit = Math.max(1, Math.min(100, Math.trunc(input.limit ?? 25)))
+  const result = await input.client.execute({
+    sql: `
+      SELECT community_id
+      FROM telegram_channel_destinations
+      WHERE status = 'active'
+        AND publication_mode != 'off'
+      ORDER BY linked_at DESC
+      LIMIT ?1
+    `,
+    args: [limit],
+  })
+  return result.rows
+    .map((row) => String(rowValue(row, "community_id") ?? ""))
+    .filter(Boolean)
+}
+
 function normalizeChatId(value: unknown): string {
   if (typeof value === "number" && Number.isSafeInteger(value)) return String(value)
   if (typeof value === "string" && value.trim()) return value.trim()
