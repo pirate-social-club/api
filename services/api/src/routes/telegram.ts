@@ -89,6 +89,7 @@ import {
   transcribeTelegramGroupAssistantVoice,
 } from "./telegram-assistant-workflow"
 import { completeTelegramChannelSetupByRequest } from "../lib/telegram/channel-destination-service"
+import { getWaitUntil } from "./execution-context"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
@@ -1098,7 +1099,12 @@ async function handleChatJoinRequest(env: Env, joinRequest: TelegramWebhookChatJ
   }
 }
 
-async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpdate, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+async function handleTelegramWebhookUpdate(
+  env: Env,
+  update: TelegramWebhookUpdate,
+  bot: Env | TelegramCommunityBotCredential = env,
+  waitUntil?: (promise: Promise<void>) => void,
+): Promise<void> {
   if (update.chat_join_request) {
     await handleChatJoinRequest(env, update.chat_join_request, bot)
     return
@@ -1117,7 +1123,7 @@ async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpda
   }
   if (isPrivateChat(message.chat?.type)) {
     if (isCommunityBot(bot)) {
-      if (await handleTelegramStudyVoiceMessage({ bot, env, message })) {
+      if (await handleTelegramStudyVoiceMessage({ bot, env, message, waitUntil })) {
         return
       }
       await handleDirectAssistantMessage(env, message, bot)
@@ -1280,7 +1286,7 @@ telegram.post("/community-bots/:webhookId/webhook", async (c) => {
     return c.json({ ok: true }, 200)
   }
   try {
-    await handleTelegramWebhookUpdate(c.env, body, bot)
+    await handleTelegramWebhookUpdate(c.env, body, bot, getWaitUntil(c))
   } catch (error) {
     console.warn("[telegram-community-webhook] update handling failed", {
       error: error instanceof Error ? error.message : String(error),

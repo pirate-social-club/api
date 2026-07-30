@@ -23,10 +23,10 @@ import {
 } from "./community-bot-service"
 import type { TelegramWebhookMessage } from "./webhook-parsing"
 import { inferTelegramAudioMimeType, telegramIdentifier } from "./webhook-parsing"
+import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 
 const VOICE_INTENT_TTL_MS = 10 * 60 * 1000
 const VOICE_PROCESSING_LEASE_MS = 2 * 60 * 1000
-const RECENT_EXPIRED_INTENT_MS = 30 * 60 * 1000
 
 type VoiceIntentRow = {
   attemptNumber: number
@@ -130,6 +130,9 @@ export async function createTelegramStudyVoiceIntent(input: {
   postId: string
   targetLanguage?: string | null
 }): Promise<TelegramStudyVoiceIntentResource> {
+  if (!isTelegramStudyVoiceEnabled(input.env, input.communityId)) {
+    throw conflictError("Telegram study voice messages are not enabled for this community")
+  }
   const bot = await decryptActiveCommunityTelegramBotOrNull({
     env: input.env,
     communityId: input.communityId,
@@ -281,7 +284,6 @@ async function findVoiceIntent(input: {
   env: Env
   telegramUserId: string
 }): Promise<VoiceIntentRow | null> {
-  const cutoff = new Date(Date.now() - RECENT_EXPIRED_INTENT_MS).toISOString()
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
       SELECT intent_id, telegram_user_id, user_id, community_id, post_id,
@@ -291,13 +293,42 @@ async function findVoiceIntent(input: {
       FROM telegram_study_voice_intents
       WHERE telegram_community_bot_id = ?1
         AND telegram_user_id = ?2
-        AND created_at >= ?3
+        AND status IN ('pending', 'processing')
       ORDER BY created_at DESC, intent_id DESC
       LIMIT 1
     `,
-    args: [input.botId, input.telegramUserId, cutoff],
+    args: [input.botId, input.telegramUserId],
   })
   return serializeIntentRow(result.rows[0])
+}
+
+async function isKnownVoiceDelivery(input: {
+  botId: string
+  env: Env
+  telegramMessageId: number
+  telegramUserId: string
+  voiceFileUniqueId: string
+}): Promise<boolean> {
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT intent_id
+      FROM telegram_study_voice_intents
+      WHERE telegram_community_bot_id = ?1
+        AND telegram_user_id = ?2
+        AND (
+          telegram_voice_message_id = ?3
+          OR telegram_voice_file_unique_id = ?4
+        )
+      LIMIT 1
+    `,
+    args: [
+      input.botId,
+      input.telegramUserId,
+      input.telegramMessageId,
+      input.voiceFileUniqueId,
+    ],
+  })
+  return Boolean(stringOrNull(rowValue(result.rows[0], "intent_id")))
 }
 
 async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string): Promise<void> {
@@ -316,6 +347,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
   bot: TelegramCommunityBotCredential
   env: Env
   message: TelegramWebhookMessage
+  waitUntil?: (promise: Promise<void>) => void
 }): Promise<boolean> {
   const chatId = telegramIdentifier(input.message.chat?.id)
   const telegramUserId = telegramIdentifier(input.message.from?.id)
@@ -324,6 +356,16 @@ export async function handleTelegramStudyVoiceMessage(input: {
   const telegramMessageId = numberOrNull(input.message.message_id)
   if (!chatId || !telegramUserId || !voiceFileId || !voiceFileUniqueId || telegramMessageId === null) {
     return false
+  }
+  if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) return false
+  if (await isKnownVoiceDelivery({
+    botId: input.bot.id,
+    env: input.env,
+    telegramMessageId,
+    telegramUserId,
+    voiceFileUniqueId,
+  })) {
+    return true
   }
 
   const intent = await findVoiceIntent({
@@ -335,21 +377,25 @@ export async function handleTelegramStudyVoiceMessage(input: {
   const now = nowIso()
   if (
     intent.communityId !== input.bot.communityId
-    || intent.status === "consumed"
-    || intent.status === "expired"
-    || Date.parse(intent.expiresAt) <= Date.parse(now)
   ) {
-    if (intent.status === "pending" && Date.parse(intent.expiresAt) <= Date.parse(now)) {
-      await getControlPlaneClient(input.env).execute({
-        sql: `
-          UPDATE telegram_study_voice_intents
-          SET status = 'expired', updated_at = ?2
-          WHERE intent_id = ?1 AND status = 'pending'
-        `,
-        args: [intent.id, now],
-      })
+    return false
+  }
+  if (Date.parse(intent.expiresAt) <= Date.parse(now)) {
+    const expired = await getControlPlaneClient(input.env).execute({
+      sql: `
+        UPDATE telegram_study_voice_intents
+        SET status = 'expired',
+            telegram_voice_message_id = ?3,
+            telegram_voice_file_id = ?4,
+            telegram_voice_file_unique_id = ?5,
+            updated_at = ?2
+        WHERE intent_id = ?1 AND status = 'pending'
+      `,
+      args: [intent.id, now, telegramMessageId, voiceFileId, voiceFileUniqueId],
+    })
+    if ((expired.rowsAffected ?? 0) === 1) {
+      await sendExpiredMessage(input.bot, chatId)
     }
-    await sendExpiredMessage(input.bot, chatId)
     return true
   }
   if (
@@ -408,109 +454,120 @@ export async function handleTelegramStudyVoiceMessage(input: {
   })
   if (claim.rowsAffected !== 1) return true
 
-  let result: SongStudyAttemptResult
-  try {
-    const telegramFile = await getTelegramFile(input.bot, voiceFileId)
-    if (!telegramFile.file_path?.trim()) {
-      throw providerUnavailable("Telegram voice file is not available")
+  const processClaimedVoice = async (): Promise<void> => {
+    let result: SongStudyAttemptResult
+    try {
+      const telegramFile = await getTelegramFile(input.bot, voiceFileId)
+      if (!telegramFile.file_path?.trim()) {
+        throw providerUnavailable("Telegram voice file is not available")
+      }
+      const download = await downloadTelegramFile(input.bot, telegramFile.file_path)
+      const mimeType = inferTelegramAudioMimeType({
+        explicitMimeType: input.message.voice?.mime_type ?? download.contentType ?? undefined,
+        fallback: "audio/ogg",
+        fileName: telegramFile.file_path,
+      })
+      const actor: ActorContext = { authType: "user", userId: intent.userId }
+      const transcription = await transcribePostStudyAudio({
+        actor,
+        communityId: intent.communityId,
+        communityRepository: getCommunityRepository(input.env),
+        env: input.env,
+        file: new File([download.bytes], "telegram-study-voice.oga", { type: mimeType }),
+        postId: intent.postId,
+      })
+      result = await submitPostStudyAttempt({
+        actor,
+        body: {
+          attempt_number: intent.attemptNumber,
+          exercise_id: intent.exerciseId,
+          idempotency_key: intent.idempotencyKey,
+          session_id: intent.sessionId,
+          transcript: transcription.text,
+          type: "say_it_back",
+        },
+        communityId: intent.communityId,
+        communityRepository: getCommunityRepository(input.env),
+        env: input.env,
+        postId: intent.postId,
+      })
+      await getControlPlaneClient(input.env).execute({
+        sql: `
+          UPDATE telegram_study_voice_intents
+          SET status = 'consumed',
+              consumed_at = ?3,
+              processing_lease_id = NULL,
+              processing_lease_expires_at = NULL,
+              updated_at = ?3
+          WHERE intent_id = ?1
+            AND status = 'processing'
+            AND processing_lease_id = ?2
+        `,
+        args: [intent.id, leaseId, nowIso()],
+      })
+    } catch (error) {
+      const retryExpiresAt = new Date(Date.now() + VOICE_INTENT_TTL_MS).toISOString()
+      await getControlPlaneClient(input.env).execute({
+        sql: `
+          UPDATE telegram_study_voice_intents
+          SET status = 'pending',
+              processing_lease_id = NULL,
+              processing_lease_expires_at = NULL,
+              expires_at = CASE WHEN expires_at < ?5 THEN ?5 ELSE expires_at END,
+              last_error_code = 'voice_processing_failed',
+              last_error_message = ?3,
+              updated_at = ?4
+          WHERE intent_id = ?1
+            AND status = 'processing'
+            AND processing_lease_id = ?2
+        `,
+        args: [
+          intent.id,
+          leaseId,
+          error instanceof Error ? error.message : String(error),
+          nowIso(),
+          retryExpiresAt,
+        ],
+      })
+      await sendTelegramMessage(input.bot, {
+        chat_id: chatId,
+        text: "I could not grade that recording. Send another voice message to try again.",
+      }).catch(() => undefined)
+      return
     }
-    const download = await downloadTelegramFile(input.bot, telegramFile.file_path)
-    const mimeType = inferTelegramAudioMimeType({
-      explicitMimeType: input.message.voice?.mime_type ?? download.contentType ?? undefined,
-      fallback: "audio/ogg",
-      fileName: telegramFile.file_path,
-    })
-    const actor: ActorContext = { authType: "user", userId: intent.userId }
-    const transcription = await transcribePostStudyAudio({
-      actor,
-      communityId: intent.communityId,
-      communityRepository: getCommunityRepository(input.env),
-      env: input.env,
-      file: new File([download.bytes], "telegram-study-voice.oga", { type: mimeType }),
-      postId: intent.postId,
-    })
-    result = await submitPostStudyAttempt({
-      actor,
-      body: {
-        attempt_number: intent.attemptNumber,
-        exercise_id: intent.exerciseId,
-        idempotency_key: intent.idempotencyKey,
-        session_id: intent.sessionId,
-        transcript: transcription.text,
-        type: "say_it_back",
-      },
-      communityId: intent.communityId,
-      communityRepository: getCommunityRepository(input.env),
-      env: input.env,
-      postId: intent.postId,
-    })
-    await getControlPlaneClient(input.env).execute({
-      sql: `
-        UPDATE telegram_study_voice_intents
-        SET status = 'consumed',
-            consumed_at = ?3,
-            processing_lease_id = NULL,
-            processing_lease_expires_at = NULL,
-            updated_at = ?3
-        WHERE intent_id = ?1
-          AND status = 'processing'
-          AND processing_lease_id = ?2
-      `,
-      args: [intent.id, leaseId, nowIso()],
-    })
-  } catch (error) {
-    await getControlPlaneClient(input.env).execute({
-      sql: `
-        UPDATE telegram_study_voice_intents
-        SET status = 'pending',
-            processing_lease_id = NULL,
-            processing_lease_expires_at = NULL,
-            last_error_code = 'voice_processing_failed',
-            last_error_message = ?3,
-            updated_at = ?4
-        WHERE intent_id = ?1
-          AND status = 'processing'
-          AND processing_lease_id = ?2
-      `,
-      args: [
-        intent.id,
-        leaseId,
-        error instanceof Error ? error.message : String(error),
-        nowIso(),
-      ],
-    })
+
+    const webOrigin = input.env.PIRATE_WEB_PUBLIC_ORIGIN?.trim().replace(/\/+$/u, "")
+    const studyUrl = webOrigin
+      ? `${webOrigin}/tg/c/${encodeURIComponent(publicCommunityId(intent.communityId))}/p/${encodeURIComponent(publicPostId(intent.postId))}/study`
+      : null
     await sendTelegramMessage(input.bot, {
       chat_id: chatId,
-      text: "I could not grade that recording. Send another voice message to try again.",
-    }).catch(() => undefined)
-    return true
+      text: result.outcome === "correct"
+        ? "Correct. Continue studying in the Mini App."
+        : "Not quite. Continue studying to review the line.",
+      ...(studyUrl
+        ? {
+            reply_markup: {
+              inline_keyboard: [[{
+                text: "Continue studying",
+                web_app: { url: studyUrl },
+              }]],
+            },
+          }
+        : {}),
+    }).catch((error) => {
+      console.warn("[telegram-study] result reply failed", {
+        communityId: intent.communityId,
+        error: error instanceof Error ? error.message : String(error),
+        intentId: intent.id,
+      })
+    })
   }
 
-  const webOrigin = input.env.PIRATE_WEB_PUBLIC_ORIGIN?.trim().replace(/\/+$/u, "")
-  const studyUrl = webOrigin
-    ? `${webOrigin}/tg/c/${encodeURIComponent(publicCommunityId(intent.communityId))}/p/${encodeURIComponent(publicPostId(intent.postId))}/study`
-    : null
-  await sendTelegramMessage(input.bot, {
-    chat_id: chatId,
-    text: result.outcome === "correct"
-      ? "Correct. Continue studying in the Mini App."
-      : "Not quite. Continue studying to review the line.",
-    ...(studyUrl
-      ? {
-          reply_markup: {
-            inline_keyboard: [[{
-              text: "Continue studying",
-              web_app: { url: studyUrl },
-            }]],
-          },
-        }
-      : {}),
-  }).catch((error) => {
-    console.warn("[telegram-study] result reply failed", {
-      communityId: intent.communityId,
-      error: error instanceof Error ? error.message : String(error),
-      intentId: intent.id,
-    })
-  })
+  if (input.waitUntil) {
+    input.waitUntil(processClaimedVoice())
+    return true
+  }
+  await processClaimedVoice()
   return true
 }
