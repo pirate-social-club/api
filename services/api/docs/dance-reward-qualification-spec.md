@@ -1144,36 +1144,43 @@ telemetry.
 
 ## Rollout gates
 
-### Gate 0: scorer discrimination
+The gate labels describe dependency order. The staff-only Telegram ingestion surface is intentionally
+built before calibration admission because the production delivery path defines the calibration
+input distribution.
 
-Required before API integration can emit rank-eligible results:
+### Gate 0A: offline scorer discrimination
 
-- Modal/Telegram data-processing and retention review is approved before corpus collection;
-- calibration and held-out recordings are collected through the production Telegram bot media
-  path, with the default `video` path represented and delivery mode recorded;
 - adversarial fixture suite passes;
 - low visibility never increases a score;
 - incomplete coverage cannot pass;
 - shuffled/reversed motion is separated from honest attempts;
-- calibration artifact and thresholds are reviewed on a held-out dataset;
 - scorer output is deterministic and versioned.
 
-### Gate 1: dark grading
+### Gate 0B: staff-only Telegram ingestion
 
+- Modal/Telegram data-processing and retention review is approved before collecting participant
+  recordings;
 - Telegram choreography prompt and private ingestion flow available only to staff/pilot allowlist;
 - grading runs with rewards disabled;
 - raw deletion and lifecycle backstop verified;
 - queue SLO, CPU cost, and memory measured;
 - no attempt video or landmark leakage in logs/storage.
 
-### Gate 2: shadow qualification
+### Gate 0C: channel-matched calibration admission
+
+- calibration and held-out recordings are collected through the production Telegram bot media
+  path, with the default `video` path represented and delivery mode recorded;
+- calibration artifact and thresholds are reviewed on a held-out dataset;
+- no API result can be rank eligible under an unadmitted calibration.
+
+### Gate 1: shadow qualification
 
 - produce hypothetical qualification and duplicate outcomes without outbox emission;
 - compare honest pass rate, unrelated false accepts, replay rejects, and support burden;
 - freeze the first platform floor, calibration version, fingerprint policy, and compatible
   choreography revisions.
 
-### Gate 3: capped reward pilot
+### Gate 2: capped reward pilot
 
 - enable `DANCE_REWARDS_ENABLED` only for explicit `dance` campaigns and allowlisted posts;
 - use low campaign amounts and existing unique-human verification;
@@ -1181,7 +1188,7 @@ Required before API integration can emit rank-eligible results:
 - verify no `either` campaign receives dance;
 - define a kill-switch owner and rollback procedure.
 
-### Gate 4: broader availability
+### Gate 3: broader availability
 
 - requires stable cleanup, duplicate, pass-rate, queue, cost, and dispute metrics;
 - stronger liveness beyond the v1 randomized start cue remains deferred unless observed abuse
