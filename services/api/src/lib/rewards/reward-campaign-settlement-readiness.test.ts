@@ -71,6 +71,22 @@ describe("reward campaign settlement readiness", () => {
     })
   })
 
+  test("accepts EOA vault policy without requiring Lit configuration", () => {
+    expect(assertRewardCampaignSettlementReadiness(readyEnv({
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: VAULT,
+      REWARDS_TREASURY_VAULT_ADDRESS: VAULT,
+      REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
+      LIT_REWARDS_USAGE_API_KEY: undefined,
+      LIT_REWARDS_ACTION_IPFS_ID: undefined,
+      LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+      LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+      LIT_REWARDS_MAX_GAS_LIMIT: "300000",
+    }))).toMatchObject({
+      treasuryAddress: VAULT,
+    })
+  })
+
   test("fails closed when the Lit vault tuple is incomplete or permits inline HTTP", () => {
     const lit = {
       PIRATE_REWARDS_SETTLEMENT_BACKEND: "lit_vault",

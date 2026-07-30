@@ -50,7 +50,7 @@ export async function readFreshPayoutCapacity(input: {
   client: Client
   nowMs: number
 }): Promise<RewardPayoutCapacity | null> {
-  if (resolveRewardsSettlementBackend(input.env) !== "lit_vault") return null
+  if (resolveRewardsSettlementBackend(input.env) === "local") return null
   const result = await input.client.execute(`
     SELECT
       chain_id, vault_address, epoch_duration_seconds, current_epoch,

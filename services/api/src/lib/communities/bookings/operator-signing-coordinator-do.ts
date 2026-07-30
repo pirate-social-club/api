@@ -607,7 +607,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     // The manual route uses the SAME verifier-first decision as reconciliation,
     // so the human override can never rest on weaker evidence than the
     // automated path it overrides.
-    const decision = this.usesLitVault() ? await this.decideRewardVaultReceipt(row) : undefined
+    const decision = this.usesRewardVault() ? await this.decideRewardVaultReceipt(row) : undefined
     assertManualRewardResolutionEvidence({
       resolution: input.resolution,
       liveness,
@@ -717,7 +717,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const operatorKind = this.operatorKind(row)
     const liveness = await chain().txLiveness(this.env, row.tx_hash, operatorKind)
     if (liveness === "success") {
-      if (this.operatorKind(row) === "rewards" && this.usesLitVault()) {
+      if (this.operatorKind(row) === "rewards" && this.usesRewardVault()) {
         const decision = await this.decideRewardVaultReceipt(row)
         if (decision.disposition === "capacity_deferred") {
           // Non-terminal. The operation id was never consumed on chain, so the
@@ -781,7 +781,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       }) ?? this.read(row.idempotency_key)!
     }
     if (liveness === "failed") {
-      if (operatorKind === "rewards" && this.usesLitVault()) {
+      if (operatorKind === "rewards" && this.usesRewardVault()) {
         const observe = chain().rewardVaultFailureEvidence
         if (!observe) {
           return this.cas(row.idempotency_key, row.version, {
@@ -901,8 +901,10 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return row.effect_kind === "reward_cashout" || row.effect_kind === "reward_funding_refund" ? "rewards" : "booking"
   }
 
-  private usesLitVault(): boolean {
-    return String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim() === "lit_vault"
+  private usesRewardVault(): boolean {
+    return ["lit_vault", "eoa_vault"].includes(
+      String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim(),
+    )
   }
 
   /**
@@ -1114,7 +1116,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       if (!nonceConsumed) throw error // alarm records bounded backoff; signed transaction stays prepared
       const liveness = await chain().txLiveness(this.env, row.tx_hash, this.operatorKind(row))
       const rewardsVaultFailure = this.operatorKind(row) === "rewards"
-        && this.usesLitVault()
+        && this.usesRewardVault()
         && liveness === "failed"
       const next: OperatorSettleState = liveness === "success" || liveness === "pending"
         ? "broadcast"

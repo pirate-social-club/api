@@ -224,7 +224,7 @@ export type Env = {
   // Opt out of the canonical-USDC pin (only honor a non-canonical token override when "true").
   PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
   // Rewards use the raw-key operator/treasury only in the local backend.
-  // lit_vault splits the gas-only PKP signer from the vault custody address.
+  // lit_vault and eoa_vault split the gas-only signer from vault custody.
   PIRATE_REWARDS_SETTLEMENT_BACKEND?: string
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS?: string
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY?: string
@@ -234,6 +234,7 @@ export type Env = {
   PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
   REWARDS_TREASURY_VAULT_ADDRESS?: string
   REWARDS_TREASURY_VAULT_POLICY_VERSION?: string
+  REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI?: string
   LIT_REWARDS_API_URL?: string
   LIT_REWARDS_USAGE_API_KEY?: string
   LIT_REWARDS_ACTION_IPFS_ID?: string
