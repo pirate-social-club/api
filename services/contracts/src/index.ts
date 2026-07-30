@@ -2910,6 +2910,7 @@ export type RewardCampaignCapabilities = {
 };
 
 export type PublicRewardOffer = {
+  campaign: string;
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
   daily_reward_cents: number;
@@ -2956,6 +2957,7 @@ export type RewardCampaign = {
   exhausted_at?: number | null;
   ended_at?: number | null;
   canceled_at?: number | null;
+  funding_tx_hash: string | null;
   created: number;
 };
 

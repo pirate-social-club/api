@@ -101,8 +101,13 @@ const CAMPAIGN_COLUMNS = `
   (SELECT chain_id FROM reward_campaign_funding_effects
     WHERE reward_campaign_id = reward_campaigns.reward_campaign_id
       AND status = 'confirmed'
-    ORDER BY confirmed_at DESC, reward_campaign_funding_effect_id DESC
-    LIMIT 1) AS chain_id
+    ORDER BY confirmed_at ASC, reward_campaign_funding_effect_id ASC
+    LIMIT 1) AS chain_id,
+  (SELECT tx_hash FROM reward_campaign_funding_effects
+    WHERE reward_campaign_id = reward_campaigns.reward_campaign_id
+      AND status = 'confirmed'
+    ORDER BY confirmed_at ASC, reward_campaign_funding_effect_id ASC
+    LIMIT 1) AS funding_tx_hash
 `
 
 const FUNDING_COLUMNS = `
@@ -164,12 +169,14 @@ function campaignResource(row: CampaignRow): RewardCampaign {
     exhausted_at: unixSeconds(rowValue(row, "exhausted_at")),
     ended_at: unixSeconds(rowValue(row, "ended_at")),
     canceled_at: unixSeconds(rowValue(row, "canceled_at")),
+    funding_tx_hash: stringOrNull(rowValue(row, "funding_tx_hash")),
     created: unixSeconds(rowValue(row, "created_at")) ?? 0,
   }
 }
 
 function publicRewardOffer(row: CampaignRow, settlementChainId: number): PublicRewardOffer {
   return {
+    campaign: requiredString(row, "reward_campaign_id"),
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
@@ -1082,8 +1089,12 @@ export async function confirmRewardCampaignFunding(input: {
     const requestedStartMillis = Date.parse(requiredString(campaign, "starts_at"))
     const requestedEndMillis = Date.parse(requiredString(campaign, "ends_at"))
     const campaignDurationMillis = requestedEndMillis - requestedStartMillis
-    const startMillis = genuinelyLateDeposit ? nowMillis : requestedStartMillis
-    const endMillis = genuinelyLateDeposit ? nowMillis + campaignDurationMillis : requestedEndMillis
+    const firstActivation = integer(rowValue(campaign, "funded_cents")) === 0
+      && unixSeconds(rowValue(campaign, "activated_at")) === null
+    const shiftActivationWindow = genuinelyLateDeposit
+      || (firstActivation && nowMillis > requestedStartMillis)
+    const startMillis = shiftActivationWindow ? nowMillis : requestedStartMillis
+    const endMillis = shiftActivationWindow ? nowMillis + campaignDurationMillis : requestedEndMillis
     const ownerAllowsRewards = await thirdPartyRewardsAllowed(
       tx,
       requiredString(campaign, "community_id"),
@@ -1126,7 +1137,7 @@ export async function confirmRewardCampaignFunding(input: {
           WHERE reward_campaign_id = ?1
       `,
       args: [
-        input.campaignId, nextFunded, nextStatus, now, genuinelyLateDeposit,
+        input.campaignId, nextFunded, nextStatus, now, shiftActivationWindow,
         new Date(startMillis).toISOString(),
         new Date(endMillis).toISOString(),
       ],
