@@ -17,6 +17,7 @@ const REWARDS_VAULT_CAPACITY_ABI = [
   "function payoutSpentByEpoch(uint256) view returns (uint256)",
   "function refundEpochCap() view returns (uint256)",
   "function refundSpentByEpoch(uint256) view returns (uint256)",
+  "function settlementOperator() view returns (address)",
 ] as const
 
 export const REWARD_CAMPAIGN_LIABILITY_SQL = `
@@ -64,6 +65,8 @@ export type RewardCampaignSolvencySummary = {
   observedAt?: string
   signerBalanceWei?: bigint
   nonceAnomalies?: number
+  pendingOver120Seconds?: number
+  pendingOver300Seconds?: number
   vaultCapacity?: RewardVaultCapacityObservation
 }
 
@@ -75,6 +78,7 @@ export type RewardVaultCapacityObservation = {
   payoutSpentAtomic: bigint
   refundEpochCapAtomic: bigint
   refundSpentAtomic: bigint
+  settlementOperator: `0x${string}`
   observedBlockNumber: number
   observedBlockHash: string
 }
@@ -150,13 +154,14 @@ async function readVaultCapacity(config: SolvencyConfig): Promise<RewardVaultCap
     if (!block?.hash) throw new Error("Reward vault capacity block is unavailable")
     const vault = new Contract(config.treasuryAddress, REWARDS_VAULT_CAPACITY_ABI, provider)
     const call = { blockTag: observedBlockNumber }
-    const [policyVersion, epochDurationSeconds, currentEpoch, payoutEpochCapAtomic, refundEpochCapAtomic] =
+    const [policyVersion, epochDurationSeconds, currentEpoch, payoutEpochCapAtomic, refundEpochCapAtomic, settlementOperator] =
       await Promise.all([
         vault.policyVersion(call),
         vault.epochDuration(call),
         vault.currentEpoch(call),
         vault.payoutEpochCap(call),
         vault.refundEpochCap(call),
+        vault.settlementOperator(call),
       ])
     const [payoutSpentAtomic, refundSpentAtomic] = await Promise.all([
       vault.payoutSpentByEpoch(currentEpoch, call),
@@ -170,6 +175,7 @@ async function readVaultCapacity(config: SolvencyConfig): Promise<RewardVaultCap
       payoutSpentAtomic: BigInt(payoutSpentAtomic),
       refundEpochCapAtomic: BigInt(refundEpochCapAtomic),
       refundSpentAtomic: BigInt(refundSpentAtomic),
+      settlementOperator: getAddress(settlementOperator) as `0x${string}`,
       observedBlockNumber,
       observedBlockHash: block.hash,
     }
@@ -179,11 +185,42 @@ async function readVaultCapacity(config: SolvencyConfig): Promise<RewardVaultCap
 }
 
 function signerGasFloor(env: Env): bigint {
-  const raw = String(env.REWARDS_LIT_SIGNER_MIN_ETH_WEI ?? "0").trim()
+  const raw = String(
+    env.REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI
+      ?? env.REWARDS_LIT_SIGNER_MIN_ETH_WEI
+      ?? "0",
+  ).trim()
   if (!/^(0|[1-9][0-9]*)$/u.test(raw)) {
-    throw new Error("REWARDS_LIT_SIGNER_MIN_ETH_WEI is invalid")
+    throw new Error("REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI is invalid")
   }
   return BigInt(raw)
+}
+
+async function readPendingAges(client: Client): Promise<{
+  over120Seconds: number
+  over300Seconds: number
+}> {
+  const result = await client.execute(`
+    SELECT
+      COUNT(*) FILTER (WHERE updated_at <= CURRENT_TIMESTAMP - INTERVAL '120 seconds') AS over_120,
+      COUNT(*) FILTER (WHERE updated_at <= CURRENT_TIMESTAMP - INTERVAL '300 seconds') AS over_300
+    FROM (
+      SELECT updated_at FROM reward_payout_effects
+      WHERE status = 'submitted'
+        AND coordinator_state IN ('prepared', 'broadcast', 'reconciliation_required')
+      UNION ALL
+      SELECT updated_at FROM reward_campaign_funding_effects
+      WHERE status = 'refund_pending'
+        AND refund_coordinator_state IN ('prepared', 'broadcast', 'reconciliation_required')
+    ) pending
+  `)
+  const over120Seconds = Number(rowValue(result.rows[0], "over_120") ?? 0)
+  const over300Seconds = Number(rowValue(result.rows[0], "over_300") ?? 0)
+  if (
+    !Number.isSafeInteger(over120Seconds) || over120Seconds < 0
+    || !Number.isSafeInteger(over300Seconds) || over300Seconds < 0
+  ) throw new Error("Rewards pending settlement age counts are invalid")
+  return { over120Seconds, over300Seconds }
 }
 
 async function readNonceAnomalies(client: Client): Promise<number> {
@@ -280,6 +317,8 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
   }
   let signerBalanceWei: bigint | undefined
   let nonceAnomalies: number | undefined
+  let pendingOver120Seconds: number | undefined
+  let pendingOver300Seconds: number | undefined
   let vaultCapacity: RewardVaultCapacityObservation | undefined
   if (resolveRewardsSettlementBackend(input.env) !== "local") {
     vaultCapacity = await (input.readCapacity ?? readVaultCapacity)(config)
@@ -331,13 +370,29 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
       ],
     })
     const signerAddress = getAddress(String(input.env.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS ?? ""))
+    if (vaultCapacity.settlementOperator !== signerAddress) {
+      await (input.warn ?? captureScheduledWarning)(
+        input.env,
+        "Rewards vault operator does not match the configured settlement signer",
+        `${TASK}:operator_mismatch`,
+        {
+          configured_signer: signerAddress,
+          onchain_operator: vaultCapacity.settlementOperator,
+          vault_address: config.treasuryAddress,
+        },
+        { urgency: "high" },
+      )
+    }
     signerBalanceWei = await (input.readSignerBalance ?? readNativeBalance)(config, signerAddress)
     nonceAnomalies = await readNonceAnomalies(input.client)
+    const pendingAges = await readPendingAges(input.client)
+    pendingOver120Seconds = pendingAges.over120Seconds
+    pendingOver300Seconds = pendingAges.over300Seconds
     const floor = signerGasFloor(input.env)
     if (signerBalanceWei <= floor) {
       await (input.warn ?? captureScheduledWarning)(
         input.env,
-        "Lit rewards signer ETH is at or below its operational floor",
+        "Rewards settlement signer ETH is at or below its operational floor",
         `${TASK}:signer_eth`,
         {
           signer_address: signerAddress,
@@ -350,10 +405,42 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
     if (nonceAnomalies > 0) {
       await (input.warn ?? captureScheduledWarning)(
         input.env,
-        "Lit rewards signer nonce contention detected",
+        "Rewards settlement signer nonce contention detected",
         `${TASK}:nonce_contention`,
         { signer_address: signerAddress, anomaly_count_15m: nonceAnomalies },
         { urgency: "high" },
+      )
+    }
+    if (
+      vaultCapacity.payoutSpentAtomic === vaultCapacity.payoutEpochCapAtomic
+      || vaultCapacity.refundSpentAtomic === vaultCapacity.refundEpochCapAtomic
+    ) {
+      await (input.warn ?? captureScheduledWarning)(
+        input.env,
+        "Rewards vault epoch cap has been reached",
+        `${TASK}:epoch_cap`,
+        {
+          current_epoch: vaultCapacity.currentEpoch.toString(),
+          payout_spent_atomic: vaultCapacity.payoutSpentAtomic.toString(),
+          payout_cap_atomic: vaultCapacity.payoutEpochCapAtomic.toString(),
+          refund_spent_atomic: vaultCapacity.refundSpentAtomic.toString(),
+          refund_cap_atomic: vaultCapacity.refundEpochCapAtomic.toString(),
+        },
+        { urgency: "high" },
+      )
+    }
+    if (pendingOver120Seconds > 0) {
+      await (input.warn ?? captureScheduledWarning)(
+        input.env,
+        pendingOver300Seconds > 0
+          ? "Rewards settlement has transactions pending for at least 300 seconds"
+          : "Rewards settlement has transactions pending for at least 120 seconds",
+        `${TASK}:pending_age`,
+        {
+          pending_over_120_seconds: pendingOver120Seconds,
+          pending_over_300_seconds: pendingOver300Seconds,
+        },
+        { urgency: pendingOver300Seconds > 0 ? "high" : "normal" },
       )
     }
   }
@@ -367,6 +454,8 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
     observedAt,
     signerBalanceWei,
     nonceAnomalies,
+    pendingOver120Seconds,
+    pendingOver300Seconds,
     vaultCapacity,
   }
 }

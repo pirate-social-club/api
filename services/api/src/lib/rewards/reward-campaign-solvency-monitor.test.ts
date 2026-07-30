@@ -123,6 +123,7 @@ describe("reward campaign treasury solvency monitor", () => {
         payoutSpentAtomic: 2_000_000n,
         refundEpochCapAtomic: 5_000_000n,
         refundSpentAtomic: 1_000_000n,
+        settlementOperator: "0x3000000000000000000000000000000000000003",
         observedBlockNumber: 12_345,
         observedBlockHash: `0x${"ab".repeat(32)}`,
       }),
@@ -141,6 +142,57 @@ describe("reward campaign treasury solvency monitor", () => {
     expect(warn.mock.calls.map((call) => call[2])).toEqual([
       "reward_campaign_treasury_solvency:signer_eth",
       "reward_campaign_treasury_solvency:nonce_contention",
+    ])
+  })
+
+  test("alerts on EOA operator mismatch, epoch cap, and pending age", async () => {
+    const warn = mock(async (..._args: Parameters<typeof captureScheduledWarning>) => true)
+    const client = {
+      execute: async (statement: string | { sql: string }) => {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        if (sql.includes("nonce_anomalies")) return { rows: [{ nonce_anomalies: "0" }] }
+        if (sql.includes("over_120")) return { rows: [{ over_120: "2", over_300: "1" }] }
+        if (sql.includes("INSERT INTO")) return { rows: [] }
+        return { rows: [{
+          contribution_liability_cents: "0",
+          credited_unpaid_liability_cents: "0",
+          pending_refund_atomic: "0",
+        }] }
+      },
+    } as unknown as Client
+    const summary = await monitorRewardCampaignTreasurySolvency({
+      env: {
+        ...env,
+        PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+        PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x3000000000000000000000000000000000000003",
+        REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI: "100",
+      } as Env,
+      client,
+      readBalance: async () => 2_500_000n,
+      readSignerBalance: async () => 1_000n,
+      readCapacity: async () => ({
+        policyVersion: 3n,
+        epochDurationSeconds: 3_600n,
+        currentEpoch: 20_000n,
+        payoutEpochCapAtomic: 10_000_000n,
+        payoutSpentAtomic: 10_000_000n,
+        refundEpochCapAtomic: 5_000_000n,
+        refundSpentAtomic: 1_000_000n,
+        settlementOperator: "0x4000000000000000000000000000000000000004",
+        observedBlockNumber: 12_345,
+        observedBlockHash: `0x${"ab".repeat(32)}`,
+      }),
+      warn,
+    })
+
+    expect(summary).toMatchObject({
+      pendingOver120Seconds: 2,
+      pendingOver300Seconds: 1,
+    })
+    expect(warn.mock.calls.map((call) => call[2])).toEqual([
+      "reward_campaign_treasury_solvency:operator_mismatch",
+      "reward_campaign_treasury_solvency:epoch_cap",
+      "reward_campaign_treasury_solvency:pending_age",
     ])
   })
 })
