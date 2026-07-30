@@ -21,7 +21,7 @@ export function resolveDanceAttemptStorageConfig(env: Env): S3SigningConfig {
   return {
     endpoint,
     accessKey: required(env.DANCE_ATTEMPT_S3_ACCESS_KEY, "DANCE_ATTEMPT_S3_ACCESS_KEY"),
-    secretKey: required(env.DANCE_ATTEMPT_S3_SECRET_KEY, "DANCE_ATTEMPT_S3_SECRET_KEY"),
+    secretKey: required(env.DANCE_ATTEMPT_S3_SECRET_KEY, "DANCE_ATTEMPT_S3_SECRET_KEY"), // gitleaks:allow — environment variable identifier, never secret material.
     bucket: required(env.DANCE_ATTEMPT_S3_BUCKET, "DANCE_ATTEMPT_S3_BUCKET"),
     region: String(env.DANCE_ATTEMPT_S3_REGION ?? "auto").trim() || "auto",
   }
