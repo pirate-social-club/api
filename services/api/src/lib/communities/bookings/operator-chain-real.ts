@@ -56,6 +56,7 @@ const ERC20_ABI = [
 const ERC20 = new Contract("0x0000000000000000000000000000000000000000", ERC20_ABI)
 const REWARD_VAULT_CAPACITY_ABI = [
   "function epochDuration() view returns (uint64)",
+  "function settlementOperator() view returns (address)",
 ] as const
 
 function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
@@ -141,6 +142,36 @@ function providerFor(config: Pick<ReturnType<typeof resolveConfig>, "rpcUrl" | "
   return createStaticSettlementProvider(config.rpcUrl, config.chainId)
 }
 
+let rewardVaultOperatorReaderForTests:
+  | ((vaultAddress: string, config: ReturnType<typeof resolveConfig>) => Promise<string>)
+  | null = null
+
+export function setRewardVaultOperatorReaderForTests(
+  reader: typeof rewardVaultOperatorReaderForTests,
+): void {
+  rewardVaultOperatorReaderForTests = reader
+}
+
+async function readRewardVaultOperator(
+  vaultAddress: string,
+  config: ReturnType<typeof resolveConfig>,
+): Promise<string> {
+  if (rewardVaultOperatorReaderForTests) {
+    return getAddress(await rewardVaultOperatorReaderForTests(vaultAddress, config))
+  }
+  const eoaProvider = providerFor(config)
+  try {
+    const configuredVault = new Contract(
+      vaultAddress,
+      REWARD_VAULT_CAPACITY_ABI,
+      eoaProvider,
+    )
+    return getAddress(await configuredVault.settlementOperator() as string)
+  } finally {
+    void eoaProvider.destroy()
+  }
+}
+
 function litFailureStage(error: unknown): PreparationFailureStage {
   if (!(error instanceof LitChipotleError)) return "transaction_verification"
   return error.code === "network" || error.code === "timeout"
@@ -197,6 +228,12 @@ export const realChain: ChainPrimitives = {
         : (async (request) => {
             if (!c.privateKey) throw badRequestError("EOA vault settlement signer is not configured")
             const signer = new Wallet(c.privateKey)
+            const onchainOperator = await readRewardVaultOperator(request.vaultAddress, c)
+            if (onchainOperator !== getAddress(request.signerAddress)) {
+              throw badRequestError(
+                "Rewards vault settlement operator does not match the configured signer",
+              )
+            }
             return {
               signedTx: await signer.signTransaction({
                 to: request.vaultAddress,

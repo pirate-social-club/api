@@ -16,6 +16,7 @@ import {
 import { LitChipotleClient } from "./lit-chipotle-client"
 import {
   resolveRewardsSettlementBackend,
+  resolveRewardVaultConfig,
   resolveRewardVaultLitConfig,
 } from "./reward-vault-lit-config"
 
@@ -36,7 +37,8 @@ export function assertRewardCampaignSettlementReadiness(env: Env): RewardCampaig
 
   try {
     const campaign = resolveRewardCampaignAssetConfig(env)
-    if (resolveRewardsSettlementBackend(env) !== "local") {
+    const backend = resolveRewardsSettlementBackend(env)
+    if (backend === "lit_vault") {
       const lit = resolveRewardVaultLitConfig(env)
       // Constructor validation proves the production endpoint and credential
       // tuple is structurally usable without making a metered external call.
@@ -46,6 +48,9 @@ export function assertRewardCampaignSettlementReadiness(env: Env): RewardCampaig
         timeoutMs: lit.requestTimeoutMs,
         maxAttempts: lit.requestMaxAttempts,
       })
+    } else if (backend === "eoa_vault") {
+      resolveRewardVaultConfig(env)
+      resolveRewardsSettlementOperatorPrivateKey(env)
     } else {
       resolveRewardsSettlementOperatorPrivateKey(env)
     }

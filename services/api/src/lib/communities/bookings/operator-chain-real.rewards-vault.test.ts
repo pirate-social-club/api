@@ -5,6 +5,7 @@ import type { Env } from "../../../env"
 import {
   createStaticSettlementProvider,
   realChain,
+  setRewardVaultOperatorReaderForTests,
   settlementGasLimit,
 } from "./operator-chain-real"
 
@@ -22,6 +23,7 @@ const originalNow = Date.now
 afterEach(() => {
   globalThis.fetch = originalFetch
   Date.now = originalNow
+  setRewardVaultOperatorReaderForTests(null)
 })
 
 function env(): Env {
@@ -59,11 +61,7 @@ describe("real rewards Lit vault signer wiring", () => {
   })
 
   test("signs only verifier-bound vault calldata with the EOA backend", async () => {
-    let fetchCalled = false
-    globalThis.fetch = (async () => {
-      fetchCalled = true
-      throw new Error("unexpected network request")
-    }) as typeof fetch
+    setRewardVaultOperatorReaderForTests(async () => SIGNER.address)
     Date.now = () => 2_000_000_000_000
     const eoaEnv = {
       ...env(),
@@ -88,7 +86,6 @@ describe("real rewards Lit vault signer wiring", () => {
     const parsed = Transaction.from(result.signedTx)
     const decoded = VAULT_INTERFACE.decodeFunctionData("pay", parsed.data)
 
-    expect(fetchCalled).toBe(false)
     expect(parsed.from).toBe(SIGNER.address)
     expect(parsed.to).toBe(VAULT)
     expect(parsed.nonce).toBe(9)
@@ -129,6 +126,29 @@ describe("real rewards Lit vault signer wiring", () => {
     expect(message).toContain("preparation failed")
     expect(message).not.toContain(privateKey)
     expect(message).not.toContain(privateKey.slice(2))
+  })
+
+  test("rejects before signing when the on-chain operator differs", async () => {
+    setRewardVaultOperatorReaderForTests(
+      async () => "0x3000000000000000000000000000000000000003",
+    )
+    await expect(realChain.signVerifiedTransfer({
+      ...env(),
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: SIGNER.privateKey,
+    } as Env, {
+      operatorKind: "rewards",
+      effectKind: "reward_cashout",
+      effectId: "cashout_effect_operator_mismatch",
+      to: RECIPIENT,
+      amountAtomic: "500000",
+      nonce: 1,
+      gas: {
+        maxFeePerGas: 2_000_000_000n,
+        maxPriorityFeePerGas: 1_000_000_000n,
+        gasLimit: 300_000n,
+      },
+    })).rejects.toThrow("preparation failed")
   })
 
   test("creates a fresh deadline at each signing attempt without changing the effect identity", async () => {
