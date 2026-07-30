@@ -220,7 +220,7 @@ describe("reward settlement rehearsal route", () => {
     const response = await fixture.app.request("/operator/reward_settlements/rehearsal", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ scenario: "over_limit" }),
+      body: JSON.stringify({ scenario: "eoa_first_payout" }),
     }, fixture.env)
     expect(response.status).toBe(202)
     expect(response.headers.get("cache-control")).toBe("private, no-store")
@@ -238,7 +238,7 @@ describe("reward settlement rehearsal route", () => {
       body: JSON.stringify({ scenario: "epoch_cap_defer" }),
     }, fixture.env)
     expect(epochCap.status).toBe(202)
-    expect(seen).toEqual(["over_limit", "refund_while_payouts_paused", "epoch_cap_defer"])
+    expect(seen).toEqual(["eoa_first_payout", "refund_while_payouts_paused", "epoch_cap_defer"])
   })
 
   test("exposes the fixed epoch-cap snapshot only in staging with private no-store", async () => {

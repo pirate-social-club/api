@@ -15,6 +15,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 
 const REHEARSAL_USER_ID = "usr_eb47ab813754497d8f107ca01d762bc9"
 const REHEARSAL_RECIPIENT = "0xCc4049cEd4ff4C3CA25F7e32eDb8c69dEA4bB12f"
+const EOA_FIRST_PAYOUT_EFFECT_ID = "rpe_e0a50000000000000000000020260730"
 const CONSUMED_SCENARIO_1_EFFECT_ID = "rpe_4d49a8ee731d4fa2b6eab990a013c757"
 const SCENARIO_13_FUNDING_EFFECT_ID = "rcf_13000000000000000000000020260729"
 const EPOCH_CAP_IDEMPOTENCY_KEYS = {
@@ -55,34 +56,40 @@ export type RewardEpochCapSnapshotRow = {
 type PayoutScenario = Exclude<RewardRehearsalScenario, "refund_while_payouts_paused">
 
 const PAYOUT_FIXTURES: Record<PayoutScenario, {
-  scenarioNumber: 3 | 4 | 5 | 6
+  idempotencyKey: string
   payoutEffectId: string
   amountCents: number
 }> = {
+  eoa_first_payout: {
+    idempotencyKey: "rehearsal:eoa-first-payout:20260730:v1",
+    payoutEffectId: EOA_FIRST_PAYOUT_EFFECT_ID,
+    amountCents: 500,
+  },
   replay: {
-    scenarioNumber: 3,
+    idempotencyKey: "rehearsal:scenario3:20260729:v1",
     payoutEffectId: CONSUMED_SCENARIO_1_EFFECT_ID,
     amountCents: 50,
   },
   deadline_expired: {
-    scenarioNumber: 4,
+    idempotencyKey: "rehearsal:scenario4:20260729:v1",
     payoutEffectId: "rpe_d448820ca082d9bb53f003a0f4a26b84",
     amountCents: 50,
   },
   over_limit: {
-    scenarioNumber: 5,
+    idempotencyKey: "rehearsal:scenario5:20260729:v2",
     payoutEffectId: "rpe_6cf832d0713742e4509cbd16995b1419",
     amountCents: 60,
   },
   stale_policy: {
-    scenarioNumber: 6,
+    idempotencyKey: "rehearsal:scenario6:20260729:v1",
     payoutEffectId: "rpe_a1051e827c685b79dbe83482d7fc9f21",
     amountCents: 50,
   },
 }
 
 export function isRewardRehearsalScenario(value: unknown): value is RewardRehearsalRouteScenario {
-  return value === "replay"
+  return value === "eoa_first_payout"
+    || value === "replay"
     || value === "over_limit"
     || value === "deadline_expired"
     || value === "stale_policy"
@@ -135,7 +142,7 @@ export function rewardRehearsalRequest(
     operatorKind: "rewards",
     userId: REHEARSAL_USER_ID,
     payoutEffectId: fixture.payoutEffectId,
-    idempotencyKey: `rehearsal:scenario${fixture.scenarioNumber}:20260729:${scenario === "over_limit" ? "v2" : "v1"}`,
+    idempotencyKey: fixture.idempotencyKey,
     effectKind: "reward_cashout",
     amountCents: fixture.amountCents,
     recipientAddress: REHEARSAL_RECIPIENT,
