@@ -21,6 +21,10 @@ export type TelegramWebhookMessage = {
   chat?: { id?: number | string; type?: string }
   voice?: TelegramWebhookAudioAttachment
   audio?: TelegramWebhookAudioAttachment
+  video?: TelegramWebhookVideoAttachment
+  document?: TelegramWebhookDocumentAttachment
+  forward_origin?: unknown
+  forward_date?: number
   reply_to_message?: {
     message_id?: number
     from?: { id?: number | string; is_bot?: boolean; username?: string; language_code?: string }
@@ -40,6 +44,29 @@ type TelegramWebhookAudioAttachment = {
   mime_type?: string
   duration?: number
   file_size?: number
+}
+
+type TelegramWebhookVideoAttachment = TelegramWebhookAudioAttachment & {
+  width?: number
+  height?: number
+}
+
+type TelegramWebhookDocumentAttachment = {
+  file_id?: string
+  file_unique_id?: string
+  file_name?: string
+  mime_type?: string
+  file_size?: number
+}
+
+export type TelegramVideoReplyAttachment = {
+  deliveryMode: "video" | "document"
+  fileId: string
+  fileUniqueId: string
+  fileName: string | null
+  mimeType: string | null
+  reportedSizeBytes: number | null
+  reportedDurationSeconds: number | null
 }
 
 export type TelegramWebhookChatJoinRequest = {
@@ -79,6 +106,54 @@ export function telegramLanguageCode(value: unknown): string | null {
   }
   const trimmed = value.trim()
   return trimmed ? trimmed : null
+}
+
+function optionalSafeInteger(value: unknown): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+    ? value
+    : null
+}
+
+export function telegramVideoReplyAttachment(
+  message: TelegramWebhookMessage,
+): TelegramVideoReplyAttachment | null {
+  const deliveryMode = message.video ? "video" : message.document ? "document" : null
+  const attachment = message.video ?? message.document
+  if (!deliveryMode || !attachment) return null
+  const fileId = typeof attachment.file_id === "string" ? attachment.file_id.trim() : ""
+  const fileUniqueId = typeof attachment.file_unique_id === "string"
+    ? attachment.file_unique_id.trim()
+    : ""
+  if (!fileId || !fileUniqueId) return null
+  const mimeType = typeof attachment.mime_type === "string"
+    ? attachment.mime_type.trim() || null
+    : null
+  if (
+    deliveryMode === "document"
+    && mimeType !== null
+    && !mimeType.toLowerCase().startsWith("video/")
+  ) {
+    return null
+  }
+  return {
+    deliveryMode,
+    fileId,
+    fileUniqueId,
+    fileName: typeof attachment.file_name === "string"
+      ? attachment.file_name.trim() || null
+      : null,
+    mimeType,
+    reportedSizeBytes: optionalSafeInteger(attachment.file_size),
+    reportedDurationSeconds: deliveryMode === "video"
+      ? optionalSafeInteger(message.video?.duration)
+      : null,
+  }
+}
+
+export function telegramMessageHasForwardingMetadata(
+  message: TelegramWebhookMessage,
+): boolean {
+  return message.forward_origin !== undefined || message.forward_date !== undefined
 }
 
 export function parseStartToken(text: string | undefined): string | null {
