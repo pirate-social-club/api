@@ -10,6 +10,7 @@ import {
 describe("reward rehearsal fixtures", () => {
   test("accepts only the fixed scenario enums", () => {
     expect([
+      "eoa_first_payout",
       "replay",
       "over_limit",
       "deadline_expired",
@@ -25,18 +26,26 @@ describe("reward rehearsal fixtures", () => {
 
   test("derives immutable one-field fixtures server-side", () => {
     const env = { ENVIRONMENT: "staging" } as Env
+    const firstEoaPayout = rewardRehearsalRequest(env, "eoa_first_payout")
     const replay = rewardRehearsalRequest(env, "replay")
     const deadline = rewardRehearsalRequest(env, "deadline_expired")
     const overLimit = rewardRehearsalRequest(env, "over_limit")
     const stale = rewardRehearsalRequest(env, "stale_policy")
     const refund = rewardRehearsalRequest(env, "refund_while_payouts_paused")
 
+    expect(firstEoaPayout).toMatchObject({
+      payoutEffectId: "rpe_e0a50000000000000000000020260730",
+      idempotencyKey: "rehearsal:eoa-first-payout:20260730:v1",
+      amountCents: 500,
+      effectKind: "reward_cashout",
+      rehearsalScenario: "eoa_first_payout",
+    })
     expect(replay.payoutEffectId).toBe("rpe_4d49a8ee731d4fa2b6eab990a013c757")
     expect(overLimit.amountCents).toBe(60)
     expect(overLimit.idempotencyKey).toBe("rehearsal:scenario5:20260729:v2")
     expect([replay, deadline, stale].map((fixture) => fixture.amountCents)).toEqual([50, 50, 50])
     expect(new Set([deadline.payoutEffectId, overLimit.payoutEffectId, stale.payoutEffectId]).size).toBe(3)
-    expect([replay, deadline, overLimit, stale].every((fixture) =>
+    expect([firstEoaPayout, replay, deadline, overLimit, stale].every((fixture) =>
       fixture.recipientAddress === replay.recipientAddress
       && fixture.userId === replay.userId
       && fixture.effectKind === "reward_cashout"

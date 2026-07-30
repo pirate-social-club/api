@@ -15,6 +15,7 @@ const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 export type OperatorKind = "booking" | "rewards"
 export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
 export type RewardRehearsalScenario =
+  | "eoa_first_payout"
   | "replay"
   | "over_limit"
   | "deadline_expired"
