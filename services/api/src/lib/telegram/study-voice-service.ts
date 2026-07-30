@@ -10,7 +10,7 @@ import {
 } from "../posts/post-study-service"
 import { publicCommunityId, publicPostId } from "../public-ids"
 import { rowValue } from "../sql-row"
-import { getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneClient, withBackgroundControlPlaneClients } from "../runtime-deps"
 import type { Env } from "../../env"
 import {
   downloadTelegramFile,
@@ -27,6 +27,7 @@ import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 
 const VOICE_INTENT_TTL_MS = 10 * 60 * 1000
 const VOICE_PROCESSING_LEASE_MS = 2 * 60 * 1000
+const VOICE_PROCESSING_MAX_ATTEMPTS = 3
 
 type VoiceIntentRow = {
   attemptNumber: number
@@ -36,6 +37,7 @@ type VoiceIntentRow = {
   id: string
   idempotencyKey: string
   postId: string
+  processingAttemptCount: number
   processingLeaseExpiresAt: string | null
   promptMessageId: number | null
   sessionId: string
@@ -67,6 +69,7 @@ function serializeIntentRow(row: unknown): VoiceIntentRow | null {
   const status = stringOrNull(rowValue(row, "status"))
   const expiresAt = stringOrNull(rowValue(row, "expires_at"))
   const attemptNumber = numberOrNull(rowValue(row, "attempt_number"))
+  const processingAttemptCount = numberOrNull(rowValue(row, "processing_attempt_count"))
   if (
     !id
     || !userId
@@ -80,6 +83,7 @@ function serializeIntentRow(row: unknown): VoiceIntentRow | null {
     || !status
     || !expiresAt
     || !attemptNumber
+    || processingAttemptCount === null
   ) {
     return null
   }
@@ -91,6 +95,7 @@ function serializeIntentRow(row: unknown): VoiceIntentRow | null {
     id,
     idempotencyKey,
     postId,
+    processingAttemptCount,
     processingLeaseExpiresAt: stringOrNull(rowValue(row, "processing_lease_expires_at")),
     promptMessageId: numberOrNull(rowValue(row, "prompt_message_id")),
     sessionId,
@@ -289,7 +294,7 @@ async function findVoiceIntent(input: {
       SELECT intent_id, telegram_user_id, user_id, community_id, post_id,
              exercise_id, target_language, study_session_id, attempt_number,
              idempotency_key, status, prompt_message_id, expires_at,
-             processing_lease_expires_at
+             processing_attempt_count, processing_lease_expires_at
       FROM telegram_study_voice_intents
       WHERE telegram_community_bot_id = ?1
         AND telegram_user_id = ?2
@@ -441,6 +446,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
       WHERE intent_id = ?1
         AND status = 'pending'
         AND expires_at > ?7
+        AND processing_attempt_count < ${VOICE_PROCESSING_MAX_ATTEMPTS}
     `,
     args: [
       intent.id,
@@ -506,6 +512,32 @@ export async function handleTelegramStudyVoiceMessage(input: {
         args: [intent.id, leaseId, nowIso()],
       })
     } catch (error) {
+      const processingAttemptCount = intent.processingAttemptCount + 1
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const failedAt = nowIso()
+      if (processingAttemptCount >= VOICE_PROCESSING_MAX_ATTEMPTS) {
+        await getControlPlaneClient(input.env).execute({
+          sql: `
+            UPDATE telegram_study_voice_intents
+            SET status = 'failed',
+                processing_lease_id = NULL,
+                processing_lease_expires_at = NULL,
+                last_error_code = 'voice_processing_attempts_exhausted',
+                last_error_message = ?3,
+                failed_at = ?4,
+                updated_at = ?4
+            WHERE intent_id = ?1
+              AND status = 'processing'
+              AND processing_lease_id = ?2
+          `,
+          args: [intent.id, leaseId, errorMessage, failedAt],
+        })
+        await sendTelegramMessage(input.bot, {
+          chat_id: chatId,
+          text: "I could not grade this exercise after several tries. Reopen study to start it again.",
+        }).catch(() => undefined)
+        return
+      }
       const retryExpiresAt = new Date(Date.now() + VOICE_INTENT_TTL_MS).toISOString()
       await getControlPlaneClient(input.env).execute({
         sql: `
@@ -513,6 +545,9 @@ export async function handleTelegramStudyVoiceMessage(input: {
           SET status = 'pending',
               processing_lease_id = NULL,
               processing_lease_expires_at = NULL,
+              telegram_voice_message_id = NULL,
+              telegram_voice_file_id = NULL,
+              telegram_voice_file_unique_id = NULL,
               expires_at = CASE WHEN expires_at < ?5 THEN ?5 ELSE expires_at END,
               last_error_code = 'voice_processing_failed',
               last_error_message = ?3,
@@ -521,13 +556,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
             AND status = 'processing'
             AND processing_lease_id = ?2
         `,
-        args: [
-          intent.id,
-          leaseId,
-          error instanceof Error ? error.message : String(error),
-          nowIso(),
-          retryExpiresAt,
-        ],
+        args: [intent.id, leaseId, errorMessage, failedAt, retryExpiresAt],
       })
       await sendTelegramMessage(input.bot, {
         chat_id: chatId,
@@ -565,7 +594,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
   }
 
   if (input.waitUntil) {
-    input.waitUntil(processClaimedVoice())
+    input.waitUntil(withBackgroundControlPlaneClients(processClaimedVoice))
     return true
   }
   await processClaimedVoice()
