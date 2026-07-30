@@ -1,4 +1,6 @@
--- Exact fixture mirror of Core migration 0174.
+-- Bridges a Telegram-authenticated Mini App session to a separately
+-- authenticated Pirate web session without exposing either bearer credential
+-- to the other context.
 CREATE TABLE IF NOT EXISTS telegram_account_link_intents (
     link_intent_id TEXT PRIMARY KEY,
     token_hash TEXT NOT NULL UNIQUE,
@@ -18,6 +20,8 @@ CREATE TABLE IF NOT EXISTS telegram_account_link_intents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Reissuing a link from the Mini App replaces, rather than accumulates,
+-- pending credentials for the same proven Telegram identity.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_account_link_intents_active_subject
     ON telegram_account_link_intents(telegram_provider_subject)
     WHERE status = 'pending';

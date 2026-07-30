@@ -46,10 +46,14 @@ CREATE TABLE IF NOT EXISTS telegram_study_voice_intents (
     UNIQUE (idempotency_key)
 );
 
+-- A learner may have one pending exercise per sovereign community bot. Intents
+-- for different bots coexist without cross-wiring their webhook deliveries.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_study_voice_intents_active_bot_user
     ON telegram_study_voice_intents(telegram_community_bot_id, telegram_user_id)
     WHERE status IN ('pending', 'processing');
 
+-- Telegram may redeliver the same update. Either identifier is sufficient to
+-- recognize a voice message already claimed for this bot.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_telegram_study_voice_intents_bot_voice_file
     ON telegram_study_voice_intents(
         telegram_community_bot_id,
