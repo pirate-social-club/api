@@ -10,6 +10,7 @@ import auth from "./routes/auth"
 import bookings from "./routes/bookings"
 import danceChoreographies from "./routes/dance-choreographies"
 import danceSessions from "./routes/dance-sessions"
+import danceAttempts from "./routes/dance-attempts"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
@@ -109,6 +110,8 @@ import {
   dispatchDueDanceAttempts,
   isDanceAttemptDispatchConfigured,
 } from "./lib/dance/attempt-dispatch"
+import { cleanupDueDanceAttempts } from "./lib/dance/attempt-cleanup"
+import { terminalizeExhaustedDanceAttempts } from "./lib/dance/attempt-lifecycle"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runRewardCampaignMonitorCycle } from "./lib/rewards/reward-campaign-monitor-cycle"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
@@ -485,6 +488,7 @@ app.route("/auth", auth)
 app.route("/bookings", bookings)
 app.route("/dance-choreographies", danceChoreographies)
 app.route("/dance-sessions", danceSessions)
+app.route("/dance-attempts", danceAttempts)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return
@@ -1654,6 +1658,36 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(env.CONTROL_PLANE_DATABASE_URL
+        ? [{
+            name: "terminalize_exhausted_dance_attempts",
+            run: async () => {
+              const summary = await terminalizeExhaustedDanceAttempts({ env })
+              if (summary.terminalized > 0 || summary.failed > 0) {
+                console.info(
+                  "[scheduled] exhausted dance attempt terminalization",
+                  summary,
+                )
+              }
+            },
+          }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL && env.DANCE_ATTEMPT_S3_ENDPOINT
+          && env.DANCE_ATTEMPT_S3_ACCESS_KEY && env.DANCE_ATTEMPT_S3_SECRET_KEY
+          && env.DANCE_ATTEMPT_S3_BUCKET
+        ? [{
+            name: "cleanup_dance_attempts",
+            run: async () => {
+              const summary = await cleanupDueDanceAttempts({ env })
+              if (
+                summary.claimed > 0 || summary.expired > 0
+                || summary.expired_fingerprints > 0
+              ) {
+                console.info("[scheduled] dance attempt cleanup", summary)
+              }
+            },
+          }]
+        : []),
       ...(isDanceAttemptDispatchConfigured(env)
         ? [{
             name: "dispatch_dance_attempts",

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   buildDanceAttemptUploadIntent,
+  deleteDanceAttemptUpload,
   DanceAttemptUploadInvalidError,
   danceAttemptObjectKey,
   verifyDanceAttemptUpload,
@@ -79,5 +80,21 @@ describe("dance attempt private storage", () => {
         },
       }),
     })).rejects.toBeInstanceOf(DanceAttemptUploadInvalidError)
+  })
+
+  test("treats deletion and an already-missing object as successful", async () => {
+    for (const status of [204, 404]) {
+      let method = ""
+      await deleteDanceAttemptUpload({
+        env,
+        objectKey: `dance/attempt-media/das_123/${sha}.mp4`,
+        now: new Date("2026-07-30T00:00:00Z"),
+        fetchFn: async (input) => {
+          method = new Request(input).method
+          return new Response(null, { status })
+        },
+      })
+      expect(method).toBe("DELETE")
+    }
   })
 })
