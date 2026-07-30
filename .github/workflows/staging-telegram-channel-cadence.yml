@@ -1,10 +1,8 @@
-name: staging-telegram-channel-smoke
+name: staging-telegram-channel-cadence
 
-# This is the real transport synthetic. It reuses the already-connected staging
-# fixture, creates one text post, deterministically dispatches the real queued
-# handler and Bot API, then deletes both the Telegram message and Pirate post.
-# Scheduler cadence is tested separately; a lost send response fails closed in
-# `uncertain` and never retries into a duplicate.
+# Honest scheduler canary: unlike the fast publication synthetic, this never
+# calls the fixture-scoped drain. It proves that ordinary cron picks up a real
+# telegram_post_publish job within the user-visible latency budget.
 on:
   workflow_dispatch:
     inputs:
@@ -13,12 +11,10 @@ on:
         required: false
         type: string
   schedule:
-    # Offset from the top of the hour to avoid the busiest shared scheduler
-    # window and daily release jobs.
-    - cron: "17 6 * * *"
+    - cron: "47 6 * * *"
 
 concurrency:
-  group: staging-telegram-channel-smoke
+  group: staging-telegram-channel-cadence
   cancel-in-progress: false
 
 permissions:
@@ -26,8 +22,8 @@ permissions:
   packages: read
 
 jobs:
-  real-telegram-delivery:
-    name: Real Telegram channel delivery
+  cron-telegram-delivery:
+    name: Cron-paced Telegram channel delivery
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -35,7 +31,7 @@ jobs:
       PIRATE_SMOKE_API_BASE_URL: https://api-staging.pirate.sc
       PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID: ${{ inputs.community_id || vars.PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID }}
       PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS: "1200000"
-      PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE: deterministic
+      PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE: cron
 
     steps:
       - name: Check out repository
@@ -69,6 +65,6 @@ jobs:
           NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
 
-      - name: Verify real Telegram delivery and cleanup
+      - name: Verify cron-paced Telegram delivery and cleanup
         working-directory: api/services/api
         run: bun run smoke:telegram-channel

@@ -7,7 +7,8 @@ import { openCommunityWriteClient } from "../lib/communities/community-read-acce
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { nowIso } from "../lib/helpers"
 import { logPipelineError } from "../lib/observability/pipeline-log"
-import { decodePublicCommunityId } from "../lib/public-ids"
+import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
+import { getPostById } from "../lib/posts/community-post-query-store"
 import {
   countUncertainDeliveries,
   findDeliverySubject,
@@ -22,6 +23,7 @@ import {
   findTelegramSyntheticFixture,
   getTelegramSyntheticDelivery,
 } from "../lib/telegram/telegram-synthetic-ops-service"
+import { assertTelegramSyntheticCleanupPost } from "../lib/telegram/telegram-synthetic-contract"
 
 // Operator surface for Telegram channel deliveries stranded in 'uncertain'.
 // Nothing scans that state automatically — by design, because retrying an
@@ -121,11 +123,31 @@ opsTelegramDeliveries.post("/synthetic-deliveries/:postId/cleanup", async (c) =>
   const unavailable = requireStaging(c)
   if (unavailable) return unavailable
   if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const fixture = await findTelegramSyntheticFixture({
+    client: getControlPlaneClient(c.env),
+    communityId: c.req.query("community_id") ?? null,
+  })
+  const communityId = decodePublicCommunityId(fixture.community_id)
+  const postId = decodePublicPostId(c.req.param("postId"))
+  const handle = await openCommunityWriteClient(
+    c.env,
+    getCommunityRepository(c.env),
+    communityId,
+  )
+  try {
+    assertTelegramSyntheticCleanupPost({
+      post: await getPostById(handle.client, postId),
+      communityId,
+      ownerUserId: fixture.owner_user_id,
+    })
+  } finally {
+    await handle.close()
+  }
   const outcome = await cleanupTelegramSyntheticDelivery({
     env: c.env,
     client: getControlPlaneClient(c.env),
-    postId: c.req.param("postId"),
-    communityId: c.req.query("community_id") ?? null,
+    postId,
+    communityId: fixture.community_id,
   })
   return c.json(outcome)
 })
