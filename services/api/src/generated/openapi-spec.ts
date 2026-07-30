@@ -1501,6 +1501,84 @@ const spec = {
         "operationId": "put_users_me_identity_wallet"
       }
     },
+    "/users/me/telegram-account-link-intents": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Start linking a Telegram Mini App identity to an existing Pirate account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTelegramAccountLinkIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountLinkIntentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_users_me_telegram_account_link_intents"
+      }
+    },
+    "/users/me/telegram-account-link-intents/consume": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Consume a Telegram account link from an authenticated Pirate browser",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumeTelegramAccountLinkIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountLinkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_users_me_telegram_account_link_intents_consume"
+      }
+    },
     "/profiles/me": {
       "get": {
         "tags": [
@@ -3978,6 +4056,65 @@ const spec = {
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_study_attempts"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/study/telegram_voice_intents": {
+      "post": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Continue a say-it-back exercise as a native Telegram voice message",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramStudyVoiceIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramStudyVoiceIntent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_study_telegram_voice_intents"
       }
     },
     "/communities/{community_id}/posts/{post_id}/study/transcriptions": {
@@ -10279,6 +10416,64 @@ const spec = {
           }
         }
       },
+      "CreateTelegramAccountLinkIntentRequest": {
+        "type": "object",
+        "required": [
+          "community_id"
+        ],
+        "properties": {
+          "community_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramAccountLinkIntentResponse": {
+        "type": "object",
+        "required": [
+          "expires_at",
+          "link_url"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "link_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConsumeTelegramAccountLinkIntentRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramAccountLinkResult": {
+        "type": "object",
+        "required": [
+          "linked"
+        ],
+        "properties": {
+          "linked": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "Profile": {
         "type": "object",
         "required": [
@@ -14867,6 +15062,59 @@ const spec = {
               "current_streak"
             ],
             "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramStudyVoiceIntentRequest": {
+        "type": "object",
+        "required": [
+          "exercise_id"
+        ],
+        "properties": {
+          "exercise_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_language": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramStudyVoiceIntent": {
+        "type": "object",
+        "required": [
+          "created",
+          "expires_at",
+          "id",
+          "object",
+          "status"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "telegram_study_voice_intent"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending"
+            ]
           }
         },
         "additionalProperties": false

@@ -2447,6 +2447,36 @@ export type SongStudyTranscriptionResponse = {
   duration_seconds?: number | null;
 };
 
+export type TelegramStudyVoiceIntentRequest = {
+  exercise_id: string;
+  target_language?: string | null;
+};
+
+export type TelegramStudyVoiceIntent = {
+  created: number;
+  expires_at: number;
+  id: string;
+  object: "telegram_study_voice_intent";
+  status: "pending";
+};
+
+export type CreateTelegramAccountLinkIntentRequest = {
+  community_id: string;
+};
+
+export type TelegramAccountLinkIntentResponse = {
+  expires_at: string;
+  link_url: string;
+};
+
+export type ConsumeTelegramAccountLinkIntentRequest = {
+  token: string;
+};
+
+export type TelegramAccountLinkResult = {
+  linked: true;
+};
+
 export type SongStreakLeaderboard = {
   object: "song_streak_leaderboard";
   post_id: string;
@@ -4422,6 +4452,8 @@ type ZkPassportVerificationLaunch = {
 export const apiRoutes = {
   authSessionExchange: "/auth/session/exchange",
   usersMe: "/users/me",
+  usersMeTelegramAccountLinkIntents: "/users/me/telegram-account-link-intents",
+  usersMeTelegramAccountLinkIntentsConsume: "/users/me/telegram-account-link-intents/consume",
   profilesMe: "/profiles/me",
   profilesMeCourtyardInventory: "/profiles/me/courtyard-inventory",
   gateCapabilitiesAssets: "/gate-capabilities/assets",
@@ -4531,6 +4563,7 @@ export const apiRoutes = {
   communitySongArtifact: (communityId: string, songArtifactBundleId: string) => `/communities/${communityId}/song-artifacts/${songArtifactBundleId}`,
   communityPostStudy: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study`,
   communityPostStudyAttempts: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/attempts`,
+  communityPostStudyTelegramVoiceIntents: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/telegram_voice_intents`,
   communityPostStudyTranscriptions: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/study/transcriptions`,
   communityPostStreaksLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/streaks/leaderboard`,
   communityPostKaraokeLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/leaderboard`,
