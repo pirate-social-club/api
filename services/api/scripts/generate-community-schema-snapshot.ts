@@ -20,7 +20,9 @@
  * (re-run whenever the community-template migrations change).
  */
 import { createClient } from "@libsql/client"
-import { isBootstrapAllowedStatement } from "@pirate/api-shared"
+// Use the source module directly: this script runs in CI before API workspace
+// dependencies are installed, while the shared source is already checked out.
+import { isBootstrapAllowedStatement } from "../../shared/src/sql-read-guard"
 import { createHash } from "node:crypto"
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
