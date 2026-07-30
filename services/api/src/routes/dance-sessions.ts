@@ -17,6 +17,7 @@ import {
   DanceAttemptUploadInvalidError,
   verifyDanceAttemptUpload,
 } from "../lib/dance/attempt-storage"
+import { isDanceCaptureEnabled } from "../lib/dance/capture-policy"
 import {
   badRequestError,
   conflictError,
@@ -86,6 +87,17 @@ function assertUnexpired(expiresAt: string, nowMs: number): void {
 
 const danceSessions = new Hono<AuthenticatedEnv>()
 danceSessions.use("*", authenticate)
+danceSessions.use("*", async (c, next) => {
+  if (!isDanceCaptureEnabled(c.env)) {
+    throw new HttpError(
+      503,
+      "dance_capture_disabled",
+      "Dance capture is unavailable",
+      false,
+    )
+  }
+  await next()
+})
 
 danceSessions.post("/", async (c) => {
   const body = bodyRecord(await c.req.json().catch(() => null))

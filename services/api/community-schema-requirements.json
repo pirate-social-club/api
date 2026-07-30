@@ -104,6 +104,9 @@
     },
     "1146_dance_attempt_reason_contract.sql": {
       "rationale": "Core widens the still-dark dance-attempt rejection contract, but this API commit does not read or write the community-shard dance_attempt table. Require it together with 1145 before the dance-attempt persistence runtime lands."
+    },
+    "1147_dance_attempt_upload_invalid_reason.sql": {
+      "rationale": "Core admits the permanent upload_invalid rejection, but this API commit still stops at control-plane submission and does not write community-shard dance evidence. Promote 1145-1147 together before callback finalization writes the shard."
     }
   }
 }
