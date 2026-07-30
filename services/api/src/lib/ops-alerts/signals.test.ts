@@ -131,6 +131,26 @@ describe("collectCommunityPublishAlertSignals", () => {
       },
       {
         sql: `
+          INSERT INTO community_jobs (
+            job_id, community_id, job_type, subject_type, subject_id, status,
+            attempt_count, created_at, updated_at
+          ) VALUES (?1, 'cmt_test', 'telegram_post_publish', 'post', ?2, 'queued',
+            0, ?3, ?3)
+        `,
+        args: ["job_stale_telegram", "pst_stale", "2026-07-08T11:30:00.000Z"],
+      },
+      {
+        sql: `
+          INSERT INTO community_jobs (
+            job_id, community_id, job_type, subject_type, subject_id, status,
+            attempt_count, created_at, updated_at
+          ) VALUES (?1, 'cmt_test', 'telegram_post_publish', 'post', ?2, 'queued',
+            0, ?3, ?3)
+        `,
+        args: ["job_fresh_telegram", "pst_fresh", "2026-07-08T12:10:00.000Z"],
+      },
+      {
+        sql: `
           INSERT INTO story_registration_effects (asset_id, status, provider_tx_ref, updated_at)
           VALUES (?1, 'reconciliation_required', ?2, ?3)
         `,
@@ -142,6 +162,8 @@ describe("collectCommunityPublishAlertSignals", () => {
       client,
       communityId: "cmt_test",
       since,
+      now: "2026-07-08T12:15:00.000Z",
+      readyBefore: "2026-07-08T12:00:00.000Z",
     })
 
     expect(signals.failure_codes).toEqual([{ code: "listing_creation_failed", count: 1 }])
@@ -158,5 +180,19 @@ describe("collectCommunityPublishAlertSignals", () => {
     })
     expect(signals.story_registration_reconciliation_required).toBe(1)
     expect(signals.story_registration_reconciliation_samples[0]?.asset_id).toBe("ast_story_unknown")
+    expect(signals.stale_ready_job_lanes).toEqual([
+      {
+        job_type: "locked_asset_delivery_prepare",
+        ready_jobs: 2,
+        oldest_ready_at: "2026-07-08T10:00:00.000Z",
+        oldest_ready_age_ms: 135 * 60_000,
+      },
+      {
+        job_type: "telegram_post_publish",
+        ready_jobs: 1,
+        oldest_ready_at: "2026-07-08T11:30:00.000Z",
+        oldest_ready_age_ms: 45 * 60_000,
+      },
+    ])
   })
 })

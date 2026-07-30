@@ -13,6 +13,7 @@ import { opsAlertBucketMs, opsAlertDedupeTtlSeconds } from "./policy"
 
 const DEFAULT_MAX_COMMUNITIES = 100
 const DEFAULT_LOOKBACK_MS = 15 * 60 * 1000
+const DEFAULT_COMMUNITY_JOB_PICKUP_ALERT_MS = 15 * 60 * 1000
 const SCAN_ROTATION_MS = 60 * 1000
 
 function intFromEnv(value: string | undefined, fallback: number): number {
@@ -65,7 +66,13 @@ export async function runOpsAlerts(input: {
 
   const maxCommunities = intFromEnv(env.OPS_ALERT_MAX_COMMUNITIES, DEFAULT_MAX_COMMUNITIES)
   const lookbackMs = intFromEnv(env.OPS_ALERT_LOOKBACK_MS, DEFAULT_LOOKBACK_MS)
+  const jobPickupAlertMs = intFromEnv(
+    env.COMMUNITY_JOB_PICKUP_ALERT_MS,
+    DEFAULT_COMMUNITY_JOB_PICKUP_ALERT_MS,
+  )
   const since = new Date(input.nowMs - lookbackMs).toISOString()
+  const currentTime = new Date(input.nowMs).toISOString()
+  const readyBefore = new Date(input.nowMs - jobPickupAlertMs).toISOString()
   const activeCommunities = await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const scanSelection = selectCommunityIdsForOpsAlertScan({
     communityIds: activeCommunities.map((community) => community.community_id),
@@ -99,7 +106,13 @@ export async function runOpsAlerts(input: {
     let handle: Awaited<ReturnType<typeof openCommunityReadClient>> | null = null
     try {
       handle = await openCommunityReadClient(env, input.communityRepository, communityId)
-      signals.push(await collectCommunityPublishAlertSignals({ client: handle.client, communityId, since }))
+      signals.push(await collectCommunityPublishAlertSignals({
+        client: handle.client,
+        communityId,
+        since,
+        now: currentTime,
+        readyBefore,
+      }))
     } catch (error) {
       logPipelineError("[ops-alerts] failed to collect signals for community", {
         community_id: communityId,

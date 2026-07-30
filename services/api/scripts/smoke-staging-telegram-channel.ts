@@ -9,6 +9,10 @@
  */
 
 import { asObject, asString } from "./staging-smoke-support"
+import {
+  TELEGRAM_SYNTHETIC_BODY,
+  TELEGRAM_SYNTHETIC_TITLE_PREFIX,
+} from "../src/lib/telegram/telegram-synthetic-contract"
 
 type Json = Record<string, unknown>
 
@@ -19,8 +23,14 @@ const configuredCommunity = String(process.env.PIRATE_TELEGRAM_SMOKE_COMMUNITY_I
 const timeoutMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS ?? 20 * 60_000)
 const pollMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_POLL_MS ?? 15_000)
 const networkAttempts = 3
+const dispatchMode = String(
+  process.env.PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE ?? "deterministic",
+).trim()
 
 if (!adminToken) throw new Error("PIRATE_ADMIN_TOKEN is required")
+if (dispatchMode !== "deterministic" && dispatchMode !== "cron") {
+  throw new Error("PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE must be deterministic or cron")
+}
 if (!new URL(apiBase).hostname.includes("staging")) {
   throw new Error("Telegram channel synthetic is staging-only")
 }
@@ -77,7 +87,7 @@ const fixture = await request({
 })
 const communityId = asString(fixture.community_id, "fixture.community_id", prefix)
 const ownerUserId = asString(fixture.owner_user_id, "fixture.owner_user_id", prefix)
-const marker = `telegram-channel-synthetic-${Date.now()}`
+const marker = `${TELEGRAM_SYNTHETIC_TITLE_PREFIX}${Date.now()}`
 let postId: string | null = null
 let lastDelivery: Json | null = null
 let telegramCleaned = false
@@ -95,8 +105,8 @@ try {
     body: {
       post_type: "text",
       identity_mode: "public",
-      title: `Telegram channel synthetic ${marker}`,
-      body: "Automated staging delivery check. This message should remove itself.",
+      title: marker,
+      body: TELEGRAM_SYNTHETIC_BODY,
       idempotency_key: marker,
     },
   })
@@ -111,12 +121,14 @@ try {
 
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    const drained = await request({
-      method: "POST",
-      path: withCommunity("/admin/ops/telegram/synthetic-fixture/drain", communityId),
-    })
-    if (Number(drained.failed_communities) > 0) {
-      throw new Error("fixture-scoped community job drain failed")
+    if (dispatchMode === "deterministic") {
+      const drained = await request({
+        method: "POST",
+        path: withCommunity("/admin/ops/telegram/synthetic-fixture/drain", communityId),
+      })
+      if (Number(drained.failed_communities) > 0) {
+        throw new Error("fixture-scoped community job drain failed")
+      }
     }
     const state = await request({
       path: withCommunity(
@@ -168,7 +180,14 @@ try {
   telegramCleaned = true
   console.log(`[${prefix}] Telegram message deleted`)
 } finally {
-  if (postId && (telegramCleaned || lastDelivery == null || lastDelivery.status === "failed")) {
+  if (
+    postId
+    && (
+      telegramCleaned
+      || lastDelivery?.status === "failed"
+      || (dispatchMode === "deterministic" && lastDelivery == null)
+    )
+  ) {
     await request({
       method: "POST",
       path: `/communities/${encodeURIComponent(communityId)}/posts/${encodeURIComponent(postId)}/delete`,
