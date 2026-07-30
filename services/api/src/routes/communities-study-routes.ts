@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { decodePublicPostId } from "../lib/public-ids"
 import {
@@ -17,6 +16,7 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { getWaitUntil } from "./execution-context"
 
 function parseLeaderboardLimit(value: string | undefined): number | undefined {
   if (value == null || value.trim() === "") return undefined
@@ -25,15 +25,6 @@ function parseLeaderboardLimit(value: string | undefined): number | undefined {
     throw badRequestError("limit must be an integer between 1 and 100")
   }
   return limit
-}
-
-function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefined {
-  try {
-    const executionCtx = c.executionCtx
-    return (promise) => executionCtx.waitUntil(promise)
-  } catch {
-    return undefined
-  }
 }
 
 export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>): void {

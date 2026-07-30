@@ -185,6 +185,8 @@ describe("community study routes", () => {
     const ctx = await createRouteTestContext({
       CREDENTIAL_WRAP_KEY: wrapKey,
       CREDENTIAL_WRAP_KEY_VERSION: "1",
+      TELEGRAM_STUDY_VOICE_COMMUNITY_IDS: "cmt_study_route_telegram_voice",
+      TELEGRAM_STUDY_VOICE_ENABLED: "true",
     })
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "study-route-telegram-voice")
@@ -276,10 +278,51 @@ describe("community study routes", () => {
       exercises: Array<{ id: string; reference_text?: string; type: string }>
     }
     const exercise = study.exercises.find((item) => item.type === "say_it_back")
+    const nextExercise = study.exercises.filter((item) => item.type === "say_it_back")[1]
     expect(exercise).toBeTruthy()
+    expect(nextExercise).toBeTruthy()
+
+    ctx.env.TELEGRAM_STUDY_VOICE_ENABLED = "false"
+    const disabledVoiceIntent = await app.request(
+      `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ exercise_id: exercise!.id }),
+      },
+      ctx.env,
+    )
+    expect(disabledVoiceIntent.status).toBe(409)
+    ctx.env.TELEGRAM_STUDY_VOICE_ENABLED = "true"
+
+    const untrustedCoordinates = await app.request(
+      `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          attempt_number: 99,
+          exercise_id: "exercise_from_another_session",
+          session_id: "sts_attacker_supplied",
+        }),
+      },
+      ctx.env,
+    )
+    expect(untrustedCoordinates.status).toBe(409)
+    const intentsBeforeEligibleCreation = await ctx.client.execute(
+      "SELECT intent_id FROM telegram_study_voice_intents",
+    )
+    expect(intentsBeforeEligibleCreation.rows).toHaveLength(0)
 
     const originalFetch = globalThis.fetch
     const telegramRequests: Request[] = []
+    let transcriptionRequests = 0
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       if (request.url.endsWith("/getFile")) {
@@ -295,6 +338,10 @@ describe("community study routes", () => {
         })
       }
       if (request.url === "https://api.elevenlabs.io/v1/speech-to-text") {
+        transcriptionRequests += 1
+        if (transcriptionRequests === 1) {
+          return new Response("temporary transcription failure", { status: 503 })
+        }
         const form = await request.formData()
         expect(form.get("file")).toBeInstanceOf(File)
         expect((form.get("file") as File).type).toBe("audio/ogg")
@@ -353,6 +400,42 @@ describe("community study routes", () => {
       expect(String(stored.rows[0]?.idempotency_key)).toStartWith("telegram-study:")
       await ctx.client.execute({
         sql: `
+          INSERT INTO telegram_community_bots (
+            telegram_community_bot_id, community_id, encrypted_bot_token, token_last4,
+            encryption_key_version, telegram_bot_user_id, bot_username, bot_display_name,
+            webhook_id, webhook_secret, webhook_status, status, created_at, updated_at,
+            actor_user_id
+          ) VALUES (
+            'tcb_study_voice_replaced', ?1, ?2, '7890', 1, '987655',
+            'OldVoiceStudyBot', 'Old voice study bot', 'tgb_study_voice_replaced',
+            'old-voice-secret', 'disabled', 'revoked', ?3, ?3, 'route_author'
+          )
+        `,
+        args: [
+          communityId,
+          encryptTelegramBotToken({ plaintextToken: "987655:telegramstudyoldtoken1234567890", wrapKey }),
+          now,
+        ],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO telegram_study_voice_intents (
+            intent_id, telegram_community_bot_id, telegram_user_id, user_id,
+            community_id, post_id, exercise_id, exercise_type, target_language,
+            study_session_id, attempt_number, presentation_number, idempotency_key,
+            status, prompt_delivery_status, expires_at, created_at, updated_at
+          )
+          SELECT
+            'tsv_other_bot', 'tcb_study_voice_replaced', telegram_user_id, user_id,
+            community_id, post_id, exercise_id, exercise_type, target_language,
+            study_session_id, attempt_number, presentation_number, 'telegram-study:other-bot',
+            'pending', 'sent', expires_at, created_at, updated_at
+          FROM telegram_study_voice_intents
+          WHERE telegram_community_bot_id = 'tcb_study_voice'
+        `,
+      })
+      await ctx.client.execute({
+        sql: `
           UPDATE telegram_study_voice_intents
           SET status = 'processing',
               processing_lease_id = 'abandoned-lease',
@@ -388,19 +471,65 @@ describe("community study routes", () => {
         ctx.env,
       )
       expect(webhook.status).toBe(200)
-      const duplicateWebhook = await app.request(
-        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
-        {
+      const retryable = await ctx.client.execute({
+        sql: `
+          SELECT status, expires_at
+          FROM telegram_study_voice_intents
+          WHERE telegram_community_bot_id = 'tcb_study_voice'
+        `,
+      })
+      expect(retryable.rows[0]?.status).toBe("pending")
+      expect(Date.parse(String(retryable.rows[0]?.expires_at))).toBeGreaterThan(Date.now())
+      const communityClient = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      const attemptsAfterTranscriptionFailure = await communityClient.execute({
+        sql: "SELECT idempotency_key FROM song_study_attempt WHERE user_id = ?1",
+        args: [session.userId],
+      })
+      expect(attemptsAfterTranscriptionFailure.rows).toHaveLength(0)
+
+      const retryVoiceUpdate = {
+        ...voiceUpdate,
+        update_id: 9002,
+        message: {
+          ...voiceUpdate.message,
+          message_id: 655,
+          voice: {
+            ...voiceUpdate.message.voice,
+            file_id: "voice-study-file-retry",
+            file_unique_id: "voice-study-unique-retry",
+          },
+        },
+      }
+      const backgroundTasks: Promise<void>[] = []
+      const executionCtx = {
+        passThroughOnException() {},
+        waitUntil(promise: Promise<void>) {
+          backgroundTasks.push(promise)
+        },
+      } as ExecutionContext
+      const webhookRequest = () => app.fetch(
+        new Request("http://pirate.test/telegram/community-bots/tgb_study_voice/webhook", {
           method: "POST",
           headers: {
             "content-type": "application/json",
             "x-telegram-bot-api-secret-token": "voice-secret",
           },
-          body: JSON.stringify(voiceUpdate),
-        },
+          body: JSON.stringify(retryVoiceUpdate),
+        }),
         ctx.env,
+        executionCtx,
       )
-      expect(duplicateWebhook.status).toBe(200)
+      const [retryWebhook, concurrentDuplicateWebhook] = await Promise.all([
+        webhookRequest(),
+        webhookRequest(),
+      ])
+      expect(retryWebhook.status).toBe(200)
+      expect(concurrentDuplicateWebhook.status).toBe(200)
+      expect(backgroundTasks).toHaveLength(1)
+      await Promise.all(backgroundTasks)
+      expect(transcriptionRequests).toBe(2)
       const consumed = await ctx.client.execute({
         sql: `
           SELECT status, telegram_voice_message_id, telegram_voice_file_unique_id
@@ -410,12 +539,13 @@ describe("community study routes", () => {
       })
       expect(consumed.rows[0]).toMatchObject({
         status: "consumed",
-        telegram_voice_file_unique_id: "voice-study-unique",
-        telegram_voice_message_id: 654,
+        telegram_voice_file_unique_id: "voice-study-unique-retry",
+        telegram_voice_message_id: 655,
       })
-      const communityClient = createClient({
-        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      const otherBotIntent = await ctx.client.execute({
+        sql: "SELECT status FROM telegram_study_voice_intents WHERE intent_id = 'tsv_other_bot'",
       })
+      expect(otherBotIntent.rows[0]?.status).toBe("pending")
       try {
         const attempts = await communityClient.execute({
           sql: `
@@ -431,6 +561,83 @@ describe("community study routes", () => {
       } finally {
         communityClient.close()
       }
+
+      const nextIntentResponse = await app.request(
+        `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            exercise_id: nextExercise!.id,
+            target_language: "es",
+          }),
+        },
+        ctx.env,
+      )
+      expect(nextIntentResponse.status).toBe(201)
+      await ctx.client.execute({
+        sql: `
+          UPDATE telegram_study_voice_intents
+          SET expires_at = '2020-01-01T00:00:00.000Z'
+          WHERE telegram_community_bot_id = 'tcb_study_voice'
+            AND status = 'pending'
+        `,
+      })
+      const expiredVoiceUpdate = {
+        ...voiceUpdate,
+        update_id: 9003,
+        message: {
+          ...voiceUpdate.message,
+          message_id: 656,
+          voice: {
+            ...voiceUpdate.message.voice,
+            file_id: "voice-study-file-expired",
+            file_unique_id: "voice-study-unique-expired",
+          },
+        },
+      }
+      const requestsBeforeExpiredReply = telegramRequests.length
+      const expiredWebhook = await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(expiredVoiceUpdate),
+        },
+        ctx.env,
+      )
+      expect(expiredWebhook.status).toBe(200)
+      const expiredIntent = await ctx.client.execute({
+        sql: `
+          SELECT status
+          FROM telegram_study_voice_intents
+          WHERE telegram_community_bot_id = 'tcb_study_voice'
+            AND telegram_voice_message_id = 656
+        `,
+      })
+      expect(expiredIntent.rows[0]?.status).toBe("expired")
+      expect(telegramRequests.length).toBe(requestsBeforeExpiredReply + 1)
+
+      const expiredRedelivery = await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(expiredVoiceUpdate),
+        },
+        ctx.env,
+      )
+      expect(expiredRedelivery.status).toBe(200)
+      expect(telegramRequests.length).toBe(requestsBeforeExpiredReply + 1)
     } finally {
       globalThis.fetch = originalFetch
     }
