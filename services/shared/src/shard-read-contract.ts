@@ -137,8 +137,8 @@ export interface ShardPoolRpc {
  * retry: if `last_loaded_at` is already set for this binding, the load is a
  * no-op. The shard re-validates the pool row before any write (the §4.2
  * invariant against the release+reallocate window) and sets
- * `last_loaded_at = now()` on full success. DDL allowed (CREATE TABLE IF NOT
- * EXISTS + INSERT only) — the existing `WRITE_NOT_ALLOWED` guard is too strict
+ * `last_loaded_at = now()` on full success. DDL allowed (CREATE TABLE/INDEX/
+ * TRIGGER + INSERT) — the existing `WRITE_NOT_ALLOWED` guard is too strict
  * for bootstrap; a separate `isBootstrapAllowedStatement` guard applies here.
  */
 export type ShardLoadSnapshotRequest = {
