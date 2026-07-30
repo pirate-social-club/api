@@ -323,6 +323,7 @@ describe("community study routes", () => {
     const originalFetch = globalThis.fetch
     const telegramRequests: Request[] = []
     let transcriptionRequests = 0
+    let forceTranscriptionFailure = false
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       if (request.url.endsWith("/getFile")) {
@@ -339,7 +340,7 @@ describe("community study routes", () => {
       }
       if (request.url === "https://api.elevenlabs.io/v1/speech-to-text") {
         transcriptionRequests += 1
-        if (transcriptionRequests === 1) {
+        if (transcriptionRequests === 1 || forceTranscriptionFailure) {
           return new Response("temporary transcription failure", { status: 503 })
         }
         const form = await request.formData()
@@ -473,13 +474,17 @@ describe("community study routes", () => {
       expect(webhook.status).toBe(200)
       const retryable = await ctx.client.execute({
         sql: `
-          SELECT status, expires_at
+          SELECT status, expires_at, telegram_voice_message_id,
+                 telegram_voice_file_id, telegram_voice_file_unique_id
           FROM telegram_study_voice_intents
           WHERE telegram_community_bot_id = 'tcb_study_voice'
         `,
       })
       expect(retryable.rows[0]?.status).toBe("pending")
       expect(Date.parse(String(retryable.rows[0]?.expires_at))).toBeGreaterThan(Date.now())
+      expect(retryable.rows[0]?.telegram_voice_message_id).toBeNull()
+      expect(retryable.rows[0]?.telegram_voice_file_id).toBeNull()
+      expect(retryable.rows[0]?.telegram_voice_file_unique_id).toBeNull()
       const communityClient = createClient({
         url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
       })
@@ -581,6 +586,72 @@ describe("community study routes", () => {
       await ctx.client.execute({
         sql: `
           UPDATE telegram_study_voice_intents
+          SET processing_attempt_count = 2
+          WHERE telegram_community_bot_id = 'tcb_study_voice'
+            AND status = 'pending'
+        `,
+      })
+      forceTranscriptionFailure = true
+      const terminalVoiceUpdate = {
+        ...voiceUpdate,
+        update_id: 9003,
+        message: {
+          ...voiceUpdate.message,
+          message_id: 656,
+          voice: {
+            ...voiceUpdate.message.voice,
+            file_id: "voice-study-file-terminal",
+            file_unique_id: "voice-study-unique-terminal",
+          },
+        },
+      }
+      const terminalWebhook = await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(terminalVoiceUpdate),
+        },
+        ctx.env,
+      )
+      expect(terminalWebhook.status).toBe(200)
+      const terminalIntent = await ctx.client.execute({
+        sql: `
+          SELECT status, processing_attempt_count, last_error_code
+          FROM telegram_study_voice_intents
+          WHERE telegram_community_bot_id = 'tcb_study_voice'
+            AND telegram_voice_message_id = 656
+        `,
+      })
+      expect(terminalIntent.rows[0]).toMatchObject({
+        last_error_code: "voice_processing_attempts_exhausted",
+        processing_attempt_count: 3,
+        status: "failed",
+      })
+      forceTranscriptionFailure = false
+
+      const expiringIntentResponse = await app.request(
+        `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${session.accessToken}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            exercise_id: nextExercise!.id,
+            target_language: "es",
+          }),
+        },
+        ctx.env,
+      )
+      expect(expiringIntentResponse.status).toBe(201)
+      await ctx.client.execute({
+        sql: `
+          UPDATE telegram_study_voice_intents
           SET expires_at = '2020-01-01T00:00:00.000Z'
           WHERE telegram_community_bot_id = 'tcb_study_voice'
             AND status = 'pending'
@@ -588,10 +659,10 @@ describe("community study routes", () => {
       })
       const expiredVoiceUpdate = {
         ...voiceUpdate,
-        update_id: 9003,
+        update_id: 9004,
         message: {
           ...voiceUpdate.message,
-          message_id: 656,
+          message_id: 657,
           voice: {
             ...voiceUpdate.message.voice,
             file_id: "voice-study-file-expired",
@@ -618,7 +689,7 @@ describe("community study routes", () => {
           SELECT status
           FROM telegram_study_voice_intents
           WHERE telegram_community_bot_id = 'tcb_study_voice'
-            AND telegram_voice_message_id = 656
+            AND telegram_voice_message_id = 657
         `,
       })
       expect(expiredIntent.rows[0]?.status).toBe("expired")
