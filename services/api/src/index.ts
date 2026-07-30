@@ -98,7 +98,9 @@ import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconc
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
+import { reconcileConfirmingRewardCampaignFunding } from "./lib/rewards/reward-funding-confirmation-reconciler"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
+import { runRewardCampaignMonitorCycle } from "./lib/rewards/reward-campaign-monitor-cycle"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
 import { monitorRewardCampaignTreasurySolvency } from "./lib/rewards/reward-campaign-solvency-monitor"
@@ -1188,7 +1190,33 @@ async function monitorScheduledRewardCampaignTreasurySolvency(env: Env): Promise
 async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
-    const summary = await monitorRewardCampaigns({ env, client, limit: 100 })
+    const summary = await runRewardCampaignMonitorCycle({
+      reconcileFunding: async () => {
+        const funding = await reconcileConfirmingRewardCampaignFunding({
+          env,
+          client,
+          limit: 100,
+        })
+        if (funding.errors > 0) {
+          await captureScheduledWarning(
+            env,
+            "Submitted reward funding could not be reconciled",
+            "reward_campaign_funding_confirmation_reconciliation",
+            {
+              errors: funding.errors,
+              scanned: funding.scanned,
+              pending: funding.pending,
+            },
+            { urgency: "high" },
+          )
+        }
+      },
+      onFundingError: async (error) => {
+        console.error("[reward-campaigns] funding confirmation reconciliation failed", error)
+        await captureScheduledError(env, error, "reward_campaign_funding_confirmation_reconciliation")
+      },
+      monitorIntegrity: () => monitorRewardCampaigns({ env, client, limit: 100 }),
+    })
     if (!summary.enabled) return
     if (summary.liveness_stale) {
       await captureScheduledWarning(
