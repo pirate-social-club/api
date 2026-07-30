@@ -64,16 +64,34 @@ describe("staging reward money-loop configuration", () => {
     )
   })
 
-  test("keeps production settlement dark and contains no testnet reward custody config", () => {
+  test("arms production settlement on Base mainnet without testnet custody config", () => {
     const vars = readWranglerVars(wranglerConfigPath, "production")
+    expectCampaignEnablementIsCoordinated(vars)
     expect(vars).toMatchObject({
-      REWARDS_CAMPAIGNS_ENABLED: "false",
-      REWARDS_REFUNDS_ENABLED: "false",
+      REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_READS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
-      REWARDS_PAYOUTS_ENABLED: "false",
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_MIN_CASHOUT_CENTS: "500",
       REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "false",
       REWARDS_IDENTITY_PROVIDER: "self",
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
+      REWARDS_CAMPAIGN_RPC_URL: "https://mainnet.base.org",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x43bbA97370B00E9930994EA427DAEE400846617B",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://mainnet.base.org",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "8453",
+      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
+      REWARDS_TREASURY_VAULT_ADDRESS: "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
+      REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
+      LIT_REWARDS_SIGNING_DEADLINE_SECONDS: "300",
+      LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+      LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+      LIT_REWARDS_MAX_GAS_LIMIT: "300000",
     })
 
     const productionRewardVars = Object.fromEntries(
@@ -85,17 +103,13 @@ describe("staging reward money-loop configuration", () => {
     )
     const serialized = JSON.stringify(productionRewardVars).toLowerCase()
 
-    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_CHAIN_ID")
-    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS")
-    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_TREASURY_ADDRESS")
-    expect(productionRewardVars).not.toHaveProperty("REWARDS_CAMPAIGN_RPC_URL")
-    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_CHAIN_ID")
-    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS")
-    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS")
-    expect(productionRewardVars).not.toHaveProperty("PIRATE_REWARDS_SETTLEMENT_RPC_URL")
-    expect(productionRewardVars).not.toHaveProperty("REWARDS_TREASURY_VAULT_ADDRESS")
     expect(serialized).not.toContain("84532")
     expect(serialized).not.toContain("sepolia")
     expect(serialized).not.toContain("0x036cbd53842c5426634e7929541ec2318f3dcf7e")
+    expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).toBe(vars.REWARDS_TREASURY_VAULT_ADDRESS)
+    expect(vars.REWARDS_CAMPAIGN_CHAIN_ID).toBe(vars.PIRATE_REWARDS_SETTLEMENT_CHAIN_ID)
+    expect(vars.REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS).toBe(
+      vars.PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS,
+    )
   })
 })
