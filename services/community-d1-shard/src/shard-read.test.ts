@@ -892,6 +892,43 @@ describe("runShardLoadSnapshot (step 3 — returns ShardResult)", () => {
     expect(row?.last_loaded_at).not.toBeNull()
   })
 
+  test("loads CREATE TRIGGER schema statements (migration 1147 regression: body semicolons inside BEGIN ... END)", async () => {
+    // The generated snapshot includes integrity triggers; their `;`-terminated
+    // body statements tripped the bootstrap guard's batching rule and failed
+    // every d1_native provision in production. This is the exact RPC shape the
+    // provisioning backend sends.
+    const pool = fakePoolD1([{ ...POOL_ROW }])
+    const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1([], { perStatementChanges: [0, 0] }) })
+    const r = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [
+        { sql: "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)", args: [] },
+        {
+          sql: "CREATE TRIGGER t_id_required BEFORE INSERT ON t WHEN NEW.id IS NULL BEGIN SELECT RAISE(ABORT, 'id required'); END;",
+          args: [],
+        },
+      ],
+    })
+    expect(r).toEqual({ ok: true, value: { rowsAffected: 0, loaded: true } })
+  })
+
+  test("rejects a statement smuggled after a CREATE TRIGGER body", async () => {
+    const pool = fakePoolD1([{ ...POOL_ROW }])
+    const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1() })
+    const r = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [
+        {
+          sql: "CREATE TRIGGER t_id_required BEFORE INSERT ON t BEGIN SELECT RAISE(ABORT, 'x'); END; DELETE FROM t",
+          args: [],
+        },
+      ],
+    })
+    expect(r).toMatchObject({ ok: false, code: "shard_write_not_allowed" })
+  })
+
   test("§8.4 — idempotency: re-running on an already-loaded binding returns loaded: false, leaves last_loaded_at unchanged", async () => {
     const pool = fakePoolD1([{ ...POOL_ROW, last_loaded_at: "t_prior" }])
     const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1() })

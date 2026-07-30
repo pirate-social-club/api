@@ -2,8 +2,9 @@
 // Final-form community-local schema (CREATE-only), produced by replaying the
 // 149 core/db/community-template migrations into an in-memory DB and
 // dumping sqlite_master. Used by the d1_native provisioning path (§8.7) to load
-// a full community schema via communityD1LoadSnapshot with NO bootstrap-guard
-// widening (no ALTER/DROP/PRAGMA reach the shard — only these CREATEs do).
+// a full community schema via communityD1LoadSnapshot. Every statement below is
+// asserted against the shard bootstrap guard (isBootstrapAllowedStatement) at
+// generation time — no ALTER/DROP/PRAGMA reaches the shard, only these CREATEs.
 
 export const COMMUNITY_SCHEMA_STATEMENTS: readonly string[] = [
   "CREATE TABLE asset_derivative_links (\n    asset_derivative_link_id TEXT PRIMARY KEY,\n    asset_id TEXT NOT NULL,\n    upstream_asset_id TEXT NOT NULL,\n    relationship_type TEXT NOT NULL CHECK (\n        relationship_type IN ('remix_of', 'references_song', 'inspired_by', 'samples')\n    ),\n    created_at TEXT NOT NULL,\n    FOREIGN KEY (asset_id) REFERENCES assets(asset_id)\n);",
