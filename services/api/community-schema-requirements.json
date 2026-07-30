@@ -47,6 +47,10 @@
     "1146_dance_attempt_reason_contract.sql"
   ],
   "features": {},
+  "ledger_only": {
+    "1145_dance_attempts.sql": "The migration creates the required dance_attempt table and indexes plus two JSON-validation triggers. The schema artifact deriver attests the table and indexes but cannot attest CREATE TRIGGER bodies, so the release gate deliberately verifies the pinned migration ledger checksum for the complete migration.",
+    "1146_dance_attempt_reason_contract.sql": "The migration widens the dance_attempt reason contract through a SQLite table rebuild (INSERT, DROP TABLE, ALTER TABLE) and recreates its indexes and JSON-validation triggers. Those rebuild and trigger statements are outside the schema artifact deriver, so the release gate deliberately verifies the pinned migration ledger checksum for the complete migration."
+  },
   "transitional": {
     "1143_lyrics_language.sql": {
       "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",
