@@ -23,6 +23,7 @@ describe("dance attempt cleanup", () => {
     })
     expect(summary).toEqual({
       expired: 0,
+      expired_fingerprints: 0,
       claimed: 0,
       deleted: 0,
       retry_scheduled: 0,

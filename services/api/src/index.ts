@@ -1651,7 +1651,10 @@ const handler: ExportedHandler<Env> = {
             name: "cleanup_dance_attempts",
             run: async () => {
               const summary = await cleanupDueDanceAttempts({ env })
-              if (summary.claimed > 0 || summary.expired > 0) {
+              if (
+                summary.claimed > 0 || summary.expired > 0
+                || summary.expired_fingerprints > 0
+              ) {
                 console.info("[scheduled] dance attempt cleanup", summary)
               }
             },

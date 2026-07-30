@@ -79,6 +79,7 @@ export async function cleanupDueDanceAttempts(input: {
   maxCleanups?: number
 }): Promise<{
   expired: number
+  expired_fingerprints: number
   claimed: number
   deleted: number
   retry_scheduled: number
@@ -86,11 +87,18 @@ export async function cleanupDueDanceAttempts(input: {
 }> {
   const client = input.client ?? getControlPlaneClient(input.env)
   const now = input.now ?? (() => Date.now())
+  const sweepNow = new Date(now()).toISOString()
+  const expiredFingerprints = await client.execute({
+    sql: "DELETE FROM dance_attempt_fingerprints WHERE expires_at <= ?1",
+    args: [sweepNow],
+  })
   const summary = {
     expired: await expireDanceAttemptSessions({
       client,
-      now: new Date(now()).toISOString(),
+      now: sweepNow,
     }),
+    expired_fingerprints:
+      expiredFingerprints.rowsAffected ?? expiredFingerprints.rows.length,
     claimed: 0,
     deleted: 0,
     retry_scheduled: 0,
