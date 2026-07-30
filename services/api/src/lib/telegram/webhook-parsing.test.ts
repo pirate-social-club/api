@@ -10,6 +10,8 @@ import {
   parseStartToken,
   telegramIdentifier,
   telegramLanguageCode,
+  telegramMessageHasForwardingMetadata,
+  telegramVideoReplyAttachment,
 } from "./webhook-parsing"
 
 const bot: TelegramCommunityBotCredential = {
@@ -23,6 +25,55 @@ const bot: TelegramCommunityBotCredential = {
 }
 
 describe("Telegram webhook primitive parsing", () => {
+  test("parses video and video-document replies without trusting incomplete attachments", () => {
+    expect(telegramVideoReplyAttachment({
+      video: {
+        file_id: "video-file",
+        file_unique_id: "video-unique",
+        duration: 24,
+        file_size: 1_234,
+        mime_type: "video/mp4",
+      },
+    })).toEqual({
+      deliveryMode: "video",
+      fileId: "video-file",
+      fileUniqueId: "video-unique",
+      fileName: null,
+      mimeType: "video/mp4",
+      reportedSizeBytes: 1_234,
+      reportedDurationSeconds: 24,
+    })
+    expect(telegramVideoReplyAttachment({
+      document: {
+        file_id: "document-file",
+        file_unique_id: "document-unique",
+        file_name: "attempt.mov",
+        mime_type: "video/quicktime",
+      },
+    })).toMatchObject({
+      deliveryMode: "document",
+      fileId: "document-file",
+      fileUniqueId: "document-unique",
+      reportedDurationSeconds: null,
+    })
+    expect(telegramVideoReplyAttachment({
+      document: {
+        file_id: "text-file",
+        file_unique_id: "text-unique",
+        mime_type: "text/plain",
+      },
+    })).toBeNull()
+    expect(telegramVideoReplyAttachment({
+      video: { file_id: "missing-stable-id" },
+    })).toBeNull()
+  })
+
+  test("detects forwarding metadata without treating its absence as liveness", () => {
+    expect(telegramMessageHasForwardingMetadata({ forward_date: 1_700_000_000 })).toBe(true)
+    expect(telegramMessageHasForwardingMetadata({ forward_origin: { type: "user" } })).toBe(true)
+    expect(telegramMessageHasForwardingMetadata({})).toBe(false)
+  })
+
   test("accepts only safe identifiers and non-empty language codes", () => {
     expect(telegramIdentifier(123456)).toBe("123456")
     expect(telegramIdentifier("  -100123  ")).toBe("-100123")

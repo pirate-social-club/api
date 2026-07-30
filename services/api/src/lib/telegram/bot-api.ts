@@ -309,6 +309,7 @@ export function getTelegramFile(bot: Env | TelegramBotCredential, fileId: string
 export async function downloadTelegramFile(
   bot: Env | TelegramBotCredential,
   filePath: string,
+  options?: { maximumBytes?: number },
 ): Promise<{ bytes: ArrayBuffer; contentType: string | null }> {
   const token = telegramBotToken(bot)
   const controller = new AbortController()
@@ -329,8 +330,57 @@ export async function downloadTelegramFile(
   if (!response.ok) {
     throw providerUnavailable(`Telegram file download failed with http_${response.status}`)
   }
+  const maximumBytes = options?.maximumBytes
+  if (
+    maximumBytes !== undefined
+    && (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1)
+  ) {
+    throw providerUnavailable("Telegram file download byte limit is invalid")
+  }
+  const contentLength = response.headers.get("content-length")
+  if (
+    maximumBytes !== undefined
+    && contentLength !== null
+    && Number.isSafeInteger(Number(contentLength))
+    && Number(contentLength) > maximumBytes
+  ) {
+    await response.body?.cancel().catch(() => undefined)
+    throw providerUnavailable("Telegram file exceeds the download byte limit")
+  }
+  if (maximumBytes === undefined) {
+    return {
+      bytes: await response.arrayBuffer(),
+      contentType: response.headers.get("content-type"),
+    }
+  }
+  if (!response.body) {
+    throw providerUnavailable("Telegram file download response is empty")
+  }
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let totalBytes = 0
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) break
+      totalBytes += next.value.byteLength
+      if (totalBytes > maximumBytes) {
+        await reader.cancel().catch(() => undefined)
+        throw providerUnavailable("Telegram file exceeds the download byte limit")
+      }
+      chunks.push(next.value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
   return {
-    bytes: await response.arrayBuffer(),
+    bytes: bytes.buffer,
     contentType: response.headers.get("content-type"),
   }
 }
