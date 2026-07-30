@@ -144,6 +144,17 @@ describe("dance attempt callback contract", () => {
       resultDigest: payload.result_digest,
     })
 
+    expect(parseDanceAttemptTerminalFacts(withDigest({
+      subject: "attempt_123",
+      outcome: "rejected",
+      reason: "upload_invalid",
+      completed_at: 1_800_000_000,
+    }))).toMatchObject({
+      outcome: "rejected",
+      reason: "upload_invalid",
+      pregrade: true,
+    })
+
     expect(() => parseDanceAttemptTerminalFacts(withDigest({
       subject: "attempt_123",
       outcome: "rejected",

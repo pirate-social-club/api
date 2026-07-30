@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   buildDanceAttemptUploadIntent,
+  DanceAttemptUploadInvalidError,
   danceAttemptObjectKey,
   verifyDanceAttemptUpload,
 } from "./attempt-storage"
@@ -77,6 +78,6 @@ describe("dance attempt private storage", () => {
           "x-amz-meta-content-sha256": sha,
         },
       }),
-    })).rejects.toThrow("does not match")
+    })).rejects.toBeInstanceOf(DanceAttemptUploadInvalidError)
   })
 })
