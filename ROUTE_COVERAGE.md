@@ -16,6 +16,7 @@ Mounted in `services/api/src/index.ts`:
 - `/analytics`
 - `/bookings`
 - `/dance-choreographies`
+- `/dance-attempts`
 - `/dance-sessions`
 - `/__version`
 - non-production `/__debug/sentry-error`
@@ -105,6 +106,7 @@ Mounted in `services/api/src/index.ts`:
 | `/api/privy-relay` | `src/routes/privy-relay.ts` | `src/lib/efp-indexer/follow-sponsorship-relay.test.ts` | service | Authenticated route is thin validation over the exact-transaction relay; bootstrap reservation and forwarded Privy payload are covered at the service boundary. |
 | `/bookings/*` | `src/routes/bookings.ts` | `tests/routes/bookings-routes.test.ts`, `src/lib/bookings/*\.pg.test.ts`, `src/lib/bookings/host-config-repository.production-path.pg.test.ts` | direct/service/PG | Global booking API surface. Route suite covers auth, parameter/body normalization, aliases, status mapping, and service wiring; real-Postgres service tests cover durable behavior. |
 | `/dance-choreographies/*` | `src/routes/dance-choreographies.ts` | `src/routes/dance-choreographies.test.ts`, `src/lib/dance/grader-callback-auth.test.ts` | direct | Dark pilot operator seed and Modal reference callback boundary. Covers dedicated operator scope, bounded seed parsing, exact raw-body HMAC verification, revision subject binding, and callback finalization wiring. |
+| `/dance-attempts/*` | `src/routes/dance-attempts.ts` | `src/routes/dance-attempts.test.ts`, `src/lib/dance/attempt-finalize-service.test.ts`, `src/lib/dance/attempt-cleanup.test.ts` | direct | Dark Modal attempt callback boundary. Covers exact-byte HMAC verification, session subject binding, terminal fact parsing, provisional-calibration rank refusal, shard evidence persistence, and terminal-only raw-media cleanup. |
 | `/dance-sessions/*` | `src/routes/dance-sessions.ts` | `src/lib/dance/attempt-session-repository.test.ts`, `src/lib/dance/attempt-storage.test.ts`, `src/lib/dance/attempt-contract.test.ts` | service/partial | Dark authenticated create, MP4-only hash-bound upload-intent, and verified submit surface. Durable state transitions, private storage signing/HEAD verification, and callback parsing have direct service coverage; route-level auth/serialization coverage is still required before enabling the surface. |
 | `/host-bookings/me/*` | `src/routes/host-bookings.ts` | `tests/routes/host-bookings-routes.test.ts` | direct | Covers host profile upsert, publish/unpublish, availability rules / exceptions / price rules CRUD, hard bounds, FK precondition, and envelope shape. |
 | `/public-profiles/:handleLabel` | `src/routes/public-profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts`, `tests/routes/profiles/public-profiles-routes.test.ts` | direct | Covered alongside profile/global-handle tests. |
