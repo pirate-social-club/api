@@ -42,15 +42,9 @@
     "1140_karaoke_attempts_schema_repair.sql",
     "1141_namespace_handle_policy_revision.sql",
     "1142_song_study_sessions.sql",
-    "1144_karaoke_scoring_diagnostics.sql",
-    "1145_dance_attempts.sql",
-    "1146_dance_attempt_reason_contract.sql"
+    "1144_karaoke_scoring_diagnostics.sql"
   ],
   "features": {},
-  "ledger_only": {
-    "1145_dance_attempts.sql": "The migration creates the required dance_attempt table and indexes plus two JSON-validation triggers. The schema artifact deriver attests the table and indexes but cannot attest CREATE TRIGGER bodies, so the release gate deliberately verifies the pinned migration ledger checksum for the complete migration.",
-    "1146_dance_attempt_reason_contract.sql": "The migration widens the dance_attempt reason contract through a SQLite table rebuild (INSERT, DROP TABLE, ALTER TABLE) and recreates its indexes and JSON-validation triggers. Those rebuild and trigger statements are outside the schema artifact deriver, so the release gate deliberately verifies the pinned migration ledger checksum for the complete migration."
-  },
   "transitional": {
     "1143_lyrics_language.sql": {
       "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",
@@ -104,6 +98,12 @@
   "deferred": {
     "1139_story_registration_durable_request.sql": {
       "rationale": "Core prepares durable_request_json for persist-and-replay Story registration, but this API commit does not read or write that column. Require it when the durable registration runtime lands."
+    },
+    "1145_dance_attempts.sql": {
+      "rationale": "Core provides dark dance-attempt evidence infrastructure, but this API commit does not read or write the community-shard dance_attempt table. Require and roll this migration across the fleet before the dance-attempt persistence runtime lands."
+    },
+    "1146_dance_attempt_reason_contract.sql": {
+      "rationale": "Core widens the still-dark dance-attempt rejection contract, but this API commit does not read or write the community-shard dance_attempt table. Require it together with 1145 before the dance-attempt persistence runtime lands."
     }
   }
 }
