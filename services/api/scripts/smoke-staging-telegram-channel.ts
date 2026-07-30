@@ -8,11 +8,16 @@
  * outbound-only client can recover the missing message id safely.
  */
 
+import { appendFile } from "node:fs/promises"
 import { asObject, asString } from "./staging-smoke-support"
 import {
   TELEGRAM_SYNTHETIC_BODY,
   TELEGRAM_SYNTHETIC_TITLE_PREFIX,
 } from "../src/lib/telegram/telegram-synthetic-contract"
+import {
+  telegramCadenceOutcome,
+  type TelegramCadenceOutcome,
+} from "../src/lib/telegram/telegram-cadence-outcome"
 
 type Json = Record<string, unknown>
 
@@ -21,6 +26,9 @@ const apiBase = (process.env.PIRATE_SMOKE_API_BASE_URL ?? "https://api-staging.p
 const adminToken = String(process.env.PIRATE_ADMIN_TOKEN ?? "").trim()
 const configuredCommunity = String(process.env.PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID ?? "").trim()
 const timeoutMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS ?? 20 * 60_000)
+const latencySloMs = Number(
+  process.env.PIRATE_TELEGRAM_SMOKE_LATENCY_SLO_MS ?? 15 * 60_000,
+)
 const pollMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_POLL_MS ?? 15_000)
 const networkAttempts = 3
 const dispatchMode = String(
@@ -28,6 +36,12 @@ const dispatchMode = String(
 ).trim()
 
 if (!adminToken) throw new Error("PIRATE_ADMIN_TOKEN is required")
+if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  throw new Error("PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS must be positive")
+}
+if (!Number.isFinite(latencySloMs) || latencySloMs <= 0) {
+  throw new Error("PIRATE_TELEGRAM_SMOKE_LATENCY_SLO_MS must be positive")
+}
 if (dispatchMode !== "deterministic" && dispatchMode !== "cron") {
   throw new Error("PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE must be deterministic or cron")
 }
@@ -91,6 +105,35 @@ const marker = `${TELEGRAM_SYNTHETIC_TITLE_PREFIX}${Date.now()}`
 let postId: string | null = null
 let lastDelivery: Json | null = null
 let telegramCleaned = false
+let publishedAtMs: number | null = null
+let deliveryObservedAtMs: number | null = null
+
+async function reportCadence(input: {
+  outcome: TelegramCadenceOutcome
+  latencyMs: number
+}): Promise<void> {
+  const latencySeconds = (input.latencyMs / 1_000).toFixed(1)
+  const sloSeconds = (latencySloMs / 1_000).toFixed(0)
+  console.log(`[${prefix}] scheduler cadence`, {
+    outcome: input.outcome,
+    observed_delivery_latency_ms: input.latencyMs,
+    latency_slo_ms: latencySloMs,
+  })
+  const summaryPath = String(process.env.GITHUB_STEP_SUMMARY ?? "").trim()
+  if (summaryPath) {
+    await appendFile(
+      summaryPath,
+      [
+        "### Telegram scheduler cadence",
+        "",
+        `- Outcome: **${input.outcome}**`,
+        `- Observed publication-to-delivery latency: **${latencySeconds}s**`,
+        `- Latency SLO: **${sloSeconds}s**`,
+        "",
+      ].join("\n"),
+    )
+  }
+}
 
 console.log(`[${prefix}] fixture`, {
   community_id: communityId,
@@ -117,6 +160,7 @@ try {
       visibility: post.visibility,
     })}`)
   }
+  publishedAtMs = Date.now()
   console.log(`[${prefix}] post published`, { post_id: postId })
 
   const deadline = Date.now() + timeoutMs
@@ -140,7 +184,10 @@ try {
       ? null
       : asObject(state.delivery, "delivery", prefix)
     const status = lastDelivery?.status
-    if (status === "delivered") break
+    if (status === "delivered") {
+      deliveryObservedAtMs = Date.now()
+      break
+    }
     if (status === "uncertain" || status === "sending") {
       throw new Error(`delivery outcome is ambiguous (${status}); preserved for operator review`)
     }
@@ -151,6 +198,16 @@ try {
   }
 
   if (lastDelivery?.status !== "delivered") {
+    if (dispatchMode === "cron" && publishedAtMs != null) {
+      await reportCadence({
+        outcome: telegramCadenceOutcome({
+          delivered: false,
+          elapsedMs: Date.now() - publishedAtMs,
+          latencySloMs,
+        }),
+        latencyMs: Date.now() - publishedAtMs,
+      })
+    }
     throw new Error(`delivery did not complete within ${timeoutMs}ms`)
   }
   const messageId = Number(lastDelivery.telegram_message_id)
@@ -179,6 +236,25 @@ try {
   }
   telegramCleaned = true
   console.log(`[${prefix}] Telegram message deleted`)
+
+  if (
+    dispatchMode === "cron"
+    && publishedAtMs != null
+    && deliveryObservedAtMs != null
+  ) {
+    const latencyMs = deliveryObservedAtMs - publishedAtMs
+    const outcome = telegramCadenceOutcome({
+      delivered: true,
+      elapsedMs: latencyMs,
+      latencySloMs,
+    })
+    await reportCadence({ outcome, latencyMs })
+    if (outcome === "latency_breach") {
+      throw new Error(
+        `delivery completed but breached the ${latencySloMs}ms latency SLO (${latencyMs}ms)`,
+      )
+    }
+  }
 } finally {
   if (
     postId
