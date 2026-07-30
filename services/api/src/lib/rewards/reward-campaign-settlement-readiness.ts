@@ -36,7 +36,7 @@ export function assertRewardCampaignSettlementReadiness(env: Env): RewardCampaig
 
   try {
     const campaign = resolveRewardCampaignAssetConfig(env)
-    if (resolveRewardsSettlementBackend(env) === "lit_vault") {
+    if (resolveRewardsSettlementBackend(env) !== "local") {
       const lit = resolveRewardVaultLitConfig(env)
       // Constructor validation proves the production endpoint and credential
       // tuple is structurally usable without making a metered external call.

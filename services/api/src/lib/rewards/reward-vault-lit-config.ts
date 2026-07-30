@@ -4,16 +4,11 @@ import type { Env } from "../../env"
 import { badRequestError } from "../errors"
 import { parseExpectedEvmAddress } from "../evm-signer"
 
-export type RewardsSettlementBackend = "local" | "lit_vault"
+export type RewardsSettlementBackend = "local" | "lit_vault" | "eoa_vault"
 
-export type RewardVaultLitConfig = {
-  apiUrl: string
-  usageApiKey: string
-  actionIpfsId: string
+export type RewardVaultConfig = {
   vaultAddress: string
   policyVersion: bigint
-  requestTimeoutMs: number
-  requestMaxAttempts: number
   signingDeadlineSeconds: number
   /**
    * Gas ceilings, mirroring the values pinned into the reviewed action source.
@@ -24,6 +19,14 @@ export type RewardVaultLitConfig = {
   maxFeePerGasWei: bigint
   maxPriorityFeePerGasWei: bigint
   maxGasLimit: bigint
+}
+
+export type RewardVaultLitConfig = RewardVaultConfig & {
+  apiUrl: string
+  usageApiKey: string
+  actionIpfsId: string
+  requestTimeoutMs: number
+  requestMaxAttempts: number
 }
 
 function positiveBigInt(raw: string | undefined, field: string): bigint {
@@ -48,11 +51,11 @@ function required(raw: string | undefined, field: string): string {
 
 export function resolveRewardsSettlementBackend(env: Env): RewardsSettlementBackend {
   const value = String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim()
-  if (value === "local" || value === "lit_vault") return value
-  throw badRequestError("PIRATE_REWARDS_SETTLEMENT_BACKEND must be local or lit_vault")
+  if (value === "local" || value === "lit_vault" || value === "eoa_vault") return value
+  throw badRequestError("PIRATE_REWARDS_SETTLEMENT_BACKEND must be local, lit_vault, or eoa_vault")
 }
 
-export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
+export function resolveRewardVaultConfig(env: Env): RewardVaultConfig {
   const vault = parseExpectedEvmAddress(env.REWARDS_TREASURY_VAULT_ADDRESS)
   if (!vault) throw badRequestError("REWARDS_TREASURY_VAULT_ADDRESS is invalid")
   const policyVersionRaw = required(
@@ -69,21 +72,8 @@ export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
     throw badRequestError("REWARDS_TREASURY_VAULT_POLICY_VERSION must be a positive integer")
   }
   return {
-    apiUrl: String(env.LIT_REWARDS_API_URL ?? "https://api.chipotle.litprotocol.com").trim(),
-    usageApiKey: required(env.LIT_REWARDS_USAGE_API_KEY, "LIT_REWARDS_USAGE_API_KEY"),
-    actionIpfsId: required(env.LIT_REWARDS_ACTION_IPFS_ID, "LIT_REWARDS_ACTION_IPFS_ID"),
     vaultAddress: getAddress(vault),
     policyVersion,
-    requestTimeoutMs: positiveInteger(
-      env.LIT_REWARDS_REQUEST_TIMEOUT_MS,
-      20_000,
-      "LIT_REWARDS_REQUEST_TIMEOUT_MS",
-    ),
-    requestMaxAttempts: positiveInteger(
-      env.LIT_REWARDS_REQUEST_MAX_ATTEMPTS,
-      3,
-      "LIT_REWARDS_REQUEST_MAX_ATTEMPTS",
-    ),
     maxFeePerGasWei: positiveBigInt(
       env.LIT_REWARDS_MAX_FEE_PER_GAS_WEI,
       "LIT_REWARDS_MAX_FEE_PER_GAS_WEI",
@@ -97,6 +87,25 @@ export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
       env.LIT_REWARDS_SIGNING_DEADLINE_SECONDS,
       300,
       "LIT_REWARDS_SIGNING_DEADLINE_SECONDS",
+    ),
+  }
+}
+
+export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
+  return {
+    ...resolveRewardVaultConfig(env),
+    apiUrl: String(env.LIT_REWARDS_API_URL ?? "https://api.chipotle.litprotocol.com").trim(),
+    usageApiKey: required(env.LIT_REWARDS_USAGE_API_KEY, "LIT_REWARDS_USAGE_API_KEY"),
+    actionIpfsId: required(env.LIT_REWARDS_ACTION_IPFS_ID, "LIT_REWARDS_ACTION_IPFS_ID"),
+    requestTimeoutMs: positiveInteger(
+      env.LIT_REWARDS_REQUEST_TIMEOUT_MS,
+      20_000,
+      "LIT_REWARDS_REQUEST_TIMEOUT_MS",
+    ),
+    requestMaxAttempts: positiveInteger(
+      env.LIT_REWARDS_REQUEST_MAX_ATTEMPTS,
+      3,
+      "LIT_REWARDS_REQUEST_MAX_ATTEMPTS",
     ),
   }
 }

@@ -26,13 +26,16 @@ import { fetchRewardVaultReceiptSnapshot } from "../../rewards/reward-vault-rece
 import { createProductionLitRewardVaultExecutor } from "../../rewards/lit-reward-vault-executor"
 import {
   resolveRewardsSettlementBackend,
+  resolveRewardVaultConfig,
   resolveRewardVaultLitConfig,
   rewardVaultSigningDeadline,
   type RewardsSettlementBackend,
 } from "../../rewards/reward-vault-lit-config"
 import {
+  encodeRewardVaultCalldata,
   executeAndVerifyRewardVaultTransaction,
   rewardVaultInputFromSignedEffect,
+  type RewardVaultActionExecutor,
 } from "../../rewards/reward-vault-transaction"
 import { rewardOperationId } from "../../rewards/reward-operation-id"
 import {
@@ -65,7 +68,7 @@ function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
   operatorAddressField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS" | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS"
 } {
   const backend = operatorKind === "rewards" ? resolveRewardsSettlementBackend(env) : "local"
-  const privateKey = backend === "local"
+  const privateKey = backend !== "lit_vault"
     ? (operatorKind === "rewards"
         ? resolveRewardsSettlementOperatorPrivateKey(env)
         : resolveBookingSettlementOperatorPrivateKey(env))
@@ -146,8 +149,8 @@ function litFailureStage(error: unknown): PreparationFailureStage {
 }
 
 export function settlementGasLimit(env: Env, backend: RewardsSettlementBackend): bigint {
-  return backend === "lit_vault"
-    ? resolveRewardVaultLitConfig(env).maxGasLimit
+  return backend !== "local"
+    ? resolveRewardVaultConfig(env).maxGasLimit
     : 100_000n
 }
 
@@ -173,24 +176,45 @@ export const realChain: ChainPrimitives = {
     }
     const to = checksumRecipient(input.to)
     const amount = transferAmount(input)
-    if (c.backend === "lit_vault") {
-      let lit: ReturnType<typeof resolveRewardVaultLitConfig>
+    if (c.backend !== "local") {
+      let vault: ReturnType<typeof resolveRewardVaultConfig>
       try {
-        lit = resolveRewardVaultLitConfig(env)
+        vault = resolveRewardVaultConfig(env)
       } catch (error) {
         throw preparationError("config_resolution", error, startedAt)
       }
-      const client = new LitChipotleClient({
-        usageApiKey: lit.usageApiKey,
-        baseUrl: lit.apiUrl,
-        timeoutMs: lit.requestTimeoutMs,
-        maxAttempts: lit.requestMaxAttempts,
-      })
-      const execute = createProductionLitRewardVaultExecutor(client, lit.actionIpfsId)
+      const execute = c.backend === "lit_vault"
+        ? (() => {
+            const lit = resolveRewardVaultLitConfig(env)
+            const client = new LitChipotleClient({
+              usageApiKey: lit.usageApiKey,
+              baseUrl: lit.apiUrl,
+              timeoutMs: lit.requestTimeoutMs,
+              maxAttempts: lit.requestMaxAttempts,
+            })
+            return createProductionLitRewardVaultExecutor(client, lit.actionIpfsId)
+          })()
+        : (async (request) => {
+            if (!c.privateKey) throw badRequestError("EOA vault settlement signer is not configured")
+            const signer = new Wallet(c.privateKey)
+            return {
+              signedTx: await signer.signTransaction({
+                to: request.vaultAddress,
+                data: encodeRewardVaultCalldata(request),
+                nonce: request.nonce,
+                chainId: request.chainId,
+                type: 2,
+                value: 0,
+                maxFeePerGas: request.gas.maxFeePerGas,
+                maxPriorityFeePerGas: request.gas.maxPriorityFeePerGas,
+                gasLimit: request.gas.gasLimit,
+              }),
+            }
+          }) satisfies RewardVaultActionExecutor
       // Deadline is intentionally created at the signing attempt, not when the
       // effect is enqueued. A stale/queued effect can be safely re-signed with
       // fresh calldata because the vault replay key remains the operation ID.
-      const deadline = rewardVaultSigningDeadline(Date.now(), lit.signingDeadlineSeconds)
+      const deadline = rewardVaultSigningDeadline(Date.now(), vault.signingDeadlineSeconds)
       if (input.rehearsalScenario && env.ENVIRONMENT !== "staging") {
         throw preparationError(
           "config_resolution",
@@ -202,8 +226,8 @@ export const realChain: ChainPrimitives = {
         ? BigInt(Math.floor(Date.now() / 1_000) - 1)
         : deadline
       const rehearsalPolicyVersion = input.rehearsalScenario === "stale_policy"
-        ? lit.policyVersion + 1n
-        : lit.policyVersion
+        ? vault.policyVersion + 1n
+        : vault.policyVersion
       let verified: Awaited<ReturnType<typeof executeAndVerifyRewardVaultTransaction>>
       try {
         verified = await executeAndVerifyRewardVaultTransaction(execute, {
@@ -213,7 +237,7 @@ export const realChain: ChainPrimitives = {
           amount,
           deadline: rehearsalDeadline,
           policyVersion: rehearsalPolicyVersion,
-          vaultAddress: lit.vaultAddress,
+          vaultAddress: vault.vaultAddress,
           signerAddress: c.operatorAddress,
           chainId: c.chainId,
           nonce: input.nonce,
@@ -266,15 +290,15 @@ export const realChain: ChainPrimitives = {
   },
   rewardVaultFailureEvidence: async (env, input) => {
     const c = resolveConfig(env, "rewards")
-    if (c.backend !== "lit_vault") {
+    if (c.backend === "local") {
       return {
         disposition: "reconciliation_required" as const,
-        reason: "rewards backend is not lit_vault",
+        reason: "rewards backend is not vault-backed",
         retryAfterMs: null,
         compactEvidence: null,
       }
     }
-    const lit = resolveRewardVaultLitConfig(env)
+    const lit = resolveRewardVaultConfig(env)
     const provider = providerFor(c)
     try {
       const receipt = await provider.getTransactionReceipt(input.txHash)
@@ -371,14 +395,14 @@ export const realChain: ChainPrimitives = {
   },
   rewardVaultDecision: async (env, input) => {
     const c = resolveConfig(env, "rewards")
-    if (c.backend !== "lit_vault") {
+    if (c.backend === "local") {
       return {
         disposition: "reconciliation_required",
-        reason: "rewards backend is not lit_vault",
+        reason: "rewards backend is not vault-backed",
         evidence: null,
       }
     }
-    const lit = resolveRewardVaultLitConfig(env)
+    const lit = resolveRewardVaultConfig(env)
     const provider = providerFor(c)
     try {
     const snapshot = await fetchRewardVaultReceiptSnapshot(

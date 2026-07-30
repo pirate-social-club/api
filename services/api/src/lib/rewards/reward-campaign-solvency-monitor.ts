@@ -281,7 +281,7 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
   let signerBalanceWei: bigint | undefined
   let nonceAnomalies: number | undefined
   let vaultCapacity: RewardVaultCapacityObservation | undefined
-  if (resolveRewardsSettlementBackend(input.env) === "lit_vault") {
+  if (resolveRewardsSettlementBackend(input.env) !== "local") {
     vaultCapacity = await (input.readCapacity ?? readVaultCapacity)(config)
     if (
       vaultCapacity.payoutSpentAtomic > vaultCapacity.payoutEpochCapAtomic

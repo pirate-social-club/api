@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import {
+  resolveRewardVaultConfig,
   resolveRewardVaultLitConfig,
   resolveRewardsSettlementBackend,
   rewardVaultSigningDeadline,
@@ -27,9 +28,27 @@ describe("reward vault Lit config", () => {
   test("keeps local as the compatibility default", () => {
     expect(resolveRewardsSettlementBackend({} as Env)).toBe("local")
     expect(resolveRewardsSettlementBackend(env())).toBe("lit_vault")
+    expect(resolveRewardsSettlementBackend(env({
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+    }))).toBe("eoa_vault")
     expect(() => resolveRewardsSettlementBackend(env({
       PIRATE_REWARDS_SETTLEMENT_BACKEND: "code",
-    }))).toThrow("must be local or lit_vault")
+    }))).toThrow("must be local, lit_vault, or eoa_vault")
+  })
+
+  test("resolves common vault policy without requiring Lit credentials", () => {
+    expect(resolveRewardVaultConfig(env({
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
+      LIT_REWARDS_USAGE_API_KEY: undefined,
+      LIT_REWARDS_ACTION_IPFS_ID: undefined,
+    }))).toEqual({
+      vaultAddress: VAULT,
+      policyVersion: 7n,
+      signingDeadlineSeconds: 300,
+      maxFeePerGasWei: 50_000_000_000n,
+      maxPriorityFeePerGasWei: 25_000_000_000n,
+      maxGasLimit: 300_000n,
+    })
   })
 
   test("resolves the pinned production execution inputs", () => {
