@@ -12,6 +12,7 @@ export const REWARD_REHEARSAL_EXECUTE_SCOPE = "rewards:rehearsal:execute"
 export const REWARD_SETTLEMENT_RESOLVE_SCOPE = "rewards:settlement:resolve"
 export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
 export const STORY_SETTLEMENT_FEE_REPLACE_SCOPE = "story:settlement:fee-replace"
+export const DANCE_CHOREOGRAPHY_SEED_SCOPE = "dance:choreography:seed"
 
 const ALLOWED_OPERATOR_SCOPES = new Set<string>([
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
@@ -21,6 +22,7 @@ const ALLOWED_OPERATOR_SCOPES = new Set<string>([
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
   STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
+  DANCE_CHOREOGRAPHY_SEED_SCOPE,
 ])
 const DUMMY_SHA256_HEX = "0".repeat(64)
 const LAST_USED_TOUCH_INTERVAL_MS = 5 * 60 * 1000
@@ -33,6 +35,7 @@ export type OperatorScope =
   | typeof REWARD_SETTLEMENT_RESOLVE_SCOPE
   | typeof STORY_SETTLEMENT_REPAIR_SCOPE
   | typeof STORY_SETTLEMENT_FEE_REPLACE_SCOPE
+  | typeof DANCE_CHOREOGRAPHY_SEED_SCOPE
 
 export type OperatorActorContext = {
   authType: "operator_credential"

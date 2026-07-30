@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { app } from "../../src/index"
 import type { Env } from "../../src/types"
 import { createRouteTestContext, json } from "../helpers"
+import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
 const ADMIN_TOKEN = "test-admin-token-abc123"
 const BASE = "http://pirate.test/admin/ops/telegram/uncertain-deliveries"
@@ -68,6 +69,111 @@ describe("GET /admin/ops/telegram/uncertain-deliveries", () => {
       ctx.env,
     ))
     expect(ok.status).toBe(200)
+  })
+})
+
+describe("Telegram staging synthetic routes", () => {
+  test("discovers the owner through the migrated control-plane schema", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "staging",
+      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "telegram-synthetic-owner")
+    const now = "2026-07-29T00:00:00.000Z"
+
+    await ctx.client.batch([
+      {
+        sql: `
+          INSERT INTO communities (
+            community_id, creator_user_id, display_name, membership_mode,
+            status, provisioning_state, transfer_state, route_slug,
+            created_at, updated_at
+          ) VALUES (?1, ?2, 'Synthetic fixture', 'request', 'active', 'active',
+                    'none', 'synthetic-fixture', ?3, ?3)
+        `,
+        args: ["cmt_synthetic_fixture", session.userId, now],
+      },
+      {
+        sql: `
+          INSERT INTO telegram_community_bots (
+            telegram_community_bot_id, community_id, encrypted_bot_token, token_last4,
+            encryption_key_version, telegram_bot_user_id, bot_username, bot_display_name,
+            webhook_id, webhook_secret, webhook_status, status, created_at, updated_at,
+            actor_user_id
+          ) VALUES (
+            'tcb_synthetic_fixture', 'cmt_synthetic_fixture', 'encrypted', 'oken',
+            1, '123456', 'SyntheticBot', 'Synthetic bot', 'tgw_synthetic_fixture',
+            'secret', 'active', 'active', ?1, ?1, ?2
+          )
+        `,
+        args: [now, session.userId],
+      },
+      {
+        sql: `
+          INSERT INTO telegram_channel_destinations (
+            telegram_channel_destination_id, telegram_community_bot_id, community_id,
+            telegram_chat_id, channel_title, channel_username, bot_admin_status,
+            publication_mode, status, linked_by_user_id, linked_at, updated_at
+          ) VALUES (
+            'tcd_synthetic_fixture', 'tcb_synthetic_fixture', 'cmt_synthetic_fixture',
+            '-100123456', 'Synthetic channel', NULL, 'ready', 'from_now', 'active',
+            ?1, ?2, ?2
+          )
+        `,
+        args: [session.userId, now],
+      },
+    ])
+
+    const response = await Promise.resolve(app.request(
+      "http://pirate.test/admin/ops/telegram/synthetic-fixture",
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    ))
+    expect(response.status).toBe(200)
+    expect(await json(response)).toEqual({
+      community_id: "com_cmt_synthetic_fixture",
+      owner_user_id: session.userId,
+      channel_title: "Synthetic channel",
+    })
+  })
+
+  test("are invisible outside staging", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "production",
+      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
+    })
+    cleanup = ctx.cleanup
+
+    const response = await Promise.resolve(app.request(
+      "http://pirate.test/admin/ops/telegram/synthetic-fixture",
+      { headers: { "x-admin-token": ADMIN_TOKEN } },
+      ctx.env,
+    ))
+    expect(response.status).toBe(404)
+  })
+
+  test("require the admin token on staging", async () => {
+    const ctx = await createRouteTestContext({
+      ENVIRONMENT: "staging",
+      PIRATE_ADMIN_TOKEN: ADMIN_TOKEN,
+    })
+    cleanup = ctx.cleanup
+
+    for (const request of [
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-fixture"),
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-fixture/drain", {
+        method: "POST",
+      }),
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-deliveries/post_pst_1"),
+      new Request("http://pirate.test/admin/ops/telegram/synthetic-deliveries/post_pst_1/cleanup", {
+        method: "POST",
+      }),
+    ]) {
+      const response = await Promise.resolve(app.request(request, undefined, ctx.env))
+      expect(response.status).toBe(401)
+      expect(response.headers.get("cache-control") ?? "").toContain("no-store")
+    }
   })
 })
 

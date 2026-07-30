@@ -1,6 +1,6 @@
 import { executeFirst } from "../db-helpers"
 import { conflictError, internalError, notFoundError } from "../errors"
-import { rowValue, stringOrNull } from "../sql-row"
+import { numberOrNull, rowValue, stringOrNull } from "../sql-row"
 import type { Client, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import {
@@ -35,7 +35,13 @@ export type DanceChoreographyRevisionRecord = {
   failureCode: string | null
   referenceStorageRef: string
   referenceContentSha256: string
+  referenceMimeType: string
+  referenceSizeBytes: number
+  mirrorPolicy: "strict" | "allowed"
   referenceFeatureRef: string | null
+  referenceDispatchAttemptCount: number
+  referenceDispatchClaimToken: string | null
+  referenceDispatchId: string | null
 }
 
 export type FinalizeDanceReferenceResult =
@@ -74,6 +80,9 @@ const REVISION_SELECT = `
     r.feature_schema_version,
     r.scorer_version,
     r.artifact_version
+    , r.reference_dispatch_attempt_count
+    , r.reference_dispatch_claim_token
+    , r.reference_dispatch_id
   FROM dance_choreography_revisions r
   JOIN dance_choreographies c
     ON c.dance_choreography_id = r.dance_choreography_id
@@ -104,7 +113,15 @@ function toRecord(row: unknown): DanceChoreographyRevisionRecord {
     failureCode: stringOrNull(rowValue(row, "failure_code")),
     referenceStorageRef: requiredString(row, "reference_storage_ref"),
     referenceContentSha256: requiredString(row, "reference_content_sha256"),
+    referenceMimeType: requiredString(row, "reference_mime_type"),
+    referenceSizeBytes: requiredNumber(row, "reference_size_bytes"),
+    mirrorPolicy: requiredString(row, "mirror_policy") as "strict" | "allowed",
     referenceFeatureRef: stringOrNull(rowValue(row, "reference_feature_ref")),
+    referenceDispatchAttemptCount:
+      numberOrNull(rowValue(row, "reference_dispatch_attempt_count")) ?? 0,
+    referenceDispatchClaimToken:
+      stringOrNull(rowValue(row, "reference_dispatch_claim_token")),
+    referenceDispatchId: stringOrNull(rowValue(row, "reference_dispatch_id")),
   }
 }
 
@@ -177,8 +194,9 @@ export async function seedOperatorDanceChoreography(input: {
           INSERT INTO dance_choreography_revisions (
             dance_choreography_revision_id, dance_choreography_id, revision_number,
             reference_storage_ref, reference_content_sha256, reference_mime_type,
-            reference_size_bytes, mirror_policy, status, created_at
-          ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, 'processing', ?8)
+            reference_size_bytes, mirror_policy, status, created_at,
+            reference_next_dispatch_at
+          ) VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, 'processing', ?8, ?8)
         `,
         args: [
           seed.danceChoreographyRevisionId,
@@ -234,6 +252,7 @@ export async function finalizeDanceChoreographyReference(input: {
   facts: DanceReferenceTerminalFacts
   referenceFeatureRef?: string
   now: string
+  transientRetryAt?: string
 }): Promise<FinalizeDanceReferenceResult> {
   return withTransaction(input.client, "write", async (tx) => {
     const row = await getRevisionForUpdate(tx, input.danceChoreographyRevisionId)
@@ -259,6 +278,24 @@ export async function finalizeDanceChoreographyReference(input: {
 
     if (input.facts.outcome === "failed") {
       if (!isPermanentDanceReferenceFailure(input.facts)) {
+        if (!input.transientRetryAt) {
+          throw conflictError("Retryable dance reference failure is missing retry timing")
+        }
+        await tx.execute({
+          sql: `
+            UPDATE dance_choreography_revisions
+            SET reference_dispatch_claim_token = NULL,
+                reference_dispatch_claim_expires_at = NULL,
+                reference_next_dispatch_at = ?2,
+                reference_dispatch_last_error = ?3
+            WHERE dance_choreography_revision_id = ?1 AND status = 'processing'
+          `,
+          args: [
+            input.danceChoreographyRevisionId,
+            input.transientRetryAt,
+            input.facts.reason,
+          ],
+        })
         return {
           kind: "retryable_failure",
           reason: "scoring_unavailable",
@@ -268,7 +305,10 @@ export async function finalizeDanceChoreographyReference(input: {
       await tx.execute({
         sql: `
           UPDATE dance_choreography_revisions
-          SET status = 'failed', failure_code = ?2
+          SET status = 'failed', failure_code = ?2,
+              reference_dispatch_claim_token = NULL,
+              reference_dispatch_claim_expires_at = NULL,
+              reference_next_dispatch_at = NULL
           WHERE dance_choreography_revision_id = ?1 AND status = 'processing'
         `,
         args: [input.danceChoreographyRevisionId, input.facts.reason],
@@ -302,7 +342,10 @@ export async function finalizeDanceChoreographyReference(input: {
               feature_schema_version = ?12,
               scorer_version = ?13,
               artifact_version = ?14,
-              ready_at = ?15
+              ready_at = ?15,
+              reference_dispatch_claim_token = NULL,
+              reference_dispatch_claim_expires_at = NULL,
+              reference_next_dispatch_at = NULL
           WHERE dance_choreography_revision_id = ?1 AND status = 'processing'
         `,
         args: [
@@ -340,5 +383,201 @@ export async function finalizeDanceChoreographyReference(input: {
     const finalized = await getRevisionForUpdate(tx, input.danceChoreographyRevisionId)
     if (!finalized) throw internalError("Finalized dance choreography revision is missing")
     return { kind: "finalized", record: toRecord(finalized) }
+  })
+}
+
+export async function claimDueDanceReferenceDispatch(input: {
+  client: Client
+  now: string
+  claimToken: string
+  claimExpiresAt: string
+}): Promise<DanceChoreographyRevisionRecord | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      UPDATE dance_choreography_revisions
+      SET reference_dispatch_attempt_count = reference_dispatch_attempt_count + 1,
+          reference_dispatch_claim_token = ?2,
+          reference_dispatch_claim_expires_at = ?3,
+          reference_next_dispatch_at = ?3,
+          reference_dispatch_last_error = NULL
+      WHERE dance_choreography_revision_id = (
+        SELECT dance_choreography_revision_id
+        FROM dance_choreography_revisions
+        WHERE status = 'processing'
+          AND reference_dispatch_attempt_count < 5
+          AND reference_next_dispatch_at IS NOT NULL
+          AND reference_next_dispatch_at <= ?1
+          AND (
+            reference_dispatch_claim_token IS NULL
+            OR reference_dispatch_claim_expires_at <= ?1
+          )
+        ORDER BY reference_next_dispatch_at ASC, created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      )
+      RETURNING dance_choreography_revision_id
+    `,
+    args: [input.now, input.claimToken, input.claimExpiresAt],
+  })
+  if (!row) return null
+
+  const claimed = await executeFirst(input.client, {
+    sql: `${REVISION_SELECT} AND r.reference_dispatch_claim_token = ?2`,
+    args: [
+      requiredString(row, "dance_choreography_revision_id"),
+      input.claimToken,
+    ],
+  })
+  return claimed ? toRecord(claimed) : null
+}
+
+export async function acceptDanceReferenceDispatch(input: {
+  client: Client
+  danceChoreographyRevisionId: string
+  claimToken: string
+  dispatchId: string
+  now: string
+  callbackDeadline: string
+}): Promise<boolean> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE dance_choreography_revisions
+      SET reference_dispatch_id = ?3,
+          reference_dispatched_at = ?4,
+          reference_dispatch_claim_token = NULL,
+          reference_dispatch_claim_expires_at = NULL,
+          reference_next_dispatch_at = ?5
+      WHERE dance_choreography_revision_id = ?1
+        AND status = 'processing'
+        AND reference_dispatch_claim_token = ?2
+      RETURNING dance_choreography_revision_id
+    `,
+    args: [
+      input.danceChoreographyRevisionId,
+      input.claimToken,
+      input.dispatchId,
+      input.now,
+      input.callbackDeadline,
+    ],
+  })
+  return result.rows.length > 0
+}
+
+export async function exhaustDueDanceReferenceDispatch(input: {
+  client: Client
+  now: string
+}): Promise<boolean> {
+  return withTransaction(input.client, "write", async (tx) => {
+    const due = await executeFirst(tx, {
+      sql: `
+        SELECT dance_choreography_revision_id
+        FROM dance_choreography_revisions
+        WHERE status = 'processing'
+          AND reference_dispatch_attempt_count >= 5
+          AND reference_next_dispatch_at IS NOT NULL
+          AND reference_next_dispatch_at <= ?1
+        ORDER BY reference_next_dispatch_at ASC, created_at ASC
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      `,
+      args: [input.now],
+    })
+    if (!due) return false
+    const row = await getRevisionForUpdate(
+      tx,
+      requiredString(due, "dance_choreography_revision_id"),
+    )
+    if (!row) throw internalError("Claimed exhausted dance reference is missing")
+    const record = toRecord(row)
+    await tx.execute({
+      sql: `
+        UPDATE dance_choreography_revisions
+        SET status = 'failed',
+            failure_code = 'scoring_unavailable',
+            reference_dispatch_claim_token = NULL,
+            reference_dispatch_claim_expires_at = NULL,
+            reference_next_dispatch_at = NULL,
+            reference_dispatch_last_error = 'modal_callback_timeout'
+        WHERE dance_choreography_revision_id = ?1
+          AND status = 'processing'
+      `,
+      args: [record.danceChoreographyRevisionId],
+    })
+    await tx.execute({
+      sql: `
+        UPDATE dance_choreographies
+        SET status = 'failed', updated_at = ?2
+        WHERE dance_choreography_id = ?1 AND status = 'processing'
+      `,
+      args: [record.danceChoreographyId, input.now],
+    })
+    return true
+  })
+}
+
+export async function rejectDanceReferenceDispatch(input: {
+  client: Client
+  danceChoreographyRevisionId: string
+  claimToken: string
+  errorCode: string
+  retryAt: string
+  now: string
+}): Promise<"retry_scheduled" | "exhausted" | "claim_lost"> {
+  return withTransaction(input.client, "write", async (tx) => {
+    const row = await getRevisionForUpdate(tx, input.danceChoreographyRevisionId)
+    if (!row || stringOrNull(rowValue(row, "reference_dispatch_claim_token")) !== input.claimToken) {
+      return "claim_lost"
+    }
+    const record = toRecord(row)
+    if (record.revisionStatus !== "processing") return "claim_lost"
+
+    if (record.referenceDispatchAttemptCount >= 5) {
+      await tx.execute({
+        sql: `
+          UPDATE dance_choreography_revisions
+          SET status = 'failed',
+              failure_code = 'scoring_unavailable',
+              reference_dispatch_claim_token = NULL,
+              reference_dispatch_claim_expires_at = NULL,
+              reference_next_dispatch_at = NULL,
+              reference_dispatch_last_error = ?2
+          WHERE dance_choreography_revision_id = ?1
+            AND reference_dispatch_claim_token = ?3
+        `,
+        args: [
+          input.danceChoreographyRevisionId,
+          input.errorCode,
+          input.claimToken,
+        ],
+      })
+      await tx.execute({
+        sql: `
+          UPDATE dance_choreographies
+          SET status = 'failed', updated_at = ?2
+          WHERE dance_choreography_id = ?1 AND status = 'processing'
+        `,
+        args: [record.danceChoreographyId, input.now],
+      })
+      return "exhausted"
+    }
+
+    await tx.execute({
+      sql: `
+        UPDATE dance_choreography_revisions
+        SET reference_dispatch_claim_token = NULL,
+            reference_dispatch_claim_expires_at = NULL,
+            reference_next_dispatch_at = ?2,
+            reference_dispatch_last_error = ?3
+        WHERE dance_choreography_revision_id = ?1
+          AND reference_dispatch_claim_token = ?4
+      `,
+      args: [
+        input.danceChoreographyRevisionId,
+        input.retryAt,
+        input.errorCode,
+        input.claimToken,
+      ],
+    })
+    return "retry_scheduled"
   })
 }

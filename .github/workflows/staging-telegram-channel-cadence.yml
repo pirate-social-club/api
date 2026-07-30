@@ -1,0 +1,70 @@
+name: staging-telegram-channel-cadence
+
+# Honest scheduler canary: unlike the fast publication synthetic, this never
+# calls the fixture-scoped drain. It proves that ordinary cron picks up a real
+# telegram_post_publish job within the user-visible latency budget.
+on:
+  workflow_dispatch:
+    inputs:
+      community_id:
+        description: "Optional com_cmt_... fixture; blank requires exactly one active channel"
+        required: false
+        type: string
+  schedule:
+    - cron: "47 6 * * *"
+
+concurrency:
+  group: staging-telegram-channel-cadence
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  cron-telegram-delivery:
+    name: Cron-paced Telegram channel delivery
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
+      PIRATE_SMOKE_API_BASE_URL: https://api-staging.pirate.sc
+      PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID: ${{ inputs.community_id || vars.PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID }}
+      PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS: "1200000"
+      PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE: cron
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: api
+
+      - name: Read compatible Core commit
+        working-directory: api
+        run: echo "CORE_SHA=$(<.github/ci-refs/core.sha)" >> "$GITHUB_ENV"
+
+      - name: Check out compatible Core
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/core
+          ref: ${{ env.CORE_SHA }}
+          path: core
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.2.21
+
+      - name: Install shared dependencies
+        working-directory: api/services/shared
+        run: bun install --frozen-lockfile
+
+      - name: Install API dependencies
+        working-directory: api/services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: bun install --frozen-lockfile
+
+      - name: Verify cron-paced Telegram delivery and cleanup
+        working-directory: api/services/api
+        run: bun run smoke:telegram-channel

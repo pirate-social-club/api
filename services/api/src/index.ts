@@ -8,6 +8,8 @@ import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
+import danceChoreographies from "./routes/dance-choreographies"
+import danceSessions from "./routes/dance-sessions"
 import botUsers from "./routes/bot-users"
 import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
@@ -99,6 +101,10 @@ import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-se
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
 import { reconcileConfirmingRewardCampaignFunding } from "./lib/rewards/reward-funding-confirmation-reconciler"
+import {
+  dispatchDueDanceReferences,
+  isDanceReferenceDispatchConfigured,
+} from "./lib/dance/choreography-reference-dispatch"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./lib/rewards/reward-campaign-monitor"
 import { runRewardCampaignMonitorCycle } from "./lib/rewards/reward-campaign-monitor-cycle"
 import { runOpsAlerts } from "./lib/ops-alerts/run"
@@ -193,6 +199,7 @@ const CREDENTIAL_BEARING_REQUEST_HEADERS = [
   "x-agent-connection-token",
   "x-very-callback-secret",
   "x-karaoke-finalize-secret",
+  "x-dance-grader-signature",
   "x-telegram-bot-secret",
   "x-telegram-bot-api-secret-token",
 ] as const
@@ -472,6 +479,8 @@ app.route("/", agents)
 app.route("/analytics", analytics)
 app.route("/auth", auth)
 app.route("/bookings", bookings)
+app.route("/dance-choreographies", danceChoreographies)
+app.route("/dance-sessions", danceSessions)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return
@@ -1641,6 +1650,23 @@ const handler: ExportedHandler<Env> = {
     )
       .map((name) => ({ name, run: priorityJobRuns[name] }))
     const generalJobs: NamedTask[] = [
+      ...(isDanceReferenceDispatchConfigured(env)
+        ? [{
+            name: "dispatch_dance_references",
+            run: async () => {
+              const summary = await dispatchDueDanceReferences({ env })
+              if (summary.claimed > 0) {
+                console.info("[scheduled] dance reference dispatch", {
+                  claimed: summary.claimed,
+                  dispatched: summary.dispatched,
+                  retry_scheduled: summary.retry_scheduled,
+                  exhausted: summary.exhausted,
+                  claim_lost: summary.claim_lost,
+                })
+              }
+            },
+          }]
+        : []),
       ...(env.CONTROL_PLANE_DATABASE_URL && env.BASE_MAINNET_RPC_URL
         ? [{
             name: "scan_efp_base",

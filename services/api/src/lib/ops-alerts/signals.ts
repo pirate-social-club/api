@@ -6,6 +6,7 @@ import type {
   StaleLockedDeliveryAssetSample,
   StuckRoyaltyProjectionSample,
   StoryRegistrationReconciliationSample,
+  StaleReadyJobLane,
 } from "./types"
 import { OPS_ACTIONABLE_FAILURE_CODES } from "./types"
 
@@ -15,6 +16,8 @@ export async function collectCommunityPublishAlertSignals(input: {
   client: ReadClient
   communityId: string
   since: string
+  now: string
+  readyBefore: string
 }): Promise<CommunityPublishAlertSignals> {
   const failuresResult = await input.client.execute({
     sql: `
@@ -161,6 +164,34 @@ export async function collectCommunityPublishAlertSignals(input: {
       updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
     }))
 
+  const staleReadyJobsResult = await input.client.execute({
+    sql: `
+      SELECT job_type, COUNT(*) AS ready_jobs,
+             MIN(COALESCE(available_at, created_at)) AS oldest_ready_at
+      FROM community_jobs
+      WHERE status IN ('queued', 'failed')
+        AND attempt_count < 8
+        AND (available_at IS NULL OR available_at <= ?1)
+        AND COALESCE(available_at, created_at) <= ?2
+      GROUP BY job_type
+      ORDER BY oldest_ready_at ASC, job_type ASC
+    `,
+    args: [input.now, input.readyBefore],
+  })
+  const nowMs = Date.parse(input.now)
+  const stale_ready_job_lanes: StaleReadyJobLane[] = staleReadyJobsResult.rows.map((row) => {
+    const oldestReadyAt = String(row.oldest_ready_at ?? "")
+    const oldestReadyMs = Date.parse(oldestReadyAt)
+    return {
+      job_type: String(row.job_type ?? ""),
+      ready_jobs: Number(row.ready_jobs ?? 0),
+      oldest_ready_at: oldestReadyAt,
+      oldest_ready_age_ms: Number.isFinite(nowMs) && Number.isFinite(oldestReadyMs)
+        ? Math.max(0, nowMs - oldestReadyMs)
+        : 0,
+    }
+  }).filter((lane) => lane.job_type && lane.ready_jobs > 0)
+
   return {
     community_id: input.communityId,
     failure_codes,
@@ -173,5 +204,6 @@ export async function collectCommunityPublishAlertSignals(input: {
     retried_locked_delivery_job_samples,
     story_registration_reconciliation_required: Number(storyRegistrationReconciliationResult.rows[0]?.count ?? 0),
     story_registration_reconciliation_samples,
+    stale_ready_job_lanes,
   }
 }

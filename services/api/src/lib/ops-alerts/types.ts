@@ -31,6 +31,13 @@ export type StoryRegistrationReconciliationSample = {
   updated_at: string | null
 }
 
+export type StaleReadyJobLane = {
+  job_type: string
+  ready_jobs: number
+  oldest_ready_at: string
+  oldest_ready_age_ms: number
+}
+
 export type CommunityPublishAlertSignals = {
   community_id: string
   failure_codes: PublishFailureCount[]
@@ -43,6 +50,7 @@ export type CommunityPublishAlertSignals = {
   retried_locked_delivery_job_samples: RetriedLockedDeliveryJobSample[]
   story_registration_reconciliation_required: number
   story_registration_reconciliation_samples: StoryRegistrationReconciliationSample[]
+  stale_ready_job_lanes: StaleReadyJobLane[]
 }
 
 export type OpsAlertSeverity = "high" | "medium" | "low"

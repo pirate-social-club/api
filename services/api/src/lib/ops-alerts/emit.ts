@@ -26,6 +26,12 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
   let storyRegistrationReconciliationRequired = 0
   const storyRegistrationReconciliationCommunities = new Set<string>()
   const storyRegistrationReconciliationSamples: Array<Record<string, unknown>> = []
+  const staleReadyJobLanes = new Map<string, {
+    count: number
+    communities: Set<string>
+    oldestReadyAt: string
+    oldestReadyAgeMs: number
+  }>()
 
   for (const signal of signals) {
     for (const { code, count } of signal.failure_codes) {
@@ -70,6 +76,21 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
         if (storyRegistrationReconciliationSamples.length >= 10) break
         storyRegistrationReconciliationSamples.push({ community_id: signal.community_id, ...sample })
       }
+    }
+    for (const lane of signal.stale_ready_job_lanes) {
+      const aggregate = staleReadyJobLanes.get(lane.job_type) ?? {
+        count: 0,
+        communities: new Set<string>(),
+        oldestReadyAt: lane.oldest_ready_at,
+        oldestReadyAgeMs: 0,
+      }
+      aggregate.count += lane.ready_jobs
+      aggregate.communities.add(signal.community_id)
+      if (lane.oldest_ready_age_ms > aggregate.oldestReadyAgeMs) {
+        aggregate.oldestReadyAgeMs = lane.oldest_ready_age_ms
+        aggregate.oldestReadyAt = lane.oldest_ready_at
+      }
+      staleReadyJobLanes.set(lane.job_type, aggregate)
     }
   }
 
@@ -131,6 +152,21 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       count: storyRegistrationReconciliationRequired,
       community_ids: [...storyRegistrationReconciliationCommunities].sort(),
       details: { samples: storyRegistrationReconciliationSamples },
+    })
+  }
+  for (const [jobType, lane] of staleReadyJobLanes) {
+    alerts.push({
+      key: `community_job_pickup_stale:${jobType}`,
+      severity: "high",
+      title: `Community job lane pickup is stale: ${jobType}`,
+      count: lane.count,
+      community_ids: [...lane.communities].sort(),
+      details: {
+        job_type: jobType,
+        ready_jobs: lane.count,
+        oldest_ready_at: lane.oldestReadyAt,
+        oldest_ready_age_ms: lane.oldestReadyAgeMs,
+      },
     })
   }
   return alerts
