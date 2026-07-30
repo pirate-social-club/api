@@ -6,7 +6,7 @@ acceptance gates in this document pass. This document does not authorize product
 ## Decision summary
 
 Pirate will add `dance` as a third way to earn a song-practice reward. A rewarded dance attempt
-compares a server-extracted pose sequence from an in-app recording with a versioned reference
+compares a server-extracted pose sequence from a Telegram video reply with a versioned reference
 choreography. A passing attempt emits the same durable reward qualification event used by study and
 karaoke.
 
@@ -17,12 +17,16 @@ V1 fixes the following product decisions:
   expand already-funded campaigns.
 - A user may earn at most one `campaign_practice_day` reward for a song post and UTC day across
   study, karaoke, and dance.
-- Rewarded attempts use in-app recording. Arbitrary uploads may be supported later for unrewarded
-  coaching, but cannot qualify for money in v1.
-- V1 does not require a randomized pre-roll gesture, audio nonce, palm scan, or other active
-  liveness challenge.
-- Replay controls are reference-copy rejection, exact and near-duplicate fingerprints, session
-  binding, and the existing credit-time unique-human proof.
+- Telegram bot conversation is the only v1 delivery channel. V1 has no Mini App, browser capture
+  page, custom recorder, live pose overlay, or TikTok-style feed.
+- The bot creates a session before accepting its video reply. A randomly selected, gross-body
+  start cue is shown after session creation and verified from the opening frames. This is a
+  freshness signal, not proof of physical liveness.
+- Telegram video replies are uploads and cannot be assumed to be newly recorded. Session binding,
+  the start cue, reference-copy rejection, and duplicate fingerprints provide layered protection.
+- Replay controls are the randomized start cue, reference-copy rejection, exact and near-duplicate
+  fingerprints, session binding, Telegram file identifiers, and the existing credit-time
+  unique-human proof.
 - Raw attempt video is stored only in a private ephemeral object bucket. The grader explicitly
   deletes it after a terminal result. A one-day object-lifecycle rule is a failure backstop, not the
   primary deletion mechanism.
@@ -41,6 +45,8 @@ V1 fixes the following product decisions:
   `dance_grader` package plus a thin `modal_app.py`, dispatched by the API and reporting back over
   an HMAC-signed callback. Cloudflare Containers is the named fallback if Modal's benchmark,
   privacy review, or operational behavior disappoints.
+- The standard hosted Telegram Bot API's 20 MB `getFile` download ceiling is a v1 product limit.
+  Pirate will not operate a local Bot API server in v1.
 
 ## Problem
 
@@ -97,6 +103,7 @@ calibration merge-blocking work.
 - Arbitrary camera-angle invariance.
 - Creator-authored scoring formulas.
 - A public upload-and-grade endpoint that returns money-bearing results.
+- A Telegram Mini App or general-purpose web upload surface.
 - GPU deployment before CPU throughput is measured.
 - Long-term storage of raw attempts for moderation, social posting, or model training.
 
@@ -151,9 +158,12 @@ The v1 data flow is:
 
 ```text
 authenticated client
-  -> create dance session
-  -> direct upload to private attempt bucket
-  -> submit session
+  -> choose "Do this dance" in the Telegram bot
+  -> bot creates a dance session and returns a randomized start cue
+  -> user replies to the prompt with a Telegram video
+  -> webhook binds the reply to the pending session and downloads it once
+  -> API validates and copies the media to the private attempt bucket
+  -> API submits the session
   -> durable dispatch record and authenticated Modal dispatch
   -> Modal spawns the grading function
   -> grader fetches one object with a short-lived signed GET
@@ -162,7 +172,7 @@ authenticated client
   -> API finalizes shard attempt and optional reward outbox event in one transaction
   -> API records the control-plane projection
   -> API explicitly deletes raw video and retries cleanup until confirmed
-  -> client polls the attempt resource
+  -> bot reports the terminal result or actionable retry message
 ```
 
 The shared `community_jobs` lane is not used for grading. Dance receives a dedicated worker lane so
@@ -335,6 +345,78 @@ Fingerprint retention must be explicitly configured and bounded. V1 default is 9
 the final privacy review before production. Expiry removes the projection without affecting the
 immutable aggregate reward evidence.
 
+## Delivery channel: Telegram bot (v1)
+
+Telegram is the v1 product surface. The HTTP resources below remain the internal platform contract
+used by the bot and future clients; they are not a promise of a general public upload UI.
+
+### Conversation state machine
+
+1. The bot sends the reference dance video, its song attribution, the attempt terms, and a
+   `Do this dance` action.
+2. The action creates a short-lived session pinned to the Telegram account, linked Pirate user,
+   host post, song post, choreography revision, and applicable reward terms.
+3. The bot selects one versioned gross-body start cue, such as hands on head, arms in a T, or hands
+   on hips. It asks the user to begin with that pose and then perform the dance.
+4. The user replies to that exact bot prompt with a Telegram `video` or video `document`. The
+   webhook binds the update to the pending session using the reply relationship and stored chat and
+   message identifiers; caption text is not an authority token.
+5. The bot acknowledges receipt and reports `Grading…`. The API downloads the file once, validates
+   it, stores it in the private ephemeral attempt bucket, and dispatches grading.
+6. The bot sends or edits a terminal message with score, pass/rejection, concise corrective
+   feedback, and reward status when rewards are enabled.
+
+Only one nonterminal dance session may exist per Telegram account. `/cancel` expires it and releases
+the slot. Sessions also expire automatically. Telegram webhook redelivery, repeated button presses,
+repeated media updates, dispatch retry, and result delivery are idempotent.
+
+The bot accepts media only from the same private chat and Telegram sender that created the session.
+Forwarded-message metadata is rejected for reward-bearing attempts. Absence of forwarding metadata
+is not treated as proof of fresh capture. A Telegram account must be linked to the platform's
+rewards-eligible identity before an attempt can accrue money; an unlinked user may receive a score
+but must not see an earned-reward claim.
+
+### Telegram media contract
+
+The hosted Bot API `getFile` limit is 20 MB. V1 rejects reported files at or above a conservative
+19 MB application limit before download and limits choreographies and attempts to 30 seconds. The
+limits are configurable downward, but raising either requires evidence that the hosted Bot API and
+grader budgets still hold. V1 does not operate a local Bot API server.
+
+Both Telegram `video` and video `document` messages are accepted. `file_id` is used to download;
+`file_unique_id` and the observed media metadata are retained as bounded exact-replay signals.
+Neither identifier replaces content hashing, reference comparison, or motion-fingerprint checks.
+The API streams the Telegram file into private ephemeral storage, enforces a download byte ceiling,
+hashes it, probes the actual container and codecs, and normalizes supported inputs to the grader's
+MP4 contract. Declared MIME type, file name, and Telegram metadata are not trusted as media
+validation.
+
+Telegram commonly transforms videos sent as `video`, while documents may preserve their source.
+Therefore Gate 0 calibration and Gate 1 pilot recordings must enter through this exact Telegram
+flow in the same user-default media mode expected in production. Clean local files alone cannot
+admit a calibration for Telegram reward traffic. Calibration reporting must stratify `video` and
+`document` delivery; v1 may disable document attempts for rewards if the held-out corpus does not
+support one shared policy.
+
+### Failure and retry UX
+
+Failure handling distinguishes user-correctable capture failures from infrastructure failures:
+
+- Invalid/oversized media, duration, coverage, pose presence, multiple-person, and start-cue
+  failures close the submitted session, release the active slot, and return a reason-specific
+  instruction plus `Try again`, which creates a new session and cue.
+- Reference replay or duplicate-attempt outcomes close the session without accusatory language and
+  do not offer an automatic reward retry against the same evidence.
+- `scoring_unavailable` remains pending while bounded server dispatch retries run. After exhaustion
+  it closes the session, consumes no daily qualification, and offers a new attempt.
+- A failed, rejected, expired, or cancelled attempt never consumes the song/day reward fence. Only
+  a committed qualification does.
+- Telegram message-delivery failure does not change the terminal attempt. A later bot interaction
+  can read and present the durable result.
+
+The bot maps stable internal reason codes to reviewed user-facing copy. It never exposes provider
+errors, signed URLs, hashes, fingerprints, or fraud accusations.
+
 ## Public API
 
 New public resources follow the repository's resource conventions: canonical `id` and `object`
@@ -389,7 +471,7 @@ and returns:
     "headers": {
       "content-type": "video/mp4"
     },
-    "max_bytes": 67108864,
+    "max_bytes": 19922944,
     "expires_at": 1780000000
   },
   "expires_at": 1780000000,
@@ -409,7 +491,7 @@ Request:
 ```json
 {
   "content_sha256": "64-lowercase-hex",
-  "capture_mode": "in_app_camera"
+  "capture_mode": "telegram_video_reply"
 }
 ```
 
@@ -417,8 +499,9 @@ Submit is an idempotent custom action. The API verifies object existence, bounds
 session ownership, expiry, and hash before moving the session to `submitted` and dispatching exactly
 one logical grading job.
 
-`capture_mode` is an auditable product assertion, not a cryptographic liveness proof. V1 does not
-claim otherwise.
+`capture_mode` is derived by the Telegram adapter, not accepted from Telegram caption text. It is
+an auditable delivery-channel assertion, not cryptographic liveness proof. V1 does not claim
+otherwise.
 
 ### Read status
 
@@ -769,6 +852,9 @@ V1 uses layered friction rather than claiming cryptographic camera liveness.
 
 - Session belongs to the authenticated subject, post, and pinned choreography revision.
 - Session is unexpired and accepts only one upload object and one logical submission.
+- Telegram sender, private chat, and reply-to prompt match the session.
+- The opening frames satisfy the session's randomly selected, versioned gross-body start cue before
+  choreography scoring begins.
 - Submitted content hash matches the stored object.
 - Attempt is not byte-identical to the reference or a previous attempt.
 - Perceptual video/reference comparison does not indicate a reference copy with simple
@@ -788,7 +874,7 @@ observability.
 
 ### Explicitly deferred controls
 
-- randomized gesture or audio challenge;
+- audio nonce or spoken challenge;
 - device attestation;
 - palm or face liveness;
 - continuous camera-frame attestation;
@@ -815,10 +901,11 @@ exceeds v1 risk limits.
 - Exclude the bucket from durable backup and replication unless a later privacy review explicitly
   approves them.
 
-Grading on Modal makes it a data processor for ephemeral attempt video. Before any pilot beyond
-consented staff: subprocessor/DPA review, confirmation that Modal containers retain no media after
-a job, region selection where available, and verification that Modal-side logs contain no signed
-URLs, frames, or landmarks.
+Grading on Modal makes it a data processor for ephemeral attempt video. Before collecting the
+calibration corpus or any other real participant video: subprocessor/DPA review, documented
+participant consent, confirmation that Modal containers retain no media after a job, region
+selection where available, and verification that Modal-side logs contain no signed URLs, frames,
+or landmarks. The same review covers Telegram as the capture/data-transfer channel.
 
 The product statement must promise prompt deletion after grading, not instantaneous erasure. It
 must describe the bounded cleanup fallback accurately.
@@ -1008,6 +1095,15 @@ telemetry.
 ### API and storage tests
 
 - session idempotency and ownership;
+- Telegram callback/button idempotency and one-active-session enforcement;
+- Telegram sender, private-chat, and reply-to-prompt binding;
+- forwarded-message rejection for reward-bearing attempts;
+- hosted Bot API file-size preflight and streaming byte-ceiling enforcement;
+- `video` and video `document` ingestion, probing, and normalization;
+- `file_unique_id` exact-replay signal without treating it as the sole duplicate check;
+- randomized start-cue assignment, persistence, verification, and score-window exclusion;
+- `/cancel`, expiry, retry-slot release, and reason-code-to-message mapping;
+- Telegram result-delivery failure leaves the durable terminal attempt readable;
 - upload expiry and object-key isolation;
 - submit verifies observed size/hash;
 - MIME spoof and invalid codec rejection;
@@ -1052,6 +1148,9 @@ telemetry.
 
 Required before API integration can emit rank-eligible results:
 
+- Modal/Telegram data-processing and retention review is approved before corpus collection;
+- calibration and held-out recordings are collected through the production Telegram bot media
+  path, with the default `video` path represented and delivery mode recorded;
 - adversarial fixture suite passes;
 - low visibility never increases a score;
 - incomplete coverage cannot pass;
@@ -1061,7 +1160,7 @@ Required before API integration can emit rank-eligible results:
 
 ### Gate 1: dark grading
 
-- choreography and private upload flow available only to staff/pilot allowlist;
+- Telegram choreography prompt and private ingestion flow available only to staff/pilot allowlist;
 - grading runs with rewards disabled;
 - raw deletion and lifecycle backstop verified;
 - queue SLO, CPU cost, and memory measured;
@@ -1085,7 +1184,8 @@ Required before API integration can emit rank-eligible results:
 ### Gate 4: broader availability
 
 - requires stable cleanup, duplicate, pass-rate, queue, cost, and dispute metrics;
-- active liveness remains deferred unless observed abuse justifies its UX and implementation cost;
+- stronger liveness beyond the v1 randomized start cue remains deferred unless observed abuse
+  justifies its UX and implementation cost;
 - any increase in campaign value requires a new abuse-risk review.
 
 ## Acceptance criteria
@@ -1093,7 +1193,10 @@ Required before API integration can emit rank-eligible results:
 V1 is complete only when:
 
 - a creator/operator can publish a ready immutable choreography revision;
-- an authenticated user can record, upload, submit, and read one dance attempt;
+- a linked Telegram user can start a session, reply with a bounded video, receive a terminal result,
+  and retry a correctable failure without a Mini App or web capture UI;
+- the Telegram adapter enforces sender/prompt binding, randomized start-cue verification, hosted
+  Bot API media limits, and idempotent webhook handling;
 - the grader returns reproducible, calibrated basis points and bounded coaching facts;
 - truncated, low-visibility, reference-copy, and duplicate attempts fail closed;
 - a passing attempt updates dance engagement and emits one durable dance qualification;
@@ -1109,7 +1212,7 @@ V1 is complete only when:
 
 The following require new evidence or product scope and are not implied by v1:
 
-- active liveness challenges;
+- stronger active liveness beyond the randomized gross-body start cue;
 - device attestation;
 - group choreography;
 - multiple choreographies eligible within one campaign;
