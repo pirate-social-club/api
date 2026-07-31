@@ -17296,6 +17296,7 @@ const spec = {
           "max_duration_seconds",
           "default_duration_seconds",
           "eligible_activities",
+          "nationality_payout_tiers",
           "chain_id",
           "token_address"
         ],
@@ -17335,6 +17336,13 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
             }
+          },
+          "nationality_payout_tiers": {
+            "type": "string",
+            "enum": [
+              "unavailable",
+              "draft_only"
+            ]
           },
           "chain_id": {
             "type": "integer",
