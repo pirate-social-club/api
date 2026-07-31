@@ -2939,6 +2939,11 @@ export type RewardCampaignCapabilities = {
   token_address: string;
 };
 
+export type RewardCampaignPayoutTier = {
+  nationalities: Array<string>;
+  amount_cents: number;
+};
+
 export type PublicRewardOffer = {
   campaign: string;
   eligible_activity: RewardCampaignEligibleActivity;
@@ -2971,6 +2976,9 @@ export type RewardCampaign = {
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
   daily_reward_cents: number;
+  default_amount_cents: number;
+  max_claim_cents: number;
+  payout_tiers: Array<RewardCampaignPayoutTier>;
   milestone_7_cents: number;
   milestone_30_cents: number;
   reward_period_cap_cents: number;
@@ -2997,6 +3005,8 @@ export type RewardCampaignCreateRequest = {
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
   daily_reward_cents: number;
+  default_amount_cents?: number;
+  payout_tiers?: Array<RewardCampaignPayoutTier>;
   milestone_7_cents: number;
   milestone_30_cents: number;
   reward_period_cap_cents: number;

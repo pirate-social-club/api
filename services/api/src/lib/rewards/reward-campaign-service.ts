@@ -38,6 +38,7 @@ import {
 } from "./reward-vault-refund-policy"
 import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
+import { normalizeIdentityCountryCode } from "../identity/country-codes"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -95,6 +96,7 @@ const CAMPAIGN_COLUMNS = `
   reward_campaign_id, rewarder_user_id, community_id, post_id,
   song_artifact_bundle_id, song_owner_user_id, status, eligible_activity,
   min_score_bps, daily_reward_cents, milestone_7_cents, milestone_30_cents,
+  default_amount_cents, max_claim_cents, payout_tiers_json,
   reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
   credited_cents, paid_cents, refunded_cents, starts_at, ends_at,
   activated_at, exhausted_at, ended_at, canceled_at, created_at,
@@ -136,6 +138,41 @@ function queryResultRow(value: unknown): QueryResultRow | null {
     : null
 }
 
+type RewardCampaignPayoutTier = RewardCampaign["payout_tiers"][number]
+
+function payoutTiers(value: unknown): RewardCampaignPayoutTier[] {
+  let decoded = value
+  if (typeof decoded === "string") {
+    try {
+      decoded = JSON.parse(decoded)
+    } catch {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+  }
+  if (!Array.isArray(decoded) || decoded.length > 10) {
+    throw new Error("reward campaign payout tiers are corrupt")
+  }
+  return decoded.map((tier) => {
+    if (!tier || typeof tier !== "object" || Array.isArray(tier)) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    const record = tier as Record<string, unknown>
+    if (
+      !Array.isArray(record.nationalities)
+      || record.nationalities.length === 0
+      || !Number.isSafeInteger(record.amount_cents)
+      || Number(record.amount_cents) <= 0
+    ) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    const nationalities = record.nationalities.filter((code): code is string => typeof code === "string")
+    if (nationalities.length !== record.nationalities.length) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    return { nationalities, amount_cents: Number(record.amount_cents) }
+  })
+}
+
 function campaignResource(row: CampaignRow): RewardCampaign {
   const funded = integer(rowValue(row, "funded_cents"))
   const reserved = integer(rowValue(row, "reserved_cents"))
@@ -153,6 +190,9 @@ function campaignResource(row: CampaignRow): RewardCampaign {
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
+    default_amount_cents: integer(rowValue(row, "default_amount_cents")),
+    max_claim_cents: integer(rowValue(row, "max_claim_cents")),
+    payout_tiers: payoutTiers(rowValue(row, "payout_tiers_json")),
     milestone_7_cents: integer(rowValue(row, "milestone_7_cents")),
     milestone_30_cents: integer(rowValue(row, "milestone_30_cents")),
     reward_period_cap_cents: integer(rowValue(row, "reward_period_cap_cents")),
@@ -234,10 +274,70 @@ function basisPoints(value: unknown, field: string): number {
   return result
 }
 
+function normalizePayoutTiers(value: unknown): RewardCampaignPayoutTier[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 10) {
+    throw badRequestError("payout_tiers must contain at most 10 tiers")
+  }
+  const assignedNationalities = new Set<string>()
+  const normalized = value.map((tier, tierIndex) => {
+    if (!tier || typeof tier !== "object" || Array.isArray(tier)) {
+      throw badRequestError(`payout_tiers[${tierIndex}] is invalid`)
+    }
+    const record = tier as Record<string, unknown>
+    if (!Array.isArray(record.nationalities) || record.nationalities.length === 0) {
+      throw badRequestError(`payout_tiers[${tierIndex}].nationalities is invalid`)
+    }
+    const nationalities = record.nationalities.map((value) => {
+      const country = normalizeIdentityCountryCode(value)
+      if (!country) {
+        throw badRequestError(`payout_tiers[${tierIndex}].nationalities must contain valid country codes`)
+      }
+      if (assignedNationalities.has(country)) {
+        throw badRequestError(`Nationality ${country} is assigned to more than one payout tier`)
+      }
+      assignedNationalities.add(country)
+      return country
+    }).sort()
+    return {
+      nationalities,
+      amount_cents: cents(record.amount_cents, `payout_tiers[${tierIndex}].amount_cents`, false),
+    }
+  })
+  const nationalitiesByAmount = new Map<number, string[]>()
+  for (const tier of normalized) {
+    nationalitiesByAmount.set(
+      tier.amount_cents,
+      [...(nationalitiesByAmount.get(tier.amount_cents) ?? []), ...tier.nationalities].sort(),
+    )
+  }
+  return Array.from(nationalitiesByAmount, ([amount_cents, nationalities]) => ({
+    nationalities,
+    amount_cents,
+  })).sort((left, right) => {
+    const leftCountries = left.nationalities.join(",")
+    const rightCountries = right.nationalities.join(",")
+    const countries = leftCountries < rightCountries ? -1 : leftCountries > rightCountries ? 1 : 0
+    return countries !== 0 ? countries : left.amount_cents - right.amount_cents
+  })
+}
+
 function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCampaignConfig): RewardCampaignCreateInput {
   if (!(["study", "karaoke", "either"] as const).includes(input.eligible_activity)) {
     throw badRequestError("eligible_activity is invalid")
   }
+  const normalizedTiers = normalizePayoutTiers(input.payout_tiers)
+  const normalizedDailyReward = cents(input.daily_reward_cents, "daily_reward_cents", false)
+  const normalizedDefaultAmount = input.default_amount_cents === undefined
+    ? normalizedDailyReward
+    : cents(input.default_amount_cents, "default_amount_cents", false)
+  if (normalizedDefaultAmount !== normalizedDailyReward) {
+    throw badRequestError("default_amount_cents must equal daily_reward_cents")
+  }
+  const maxClaimCents = Math.max(
+    normalizedDefaultAmount,
+    ...normalizedTiers.map((tier) => tier.amount_cents),
+  )
   const normalized = {
     ...input,
     // Web routes and API serializers expose public IDs (`com_cmt_…` and
@@ -247,7 +347,9 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     post: decodePublicPostId(nonEmpty(input.post, "post")),
     idempotency_key: nonEmpty(input.idempotency_key, "idempotency_key"),
     min_score_bps: basisPoints(input.min_score_bps, "min_score_bps"),
-    daily_reward_cents: cents(input.daily_reward_cents, "daily_reward_cents", false),
+    daily_reward_cents: normalizedDailyReward,
+    default_amount_cents: normalizedDefaultAmount,
+    payout_tiers: normalizedTiers,
     milestone_7_cents: cents(input.milestone_7_cents, "milestone_7_cents", true),
     milestone_30_cents: cents(input.milestone_30_cents, "milestone_30_cents", true),
     reward_period_cap_cents: cents(input.reward_period_cap_cents, "reward_period_cap_cents", false),
@@ -259,15 +361,15 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     throw badRequestError("Campaign milestone rewards are not available yet")
   }
   if (
-    normalized.daily_reward_cents > config.maxRewardCents
+    maxClaimCents > config.maxRewardCents
     || normalized.milestone_7_cents > config.maxRewardCents
     || normalized.milestone_30_cents > config.maxRewardCents
   ) throw badRequestError("Campaign reward exceeds the platform maximum")
   if (normalized.budget_cents < config.minBudgetCents || normalized.budget_cents > config.maxBudgetCents) {
     throw badRequestError("Campaign budget is outside platform guardrails")
   }
-  if (normalized.budget_cents < normalized.daily_reward_cents) {
-    throw badRequestError("Campaign budget cannot cover one daily reward")
+  if (normalized.budget_cents < maxClaimCents) {
+    throw badRequestError("Campaign budget cannot cover one maximum claim")
   }
   if (normalized.ends_at <= Math.floor(Date.now() / 1000)) {
     throw badRequestError("Campaign must end in the future")
@@ -276,7 +378,7 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
   if (duration < config.minDurationSeconds || duration > config.maxDurationSeconds) {
     throw badRequestError("Campaign duration is outside platform guardrails")
   }
-  const largestMaturingCombination = normalized.daily_reward_cents
+  const largestMaturingCombination = maxClaimCents
     + Math.max(normalized.milestone_7_cents, normalized.milestone_30_cents)
   if (normalized.reward_period_cap_cents < largestMaturingCombination) {
     throw badRequestError("reward_period_cap_cents must cover every configured reward combination")
@@ -290,7 +392,7 @@ async function sha256(value: string): Promise<string> {
 }
 
 function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTarget): string {
-  return JSON.stringify({
+  const legacyTerms = {
     community: target.communityId,
     post: target.postId,
     song_artifact_bundle: target.songArtifactBundleId,
@@ -304,6 +406,12 @@ function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTa
     budget_cents: input.budget_cents,
     starts_at: input.starts_at,
     ends_at: input.ends_at,
+  }
+  if (!input.payout_tiers?.length) return JSON.stringify(legacyTerms)
+  return JSON.stringify({
+    ...legacyTerms,
+    default_amount_cents: input.default_amount_cents,
+    payout_tiers: input.payout_tiers,
   })
 }
 
@@ -478,11 +586,13 @@ export async function createRewardCampaign(input: {
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
           status, eligible_activity, min_score_bps, daily_reward_cents, milestone_7_cents,
           milestone_30_cents, reward_period_cap_cents, budget_cents,
+          default_amount_cents, max_claim_cents, payout_tiers_json,
           terms_version, terms_hash, starts_at, ends_at,
           requested_starts_at, requested_ends_at, created_at, updated_at
         ) VALUES (
           ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9,
-          ?10, ?11, ?12, ?13, ?14, 2, ?15, ?16, ?17, ?16, ?17, ?18, ?18
+          ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+          ?18, ?19, ?20, ?21, ?20, ?21, ?22, ?22
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
@@ -490,7 +600,9 @@ export async function createRewardCampaign(input: {
         campaignId, input.userId, body.idempotency_key, target.communityId, target.postId,
         target.songArtifactBundleId, target.songOwnerUserId, body.eligible_activity,
         body.min_score_bps, body.daily_reward_cents, body.milestone_7_cents, body.milestone_30_cents,
-        body.reward_period_cap_cents, body.budget_cents, termsHash,
+        body.reward_period_cap_cents, body.budget_cents, body.default_amount_cents,
+        Math.max(body.default_amount_cents ?? body.daily_reward_cents, ...body.payout_tiers!.map((tier) => tier.amount_cents)),
+        JSON.stringify(body.payout_tiers), body.payout_tiers!.length > 0 ? 3 : 2, termsHash,
         new Date(body.starts_at * 1000).toISOString(), new Date(body.ends_at * 1000).toISOString(), now,
         ],
       })
@@ -671,6 +783,9 @@ export async function createRewardCampaignFundingQuote(input: {
 
     const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
     if (!campaign) throw notFoundError("Reward campaign not found")
+    if (payoutTiers(rowValue(campaign, "payout_tiers_json")).length > 0) {
+      throw conflictError("Tiered reward campaigns cannot accept contributions until nationality payout resolution is enabled")
+    }
     await requireThirdPartyRewardsAllowed(
       tx,
       requiredString(campaign, "community_id"),
@@ -880,6 +995,11 @@ export async function confirmRewardCampaignFunding(input: {
     }
     if (requiredString(effect, "funder_user_id") !== input.userId) {
       throw notFoundError("Reward campaign funding quote not found")
+    }
+    const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
+    if (!campaign) throw notFoundError("Reward campaign not found")
+    if (payoutTiers(rowValue(campaign, "payout_tiers_json")).length > 0) {
+      throw conflictError("Tiered reward campaigns cannot be funded until nationality payout resolution is enabled")
     }
     const status = requiredString(effect, "status")
     const existingTx = stringOrNull(rowValue(effect, "tx_hash"))
