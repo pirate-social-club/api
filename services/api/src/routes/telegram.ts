@@ -321,6 +321,12 @@ function telegramCommunityStartMarkup(input: {
   }
 }
 
+function telegramCommunityActionMarkup(text: string, url: string): unknown {
+  return {
+    inline_keyboard: [[{ text, web_app: { url } }]],
+  }
+}
+
 async function handleTelegramStartMenuCallback(input: {
   bot: TelegramCommunityBotCredential
   callback: TelegramWebhookCallbackQuery
@@ -472,6 +478,7 @@ async function handleCommunityBotStartMessage(env: Env, input: {
       bot: input.bot,
       chatId: input.chatId,
       communityId: input.bot.communityId,
+      showStartMenu: true,
       telegramLanguageCode: input.telegramLanguageCode,
       telegramUserId: input.telegramUserId,
     })
@@ -592,6 +599,7 @@ async function handleCommunityStartMessage(env: Env, input: {
   bot: Env | TelegramCommunityBotCredential
   chatId: string
   communityId: string
+  showStartMenu?: boolean
   telegramLanguageCode: string | null
   telegramUserId: string | null
 }): Promise<void> {
@@ -652,12 +660,14 @@ async function handleCommunityStartMessage(env: Env, input: {
   await safeSendTelegramMessage(input.bot, {
     chat_id: input.chatId,
     text: presentation.messageText,
-    reply_markup: telegramCommunityStartMarkup({
-      action: { text: presentation.actionText, url: presentation.actionUrl },
-      boardUrl,
-      studyEnabled: isCommunityBot(input.bot)
-        && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
-    }),
+    reply_markup: input.showStartMenu
+      ? telegramCommunityStartMarkup({
+          action: { text: presentation.actionText, url: presentation.actionUrl },
+          boardUrl,
+          studyEnabled: isCommunityBot(input.bot)
+            && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
+        })
+      : telegramCommunityActionMarkup(presentation.actionText, presentation.actionUrl),
   })
 }
 

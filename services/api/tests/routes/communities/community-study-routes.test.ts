@@ -405,7 +405,7 @@ describe("community study routes", () => {
         },
       })
       expect(menuStudy.status).toBe(200)
-      await Bun.sleep(20)
+      await new Promise((resolve) => setTimeout(resolve, 20))
       expect(telegramBodies.filter((body) => body.text === "Choose a song to study:")).toHaveLength(1)
 
       telegramBodies.length = 0
