@@ -86,7 +86,7 @@ export async function createModerationSignal(input: {
   executor: DbExecutor
   communityId: string
   postId: string
-  moderationCaseId: string
+  moderationCaseId: string | null
   signalType: string
   severity: ModerationSignalSeverity
   provider: string
@@ -512,16 +512,20 @@ export async function setPostAgeGatePolicy(input: {
   executor: DbExecutor
   postId: string
   ageGatePolicy: "none" | "18_plus"
+  evidenceRef: string
   now: string
 }): Promise<void> {
   await input.executor.execute({
     sql: `
       UPDATE posts
       SET age_gate_policy = ?2,
-          updated_at = ?3
+          age_gate_source = CASE WHEN age_gate_policy = '18_plus' THEN age_gate_source ELSE 'moderator' END,
+          age_gate_evidence_ref = CASE WHEN age_gate_policy = '18_plus' THEN age_gate_evidence_ref ELSE ?3 END,
+          age_gate_set_at = CASE WHEN age_gate_policy = '18_plus' THEN age_gate_set_at ELSE ?4 END,
+          updated_at = ?4
       WHERE post_id = ?1
     `,
-    args: [input.postId, input.ageGatePolicy, input.now],
+    args: [input.postId, input.ageGatePolicy, input.evidenceRef, input.now],
   })
 }
 

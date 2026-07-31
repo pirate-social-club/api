@@ -20,7 +20,7 @@ import {
   markPostPublishRequestStatus,
 } from "./community-post-publish-request-store"
 import { getPostById } from "./community-post-query-store"
-import { markPostDeleted } from "./community-post-mutation-store"
+import { markPostDeleted, setPostAgeGateEvidenceRef } from "./community-post-mutation-store"
 import { resolvePostProjectionSchema } from "./community-post-projection"
 import { consumeSongPostBundle } from "../song-artifacts/song-artifact-post-resolution-service"
 import {
@@ -61,7 +61,7 @@ import type { Asset, CreatePostRequest, Post } from "../../types"
 import type { AltchaProofInput } from "../verification/altcha-provider"
 import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
 import { preparePostCreate } from "./post-create-preparation"
-import { recordReviewRequiredPostModeration } from "./post-moderation-recording"
+import { recordAutomaticPostAgeGateModeration, recordReviewRequiredPostModeration } from "./post-moderation-recording"
 import { assertPostCreateRequest } from "./post-create-validation"
 import { hashPostCreateRequestBody, isPostCreateIdempotencyConflict } from "./post-create-idempotency"
 import { assertDerivativeParentRevenueShare } from "../communities/commerce/derivative-parent-revenue-share"
@@ -460,9 +460,11 @@ export async function createPost(input: {
       communityId: input.communityId,
       upstreamAssetRefs: input.body.upstream_asset_refs,
     })
+    const createdAt = nowIso()
     const {
       writeBody,
       analysisOverride,
+      ageGateProvenance,
       analysisProviderResult,
       resolvedSongBundleForAsset,
       resolvedVideoAsset,
@@ -472,12 +474,12 @@ export async function createPost(input: {
       userId: input.userId,
       communityId: input.communityId,
       body: input.body,
+      createdAt,
       community,
       communityDbClient: db.client,
       communityRepository: input.communityRepository,
       postAnalysisProvider,
     })
-    const createdAt = nowIso()
     // Resolve the projection schema BEFORE the write tx — a buffered D1 write tx
     // can't see schema reads (or any read) until commit; threaded into insertPost.
     const projectionSchema = await resolvePostProjectionSchema(db.client)
@@ -500,6 +502,7 @@ export async function createPost(input: {
         projectionSchema,
         idempotencyBodyHash: projectionSchema.hasAsyncPublishColumns ? idempotencyBodyHash : null,
         analysisOverride,
+        ageGateProvenance,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
 
@@ -526,12 +529,32 @@ export async function createPost(input: {
       })
 
       if (analysisOverride?.analysis_state === "review_required") {
-        await recordReviewRequiredPostModeration({
+        const moderationSignalId = await recordReviewRequiredPostModeration({
           executor: tx,
           communityId: input.communityId,
           postId: draft.post_id,
           providerResult: analysisProviderResult,
           now: createdAt,
+        })
+        if (ageGateProvenance?.source === "post_moderation") {
+          await setPostAgeGateEvidenceRef({
+            executor: tx,
+            postId: draft.post_id,
+            evidenceRef: `moderation_signal:${moderationSignalId}`,
+          })
+        }
+      } else if (ageGateProvenance?.source === "post_moderation") {
+        const moderationSignalId = await recordAutomaticPostAgeGateModeration({
+          executor: tx,
+          communityId: input.communityId,
+          postId: draft.post_id,
+          providerResult: analysisProviderResult,
+          now: createdAt,
+        })
+        await setPostAgeGateEvidenceRef({
+          executor: tx,
+          postId: draft.post_id,
+          evidenceRef: `moderation_signal:${moderationSignalId}`,
         })
       }
 

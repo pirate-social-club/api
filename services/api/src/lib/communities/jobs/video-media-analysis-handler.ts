@@ -341,10 +341,31 @@ async function applyVideoAudioSafetyToPost(input: {
       UPDATE posts
       SET content_safety_state = ?2,
           age_gate_policy = ?3,
-          updated_at = ?4
+          age_gate_source = CASE
+            WHEN age_gate_policy = '18_plus' THEN age_gate_source
+            WHEN ?3 = '18_plus' THEN 'post_moderation'
+            ELSE NULL
+          END,
+          age_gate_evidence_ref = CASE
+            WHEN age_gate_policy = '18_plus' THEN age_gate_evidence_ref
+            WHEN ?3 = '18_plus' THEN ?4
+            ELSE NULL
+          END,
+          age_gate_set_at = CASE
+            WHEN age_gate_policy = '18_plus' THEN age_gate_set_at
+            WHEN ?3 = '18_plus' THEN ?5
+            ELSE NULL
+          END,
+          updated_at = ?5
       WHERE post_id = ?1
     `,
-    args: [input.postId, merged.content_safety_state, merged.age_gate_policy, input.now],
+    args: [
+      input.postId,
+      merged.content_safety_state,
+      merged.age_gate_policy,
+      `media_analysis_result:${input.mediaAnalysisResultId}`,
+      input.now,
+    ],
   })
   if (input.currentAgeGatePolicy !== "18_plus" && merged.age_gate_policy === "18_plus") {
     const existingCase = await getOpenModerationCaseForTarget({
