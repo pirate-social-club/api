@@ -250,7 +250,11 @@ export async function createTelegramStudyVoiceIntent(input: {
   try {
     const sent = await sendTelegramMessage(bot, {
       chat_id: telegramUserId,
-      text: `Say this line back:\n\n${exercise.reference_text}`,
+      text: [
+        "Say this line back:",
+        exercise.reference_text,
+        "Your voice message is received by this community's independently operated Telegram bot and sent to Pirate for grading.",
+      ].join("\n\n"),
     })
     await client.execute({
       sql: `

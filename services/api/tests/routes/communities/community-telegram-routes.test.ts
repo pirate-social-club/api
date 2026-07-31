@@ -1013,9 +1013,15 @@ describe("community Telegram routes", () => {
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
     expect(sendMessageRequests[0]?.url).toBe(`https://api.telegram.org/bot${token}/sendMessage`)
-    const sendBody = await sendMessageRequests[0]!.json() as { reply_markup?: unknown; text?: string }
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
+      text?: string
+    }
     expect(sendBody.text).toBe("Send a question to talk to this community assistant.")
-    expect(sendBody.reply_markup).toBeUndefined()
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual(expect.objectContaining({
+      callback_data: "menu:assistant",
+      text: "💬 Ask the assistant",
+    }))
   })
 
   test("community bot bare /start falls back to join presentation when preview is disabled", async () => {
@@ -1089,12 +1095,12 @@ describe("community Telegram routes", () => {
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
     const sendBody = await sendMessageRequests[0]!.json() as {
-      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+      reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string; web_app?: { url?: string } }>> }
       text?: string
     }
     expect(sendBody.text).toContain("Preview Disabled Club")
     expect(sendBody.text).not.toBe("Send a question to talk to this community assistant.")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual({
       text: "Verify to join",
       web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
     })

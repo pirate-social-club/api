@@ -2,10 +2,6 @@ import type { ActorContext } from "../auth-middleware"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
-import {
-  canAccessCommunity,
-  getCommunityMembershipState,
-} from "../communities/membership/membership-state-store"
 import { makeId, nowIso } from "../helpers"
 import {
   getPostStudyPayload,
@@ -194,22 +190,6 @@ async function listReadySongs(input: {
   }
 }
 
-async function userCanStudyCommunity(input: {
-  communityId: string
-  env: Env
-  userId: string
-}): Promise<boolean> {
-  const repository = getCommunityRepository(input.env)
-  const db = await openCommunityReadClient(input.env, repository, input.communityId)
-  try {
-    return canAccessCommunity(
-      await getCommunityMembershipState(db.client, input.communityId, input.userId),
-    )
-  } finally {
-    db.close()
-  }
-}
-
 async function replaceActiveSession(input: {
   actionKind: ChatStudyActionKind
   actionPayload: Record<string, unknown>
@@ -314,17 +294,6 @@ async function runTelegramChatStudyStart(input: {
       ...(onboarding
         ? { reply_markup: telegramOnboardingWebAppReplyMarkup(onboarding.web_app_url) }
         : {}),
-    })
-    return true
-  }
-  if (!await userCanStudyCommunity({
-    communityId: input.bot.communityId,
-    env: input.env,
-    userId: account.userId,
-  })) {
-    await sendTelegramMessage(input.bot, {
-      chat_id: input.chatId,
-      text: "Join this community before studying its songs.",
     })
     return true
   }
