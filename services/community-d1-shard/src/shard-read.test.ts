@@ -134,6 +134,7 @@ function fakePoolD1(
             .filter(
               (r) =>
                 r.community_id === null &&
+                (!/binding_name != 'DB_CMTY_FIXTURE'/.test(sql) || r.binding_name !== "DB_CMTY_FIXTURE") &&
                 (r.released_at === null || r.released_at < quarantineThreshold),
             )
             .sort((a, b) => a.binding_name.localeCompare(b.binding_name))[0]
@@ -821,6 +822,20 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
     expect(r).toMatchObject({ ok: true, value: { allocated: true, bindingName: "DB_CMTY_NEW" } })
   })
 
+  test("never allocates the reserved fixture binding even when its pool row is free", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_FIXTURE", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+      { binding_name: "DB_CMTY_0001", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, {
+      DB_CMTY_FIXTURE: fakeD1(),
+      DB_CMTY_0001: fakeD1(),
+    })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r).toMatchObject({ ok: true, value: { allocated: true, bindingName: "DB_CMTY_0001" } })
+    expect(pool.rows.find((row) => row.binding_name === "DB_CMTY_FIXTURE")?.community_id).toBeNull()
+  })
+
   test("returns shard_binding_not_initialized when the pool row's binding isn't bound on this Worker", async () => {
     const pool = fakePoolD1([
       { binding_name: "DB_CMTY_ORPHAN", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
@@ -1087,7 +1102,10 @@ function adminPoolFake(rows: FakePoolRow[]) {
           let quarantined = 0
           let allocatedLast24Hours = 0
           let allocatedLast7Days = 0
-          for (const row of rows) {
+          const countedRows = /binding_name != 'DB_CMTY_FIXTURE'/.test(sql)
+            ? rows.filter((row) => row.binding_name !== "DB_CMTY_FIXTURE")
+            : rows
+          for (const row of countedRows) {
             if (row.community_id !== null) {
               allocated += 1
               if (row.allocated_at && allocated24HoursThreshold && row.allocated_at >= allocated24HoursThreshold) {
@@ -1103,7 +1121,7 @@ function adminPoolFake(rows: FakePoolRow[]) {
             }
           }
           return {
-            total: rows.length,
+            total: countedRows.length,
             allocated,
             free,
             quarantined,
@@ -1203,6 +1221,44 @@ describe("admin RPC auth (step 5)", () => {
     const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_X", now: "t" })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.code).toBe("shard_admin_unauthorized")
+  })
+})
+
+describe("reserved fixture binding", () => {
+  const reservedEnv = () => adminEnv({
+    DB_CMTY_FIXTURE: resetCommunityFake([]) as unknown as D1Database,
+    D1_POOL: adminPoolFake([{
+      binding_name: "DB_CMTY_FIXTURE",
+      community_id: "cmt_fixture",
+      allocated_at: "t0",
+      last_loaded_at: "t1",
+      last_error: null,
+      released_at: null,
+      version: 1,
+    }]) as unknown as D1Database,
+    STAGING_RECLAIM_ENABLED: "true",
+  })
+
+  test("refuses reset, release, and decommission before touching fixture state", async () => {
+    const env = reservedEnv()
+    const reset = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_FIXTURE" })
+    const release = await runShardRelease(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_FIXTURE",
+      now: "t2",
+    })
+    const decommission = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_FIXTURE",
+      communityId: "cmt_fixture",
+      now: "t2",
+    })
+
+    for (const result of [reset, release, decommission]) {
+      expect(result).toMatchObject({ ok: false, code: "shard_binding_not_allowed" })
+    }
+    const pool = env.D1_POOL as unknown as ReturnType<typeof adminPoolFake>
+    expect(pool.rows[0]).toMatchObject({ community_id: "cmt_fixture", last_loaded_at: "t1" })
   })
 })
 

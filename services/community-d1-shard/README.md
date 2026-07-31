@@ -30,6 +30,24 @@ Any NEW RPC method touching D1 MUST go through `runShardRead`/`runShardBatch`
 - `COMMUNITY_D1_BINDING_MAP_JSON = {"cmt_a43c487541154b358837c726b98aea2e":"DB_CMTY_PILOT"}`.
 - API staging binds it: service `community-d1-shard-staging`, entrypoint `CommunityD1Shard`, binding `COMMUNITY_D1_SHARD` (api `wrangler.jsonc` staging `services`). **Prod has no shard binding.**
 
+### Reserved release-gate fixture
+
+`DB_CMTY_FIXTURE` / `cmty-d1-fixture-staging` is reserved for stable staging
+release contracts and is not provisioning-pool capacity. The shard allocator,
+reset, release, decommission, and capacity reporting paths enforce that
+reservation even if its `d1_pool` mapping is accidentally cleared.
+
+The handle-claim fixture data has a single reviewed, idempotent seed path:
+
+```bash
+rtk bun run seed:handle-claim-fixture:staging          # dry-run
+rtk bun run seed:handle-claim-fixture:staging --apply  # exact checked-in SQL
+```
+
+The command is pinned to `cmty-d1-fixture-staging` and cannot accept another
+database or arbitrary SQL. It seeds only the active local namespace binding and
+handle policy required by the release contract; it performs no HNS signing.
+
 ## Historical Turso migration procedure
 
 The manual Turso-to-D1 migration procedure is no longer an active operating

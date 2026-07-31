@@ -7,6 +7,7 @@
     "dev": "wrangler dev",
     "deploy": "bun run ../api/scripts/deploy-with-version.ts",
     "audit:gates:staging": "bun run scripts/audit-gate-policies.ts --environment staging",
+    "seed:handle-claim-fixture:staging": "bun run scripts/seed-handle-claim-fixture.ts",
     "check": "tsc --noEmit",
     "test": "bun test"
   },

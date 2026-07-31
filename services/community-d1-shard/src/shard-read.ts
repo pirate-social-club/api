@@ -110,6 +110,21 @@ export const POOL_CACHE_SHORT_TTL_MS = 5_000
  */
 export const QUARANTINE_WINDOW_MS = 5 * 60 * 1000
 
+/**
+ * Staging fixtures with stable external contracts are not pool capacity.
+ *
+ * DB_CMTY_FIXTURE predates the numeric provisioning pool and is the durable
+ * home of release-gate state. Keep the reservation in the shard's enforcement
+ * layer: a missing/corrupt pool mapping must never make this binding eligible
+ * for allocation or destructive reclamation.
+ */
+export const RESERVED_FIXTURE_BINDING = "DB_CMTY_FIXTURE"
+export const RESERVED_POOL_BINDINGS = new Set([RESERVED_FIXTURE_BINDING])
+
+export function isReservedPoolBinding(bindingName: string): boolean {
+  return RESERVED_POOL_BINDINGS.has(bindingName)
+}
+
 type PoolCacheEntry = {
   /** null = community is unknown to the pool (still cached as a negative result) */
   bindingName: string | null
@@ -525,6 +540,7 @@ export async function runShardBind(
       .prepare(
         "SELECT binding_name, version FROM d1_pool " +
           "WHERE community_id IS NULL " +
+          `AND binding_name != '${RESERVED_FIXTURE_BINDING}' ` +
           "AND (released_at IS NULL OR released_at < ?1) " +
           "ORDER BY binding_name LIMIT 1",
       )
@@ -896,6 +912,12 @@ export async function runShardReset(
 ): Promise<ShardResult<ShardAdminResetResponse>> {
   const authErr = requireAdminToken(env, input.adminToken)
   if (authErr) return authErr
+  if (isReservedPoolBinding(input.bindingName)) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to reset reserved fixture binding ${input.bindingName}`,
+    )
+  }
 
   const pool = requirePoolDb(env)
   if ("ok" in pool) return pool
@@ -949,6 +971,12 @@ export async function runShardDecommission(
   if (authErr) return authErr
   if (env.STAGING_RECLAIM_ENABLED !== "true") {
     return err(SHARD_READ_ERROR.ADMIN_UNAUTHORIZED, "staging reclaim is disabled")
+  }
+  if (isReservedPoolBinding(input.bindingName)) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to decommission reserved fixture binding ${input.bindingName}`,
+    )
   }
 
   const pool = requirePoolDb(env)
@@ -1017,6 +1045,12 @@ export async function runShardRelease(
 ): Promise<ShardResult<ShardAdminReleaseResponse>> {
   const authErr = requireAdminToken(env, input.adminToken)
   if (authErr) return authErr
+  if (isReservedPoolBinding(input.bindingName)) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to release reserved fixture binding ${input.bindingName}`,
+    )
+  }
   const pool = requirePoolDb(env)
   if ("ok" in pool) return pool
 
@@ -1054,7 +1088,7 @@ export async function runShardPoolStats(
         "SUM(CASE WHEN community_id IS NULL AND released_at IS NOT NULL AND released_at >= ?1 THEN 1 ELSE 0 END) AS quarantined, " +
         "SUM(CASE WHEN community_id IS NOT NULL AND allocated_at >= ?2 THEN 1 ELSE 0 END) AS allocated_last_24_hours, " +
         "SUM(CASE WHEN community_id IS NOT NULL AND allocated_at >= ?3 THEN 1 ELSE 0 END) AS allocated_last_7_days " +
-        "FROM d1_pool",
+        `FROM d1_pool WHERE binding_name != '${RESERVED_FIXTURE_BINDING}'`,
     )
     .bind(quarantineThreshold, allocated24HoursThreshold, allocated7DaysThreshold)
     .first()
