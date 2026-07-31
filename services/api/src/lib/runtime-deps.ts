@@ -3,6 +3,7 @@ import type { Client as LibsqlClient, Transaction as LibsqlTransaction } from "@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { Client as PgClient } from "pg"
 import { globalSingleton } from "./db-helpers"
+import { logPipelineError, logPipelineInfo } from "./observability/pipeline-log"
 import { requireControlPlaneDbUrl } from "./auth/auth-db-query-helpers"
 import type { Client, InStatement, QueryResult, QueryResultRow, Transaction } from "./sql-client"
 import type { Env } from "../env"
@@ -195,9 +196,87 @@ export function postgresifySql(sql: string): string {
   return translateInsertOrReplace(translateInsertOrIgnore(normalized))
 }
 
+// Every control-plane await is bounded. On 2026-07-31 a wallet-bearing
+// `POST /auth/session/exchange` stalled for >120s with 0.5s CPU, no exception
+// and no statement ever reaching PlanetScale — the request simply never
+// settled, so the release contract gate reported an opaque test timeout. The
+// pool's own `connectionTimeoutMillis` did not fire, so the bound has to be
+// enforced here rather than delegated to the driver.
+const controlPlaneConnectTimeoutMs = 5_000
+const controlPlaneStatementTimeoutMs = 15_000
+// Logged (not failed) so a statement that is merely slow stays visible without
+// turning latency into an outage.
+const controlPlaneSlowStatementMs = 1_000
+
+class ControlPlaneTimeoutError extends Error {
+  constructor(operation: string, timeoutMs: number, elapsedMs: number) {
+    super(
+      `control-plane ${operation} did not settle within ${timeoutMs}ms (waited ${elapsedMs}ms).`
+      + " No response was received from the Postgres transport.",
+    )
+    this.name = "ControlPlaneTimeoutError"
+  }
+}
+
+async function withControlPlaneDeadline<T>(
+  operation: string,
+  timeoutMs: number,
+  run: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new ControlPlaneTimeoutError(operation, timeoutMs, Date.now() - startedAt)),
+          timeoutMs,
+        )
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+// First keyword plus target table — enough to identify the stalled statement in
+// logs without ever emitting predicates or bound arguments.
+function describeStatement(sql: string): string {
+  const collapsed = sql.replace(/\s+/gu, " ").trim()
+  const match = collapsed.match(
+    /^(SELECT|INSERT|UPDATE|DELETE|BEGIN|COMMIT|ROLLBACK|SET)\b(?:[\s\S]*?\b(?:FROM|INTO|UPDATE)\s+([A-Za-z_][A-Za-z0-9_]*))?/iu,
+  )
+  if (!match) return "unknown"
+  const [, keyword, table] = match
+  return table ? `${keyword.toUpperCase()} ${table}` : keyword.toUpperCase()
+}
+
 async function executePostgresStatement(queryable: PostgresQueryable, statement: InStatement | string): Promise<QueryResult> {
   const normalized = normalizeStatement(statement)
-  const result = await queryable.query(postgresifySql(normalized.sql), normalizeArgs(normalized.args ?? []))
+  const description = describeStatement(normalized.sql)
+  const startedAt = Date.now()
+  const result = await withControlPlaneDeadline(
+    `statement ${description}`,
+    controlPlaneStatementTimeoutMs,
+    () => queryable.query(postgresifySql(normalized.sql), normalizeArgs(normalized.args ?? [])),
+  ).catch((error: unknown) => {
+    if (error instanceof ControlPlaneTimeoutError) {
+      logPipelineError("control-plane statement stalled", {
+        statement: description,
+        timeout_ms: controlPlaneStatementTimeoutMs,
+        elapsed_ms: Date.now() - startedAt,
+      })
+    }
+    throw error
+  })
+  const elapsedMs = Date.now() - startedAt
+  if (elapsedMs >= controlPlaneSlowStatementMs) {
+    logPipelineInfo("control-plane statement slow", {
+      statement: description,
+      elapsed_ms: elapsedMs,
+    })
+  }
   return {
     rows: normalizeRows(result.rows),
     rowsAffected: result.rowCount ?? undefined,
@@ -361,12 +440,44 @@ class PostgresClientAdapter implements Client {
   }
 
   async transaction(_mode: "read" | "write" = "write"): Promise<Transaction> {
-    const client = await this.pool.connect()
+    // Acquisition is bounded separately from BEGIN: waiting on the pool (max: 1)
+    // and waiting on the server are different failures, and collapsing them
+    // hides which boundary stalled.
+    const acquireStartedAt = Date.now()
+    const client = await withControlPlaneDeadline(
+      "pool acquisition",
+      controlPlaneConnectTimeoutMs,
+      () => this.pool.connect(),
+    ).catch((error: unknown) => {
+      if (error instanceof ControlPlaneTimeoutError) {
+        logPipelineError("control-plane pool acquisition stalled", {
+          timeout_ms: controlPlaneConnectTimeoutMs,
+          elapsed_ms: Date.now() - acquireStartedAt,
+        })
+      }
+      throw error
+    })
+    const acquireMs = Date.now() - acquireStartedAt
     try {
-      await client.query("BEGIN")
+      await executePostgresStatement(client, "BEGIN")
+      // Server-side backstop for anything that reaches Postgres but never
+      // returns, and for a transaction abandoned mid-flight by a dead
+      // connection. The client-side deadline above covers the case where the
+      // statement never arrives at all.
+      await executePostgresStatement(
+        client,
+        `SET LOCAL statement_timeout = ${controlPlaneStatementTimeoutMs}`,
+      )
+      await executePostgresStatement(
+        client,
+        `SET LOCAL idle_in_transaction_session_timeout = ${controlPlaneStatementTimeoutMs * 2}`,
+      )
     } catch (error) {
       client.release()
       throw error
+    }
+    if (acquireMs >= controlPlaneSlowStatementMs) {
+      logPipelineInfo("control-plane pool acquisition slow", { elapsed_ms: acquireMs })
     }
     return new PostgresTransactionAdapter(client)
   }
