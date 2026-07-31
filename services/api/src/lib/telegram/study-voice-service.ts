@@ -253,7 +253,7 @@ export async function createTelegramStudyVoiceIntent(input: {
       text: [
         "Say this line back:",
         exercise.reference_text,
-        "Your voice message is received by this community's independently operated Telegram bot and sent to Pirate for grading.",
+        "The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading.",
       ].join("\n\n"),
     })
     await client.execute({
