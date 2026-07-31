@@ -836,8 +836,8 @@
         "COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS": "72",
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
-        "TELEGRAM_STUDY_VOICE_ENABLED": "false",
-        "TELEGRAM_STUDY_VOICE_COMMUNITY_IDS": "",
+        "TELEGRAM_STUDY_VOICE_ENABLED": "true",
+        "TELEGRAM_STUDY_VOICE_COMMUNITY_IDS": "cmt_fb2bacac74b144eaa58802b476eb9f3b",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",
 	        "PASSPORT_SCORER_ID": "12028"
