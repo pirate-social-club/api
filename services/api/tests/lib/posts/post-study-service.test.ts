@@ -2318,11 +2318,34 @@ describe("post study service", () => {
 
     expect(result.outcome).toBe("correct")
     expect(result.next_review_hint).toBe("good")
-    expect(result.feedback).toEqual({
-      extra: [],
-      matched: ["i", "was", "lost", "in", "midnight", "wave"],
-      missing: [],
+    expect(result.feedback).toBeUndefined()
+  })
+
+  test("say-it-back accepts a phonetic near-miss as hard without token feedback", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_1:say_it_back:en",
+        idempotency_key: "study-attempt-say-phonetic",
+        transcript: "I was lost in the midnight waved",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
     })
+
+    expect(result.outcome).toBe("correct")
+    expect(result.next_review_hint).toBe("hard")
+    expect(result.feedback).toBeUndefined()
+
+    const row = await client!.execute("SELECT feedback_json, fsrs_rating FROM song_study_attempt LIMIT 1")
+    expect(row.rows[0]).toMatchObject({ feedback_json: null, fsrs_rating: "hard" })
   })
 
   test("say-it-back keeps clearly wrong recall on again", async () => {
