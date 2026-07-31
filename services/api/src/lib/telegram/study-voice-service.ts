@@ -31,6 +31,7 @@ const VOICE_PROCESSING_MAX_ATTEMPTS = 3
 
 type VoiceIntentRow = {
   attemptNumber: number
+  chatStudySessionId: string | null
   communityId: string
   exerciseId: string
   expiresAt: string
@@ -89,6 +90,7 @@ function serializeIntentRow(row: unknown): VoiceIntentRow | null {
   }
   return {
     attemptNumber,
+    chatStudySessionId: stringOrNull(rowValue(row, "chat_study_session_id")),
     communityId,
     exerciseId,
     expiresAt,
@@ -129,6 +131,7 @@ export type TelegramStudyVoiceIntentResource = {
 
 export async function createTelegramStudyVoiceIntent(input: {
   actor: ActorContext | AdminActorContext
+  chatStudySessionId?: string | null
   communityId: string
   env: Env
   exerciseId: string
@@ -210,12 +213,13 @@ export async function createTelegramStudyVoiceIntent(input: {
           intent_id, telegram_community_bot_id, telegram_user_id, user_id,
           community_id, post_id, exercise_id, exercise_type, target_language,
           study_session_id, attempt_number, presentation_number, idempotency_key,
-          status, prompt_delivery_status, expires_at, created_at, updated_at
+          status, prompt_delivery_status, expires_at, created_at, updated_at,
+          chat_study_session_id
         ) VALUES (
           ?1, ?2, ?3, ?4,
           ?5, ?6, ?7, 'say_it_back', ?8,
           ?9, ?10, ?10, ?11,
-          'pending', 'sending', ?12, ?13, ?13
+          'pending', 'sending', ?12, ?13, ?13, ?14
         )
       `,
       args: [
@@ -232,6 +236,7 @@ export async function createTelegramStudyVoiceIntent(input: {
         idempotencyKey,
         expiresAt,
         createdAt,
+        input.chatStudySessionId ?? null,
       ],
     })
     await tx.commit()
@@ -294,7 +299,8 @@ async function findVoiceIntent(input: {
       SELECT intent_id, telegram_user_id, user_id, community_id, post_id,
              exercise_id, target_language, study_session_id, attempt_number,
              idempotency_key, status, prompt_message_id, expires_at,
-             processing_attempt_count, processing_lease_expires_at
+             processing_attempt_count, processing_lease_expires_at,
+             chat_study_session_id
       FROM telegram_study_voice_intents
       WHERE telegram_community_bot_id = ?1
         AND telegram_user_id = ?2
@@ -339,7 +345,7 @@ async function isKnownVoiceDelivery(input: {
 async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string): Promise<void> {
   await sendTelegramMessage(bot, {
     chat_id: chatId,
-    text: "This study exercise expired. Reopen the Mini App to try again.",
+    text: "This study exercise expired. Send /study to start again.",
   }).catch((error) => {
     console.warn("[telegram-study] expired reply failed", {
       communityId: bot.communityId,
@@ -352,6 +358,11 @@ export async function handleTelegramStudyVoiceMessage(input: {
   bot: TelegramCommunityBotCredential
   env: Env
   message: TelegramWebhookMessage
+  onChatStudyAttemptComplete?: (completion: {
+    chatId: string
+    chatStudySessionId: string
+    result: SongStudyAttemptResult
+  }) => Promise<void>
   waitUntil?: (promise: Promise<void>) => void
 }): Promise<boolean> {
   const chatId = telegramIdentifier(input.message.chat?.id)
@@ -534,7 +545,9 @@ export async function handleTelegramStudyVoiceMessage(input: {
         })
         await sendTelegramMessage(input.bot, {
           chat_id: chatId,
-          text: "I could not grade this exercise after several tries. Reopen study to start it again.",
+          text: intent.chatStudySessionId
+            ? "I could not grade this exercise after several tries. Send /study to start again."
+            : "I could not grade this exercise after several tries. Reopen study to start it again.",
         }).catch(() => undefined)
         return
       }
@@ -562,6 +575,25 @@ export async function handleTelegramStudyVoiceMessage(input: {
         chat_id: chatId,
         text: "I could not grade that recording. Send another voice message to try again.",
       }).catch(() => undefined)
+      return
+    }
+
+    if (intent.chatStudySessionId && input.onChatStudyAttemptComplete) {
+      await input.onChatStudyAttemptComplete({
+        chatId,
+        chatStudySessionId: intent.chatStudySessionId,
+        result,
+      }).catch(async (error) => {
+        console.warn("[telegram-study] chat continuation failed", {
+          communityId: intent.communityId,
+          error: error instanceof Error ? error.message : String(error),
+          intentId: intent.id,
+        })
+        await sendTelegramMessage(input.bot, {
+          chat_id: chatId,
+          text: "Your answer was saved, but I could not continue the session. Send /study to resume.",
+        }).catch(() => undefined)
+      })
       return
     }
 

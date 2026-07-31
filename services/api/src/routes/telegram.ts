@@ -75,6 +75,12 @@ import {
 } from "../lib/telegram/webhook-parsing"
 import { handleTelegramStudyVoiceMessage } from "../lib/telegram/study-voice-service"
 import {
+  continueTelegramChatStudyAfterVoice,
+  handleTelegramChatStudyCallback,
+  startTelegramChatStudy,
+} from "../lib/telegram/chat-study-service"
+import { withBackgroundControlPlaneClients } from "../lib/runtime-deps"
+import {
   directAssistantFailureMessage,
   getTelegramDirectAssistantPolicy,
   maybeSendTelegramAssistantVoiceReply,
@@ -380,6 +386,15 @@ async function handleCommunityBotStartMessage(env: Env, input: {
         text: setupErrorMessage(error),
       })
     }
+    return
+  }
+  if (!startPayload && input.telegramUserId && await startTelegramChatStudy({
+    bot: input.bot,
+    chatId: input.chatId,
+    env,
+    targetLanguage: input.telegramLanguageCode,
+    telegramUserId: input.telegramUserId,
+  })) {
     return
   }
 
@@ -1105,6 +1120,19 @@ async function handleTelegramWebhookUpdate(
   bot: Env | TelegramCommunityBotCredential = env,
   waitUntil?: (promise: Promise<void>) => void,
 ): Promise<void> {
+  if (update.callback_query && isCommunityBot(bot)) {
+    const handle = () => handleTelegramChatStudyCallback({
+      bot,
+      callback: update.callback_query!,
+      env,
+    }).then(() => undefined)
+    if (waitUntil) {
+      waitUntil(withBackgroundControlPlaneClients(handle))
+    } else {
+      await handle()
+    }
+    return
+  }
   if (update.chat_join_request) {
     await handleChatJoinRequest(env, update.chat_join_request, bot)
     return
@@ -1123,7 +1151,36 @@ async function handleTelegramWebhookUpdate(
   }
   if (isPrivateChat(message.chat?.type)) {
     if (isCommunityBot(bot)) {
-      if (await handleTelegramStudyVoiceMessage({ bot, env, message, waitUntil })) {
+      const chatId = telegramIdentifier(message.chat?.id)
+      const telegramUserId = telegramIdentifier(message.from?.id)
+      if (
+        message.text?.trim().match(/^\/study(?:@[A-Za-z0-9_]{5,32})?$/u)
+        && chatId
+        && telegramUserId
+        && await startTelegramChatStudy({
+          bot,
+          chatId,
+          env,
+          targetLanguage: telegramLanguageCode(message.from?.language_code),
+          telegramUserId,
+        })
+      ) {
+        return
+      }
+      if (await handleTelegramStudyVoiceMessage({
+        bot,
+        env,
+        message,
+        onChatStudyAttemptComplete: ({ chatId: completionChatId, chatStudySessionId, result }) =>
+          continueTelegramChatStudyAfterVoice({
+            bot,
+            chatId: completionChatId,
+            chatStudySessionId,
+            env,
+            result,
+          }),
+        waitUntil,
+      })) {
         return
       }
       await handleDirectAssistantMessage(env, message, bot)
