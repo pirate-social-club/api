@@ -388,7 +388,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:study")).toBe(true)
-      expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:assistant")).toBe(true)
+      expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:assistant")).toBe(false)
       const sessionsAfterStart = await ctx.client.execute(
         "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
       )

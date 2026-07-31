@@ -304,6 +304,7 @@ function telegramMiniAppLauncherMarkup(url: string): unknown {
 
 function telegramCommunityStartMarkup(input: {
   action?: { text: string; url: string }
+  assistantEnabled: boolean
   boardUrl: string
   studyEnabled: boolean
 }): unknown {
@@ -311,7 +312,9 @@ function telegramCommunityStartMarkup(input: {
   if (input.studyEnabled) {
     rows.push([{ text: "📚 Study songs", callback_data: TELEGRAM_START_MENU_STUDY }])
   }
-  rows.push([{ text: "💬 Ask the assistant", callback_data: TELEGRAM_START_MENU_ASSISTANT }])
+  if (input.assistantEnabled) {
+    rows.push([{ text: "💬 Ask the assistant", callback_data: TELEGRAM_START_MENU_ASSISTANT }])
+  }
   if (input.action && input.action.url !== input.boardUrl) {
     rows.push([{ text: input.action.text, web_app: { url: input.action.url } }])
   }
@@ -466,6 +469,7 @@ async function handleCommunityBotStartMessage(env: Env, input: {
         ...(telegramCommunityParticipationUrl(env, input.bot.communityId)
           ? {
               reply_markup: telegramCommunityStartMarkup({
+                assistantEnabled: true,
                 boardUrl: telegramCommunityParticipationUrl(env, input.bot.communityId)!,
                 studyEnabled: isTelegramStudyVoiceEnabled(env, input.bot.communityId),
               }),
@@ -478,6 +482,7 @@ async function handleCommunityBotStartMessage(env: Env, input: {
       bot: input.bot,
       chatId: input.chatId,
       communityId: input.bot.communityId,
+      assistantEnabled: Boolean(policy),
       showStartMenu: true,
       telegramLanguageCode: input.telegramLanguageCode,
       telegramUserId: input.telegramUserId,
@@ -596,6 +601,7 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
 }
 
 async function handleCommunityStartMessage(env: Env, input: {
+  assistantEnabled?: boolean
   bot: Env | TelegramCommunityBotCredential
   chatId: string
   communityId: string
@@ -663,6 +669,7 @@ async function handleCommunityStartMessage(env: Env, input: {
     reply_markup: input.showStartMenu
       ? telegramCommunityStartMarkup({
           action: { text: presentation.actionText, url: presentation.actionUrl },
+          assistantEnabled: input.assistantEnabled === true,
           boardUrl,
           studyEnabled: isCommunityBot(input.bot)
             && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
