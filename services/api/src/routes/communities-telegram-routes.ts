@@ -10,6 +10,7 @@ import {
 import {
   getActiveCommunityTelegramBotUsername,
   getCommunityTelegramBot,
+  refreshCommunityTelegramBotWebhook,
   revokeCommunityTelegramBot,
   saveCommunityTelegramBot,
 } from "../lib/telegram/community-bot-service"
@@ -134,6 +135,17 @@ export function registerCommunityTelegramRoutes(communities: Hono<AuthenticatedE
   communities.post("/:communityId/telegram-bot/revoke", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await revokeCommunityTelegramBot({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/telegram-bot/refresh-webhook", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await refreshCommunityTelegramBotWebhook({
       env: c.env,
       communityRepository,
       communityId,

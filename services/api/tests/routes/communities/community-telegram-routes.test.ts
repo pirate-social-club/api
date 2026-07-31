@@ -851,7 +851,7 @@ describe("community Telegram routes", () => {
       if (method === "setWebhook") {
         expect(body.url).toContain("/telegram/community-bots/")
         expect(typeof body.secret_token).toBe("string")
-        expect(body.allowed_updates).toEqual(["message", "chat_join_request"])
+        expect(body.allowed_updates).toEqual(["message", "callback_query", "chat_join_request"])
         return { ok: true, result: true }
       }
       if (method === "deleteWebhook") {
@@ -918,6 +918,21 @@ describe("community Telegram routes", () => {
       `https://api.telegram.org/bot${token}/setWebhook`,
     ])
 
+    const refreshResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/telegram-bot/refresh-webhook`,
+      {},
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(refreshResponse.status).toBe(200)
+    const refreshed = await json(refreshResponse) as { webhook_status: string | null }
+    expect(refreshed.webhook_status).toBe("active")
+    expect(telegramRequests.map((request) => request.url)).toEqual([
+      `https://api.telegram.org/bot${token}/getMe`,
+      `https://api.telegram.org/bot${token}/setWebhook`,
+      `https://api.telegram.org/bot${token}/setWebhook`,
+    ])
+
     const revokeResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/telegram-bot/revoke`,
       {},
@@ -930,6 +945,7 @@ describe("community Telegram routes", () => {
     expect(revoked.token_last4).toBeNull()
     expect(telegramRequests.map((request) => request.url)).toEqual([
       `https://api.telegram.org/bot${token}/getMe`,
+      `https://api.telegram.org/bot${token}/setWebhook`,
       `https://api.telegram.org/bot${token}/setWebhook`,
       `https://api.telegram.org/bot${token}/deleteWebhook`,
     ])
