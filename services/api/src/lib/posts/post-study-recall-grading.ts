@@ -1,3 +1,5 @@
+import { phoneticStreamSimilarity } from "@pirate-social-club/karaoke-runtime"
+
 export type AttemptOutcome = "correct" | "incorrect" | "revealed"
 export type FsrsRating = "again" | "hard" | "good" | "easy"
 
@@ -15,6 +17,22 @@ const IGNORED_RECALL_TOKENS = new Set(["a", "an", "the"])
 
 function expandEnglishContractions(value: string): string {
   return value
+    // STT transcripts often drop apostrophes; expand those forms first, while
+    // they still read as single words, so the apostrophe rules below can never
+    // collide with them.
+    .replace(/\bdont\b/giu, "do not")
+    .replace(/\bcant\b/giu, "can not")
+    .replace(/\bwont\b/giu, "will not")
+    .replace(/\b(is|are|does|did|could|should|would)nt\b/giu, "$1 not")
+    .replace(/\bim\b/giu, "i am")
+    .replace(/\bive\b/giu, "i have")
+    // "ill"/"id" are real English words, but in song lyrics the STT-dropped
+    // apostrophe reading dominates, and the rewrite runs symmetrically on
+    // reference and transcript (and ill/I'll are homophones), so this cannot
+    // cause false negatives. Intentional side effect: it changes token counts,
+    // which shifts the phonetic budget's stream length by a phone or two.
+    .replace(/\bill\b/giu, "i will")
+    .replace(/\bid\b/giu, "i would")
     .replace(/\b(can)'t\b/giu, "$1 not")
     .replace(/\b(won)'t\b/giu, "will not")
     .replace(/\b(i)'m\b/giu, "$1 am")
@@ -69,8 +87,12 @@ export function segmentSpacelessRecallTokens(value: string): string[] {
   return Array.from(value).filter((token) => token.trim())
 }
 
-function recallTokensForSourceLanguage(value: string, sourceLanguage: string | null | undefined): string[] {
+function isEnglishRecall(sourceLanguage: string | null | undefined): boolean {
   return String(sourceLanguage ?? "").toLowerCase().startsWith("en")
+}
+
+function recallTokensForSourceLanguage(value: string, sourceLanguage: string | null | undefined): string[] {
+  return isEnglishRecall(sourceLanguage)
     ? recallTokens(value)
     : languageAgnosticRecallTokens(value)
 }
@@ -120,13 +142,31 @@ export function gradeSayItBack(input: {
   reference: string
   sourceLanguage: string | null | undefined
   transcript: string
-}): { correct: boolean; feedback: { matched: string[]; missing: string[]; extra: string[] }; rating: FsrsRating } {
+}): { correct: boolean; feedback?: { matched: string[]; missing: string[]; extra: string[] }; rating: FsrsRating } {
   const referenceTokens = recallTokensForSourceLanguage(input.reference, input.sourceLanguage)
   const transcriptTokens = recallTokensForSourceLanguage(input.transcript, input.sourceLanguage)
-  const correct = tokenEditDistance(referenceTokens, transcriptTokens) === 0
+  if (tokenEditDistance(referenceTokens, transcriptTokens) === 0) {
+    return { correct: true, rating: fsrsRatingFor("correct", input.attemptNumber) }
+  }
+  if (isEnglishRecall(input.sourceLanguage)) {
+    // STT near-misses (word fragmentation like "shooby doo", tense endings
+    // like "close"/"closed") fail exact token distance but sound the same;
+    // compare flattened phone streams with no word-boundary markers instead.
+    const phonetic = phoneticStreamSimilarity(referenceTokens, transcriptTokens)
+    // Floor 2: a single trailing consonant costs 2.0 in phonemeDistance, so a
+    // smaller floor would reject every tense-ending near-miss. Cap 4: long
+    // lines must not absorb semantic inversions (e.g. always/never).
+    const budget = Math.max(2, Math.min(Math.floor(0.15 * phonetic.length), 4))
+    if (phonetic.available && phonetic.distance <= budget) {
+      // Not an exact match, so cap at "hard" even on the first attempt. The
+      // token diff is suppressed: reporting missing/extra tokens on an attempt
+      // graded correct would contradict the verdict.
+      return { correct: true, rating: "hard" }
+    }
+  }
   return {
-    correct,
+    correct: false,
     feedback: tokenDiff(input.reference, input.transcript, input.sourceLanguage),
-    rating: correct ? fsrsRatingFor("correct", input.attemptNumber) : "again",
+    rating: "again",
   }
 }

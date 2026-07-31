@@ -67,7 +67,7 @@ describe("admin auth middleware", () => {
     }
     expect(body.karaoke_scoring_version).toBe(KARAOKE_SCORING_VERSION)
     expect(body.karaoke_runtime).toEqual({
-      version: "0.2.0",
+      version: KARAOKE_RUNTIME_BUILD.version,
       git_sha: KARAOKE_RUNTIME_BUILD.gitSha,
     })
   })

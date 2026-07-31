@@ -1,3 +1,6 @@
 [install]
 minimumReleaseAge = 604800
-minimumReleaseAgeExcludes = ["esbuild", "form-data"]
+# karaoke-runtime is a first-party package published from the web repo with
+# in-tarball provenance; excluding it lets fresh publishes (e.g. 0.2.1 for the
+# study recall grading phonetics) install without waiting the 7-day age gate.
+minimumReleaseAgeExcludes = ["esbuild", "form-data", "@pirate-social-club/karaoke-runtime"]
