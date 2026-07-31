@@ -394,6 +394,14 @@ describe("community study routes", () => {
       )
       expect(sessionsAfterStart.rows).toHaveLength(0)
 
+      const privateSongClient = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      await privateSongClient.execute(
+        "UPDATE posts SET visibility = 'members_only' WHERE post_id = 'pst_study_route_song'",
+      )
+      privateSongClient.close()
+
       telegramBodies.length = 0
       const menuStudy = await webhook({
         update_id: 5002,
@@ -406,11 +414,35 @@ describe("community study routes", () => {
       })
       expect(menuStudy.status).toBe(200)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(telegramBodies.filter((body) => body.text === "Choose a song to study:")).toHaveLength(1)
+      expect(telegramBodies.some((body) => body.text === "Choose a song to study:")).toBe(false)
+      expect(telegramBodies.some((body) => body.text === "No songs are ready to study in this community yet.")).toBe(true)
+      expect(telegramBodies.some((body) => String(body.text).includes("Route Song"))).toBe(false)
+
+      telegramBodies.length = 0
+      const repeatedMenuStudy = await webhook({
+        update_id: 5003,
+        callback_query: {
+          id: "menu-study-callback-repeat",
+          data: "menu:study",
+          from: { id: 454545, is_bot: false, language_code: "es" },
+          message: { chat: { id: 454545, type: "private" }, message_id: 600 },
+        },
+      })
+      expect(repeatedMenuStudy.status).toBe(200)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(telegramBodies.some((body) => body.text === "That study menu was already used. Send /study to choose a song again.")).toBe(true)
+
+      const publicSongClient = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      await publicSongClient.execute(
+        "UPDATE posts SET visibility = 'public' WHERE post_id = 'pst_study_route_song'",
+      )
+      publicSongClient.close()
 
       telegramBodies.length = 0
       const studyUpdate = {
-        update_id: 5003,
+        update_id: 5004,
         message: {
           chat: { id: 454545, type: "private" },
           date: 1785499201,
@@ -426,6 +458,7 @@ describe("community study routes", () => {
       expect(study.status).toBe(200)
       expect(studyRedelivery.status).toBe(200)
       expect(telegramBodies.filter((body) => body.text === "Choose a song to study:")).toHaveLength(1)
+      expect(telegramBodies.some((body) => body.text === "That study menu was already used. Send /study to choose a song again.")).toBe(false)
       const studyDeliveries = await ctx.client.execute(
         "SELECT status FROM telegram_chat_study_message_deliveries",
       )
@@ -829,6 +862,9 @@ describe("community study routes", () => {
       expect(telegramRequests[0]!.url).toBe(
         `https://api.telegram.org/bot${botToken}/sendMessage`,
       )
+      const voicePrompt = await telegramRequests[0]!.clone().json() as { text?: string }
+      expect(voicePrompt.text).toContain("community bot owner can access and listen")
+      expect(voicePrompt.text).toContain("Pirate also receives this recording")
       const stored = await ctx.client.execute({
         sql: `
           SELECT status, prompt_delivery_status, prompt_message_id,

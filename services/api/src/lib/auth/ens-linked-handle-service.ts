@@ -21,6 +21,11 @@ export type EnsProfileResolution = {
   metadata: EnsProfileMetadata
 }
 
+export type EnsProfileLookupResult =
+  | { status: "resolved"; profile: EnsProfileResolution }
+  | { status: "not_found" }
+  | { status: "unavailable" }
+
 let ensResolverForTests: ((env: Env, walletAddress: string) => Promise<string | EnsProfileResolution | null>) | null = null
 
 export function setEnsResolverForTests(
@@ -158,36 +163,41 @@ function normalizeEnsResolution(value: string | EnsProfileResolution | null): En
   }
 }
 
-export async function resolveVerifiedEnsProfile(env: Env, walletAddress: string): Promise<EnsProfileResolution | null> {
+export async function resolveVerifiedEnsProfile(env: Env, walletAddress: string): Promise<EnsProfileLookupResult> {
   if (ensResolverForTests) {
-    return normalizeEnsResolution(await ensResolverForTests(env, walletAddress))
+    try {
+      const profile = normalizeEnsResolution(await ensResolverForTests(env, walletAddress))
+      return profile ? { status: "resolved", profile } : { status: "not_found" }
+    } catch {
+      return { status: "unavailable" }
+    }
   }
 
   const provider = getEthereumProvider(env)
   if (!provider) {
-    return null
+    return { status: "unavailable" }
   }
 
   let normalizedWalletAddress: string
   try {
     normalizedWalletAddress = getAddress(walletAddress)
   } catch {
-    return null
+    return { status: "not_found" }
   }
 
   try {
     const reverseName = await provider.lookupAddress(normalizedWalletAddress)
     if (!reverseName) {
-      return null
+      return { status: "not_found" }
     }
 
     const resolvedAddress = await provider.resolveName(reverseName)
     if (!resolvedAddress) {
-      return null
+      return { status: "not_found" }
     }
 
     if (getAddress(resolvedAddress) !== normalizedWalletAddress) {
-      return null
+      return { status: "not_found" }
     }
 
     const name = reverseName.trim().toLowerCase()
@@ -225,16 +235,19 @@ export async function resolveVerifiedEnsProfile(env: Env, walletAddress: string)
     const hasSocial = Object.values(social).some(Boolean)
 
     return {
-      name,
-      metadata: {
+      status: "resolved",
+      profile: {
+        name,
+        metadata: {
         ...(avatar ? { avatar } : {}),
         ...(description ? { description } : {}),
         ...(header ? { header } : {}),
         ...(hasSocial ? { social } : {}),
         ...(normalizeEnsUrl(url) ? { url: normalizeEnsUrl(url) } : {}),
+        },
       },
     }
   } catch {
-    return null
+    return { status: "unavailable" }
   }
 }

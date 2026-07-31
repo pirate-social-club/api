@@ -1025,17 +1025,19 @@ export class DatabaseProfileRepository {
       return await this.identityRepository.getProfileByUserId(userId)
     }
 
-    const resolvedEnsProfile = await resolveVerifiedEnsProfileWithTimeout(
+    const ensLookup = await resolveVerifiedEnsProfileWithTimeout(
       this.env,
       primaryWalletRow.wallet_address_display,
     )
-    if (resolvedEnsProfile === ENS_RESOLUTION_TIMED_OUT) {
-      console.warn("[auth] ENS profile resolution timed out; preserving existing linked handles", {
+    if (ensLookup === ENS_RESOLUTION_TIMED_OUT || ensLookup.status === "unavailable") {
+      console.warn("[auth] ENS profile resolution unavailable; preserving existing linked handles", {
+        reason: ensLookup === ENS_RESOLUTION_TIMED_OUT ? "timeout" : "provider_error",
         timeout_ms: ensResolutionTimeoutMs,
         user_id: userId,
       })
       return await this.identityRepository.getProfileByUserId(userId)
     }
+    const resolvedEnsProfile = ensLookup.status === "resolved" ? ensLookup.profile : null
     const updatedAt = nowIso()
     const tx = await this.client.transaction("write")
 

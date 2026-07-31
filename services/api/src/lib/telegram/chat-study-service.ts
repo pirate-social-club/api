@@ -159,6 +159,7 @@ async function listReadySongs(input: {
         WHERE community_id = ?1
           AND post_type = 'song'
           AND status = 'published'
+          AND visibility = 'public'
         ORDER BY created_at DESC, post_id DESC
         LIMIT ${CHAT_STUDY_SONG_LIMIT}
       `,
@@ -341,7 +342,7 @@ async function claimStudyMessageDelivery(input: {
   env: Env
   messageId: number
   telegramUserId: string
-}): Promise<boolean> {
+}): Promise<"claimed" | "processing" | "consumed"> {
   const now = nowIso()
   const leaseExpiresAt = new Date(Date.parse(now) + CALLBACK_PROCESSING_LEASE_MS).toISOString()
   const result = await getControlPlaneClient(input.env).execute({
@@ -365,7 +366,20 @@ async function claimStudyMessageDelivery(input: {
     `,
     args: [input.bot.id, input.telegramUserId, input.messageId, now, leaseExpiresAt],
   })
-  return (result.rowsAffected ?? 0) === 1
+  if ((result.rowsAffected ?? 0) === 1) return "claimed"
+
+  const existing = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT status
+      FROM telegram_chat_study_message_deliveries
+      WHERE telegram_community_bot_id = ?1
+        AND telegram_user_id = ?2
+        AND telegram_message_id = ?3
+      LIMIT 1
+    `,
+    args: [input.bot.id, input.telegramUserId, input.messageId],
+  })
+  return existing.rows[0]?.status === "consumed" ? "consumed" : "processing"
 }
 
 async function finishStudyMessageDelivery(input: {
@@ -410,17 +424,22 @@ export async function startTelegramChatStudy(input: {
   if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) return false
   const requestMessageId = Number(input.requestMessageId)
   const hasDeliveryId = Number.isSafeInteger(requestMessageId)
-  if (
-    hasDeliveryId
-    && !await claimStudyMessageDelivery({
+  const deliveryClaim = hasDeliveryId
+    ? await claimStudyMessageDelivery({
       bot: input.bot,
       env: input.env,
       messageId: requestMessageId,
       telegramUserId: input.telegramUserId,
     })
-  ) {
+    : "claimed"
+  if (deliveryClaim === "consumed") {
+    await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: "That study menu was already used. Send /study to choose a song again.",
+    })
     return true
   }
+  if (deliveryClaim === "processing") return true
   try {
     const handled = await runTelegramChatStudyStart(input)
     if (hasDeliveryId) {

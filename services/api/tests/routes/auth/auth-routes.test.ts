@@ -574,7 +574,7 @@ describe("auth routes", () => {
     }
   })
 
-  test("session exchange times out ENS resolution and preserves the existing profile", async () => {
+  test("session exchange preserves the existing ENS profile when resolution times out or errors", async () => {
     const ctx = await createRouteTestContext()
     const walletAddress = "0x4444444444444444444444444444444444444444"
     const exchange = () => makeJsonRequest("http://pirate.test/auth/session/exchange", {
@@ -606,6 +606,21 @@ describe("auth routes", () => {
         profile: { linked_handles: Array<{ kind: string; label: string; verification_state: string }> }
       }
       expect(body.profile.linked_handles).toContainEqual(expect.objectContaining({
+        kind: "ens",
+        label: "kept.eth",
+        verification_state: "verified",
+      }))
+
+      setEnsResolutionTimeoutForTests(null)
+      setEnsResolverForTests(async () => {
+        throw new Error("RPC rate limited")
+      })
+      const errorResponse = await exchange()
+      expect(errorResponse.status).toBe(200)
+      const errorBody = await json(errorResponse) as {
+        profile: { linked_handles: Array<{ kind: string; label: string; verification_state: string }> }
+      }
+      expect(errorBody.profile.linked_handles).toContainEqual(expect.objectContaining({
         kind: "ens",
         label: "kept.eth",
         verification_state: "verified",
