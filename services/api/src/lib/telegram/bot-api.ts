@@ -186,6 +186,17 @@ export function sendTelegramMessage(
   return callTelegramBotApi(bot, "sendMessage", body)
 }
 
+export function answerTelegramCallbackQuery(
+  bot: Env | TelegramBotCredential,
+  body: {
+    callback_query_id: string
+    text?: string
+    show_alert?: boolean
+  },
+): Promise<boolean> {
+  return callTelegramBotApi(bot, "answerCallbackQuery", body)
+}
+
 type TelegramInlineReplyMarkup = {
   inline_keyboard: Array<Array<Record<string, unknown>>>
 }

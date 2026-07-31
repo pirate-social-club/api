@@ -9,8 +9,16 @@ import {
 import type { TelegramCommunityBotCredential } from "./community-bot-service"
 
 export type TelegramWebhookUpdate = {
+  callback_query?: TelegramWebhookCallbackQuery
   message?: TelegramWebhookMessage
   chat_join_request?: TelegramWebhookChatJoinRequest
+}
+
+export type TelegramWebhookCallbackQuery = {
+  id?: string
+  data?: string
+  from?: { id?: number | string; is_bot?: boolean; username?: string; language_code?: string }
+  message?: TelegramWebhookMessage
 }
 
 export type TelegramWebhookMessage = {
