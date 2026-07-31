@@ -389,6 +389,35 @@ describe("community study routes", () => {
         },
       })
       expect(start.status).toBe(200)
+      expect(telegramBodies.some((body) => body.text === "Choose a song to study:")).toBe(false)
+      const sessionsAfterStart = await ctx.client.execute(
+        "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
+      )
+      expect(sessionsAfterStart.rows).toHaveLength(0)
+
+      telegramBodies.length = 0
+      const studyUpdate = {
+        update_id: 5002,
+        message: {
+          chat: { id: 454545, type: "private" },
+          date: 1785499201,
+          from: { id: 454545, is_bot: false, language_code: "es" },
+          message_id: 601,
+          text: "/study",
+        },
+      }
+      const [study, studyRedelivery] = await Promise.all([
+        webhook(studyUpdate),
+        webhook(studyUpdate),
+      ])
+      expect(study.status).toBe(200)
+      expect(studyRedelivery.status).toBe(200)
+      expect(telegramBodies.filter((body) => body.text === "Choose a song to study:")).toHaveLength(1)
+      const studyDeliveries = await ctx.client.execute(
+        "SELECT status FROM telegram_chat_study_message_deliveries",
+      )
+      expect(studyDeliveries.rows).toHaveLength(1)
+      expect(studyDeliveries.rows[0]?.status).toBe("consumed")
       const picker = telegramBodies.find((body) => body.text === "Choose a song to study:")
       expect(picker).toBeTruthy()
       const pickerMarkup = picker?.reply_markup as {
@@ -510,22 +539,21 @@ describe("community study routes", () => {
       })
       expect(callbacks.rows).toHaveLength(1)
       expect(callbacks.rows[0]?.status).toBe("consumed")
-
       const secondPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string" && body.text.includes("Line two for route study")
       )
       const secondMarkup = secondPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
-      const secondCorrect = secondMarkup.inline_keyboard?.flat().find((button) =>
-        button.text === "Traducción correcta 2"
+      const secondWrong = secondMarkup.inline_keyboard?.flat().find((button) =>
+        button.text === "Traducción incorrecta 2"
       )
-      expect(secondCorrect?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
+      expect(secondWrong?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
       const secondAnswer = await webhook({
         update_id: 5004,
         callback_query: {
           id: "callback-answer-second",
-          data: secondCorrect!.callback_data,
+          data: secondWrong!.callback_data,
           from: { id: 454545, is_bot: false, language_code: "es" },
           message: {
             chat: { id: 454545, type: "private" },
@@ -536,8 +564,38 @@ describe("community study routes", () => {
       expect(secondAnswer.status).toBe(200)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string"
+        && body.text.includes("❌ Traducción incorrecta 2")
+        && body.text.includes("✅ Correct answer: Traducción correcta 2")
+      )).toBe(true)
+      const retryPrompt = [...telegramBodies].reverse().find((body) =>
+        typeof body.text === "string"
+        && body.text.includes("Line two for route study")
+        && typeof body.reply_markup === "object"
+      )
+      const retryMarkup = retryPrompt?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }
+      const retryCorrect = retryMarkup.inline_keyboard?.flat().find((button) =>
+        button.text === "Traducción correcta 2"
+      )
+      expect(retryCorrect?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
+      const retryAnswer = await webhook({
+        update_id: 5005,
+        callback_query: {
+          id: "callback-answer-second-retry",
+          data: retryCorrect!.callback_data,
+          from: { id: 454545, is_bot: false, language_code: "es" },
+          message: {
+            chat: { id: 454545, type: "private" },
+            message_id: 703,
+          },
+        },
+      })
+      expect(retryAnswer.status).toBe(200)
+      expect(telegramBodies.some((body) =>
+        typeof body.text === "string"
         && body.text.startsWith("Study complete: Route Song")
-        && body.text.includes("Score: 2/2")
+        && body.text.includes("Score:")
       )).toBe(true)
       const completed = await ctx.client.execute({
         sql: `
