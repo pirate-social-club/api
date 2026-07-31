@@ -7,6 +7,7 @@ import { readString } from "./post-study-attempt-store"
 
 export type StudyPost = {
   access_mode: "public" | "locked" | null
+  age_gate_policy: "none" | "18_plus"
   asset_id: string | null
   author_user_id: string | null
   community_id: string
@@ -26,7 +27,7 @@ export async function getStudyPostById(client: ReadClient, postId: string): Prom
     sql: `
       SELECT post_id, community_id, author_user_id, post_type, status, visibility,
              lyrics,
-             title, song_title, song_cover_art_ref, source_language, access_mode, asset_id
+             title, song_title, song_cover_art_ref, source_language, access_mode, age_gate_policy, asset_id
       FROM posts
       WHERE post_id = ?1
       LIMIT 1
@@ -36,6 +37,7 @@ export async function getStudyPostById(client: ReadClient, postId: string): Prom
   if (!row) return null
   return {
     access_mode: readString(row.access_mode) as StudyPost["access_mode"],
+    age_gate_policy: readString(row.age_gate_policy) as StudyPost["age_gate_policy"],
     asset_id: readString(row.asset_id),
     author_user_id: readString(row.author_user_id),
     community_id: readString(row.community_id) ?? "",

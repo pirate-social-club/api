@@ -1,7 +1,7 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
 import type { SongFeatureCapabilityReason } from "../../types"
-import type { ProfileRepository } from "../auth/repositories"
+import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { badRequestError, conflictError, HttpError, notFoundError } from "../errors"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
@@ -30,6 +30,8 @@ import {
 } from "./post-study-attempt-store"
 import { classifyStudyGenerationError } from "./post-study-generation-helpers"
 import { canReadPostForStudy, canStudyPost, getStudyPostById, type StudyPost } from "./post-study-access"
+import { requireAgeGateAccess } from "./age-gate-viewer-state"
+import { getUserRepository } from "../auth/repositories"
 import { getNextDueAt, listExercises } from "./post-study-exercise-query"
 import {
   ensureStudySession,
@@ -671,6 +673,11 @@ export async function getPostStudyPayload(input: {
     if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
       throw notFoundError("Post not found")
     }
+    await requireAgeGateAccess({
+      postAgeGatePolicy: post.age_gate_policy,
+      userId: input.actor.userId,
+      userRepository: getUserRepository(input.env),
+    })
     if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
       return basePayload({ access: "unavailable", post, targetLanguage })
     }
@@ -1250,6 +1257,11 @@ export async function submitPostStudyAttempt(input: {
     if (!canReadPost) {
       throw notFoundError("Post not found")
     }
+    await requireAgeGateAccess({
+      postAgeGatePolicy: post.age_gate_policy,
+      userId: input.actor.userId,
+      userRepository: getUserRepository(input.env),
+    })
     if (!canStudy) {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
@@ -1428,6 +1440,7 @@ export async function getPostStreakSummary(input: {
   postId: string
   profileRepository: ProfileRepository
   studyTimezone?: string
+  userRepository: UserRepository
   userId: string | null
 }): Promise<SongStreakSummary | null> {
   if (!input.userId) return null
@@ -1440,6 +1453,11 @@ export async function getPostStreakSummary(input: {
     if (error instanceof HttpError && error.status === 404) return null
     throw error
   }
+  await requireAgeGateAccess({
+    postAgeGatePolicy: post.age_gate_policy,
+    userId: input.userId,
+    userRepository: input.userRepository,
+  })
   try {
     return (await readSongStreakSummary({
       client: input.client,
@@ -1474,6 +1492,11 @@ export async function getPostStreakLeaderboard(input: {
     if (post.status !== "published" && !await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
       throw notFoundError("Post not found")
     }
+    await requireAgeGateAccess({
+      postAgeGatePolicy: post.age_gate_policy,
+      userId: input.actor.userId,
+      userRepository: getUserRepository(input.env),
+    })
 
     const { date, summary } = await readSongStreakSummary({
       client: db.client as Client,
@@ -1517,6 +1540,11 @@ export async function transcribePostStudyAudio(input: {
     if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
       throw notFoundError("Post not found")
     }
+    await requireAgeGateAccess({
+      postAgeGatePolicy: post.age_gate_policy,
+      userId: input.actor.userId,
+      userRepository: getUserRepository(input.env),
+    })
     if (post.post_type !== "song") {
       throw notFoundError("Study is not available")
     }

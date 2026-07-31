@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveAgeGateViewerState } from "./age-gate-viewer-state"
+import { requireAgeGateAccess, resolveAgeGateViewerState } from "./age-gate-viewer-state"
 import type { User } from "../../types"
 import type { UserRepository } from "../auth/repositories"
 import { buildDefaultVerificationCapabilities } from "../verification/verification-capabilities"
@@ -99,5 +99,24 @@ describe("resolveAgeGateViewerState", () => {
       postAgeGatePolicy: "18_plus",
     })
     expect(result).toBe("proof_required")
+  })
+
+  test("rejects age-gated learning access without verified age", async () => {
+    await expect(requireAgeGateAccess({
+      postAgeGatePolicy: "18_plus",
+      userId: null,
+      userRepository: mockUserRepository(null),
+    })).rejects.toMatchObject({
+      code: "verification_required",
+      status: 403,
+    })
+  })
+
+  test("allows age-gated learning access for a verified adult", async () => {
+    await expect(requireAgeGateAccess({
+      postAgeGatePolicy: "18_plus",
+      userId: "usr_verified",
+      userRepository: mockUserRepository(verifiedUser()),
+    })).resolves.toBeUndefined()
   })
 })
