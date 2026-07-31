@@ -17380,6 +17380,17 @@ const spec = {
             "type": "integer",
             "minimum": 1
           },
+          "default_amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payout_tiers": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignPayoutTier"
+            }
+          },
           "milestone_7_cents": {
             "type": "integer",
             "minimum": 0,
@@ -17505,6 +17516,9 @@ const spec = {
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
+          "default_amount_cents",
+          "max_claim_cents",
+          "payout_tiers",
           "milestone_7_cents",
           "milestone_30_cents",
           "reward_period_cap_cents",
@@ -17558,6 +17572,21 @@ const spec = {
           "daily_reward_cents": {
             "type": "integer",
             "minimum": 1
+          },
+          "default_amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_claim_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payout_tiers": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignPayoutTier"
+            }
           },
           "milestone_7_cents": {
             "type": "integer",
@@ -22707,6 +22736,28 @@ const spec = {
           "karaoke",
           "either"
         ]
+      },
+      "RewardCampaignPayoutTier": {
+        "type": "object",
+        "required": [
+          "nationalities",
+          "amount_cents"
+        ],
+        "properties": {
+          "nationalities": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
       },
       "RewardCampaignStatus": {
         "type": "string",

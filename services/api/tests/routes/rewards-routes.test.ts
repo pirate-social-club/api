@@ -356,6 +356,174 @@ describe("rewards routes", () => {
     expect(missing.status).toBe(400)
   })
 
+  test("persists canonical tier terms but blocks funding until nationality resolution is enabled", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-tier-owner")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const tieredBody = campaignBody({
+      default_amount_cents: 40,
+      payout_tiers: [
+        { nationalities: ["vnm"], amount_cents: 60 },
+        { nationalities: ["USA", "CAN"], amount_cents: 80 },
+      ],
+      reward_period_cap_cents: 80,
+      idempotency_key: "reward-campaign-tier-create",
+    })
+    const createdResponse = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(tieredBody),
+    }, ctx.env)
+    expect(createdResponse.status).toBe(201)
+    const campaign = await json(createdResponse) as {
+      id: string
+      daily_reward_cents: number
+      default_amount_cents: number
+      max_claim_cents: number
+      payout_tiers: Array<{ nationalities: string[]; amount_cents: number }>
+    }
+    expect(campaign).toMatchObject({
+      daily_reward_cents: 40,
+      default_amount_cents: 40,
+      max_claim_cents: 80,
+      payout_tiers: [
+        { nationalities: ["CAN", "USA"], amount_cents: 80 },
+        { nationalities: ["VNM"], amount_cents: 60 },
+      ],
+    })
+
+    const replay = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({
+        ...tieredBody,
+        payout_tiers: [
+          { nationalities: ["CAN"], amount_cents: 80 },
+          { nationalities: ["USA"], amount_cents: 80 },
+          { nationalities: ["VNM"], amount_cents: 60 },
+        ],
+      }),
+    }, ctx.env)
+    expect(replay.status).toBe(201)
+    expect((await json(replay) as { id: string }).id).toBe(campaign.id)
+
+    const stored = await ctx.client.execute({
+      sql: "SELECT default_amount_cents, max_claim_cents, payout_tiers_json, terms_version FROM reward_campaigns WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(stored.rows[0]).toMatchObject({
+      default_amount_cents: 40,
+      max_claim_cents: 80,
+      terms_version: 3,
+    })
+
+    const quote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "tier-funding-blocked" }),
+    }, ctx.env)
+    expect(quote.status).toBe(409)
+    expect(await json(quote)).toMatchObject({
+      message: "Tiered reward campaigns cannot accept contributions until nationality payout resolution is enabled",
+    })
+
+    const syntheticFundingId = "rcf_tier_activation_guard"
+    const now = new Date().toISOString()
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_campaign_funding_effects (
+          reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+          idempotency_key, chain_id, token_address, expected_amount_cents,
+          expected_amount_atomic, sender_address, treasury_address, status,
+          expires_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 84532, ?5, 100, '1000000', ?6, ?7, 'quoted', ?8, ?9, ?9)
+      `,
+      args: [
+        syntheticFundingId,
+        campaign.id,
+        session.userId,
+        "tier-activation-guard",
+        "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "0x1000000000000000000000000000000000000001",
+        "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
+        new Date(Date.now() + 60_000).toISOString(),
+        now,
+      ],
+    })
+    let verificationCalls = 0
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => {
+      verificationCalls += 1
+      return { kind: "verified", senderAddress: expected.senderAddress, txRef: fundingTxRef }
+    })
+    const confirm = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${syntheticFundingId}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"ab".repeat(32)}` }),
+      },
+      ctx.env,
+    )
+    expect(confirm.status).toBe(409)
+    expect(verificationCalls).toBe(0)
+    const guardedFunding = await ctx.client.execute({
+      sql: "SELECT status, tx_hash FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
+      args: [syntheticFundingId],
+    })
+    expect(guardedFunding.rows[0]).toMatchObject({ status: "quoted", tx_hash: null })
+  })
+
+  test("rejects ambiguous or insolvent nationality tier terms", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-tier-validation")
+    await seedCampaignSong(ctx, session.userId)
+
+    const cases = [
+      campaignBody({
+        default_amount_cents: 41,
+        idempotency_key: "tier-default-mismatch",
+      }),
+      campaignBody({
+        payout_tiers: [
+          { nationalities: ["USA"], amount_cents: 50 },
+          { nationalities: ["usa"], amount_cents: 60 },
+        ],
+        reward_period_cap_cents: 60,
+        idempotency_key: "tier-country-duplicate",
+      }),
+      campaignBody({
+        payout_tiers: Array.from({ length: 11 }, (_, index) => ({
+          nationalities: [index === 0 ? "USA" : "CAN"],
+          amount_cents: 40,
+        })),
+        idempotency_key: "tier-count-overflow",
+      }),
+      campaignBody({
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 79,
+        idempotency_key: "tier-period-under-max",
+      }),
+      campaignBody({
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 80,
+        budget_cents: 79,
+        idempotency_key: "tier-budget-under-max",
+      }),
+    ]
+    for (const body of cases) {
+      const response = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }, ctx.env)
+      expect(response.status).toBe(400)
+    }
+  })
+
   test("creates, quotes, uniquely verifies, and activates a fully funded campaign", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
