@@ -1,6 +1,71 @@
 import { describe, expect, test } from "bun:test"
 
-import { buildSongKaraokeLines } from "../../../src/lib/posts/post-karaoke-service"
+import {
+  buildSongKaraokeLines,
+  isSharedKaraokePayloadCacheable,
+  requireKaraokeAgeGateAccess,
+  shouldFallbackToPublicPostRead,
+} from "../../../src/lib/posts/post-karaoke-service"
+import { HttpError } from "../../../src/lib/errors"
+import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
+
+describe("requireKaraokeAgeGateAccess", () => {
+  test("uses the authenticated actor through public-read fallback", async () => {
+    const capabilities = buildDefaultVerificationCapabilities()
+    capabilities.age_over_18 = {
+      mechanism: null,
+      proof_type: "age_over_18",
+      provider: "self",
+      state: "verified",
+      verified_at: null,
+    }
+    const userRepository = {
+      getUserById: async (userId: string) => ({
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        user_id: userId,
+        verification_capabilities: capabilities,
+        verification_state: "verified",
+      }),
+    }
+
+    await expect(requireKaraokeAgeGateAccess({
+      actor: { authType: "user", userId: "usr_verified" },
+      postAgeGatePolicy: "18_plus",
+      userRepository: userRepository as never,
+    })).resolves.toBeUndefined()
+  })
+})
+
+describe("shouldFallbackToPublicPostRead", () => {
+  test("never retries an age-verification denial as anonymous", () => {
+    expect(shouldFallbackToPublicPostRead(
+      new HttpError(403, "verification_required", "Age verification is required"),
+    )).toBe(false)
+  })
+
+  test("still permits the intended public fallback for membership-shaped misses", () => {
+    expect(shouldFallbackToPublicPostRead(
+      new HttpError(404, "not_found", "Community not found"),
+    )).toBe(true)
+  })
+})
+
+describe("isSharedKaraokePayloadCacheable", () => {
+  test("never shares an age-gated viewer response", () => {
+    expect(isSharedKaraokePayloadCacheable({
+      access_mode: "public",
+      age_gate_policy: "18_plus",
+    })).toBe(false)
+  })
+
+  test("keeps ordinary public karaoke payloads cacheable", () => {
+    expect(isSharedKaraokePayloadCacheable({
+      access_mode: "public",
+      age_gate_policy: "none",
+    })).toBe(true)
+  })
+})
 
 describe("buildSongKaraokeLines", () => {
   test("classifies whole-line parentheticals as timed ad-libs", () => {

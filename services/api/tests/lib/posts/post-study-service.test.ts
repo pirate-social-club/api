@@ -706,6 +706,30 @@ afterEach(async () => {
 }, 120_000)
 
 describe("post study service", () => {
+  test("age-gated streak reads require verified age after post access", async () => {
+    await seedSongPost()
+    await exec("UPDATE posts SET age_gate_policy = '18_plus' WHERE post_id = ?1", [POST_ID])
+    const ageGateRow = await client!.execute({
+      args: [POST_ID],
+      sql: "SELECT age_gate_policy FROM posts WHERE post_id = ?1",
+    })
+    expect(ageGateRow.rows[0]?.age_gate_policy).toBe("18_plus")
+    const unverifiedUsers = {
+      getUserById: async () => null,
+    }
+
+    await expect(getPostStreakSummary({
+      client: client!,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+      userId: LEARNER_ID,
+      userRepository: unverifiedUsers as never,
+    })).rejects.toMatchObject({
+      code: "verification_required",
+      status: 403,
+    })
+  })
+
   test("revalidates stale local ElevenLabs study capability from the control plane", async () => {
     await exec(`
       UPDATE communities
@@ -1639,6 +1663,7 @@ describe("post study service", () => {
       client: client!,
       postId: POST_ID,
       profileRepository: profileRepository as never,
+      userRepository: {} as never,
       userId: LEARNER_ID,
     })
     expect(summary).toEqual({
@@ -1650,6 +1675,7 @@ describe("post study service", () => {
       client: client!,
       postId: SECOND_POST_ID,
       profileRepository: profileRepository as never,
+      userRepository: {} as never,
       userId: LEARNER_ID,
     })
 
@@ -1749,6 +1775,7 @@ describe("post study service", () => {
       client: client!,
       postId: POST_ID,
       profileRepository: profileRepository as never,
+      userRepository: {} as never,
       userId: LEARNER_ID,
     })
     expect(utcSummary?.viewer?.qualified_today).toBe(false)

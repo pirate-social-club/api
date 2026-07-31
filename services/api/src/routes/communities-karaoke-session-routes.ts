@@ -120,6 +120,17 @@ function responseForKaraokePayloadCache(response: Response): Response {
   })
 }
 
+function setKaraokePayloadCacheHeaders(c: Context, cacheable: boolean): void {
+  if (cacheable) {
+    setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+    return
+  }
+  c.header("Cache-Control", "private, no-store")
+  c.header("CDN-Cache-Control", "no-store")
+  c.header("Cloudflare-CDN-Cache-Control", "no-store")
+  c.header("Vary", "Accept, Authorization")
+}
+
 const defaultKaraokePayloadRouteDeps = {
   getCommunityRepository,
   getPostKaraokePayload,
@@ -148,6 +159,7 @@ export function setKaraokePayloadRouteDepsForTests(
 async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
   c: Context<E>,
   input: {
+    actor?: AuthenticatedEnv["Variables"]["actor"] | null
     communityId: string
     postId: string
   },
@@ -158,6 +170,7 @@ async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
   const locale = c.req.query("locale") ?? null
   const communityRepository = karaokePayloadRouteDeps.getCommunityRepository(c.env)
   const cacheContext = await timing.time("cache_eligibility", () => karaokePayloadRouteDeps.loadPublicPostKaraokePayloadCacheContext({
+    actor: input.actor,
     communityId,
     communityRepository,
     env: c.env,
@@ -177,6 +190,7 @@ async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
   }
 
   const payload = await timing.time("karaoke_payload", () => karaokePayloadRouteDeps.getPostKaraokePayload({
+    actor: input.actor,
     communityId,
     communityRepository,
     env: c.env,
@@ -187,7 +201,7 @@ async function handlePublicKaraokePayloadRequest<E extends { Bindings: Env }>(
     recordTiming: timing.record,
     userRepository: karaokePayloadRouteDeps.getUserRepository(c.env),
   }))
-  setPublicReadCacheHeaders(c, { vary: ["Accept"] })
+  setKaraokePayloadCacheHeaders(c, cacheContext.cacheable)
   timing.writeHeader()
   const response = c.json(payload, 200)
   response.headers.set("X-Pirate-Worker-Cache", cacheContext.cacheable ? "MISS" : "BYPASS")
@@ -221,6 +235,7 @@ export async function handlePublicPostKaraokePayloadRequest<E extends { Bindings
 export function registerCommunityKaraokeSessionRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/posts/:postId/karaoke", async (c) => {
     const timing = createServerTimingRecorder(c)
+    const actor = c.get("actor")
     const communityRepository = karaokePayloadRouteDeps.getCommunityRepository(c.env)
     const communityId = await timing.time("resolve_community", () => karaokePayloadRouteDeps.resolveCommunityIdentifier(
       communityRepository,
@@ -230,7 +245,7 @@ export function registerCommunityKaraokeSessionRoutes(communities: Hono<Authenti
       throw notFoundError("Post not found")
     }
     const postId = decodePublicPostId(c.req.param("postId"))
-    return await handlePublicKaraokePayloadRequest(c, { communityId, postId })
+    return await handlePublicKaraokePayloadRequest(c, { actor, communityId, postId })
   })
 
   communities.get("/:communityId/posts/:postId/karaoke/leaderboard", async (c) => {
