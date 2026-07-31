@@ -45,7 +45,8 @@
     "1144_karaoke_scoring_diagnostics.sql",
     "1145_dance_attempts.sql",
     "1146_dance_attempt_reason_contract.sql",
-    "1147_dance_attempt_upload_invalid_reason.sql"
+    "1147_dance_attempt_upload_invalid_reason.sql",
+    "1148_post_age_gate_provenance.sql"
   ],
   "features": {},
   "transitional": {
@@ -93,7 +94,7 @@
       "compatibility_tests": [
         {
           "path": "src/lib/posts/community-post-projection.lyrics-language.test.ts",
-          "sha256": "6ecb769d1570ea57e2f72b1da9148ba66c8b68ad11a7306f9b89a2ab0d323343"
+          "sha256": "f70b3e79596cc97e26d7d111b8929360aa65e6f96c4cdc87972f5c92a694dd23"
         }
       ]
     }

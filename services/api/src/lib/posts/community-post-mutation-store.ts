@@ -95,6 +95,9 @@ export async function markPostPublished(input: {
   analysisState: Post["analysis_state"]
   contentSafetyState: Post["content_safety_state"]
   ageGatePolicy: Post["age_gate_policy"]
+  ageGateSource: Post["age_gate_source"]
+  ageGateEvidenceRef: string | null
+  ageGateSetAt: string | null
   now: string
 }): Promise<Post> {
   await input.executor.execute({
@@ -104,14 +107,26 @@ export async function markPostPublished(input: {
           analysis_state = ?2,
           content_safety_state = ?3,
           age_gate_policy = ?4,
+          age_gate_source = ?5,
+          age_gate_evidence_ref = ?6,
+          age_gate_set_at = ?7,
           publish_failure_code = NULL,
           publish_failure_message = NULL,
           publish_failure_retryable = NULL,
           publish_failed_at = NULL,
-          updated_at = ?5
+          updated_at = ?8
       WHERE post_id = ?1
     `,
-    args: [input.postId, input.analysisState, input.contentSafetyState, input.ageGatePolicy, input.now],
+    args: [
+      input.postId,
+      input.analysisState,
+      input.contentSafetyState,
+      input.ageGatePolicy,
+      input.ageGateSource ?? null,
+      input.ageGateEvidenceRef,
+      input.ageGateSetAt,
+      input.now,
+    ],
   })
 
   const updated = await getPostById(input.executor, input.postId)
@@ -119,6 +134,17 @@ export async function markPostPublished(input: {
     throw internalError("Post row is missing after publish update")
   }
   return updated
+}
+
+export async function setPostAgeGateEvidenceRef(input: {
+  executor: DbExecutor
+  postId: string
+  evidenceRef: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `UPDATE posts SET age_gate_evidence_ref = ?2 WHERE post_id = ?1`,
+    args: [input.postId, input.evidenceRef],
+  })
 }
 
 export async function assignPostAssetIdIfMissing(input: {

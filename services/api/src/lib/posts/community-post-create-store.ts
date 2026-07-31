@@ -22,6 +22,7 @@ import {
 import type { Post } from "../../types"
 import { decodePublicSongArtifactBundleId } from "../public-ids"
 import type { PostWriteRequest } from "./post-create-validation"
+import type { AgeGateProvenance } from "./age-gate-provenance"
 
 /**
  * Deterministic projection of exactly what an insert WROTE — NOT hydrated DB
@@ -122,6 +123,7 @@ export async function insertPost(input: {
   projectionSchema: PostProjectionSchema
   idempotencyBodyHash?: string | null
   analysisOverride?: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">
+  ageGateProvenance?: AgeGateProvenance | null
   agentWriteAuthorization?: {
     agentId: string
     agentOwnershipRecordId: string
@@ -180,6 +182,11 @@ export async function insertPost(input: {
   if (input.body.event && !projectionSchema.hasPostEvents) {
     throw providerUnavailable("Community database migration is still rolling out", {
       missing_table: "post_events",
+    })
+  }
+  if (input.ageGateProvenance && !projectionSchema.hasAgeGateProvenanceColumns) {
+    throw providerUnavailable("Community database migration is still rolling out", {
+      missing_column: "posts.age_gate_source",
     })
   }
   const sourceLanguage = detectSourceLanguageFromText([
@@ -263,6 +270,9 @@ export async function insertPost(input: {
   addSql("analysis_result_ref", "NULL")
   addValue("content_safety_state", contentSafetyState)
   addValue("age_gate_policy", ageGatePolicy)
+  addOptionalMigratedValue("age_gate_source", input.ageGateProvenance?.source ?? null, projectionSchema.hasAgeGateProvenanceColumns)
+  addOptionalMigratedValue("age_gate_evidence_ref", input.ageGateProvenance?.evidenceRef ?? null, projectionSchema.hasAgeGateProvenanceColumns)
+  addOptionalMigratedValue("age_gate_set_at", input.ageGateProvenance?.setAt ?? null, projectionSchema.hasAgeGateProvenanceColumns)
   addValue("created_at", input.createdAt)
   addValue("updated_at", input.createdAt)
   addValue("idempotency_key", idempotencyKey)
