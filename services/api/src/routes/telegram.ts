@@ -74,6 +74,7 @@ import {
   type TelegramWebhookUpdate,
 } from "../lib/telegram/webhook-parsing"
 import { handleTelegramStudyVoiceMessage } from "../lib/telegram/study-voice-service"
+import { isTelegramStudyVoiceEnabled } from "../lib/telegram/study-voice-admission"
 import {
   continueTelegramChatStudyAfterVoice,
   handleTelegramChatStudyCallback,
@@ -388,16 +389,6 @@ async function handleCommunityBotStartMessage(env: Env, input: {
     }
     return
   }
-  if (!startPayload && input.telegramUserId && await startTelegramChatStudy({
-    bot: input.bot,
-    chatId: input.chatId,
-    env,
-    targetLanguage: input.telegramLanguageCode,
-    telegramUserId: input.telegramUserId,
-  })) {
-    return
-  }
-
   const joinCommunityId = parseCommunityJoinPayload(startPayload)
   const legacyCommunityId = joinCommunityId ? null : parseCommunityStartPayload(startPayload)
   const requestedCommunityId = joinCommunityId ?? legacyCommunityId
@@ -1157,15 +1148,23 @@ async function handleTelegramWebhookUpdate(
         message.text?.trim().match(/^\/study(?:@[A-Za-z0-9_]{5,32})?$/u)
         && chatId
         && telegramUserId
-        && await startTelegramChatStudy({
-          bot,
-          chatId,
-          env,
-          targetLanguage: telegramLanguageCode(message.from?.language_code),
-          telegramUserId,
-        })
       ) {
-        return
+        if (isTelegramStudyVoiceEnabled(env, bot.communityId)) {
+          const handle = () => startTelegramChatStudy({
+            bot,
+            chatId,
+            env,
+            requestMessageId: message.message_id ?? null,
+            targetLanguage: telegramLanguageCode(message.from?.language_code),
+            telegramUserId,
+          }).then(() => undefined)
+          if (waitUntil) {
+            waitUntil(withBackgroundControlPlaneClients(handle))
+          } else {
+            await handle()
+          }
+          return
+        }
       }
       if (await handleTelegramStudyVoiceMessage({
         bot,

@@ -164,7 +164,7 @@ async function listReadySongs(input: {
           AND post_type = 'song'
           AND status = 'published'
         ORDER BY created_at DESC, post_id DESC
-        LIMIT 30
+        LIMIT ${CHAT_STUDY_SONG_LIMIT}
       `,
       args: [input.communityId],
     })
@@ -287,7 +287,7 @@ async function replaceActiveSession(input: {
   }
 }
 
-export async function startTelegramChatStudy(input: {
+async function runTelegramChatStudyStart(input: {
   bot: TelegramCommunityBotCredential
   chatId: string
   env: Env
@@ -365,6 +365,116 @@ export async function startTelegramChatStudy(input: {
     reply_markup: songPickerMarkup(songs, session.actionToken, 0),
   })
   return true
+}
+
+async function claimStudyMessageDelivery(input: {
+  bot: TelegramCommunityBotCredential
+  env: Env
+  messageId: number
+  telegramUserId: string
+}): Promise<boolean> {
+  const now = nowIso()
+  const leaseExpiresAt = new Date(Date.parse(now) + CALLBACK_PROCESSING_LEASE_MS).toISOString()
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO telegram_chat_study_message_deliveries (
+        telegram_community_bot_id, telegram_user_id, telegram_message_id,
+        status, processing_lease_expires_at, received_at, updated_at
+      ) VALUES (?1, ?2, ?3, 'processing', ?5, ?4, ?4)
+      ON CONFLICT (
+        telegram_community_bot_id, telegram_user_id, telegram_message_id
+      ) DO UPDATE SET
+        status = 'processing',
+        processing_lease_expires_at = excluded.processing_lease_expires_at,
+        last_error_message = NULL,
+        updated_at = excluded.updated_at
+      WHERE telegram_chat_study_message_deliveries.status = 'failed'
+         OR (
+           telegram_chat_study_message_deliveries.status = 'processing'
+           AND telegram_chat_study_message_deliveries.processing_lease_expires_at <= excluded.updated_at
+         )
+    `,
+    args: [input.bot.id, input.telegramUserId, input.messageId, now, leaseExpiresAt],
+  })
+  return (result.rowsAffected ?? 0) === 1
+}
+
+async function finishStudyMessageDelivery(input: {
+  bot: TelegramCommunityBotCredential
+  env: Env
+  error?: unknown
+  messageId: number
+  telegramUserId: string
+}): Promise<void> {
+  const now = nowIso()
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_chat_study_message_deliveries
+      SET status = ?4,
+          processing_lease_expires_at = NULL,
+          last_error_message = ?5,
+          consumed_at = CASE WHEN ?4 = 'consumed' THEN ?6 ELSE consumed_at END,
+          updated_at = ?6
+      WHERE telegram_community_bot_id = ?1
+        AND telegram_user_id = ?2
+        AND telegram_message_id = ?3
+    `,
+    args: [
+      input.bot.id,
+      input.telegramUserId,
+      input.messageId,
+      input.error ? "failed" : "consumed",
+      input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null,
+      now,
+    ],
+  })
+}
+
+export async function startTelegramChatStudy(input: {
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  env: Env
+  requestMessageId?: number | null
+  targetLanguage?: string | null
+  telegramUserId: string
+}): Promise<boolean> {
+  if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) return false
+  const requestMessageId = Number(input.requestMessageId)
+  const hasDeliveryId = Number.isSafeInteger(requestMessageId)
+  if (
+    hasDeliveryId
+    && !await claimStudyMessageDelivery({
+      bot: input.bot,
+      env: input.env,
+      messageId: requestMessageId,
+      telegramUserId: input.telegramUserId,
+    })
+  ) {
+    return true
+  }
+  try {
+    const handled = await runTelegramChatStudyStart(input)
+    if (hasDeliveryId) {
+      await finishStudyMessageDelivery({
+        bot: input.bot,
+        env: input.env,
+        messageId: requestMessageId,
+        telegramUserId: input.telegramUserId,
+      })
+    }
+    return handled
+  } catch (error) {
+    if (hasDeliveryId) {
+      await finishStudyMessageDelivery({
+        bot: input.bot,
+        env: input.env,
+        error,
+        messageId: requestMessageId,
+        telegramUserId: input.telegramUserId,
+      }).catch(() => undefined)
+    }
+    throw error
+  }
 }
 
 async function updateSessionAction(input: {
@@ -556,6 +666,10 @@ async function loadSessionByAction(input: {
   telegramUserId: string
   token: string
 }): Promise<ChatStudySession | null> {
+  const now = nowIso()
+  const staleProcessingBefore = new Date(
+    Date.parse(now) - CALLBACK_PROCESSING_LEASE_MS,
+  ).toISOString()
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
       SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
@@ -565,11 +679,14 @@ async function loadSessionByAction(input: {
       WHERE telegram_community_bot_id = ?1
         AND telegram_user_id = ?2
         AND action_token = ?3
-        AND status IN ('selecting', 'active')
+        AND (
+          status IN ('selecting', 'active')
+          OR (status = 'processing' AND updated_at <= ?5)
+        )
         AND expires_at > ?4
       LIMIT 1
     `,
-    args: [input.bot.id, input.telegramUserId, input.token, nowIso()],
+    args: [input.bot.id, input.telegramUserId, input.token, now, staleProcessingBefore],
   })
   return parseSession(result.rows[0])
 }
@@ -633,15 +750,22 @@ async function claimSessionAction(input: {
   env: Env
   session: ChatStudySession
 }): Promise<boolean> {
+  const now = nowIso()
+  const staleProcessingBefore = new Date(
+    Date.parse(now) - CALLBACK_PROCESSING_LEASE_MS,
+  ).toISOString()
   const claimed = await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_chat_study_sessions
       SET status = 'processing', updated_at = ?3
       WHERE chat_study_session_id = ?1
         AND action_token = ?2
-        AND status IN ('selecting', 'active')
+        AND (
+          status IN ('selecting', 'active')
+          OR (status = 'processing' AND updated_at <= ?4)
+        )
     `,
-    args: [input.session.id, input.session.actionToken, nowIso()],
+    args: [input.session.id, input.session.actionToken, now, staleProcessingBefore],
   })
   return (claimed.rowsAffected ?? 0) === 1
 }
@@ -678,29 +802,48 @@ export async function handleTelegramChatStudyCallback(input: {
   const telegramUserId = telegramIdentifier(input.callback.from?.id)
   const chatId = telegramIdentifier(input.callback.message?.chat?.id)
   if (!callbackQueryId || !telegramUserId || !chatId) return true
-  await answerTelegramCallbackQuery(input.bot, {
-    callback_query_id: callbackQueryId,
-  }).catch(() => undefined)
-  if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) return true
+  if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) {
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: "Study is not available here yet.",
+    }).catch(() => undefined)
+    return true
+  }
   const session = await loadSessionByAction({
     bot: input.bot,
     env: input.env,
     telegramUserId,
     token: parsed.token,
   })
-  if (!session || session.communityId !== input.bot.communityId) return true
+  if (!session || session.communityId !== input.bot.communityId) {
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: "This button expired. Send /study to continue.",
+    }).catch(() => undefined)
+    return true
+  }
   if (!await claimCallback({
     bot: input.bot,
     callbackQueryId,
     env: input.env,
     sessionId: session.id,
   })) {
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+    }).catch(() => undefined)
     return true
   }
   if (!await claimSessionAction({ env: input.env, session })) {
     await finishCallback({ callbackQueryId, env: input.env })
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: "That answer was already handled. Send /study if you need a new session.",
+    }).catch(() => undefined)
     return true
   }
+  await answerTelegramCallbackQuery(input.bot, {
+    callback_query_id: callbackQueryId,
+  }).catch(() => undefined)
   try {
     if (session.actionKind === "select_song") {
       const songs = Array.isArray(session.actionPayload.songs)
@@ -799,13 +942,20 @@ export async function handleTelegramChatStudyCallback(input: {
       })
       const callbackMessageId = Number(input.callback.message?.message_id)
       const selectedText = optionTexts[parsed.index]
+      const correctOptionId = stringOrNull(result.correct_option_id)
+      const correctText = correctOptionId
+        ? optionTexts[optionIds.indexOf(correctOptionId)]
+        : null
       const question = stringOrNull(session.actionPayload.question)
       const promptText = stringOrNull(session.actionPayload.promptText)
       if (Number.isSafeInteger(callbackMessageId) && selectedText && question && promptText) {
+        const correction = result.outcome !== "correct" && correctText
+          ? `\n✅ Correct answer: ${correctText}`
+          : ""
         await editTelegramMessageText(input.bot, {
           chat_id: chatId,
           message_id: callbackMessageId,
-          text: `${question}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}`,
+          text: `${question}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}${correction}`,
           reply_markup: { inline_keyboard: [] },
         }).catch(() => undefined)
       }
@@ -821,6 +971,10 @@ export async function handleTelegramChatStudyCallback(input: {
   } catch (error) {
     await releaseSessionAction({ env: input.env, session }).catch(() => undefined)
     await finishCallback({ callbackQueryId, env: input.env, error })
+    await sendTelegramMessage(input.bot, {
+      chat_id: chatId,
+      text: "I couldn't process that answer. Please try the button again, or send /study to restart.",
+    }).catch(() => undefined)
     throw error
   }
   return true
