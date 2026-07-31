@@ -254,6 +254,7 @@ describe("community study routes", () => {
     const ctx = await createRouteTestContext({
       CREDENTIAL_WRAP_KEY: wrapKey,
       CREDENTIAL_WRAP_KEY_VERSION: "1",
+      PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
       TELEGRAM_STUDY_VOICE_COMMUNITY_IDS: communityId,
       TELEGRAM_STUDY_VOICE_ENABLED: "true",
     })
@@ -322,19 +323,6 @@ describe("community study routes", () => {
         now,
       ],
     })
-    const communityClient = createClient({
-      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
-    })
-    await communityClient.execute({
-      sql: `
-        INSERT INTO community_memberships (
-          membership_id, community_id, user_id, status, joined_at, created_at, updated_at
-        ) VALUES ('mbr_chat_study', ?1, ?2, 'member', ?3, ?3, ?3)
-      `,
-      args: [communityId, session.userId, now],
-    })
-    communityClient.close()
-
     const originalFetch = globalThis.fetch
     const telegramBodies: Array<Record<string, unknown>> = []
     let messageId = 700
@@ -371,6 +359,11 @@ describe("community study routes", () => {
         },
       })
       expect(gatedStart.status).toBe(200)
+      const gatedWelcome = telegramBodies.find((body) => typeof body.reply_markup === "object")
+      const gatedMarkup = gatedWelcome?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string }>>
+      }
+      expect(gatedMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:study")).toBe(false)
       const gatedSessions = await ctx.client.execute(
         "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
       )
@@ -390,14 +383,34 @@ describe("community study routes", () => {
       })
       expect(start.status).toBe(200)
       expect(telegramBodies.some((body) => body.text === "Choose a song to study:")).toBe(false)
+      const welcome = telegramBodies.find((body) => typeof body.text === "string")
+      const welcomeMarkup = welcome?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }
+      expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:study")).toBe(true)
+      expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:assistant")).toBe(true)
       const sessionsAfterStart = await ctx.client.execute(
         "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
       )
       expect(sessionsAfterStart.rows).toHaveLength(0)
 
       telegramBodies.length = 0
-      const studyUpdate = {
+      const menuStudy = await webhook({
         update_id: 5002,
+        callback_query: {
+          id: "menu-study-callback",
+          data: "menu:study",
+          from: { id: 454545, is_bot: false, language_code: "es" },
+          message: { chat: { id: 454545, type: "private" }, message_id: 600 },
+        },
+      })
+      expect(menuStudy.status).toBe(200)
+      await Bun.sleep(20)
+      expect(telegramBodies.filter((body) => body.text === "Choose a song to study:")).toHaveLength(1)
+
+      telegramBodies.length = 0
+      const studyUpdate = {
+        update_id: 5003,
         message: {
           chat: { id: 454545, type: "private" },
           date: 1785499201,
@@ -416,8 +429,8 @@ describe("community study routes", () => {
       const studyDeliveries = await ctx.client.execute(
         "SELECT status FROM telegram_chat_study_message_deliveries",
       )
-      expect(studyDeliveries.rows).toHaveLength(1)
-      expect(studyDeliveries.rows[0]?.status).toBe("consumed")
+      expect(studyDeliveries.rows).toHaveLength(2)
+      expect(studyDeliveries.rows.every((row) => row.status === "consumed")).toBe(true)
       const picker = telegramBodies.find((body) => body.text === "Choose a song to study:")
       expect(picker).toBeTruthy()
       const pickerMarkup = picker?.reply_markup as {
@@ -454,6 +467,7 @@ describe("community study routes", () => {
           SELECT status
           FROM telegram_chat_study_sessions
           WHERE telegram_community_bot_id = 'tcb_chat_study'
+            AND status = 'selecting'
         `,
       })
       expect(stillSelecting.rows[0]?.status).toBe("selecting")
@@ -602,6 +616,7 @@ describe("community study routes", () => {
           SELECT status
           FROM telegram_chat_study_sessions
           WHERE telegram_community_bot_id = 'tcb_chat_study'
+            AND status = 'completed'
         `,
       })
       expect(completed.rows[0]?.status).toBe("completed")

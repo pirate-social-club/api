@@ -11,6 +11,7 @@ import {
   type TelegramSetupKind,
 } from "../lib/telegram/community-chat-service"
 import {
+  answerTelegramCallbackQuery,
   approveTelegramChatJoinRequest,
   getTelegramChat,
   getTelegramChatMember,
@@ -69,6 +70,7 @@ import {
   parseStartToken,
   telegramIdentifier,
   telegramLanguageCode,
+  type TelegramWebhookCallbackQuery,
   type TelegramWebhookChatJoinRequest,
   type TelegramWebhookMessage,
   type TelegramWebhookUpdate,
@@ -99,6 +101,9 @@ import { completeTelegramChannelSetupByRequest } from "../lib/telegram/channel-d
 import { getWaitUntil } from "./execution-context"
 
 const telegram = new Hono<{ Bindings: Env }>()
+
+const TELEGRAM_START_MENU_STUDY = "menu:study"
+const TELEGRAM_START_MENU_ASSISTANT = "menu:assistant"
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
@@ -298,15 +303,63 @@ function telegramMiniAppLauncherMarkup(url: string): unknown {
 }
 
 function telegramCommunityStartMarkup(input: {
-  text: string
-  url: string
+  action?: { text: string; url: string }
+  boardUrl: string
+  studyEnabled: boolean
 }): unknown {
-  return {
-    inline_keyboard: [[{
-      text: input.text,
-      web_app: { url: input.url },
-    }]],
+  const rows: Array<Array<Record<string, unknown>>> = []
+  if (input.studyEnabled) {
+    rows.push([{ text: "📚 Study songs", callback_data: TELEGRAM_START_MENU_STUDY }])
   }
+  rows.push([{ text: "💬 Ask the assistant", callback_data: TELEGRAM_START_MENU_ASSISTANT }])
+  if (input.action && input.action.url !== input.boardUrl) {
+    rows.push([{ text: input.action.text, web_app: { url: input.action.url } }])
+  }
+  rows.push([{ text: "🌐 Open community", web_app: { url: input.boardUrl } }])
+  return {
+    inline_keyboard: rows,
+  }
+}
+
+async function handleTelegramStartMenuCallback(input: {
+  bot: TelegramCommunityBotCredential
+  callback: TelegramWebhookCallbackQuery
+  env: Env
+}): Promise<boolean> {
+  if (input.callback.data !== TELEGRAM_START_MENU_STUDY
+    && input.callback.data !== TELEGRAM_START_MENU_ASSISTANT) {
+    return false
+  }
+  const callbackQueryId = telegramIdentifier(input.callback.id)
+  const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+  const telegramUserId = telegramIdentifier(input.callback.from?.id)
+  if (!callbackQueryId || !chatId || !telegramUserId) return true
+
+  if (input.callback.data === TELEGRAM_START_MENU_ASSISTANT) {
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: "Send your question as a message in this chat.",
+    }).catch(() => false)
+    return true
+  }
+
+  if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) {
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: "Study is not available here yet.",
+    }).catch(() => false)
+    return true
+  }
+  await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => false)
+  await startTelegramChatStudy({
+    bot: input.bot,
+    chatId,
+    env: input.env,
+    requestMessageId: input.callback.message?.message_id ?? null,
+    targetLanguage: telegramLanguageCode(input.callback.from?.language_code),
+    telegramUserId,
+  })
+  return true
 }
 
 async function safeApproveTelegramChatJoinRequest(
@@ -404,6 +457,14 @@ async function handleCommunityBotStartMessage(env: Env, input: {
       await safeSendTelegramMessage(input.bot, {
         chat_id: input.chatId,
         text: getTelegramCopy(locale).privateAssistant.intro,
+        ...(telegramCommunityParticipationUrl(env, input.bot.communityId)
+          ? {
+              reply_markup: telegramCommunityStartMarkup({
+                boardUrl: telegramCommunityParticipationUrl(env, input.bot.communityId)!,
+                studyEnabled: isTelegramStudyVoiceEnabled(env, input.bot.communityId),
+              }),
+            }
+          : {}),
       })
       return
     }
@@ -592,8 +653,10 @@ async function handleCommunityStartMessage(env: Env, input: {
     chat_id: input.chatId,
     text: presentation.messageText,
     reply_markup: telegramCommunityStartMarkup({
-      text: presentation.actionText,
-      url: presentation.actionUrl,
+      action: { text: presentation.actionText, url: presentation.actionUrl },
+      boardUrl,
+      studyEnabled: isCommunityBot(input.bot)
+        && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
     }),
   })
 }
@@ -1112,11 +1175,14 @@ async function handleTelegramWebhookUpdate(
   waitUntil?: (promise: Promise<void>) => void,
 ): Promise<void> {
   if (update.callback_query && isCommunityBot(bot)) {
-    const handle = () => handleTelegramChatStudyCallback({
-      bot,
-      callback: update.callback_query!,
-      env,
-    }).then(() => undefined)
+    const handle = async () => {
+      if (await handleTelegramStartMenuCallback({ bot, callback: update.callback_query!, env })) return
+      await handleTelegramChatStudyCallback({
+        bot,
+        callback: update.callback_query!,
+        env,
+      })
+    }
     if (waitUntil) {
       waitUntil(withBackgroundControlPlaneClients(handle))
     } else {

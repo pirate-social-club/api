@@ -36,6 +36,32 @@ import {
 import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./reddit-handle-claim-policy"
 import { makeId } from "../helpers"
 import { resolveVerifiedEnsProfile } from "./ens-linked-handle-service"
+
+const ENS_RESOLUTION_TIMEOUT_MS = 3_000
+const ENS_RESOLUTION_TIMED_OUT = Symbol("ens_resolution_timed_out")
+
+let ensResolutionTimeoutMs = ENS_RESOLUTION_TIMEOUT_MS
+
+export function setEnsResolutionTimeoutForTests(timeoutMs: number | null): void {
+  ensResolutionTimeoutMs = timeoutMs ?? ENS_RESOLUTION_TIMEOUT_MS
+}
+
+async function resolveVerifiedEnsProfileWithTimeout(
+  env: Env,
+  walletAddress: string,
+): Promise<Awaited<ReturnType<typeof resolveVerifiedEnsProfile>> | typeof ENS_RESOLUTION_TIMED_OUT> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      resolveVerifiedEnsProfile(env, walletAddress),
+      new Promise<typeof ENS_RESOLUTION_TIMED_OUT>((resolve) => {
+        timeoutId = setTimeout(() => resolve(ENS_RESOLUTION_TIMED_OUT), ensResolutionTimeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
+  }
+}
 import type { PublicProfileResolution } from "./repositories"
 import { unixSeconds } from "../../serializers/time"
 import { publicCommunityId } from "../public-ids"
@@ -999,7 +1025,17 @@ export class DatabaseProfileRepository {
       return await this.identityRepository.getProfileByUserId(userId)
     }
 
-    const resolvedEnsProfile = await resolveVerifiedEnsProfile(this.env, primaryWalletRow.wallet_address_display)
+    const resolvedEnsProfile = await resolveVerifiedEnsProfileWithTimeout(
+      this.env,
+      primaryWalletRow.wallet_address_display,
+    )
+    if (resolvedEnsProfile === ENS_RESOLUTION_TIMED_OUT) {
+      console.warn("[auth] ENS profile resolution timed out; preserving existing linked handles", {
+        timeout_ms: ensResolutionTimeoutMs,
+        user_id: userId,
+      })
+      return await this.identityRepository.getProfileByUserId(userId)
+    }
     const updatedAt = nowIso()
     const tx = await this.client.transaction("write")
 
