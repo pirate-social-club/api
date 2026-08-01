@@ -271,7 +271,8 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(`
       CREATE TABLE reward_campaign_funding_effects (
         reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
-        tx_hash TEXT, status TEXT NOT NULL, expected_amount_cents INTEGER NOT NULL,
+        tx_hash TEXT, status TEXT NOT NULL, chain_id INTEGER NOT NULL DEFAULT 84532,
+        expected_amount_cents INTEGER NOT NULL,
         confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT
       );
     `)
