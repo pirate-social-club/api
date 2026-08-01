@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { HttpError } from "../errors"
 import { mockFetch } from "../../test-helpers/fetch"
-import { analyzeSongBundle } from "./song-artifact-analysis"
+import { analyzeSongBundle, evaluateLyricsModeration } from "./song-artifact-analysis"
 
 const originalFetch = globalThis.fetch
 
@@ -140,6 +140,79 @@ describe("song artifact analysis", () => {
     expect(result.moderationStatus).toBe("completed")
     expect(result.moderationError).toBeNull()
     expect(audioIdentificationOf(result)?.match_found).toBe(false)
+  })
+})
+
+describe("song lyrics moderation provider failure semantics", () => {
+  test("reserves enough completion budget for a strict classifier response", async () => {
+    let maxCompletionTokens: unknown = null
+    globalThis.fetch = mockFetch(async (_input, init) => {
+      const requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
+      maxCompletionTokens = requestBody.max_completion_tokens
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({ age_gate_rating: "safe", reason: "No mature content." }) } }],
+      }), { headers: { "content-type": "application/json" } })
+    })
+
+    const result = await evaluateLyricsModeration({
+      env: { OPENROUTER_API_KEY: "test-key" },
+      lyrics: "ordinary song lyrics",
+    })
+
+    expect(maxCompletionTokens).toBe(500)
+    expect(result.moderationStatus).toBe("completed")
+    expect(result.contentSafetyState).toBe("safe")
+    expect(result.ageGatePolicy).toBe("none")
+  })
+
+  test("treats a truncated classifier response as retryable provider unavailability", async () => {
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: '{"age_gate_rating":"adult"' } }],
+    }), { headers: { "content-type": "application/json" } }))
+
+    await expectProviderUnavailable(
+      evaluateLyricsModeration({
+        env: { OPENROUTER_API_KEY: "test-key" },
+        lyrics: "lyrics requiring a classifier verdict",
+      }),
+      (error) => {
+        expect(error.retryable).toBe(true)
+        expect(error.details?.reason).toBe("song_lyrics_classification_failed")
+      },
+    )
+  })
+
+  test("stops bundle analysis when lyrics classification has no verdict", async () => {
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "" } }],
+    }), { headers: { "content-type": "application/json" } }))
+
+    await expectProviderUnavailable(
+      analyzeSongBundle({
+        communityId: "com_test",
+        env: { OPENROUTER_API_KEY: "test-key" },
+        lyrics: "lyrics requiring a classifier verdict",
+        primaryAudioUpload,
+        skipAcrIdentification: true,
+      }),
+      (error) => {
+        expect(error.retryable).toBe(true)
+        expect(error.details?.provider_error).toBe("invalid_response")
+      },
+    )
+  })
+
+  test("does not publish non-empty lyrics when the classifier is unconfigured", async () => {
+    await expectProviderUnavailable(
+      evaluateLyricsModeration({
+        env: {},
+        lyrics: "lyrics requiring a classifier verdict",
+      }),
+      (error) => {
+        expect(error.retryable).toBe(true)
+        expect(error.details?.provider_error).toBe("missing_configuration")
+      },
+    )
   })
 })
 

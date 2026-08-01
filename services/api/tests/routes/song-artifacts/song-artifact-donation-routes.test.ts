@@ -172,6 +172,8 @@ describe("song artifact donation routes", () => {
     installLockedSongFetchMocks({ originalFetch, storedObjects })
 
     const ctx = await createRouteTestContext({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
@@ -392,6 +394,8 @@ describe("song artifact donation routes", () => {
     installLockedSongFetchMocks({ originalFetch, storedObjects })
 
     const ctx = await createRouteTestContext({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
@@ -621,6 +625,8 @@ describe("song artifact donation routes", () => {
     installLockedSongFetchMocks({ originalFetch, storedObjects })
 
     const ctx = await createRouteTestContext({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
@@ -835,6 +841,8 @@ describe("song artifact donation routes", () => {
     installLockedSongFetchMocks({ originalFetch, storedObjects })
 
     const ctx = await createRouteTestContext({
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       FILEBASE_S3_ACCESS_KEY: "test-filebase-access",
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",

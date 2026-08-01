@@ -1802,6 +1802,19 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
     ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const request = input instanceof Request ? input : new Request(input, init)
 
+      if (request.url === "https://openrouter.test/api/v1/chat/completions") {
+        return Response.json({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                age_gate_rating: "safe",
+                reason: "clean lyrics",
+              }),
+            },
+          }],
+        })
+      }
+
       if (!request.url.startsWith("https://s3.filebase.test/")) {
         return await originalFetch(request)
       }
@@ -1846,6 +1859,8 @@ test("uploads a song artifact bundle and publishes a song post", async () => {
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
     })
     cleanup = ctx.cleanup
 
