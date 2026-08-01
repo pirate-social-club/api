@@ -52,7 +52,6 @@ export type PostProjectionSchema = {
   hasSongDurationMs: boolean
   hasAsyncPublishColumns: boolean
   hasLyricsLanguageColumns: boolean
-  hasAgeGateProvenanceColumns: boolean
 }
 
 export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
@@ -82,9 +81,6 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("publish_failure_message")
       && columnNames.has("publish_failure_retryable")
       && columnNames.has("publish_failed_at"),
-    hasAgeGateProvenanceColumns: columnNames.has("age_gate_source")
-      && columnNames.has("age_gate_evidence_ref")
-      && columnNames.has("age_gate_set_at"),
     // 1143 is transitional/deferred: shards that have not received the fleet run yet
     // (including quarantined ones) must project NULL rather than fail the query.
     hasLyricsLanguageColumns: columnNames.has("lyrics_language")
@@ -124,9 +120,6 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
     // reliable flag projects 0 (not NULL) to match the column's NOT NULL DEFAULT 0 semantics:
     // no detection evidence must read as unverified, never as reliable.
     : "NULL AS lyrics_language, NULL AS lyrics_language_confidence, 0 AS lyrics_language_reliable, NULL AS lyrics_language_detector, NULL AS lyrics_language_detected_at, NULL AS lyrics_language_source_hash"
-  const ageGateProvenanceProjection = schema.hasAgeGateProvenanceColumns
-    ? "age_gate_source, age_gate_evidence_ref, age_gate_set_at"
-    : "NULL AS age_gate_source, NULL AS age_gate_evidence_ref, NULL AS age_gate_set_at"
   const eventProjection = schema.hasPostEvents
     ? `
   (
@@ -208,7 +201,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
       AND live_rooms.visibility = 'public'
     LIMIT 1
   ) AS anchor_live_room_status, parent_post_id, ${crosspostSourceProjection}, ${boundedJsonProjection("upstream_asset_refs_json")}, song_mode, rights_basis, analysis_state, analysis_result_ref,
-  content_safety_state, age_gate_policy, ${ageGateProvenanceProjection}, ${assetStoryProjection}, idempotency_key, ${asyncPublishProjection}, created_at, updated_at
+  content_safety_state, age_gate_policy, ${assetStoryProjection}, idempotency_key, ${asyncPublishProjection}, created_at, updated_at
 `
 }
 

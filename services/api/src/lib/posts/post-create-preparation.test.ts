@@ -41,7 +41,6 @@ async function prepare(input: {
     userId: "user_1",
     communityId: "com_test",
     body: input.body,
-    createdAt: "2026-07-31T00:00:00.000Z",
     community: input.community ?? community(),
     communityDbClient: {} as Client,
     communityRepository: {} as never,
@@ -62,7 +61,6 @@ describe("preparePostCreate age_gate_policy", () => {
     const prepared = await prepare({ body: request("18_plus") })
 
     expect(prepared.analysisOverride.age_gate_policy).toBe("18_plus")
-    expect(prepared.ageGateProvenance?.source).toBe("author")
   })
 
   test("does not let an author-declared none downgrade the community default", async () => {
@@ -72,7 +70,6 @@ describe("preparePostCreate age_gate_policy", () => {
     })
 
     expect(prepared.analysisOverride.age_gate_policy).toBe("18_plus")
-    expect(prepared.ageGateProvenance?.source).toBe("community_default")
   })
 
   test("does not let an author-declared none downgrade automated analysis", async () => {
@@ -82,6 +79,5 @@ describe("preparePostCreate age_gate_policy", () => {
     })
 
     expect(prepared.analysisOverride.age_gate_policy).toBe("18_plus")
-    expect(prepared.ageGateProvenance?.source).toBe("post_moderation")
   })
 })

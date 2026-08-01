@@ -9,7 +9,6 @@ import { createSongAssetForPost } from "../commerce/service"
 import { assertDerivativeParentRevenueShare } from "../commerce/derivative-parent-revenue-share"
 import { updateStoryRegisteredAssetPostStatus } from "../commerce/derivative-source-projection"
 import { mergeAnalysisState } from "../../posts/post-analysis"
-import { resolveFinalAgeGateProvenance } from "../../posts/age-gate-provenance"
 import { songRightsInvariantFailure } from "../../posts/song-rights-invariant"
 import { getPostById } from "../../posts/community-post-query-store"
 import {
@@ -848,15 +847,6 @@ export async function runPostPublishFinalize(
       bundleContentSafetyState: moderation.content_safety_state ?? null,
       bundleAgeGatePolicy: moderation.age_gate_policy ?? null,
     })
-    const finalAgeGateProvenance = resolveFinalAgeGateProvenance({
-      postAgeGatePolicy: post.age_gate_policy,
-      postSource: post.age_gate_source,
-      postEvidenceRef: post.age_gate_evidence_ref,
-      postSetAt: post.age_gate_set_at,
-      bundleAgeGatePolicy: moderation.age_gate_policy ?? null,
-      bundleId: bundle?.id ?? post.song_artifact_bundle_id,
-      now: nowIso(),
-    })
 
     await enqueueSongPreviewIfPending({
       client: db.client,
@@ -988,9 +978,6 @@ export async function runPostPublishFinalize(
       analysisState: finalModeration.analysis_state,
       contentSafetyState: finalModeration.content_safety_state,
       ageGatePolicy: finalModeration.age_gate_policy,
-      ageGateSource: finalAgeGateProvenance?.source ?? null,
-      ageGateEvidenceRef: finalAgeGateProvenance?.evidenceRef ?? null,
-      ageGateSetAt: finalAgeGateProvenance?.setAt ?? null,
       now: nowIso(),
     })
     const projectionUpdatedAt = nowIso()
