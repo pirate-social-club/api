@@ -629,14 +629,6 @@ async function presentNextExercise(input: {
     })
     return
   }
-  await updateSessionAction({
-    actionKind: "await_voice",
-    actionPayload: { exerciseId: exercise.id },
-    env: input.env,
-    exerciseId: exercise.id,
-    session: input.session,
-    studySessionId: study.session?.id ?? null,
-  })
   await createTelegramStudyVoiceIntent({
     actor,
     chatStudySessionId: input.session.id,
@@ -645,6 +637,15 @@ async function presentNextExercise(input: {
     exerciseId: exercise.id,
     postId: input.session.postId,
     targetLanguage: input.session.targetLanguage,
+    telegramUserId: input.session.telegramUserId,
+  })
+  await updateSessionAction({
+    actionKind: "await_voice",
+    actionPayload: { exerciseId: exercise.id },
+    env: input.env,
+    exerciseId: exercise.id,
+    session: input.session,
+    studySessionId: study.session?.id ?? null,
   })
 }
 
@@ -961,7 +962,7 @@ export async function handleTelegramChatStudyCallback(input: {
     await finishCallback({ callbackQueryId, env: input.env, error })
     await sendTelegramMessage(input.bot, {
       chat_id: chatId,
-      text: "I couldn't process that answer. Please try the button again, or send /study to restart.",
+      text: "I couldn't process that answer. Send /study to restart.",
     }).catch(() => undefined)
     throw error
   }

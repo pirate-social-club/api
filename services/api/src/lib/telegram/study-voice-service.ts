@@ -21,6 +21,7 @@ import {
   decryptActiveCommunityTelegramBotOrNull,
   type TelegramCommunityBotCredential,
 } from "./community-bot-service"
+import { resolveTelegramAccount } from "./join-request-service"
 import type { TelegramWebhookMessage } from "./webhook-parsing"
 import { inferTelegramAudioMimeType, telegramIdentifier } from "./webhook-parsing"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
@@ -137,6 +138,7 @@ export async function createTelegramStudyVoiceIntent(input: {
   exerciseId: string
   postId: string
   targetLanguage?: string | null
+  telegramUserId?: string | null
 }): Promise<TelegramStudyVoiceIntentResource> {
   if (!isTelegramStudyVoiceEnabled(input.env, input.communityId)) {
     throw conflictError("Telegram study voice messages are not enabled for this community")
@@ -148,7 +150,18 @@ export async function createTelegramStudyVoiceIntent(input: {
   if (!bot) {
     throw notFoundError("Active community Telegram bot not found")
   }
-  const telegramUserId = await telegramUserIdForPirateUser(input.env, input.actor.userId)
+  const chatTelegramUserId = stringOrNull(input.telegramUserId)
+  if (chatTelegramUserId) {
+    const resolved = await resolveTelegramAccount({
+      env: input.env,
+      telegramUserId: chatTelegramUserId,
+    })
+    if (resolved?.userId !== input.actor.userId) {
+      throw conflictError("Telegram chat identity does not match this Pirate user")
+    }
+  }
+  const telegramUserId = chatTelegramUserId
+    ?? await telegramUserIdForPirateUser(input.env, input.actor.userId)
   if (!telegramUserId) {
     throw conflictError("Telegram account is not linked to this Pirate user")
   }
