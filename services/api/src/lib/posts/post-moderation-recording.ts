@@ -65,7 +65,7 @@ export async function recordReviewRequiredPostModeration(input: {
   postId: string
   providerResult: Record<string, unknown> | null | undefined
   now: string
-}): Promise<string> {
+}): Promise<void> {
   const severity = moderationSeverityFromProviderResult(input.providerResult)
   const moderationCase = await createModerationCase({
     executor: input.executor,
@@ -78,7 +78,7 @@ export async function recordReviewRequiredPostModeration(input: {
   const categories = readProviderCategories(input.providerResult)
   const visualReasonCodes = readVisualPolicyReasonCodes(input.providerResult)
   const signalTypes = categories.length > 0 ? categories : visualReasonCodes
-  const signal = await createModerationSignal({
+  await createModerationSignal({
     executor: input.executor,
     communityId: input.communityId,
     postId: input.postId,
@@ -93,33 +93,4 @@ export async function recordReviewRequiredPostModeration(input: {
     evidenceRef: input.providerResult ? JSON.stringify(input.providerResult) : null,
     now: input.now,
   })
-  return signal.moderation_signal_id
-}
-
-export async function recordAutomaticPostAgeGateModeration(input: {
-  executor: DbExecutor
-  communityId: string
-  postId: string
-  providerResult: Record<string, unknown> | null | undefined
-  now: string
-}): Promise<string> {
-  const categories = readProviderCategories(input.providerResult)
-  const visualReasonCodes = readVisualPolicyReasonCodes(input.providerResult)
-  const signalTypes = categories.length > 0 ? categories : visualReasonCodes
-  const signal = await createModerationSignal({
-    executor: input.executor,
-    communityId: input.communityId,
-    postId: input.postId,
-    moderationCaseId: null,
-    signalType: signalTypes.length > 0 ? signalTypes.join(",") : "automatic_age_gate",
-    severity: moderationSeverityFromProviderResult(input.providerResult),
-    provider: (input.providerResult && typeof input.providerResult === "object" && "provider" in input.providerResult
-      ? String((input.providerResult as { provider: string }).provider)
-      : "openai"),
-    providerLabel: signalTypes.length > 0 ? signalTypes[0] as string : "automatic_age_gate",
-    analysisResultRef: null,
-    evidenceRef: input.providerResult ? JSON.stringify(input.providerResult) : null,
-    now: input.now,
-  })
-  return signal.moderation_signal_id
 }

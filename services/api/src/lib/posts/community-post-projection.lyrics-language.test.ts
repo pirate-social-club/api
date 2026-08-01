@@ -23,7 +23,6 @@ const BASE: Omit<PostProjectionSchema, "hasLyricsLanguageColumns"> = {
   hasSongCoverArtRef: true,
   hasSongDurationMs: true,
   hasAsyncPublishColumns: true,
-  hasAgeGateProvenanceColumns: true,
 }
 
 const LYRICS_COLUMNS = [
