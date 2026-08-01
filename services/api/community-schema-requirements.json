@@ -45,7 +45,8 @@
     "1144_karaoke_scoring_diagnostics.sql",
     "1145_dance_attempts.sql",
     "1146_dance_attempt_reason_contract.sql",
-    "1147_dance_attempt_upload_invalid_reason.sql"
+    "1147_dance_attempt_upload_invalid_reason.sql",
+    "1149_song_streak_owner_timezone.sql"
   ],
   "features": {},
   "transitional": {

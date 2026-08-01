@@ -10,6 +10,10 @@ import { executeFirst } from "../db-helpers"
 import { badRequestError, notFoundError } from "../errors"
 import { makeId } from "../helpers"
 import { getPostKaraokePayload } from "../posts/post-karaoke-service"
+import {
+  applyStreakActivityExpiry,
+  type StreakWritePreparation,
+} from "../posts/post-study-streak-write-service"
 import type { ReadClient } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
@@ -330,6 +334,20 @@ function isRankEligible(input: {
     && input.finalScoreBps >= KARAOKE_PLATFORM_MIN_SCORE_BPS
 }
 
+// Pre-tx eligibility check, mirroring the in-tx decision exactly. Lets callers
+// decide whether the (read-bearing) streak preparation is even needed before
+// opening a buffered write transaction.
+export function isKaraokeAttemptRankEligible(input: {
+  completionReason: KaraokeAttemptCompletionReason
+  summary: KaraokeSessionSummary
+}): boolean {
+  return isRankEligible({
+    completionReason: input.completionReason,
+    finalScoreBps: scoreBps(input.summary.finalScore) ?? 0,
+    summary: input.summary,
+  })
+}
+
 async function materializeKaraokeStreakFromLedger(input: {
   client: ReadClient
   communityId: string
@@ -406,6 +424,13 @@ export async function recordKaraokeAttempt(input: {
   summary: KaraokeSessionSummary
   userId: string
   emitRewardQualification?: boolean
+  /**
+   * Pin/expiry resolved by prepareStreakWrite BEFORE the write transaction
+   * opened (buffered D1 txs cannot read). The engagement day is keyed by the
+   * singer's own calendar day (pinned timezone) from the moment they sang —
+   * not the UTC date the runtime ships for the karaoke attempt row.
+   */
+  streakPreparation?: StreakWritePreparation
   /**
    * Set only after an authoritative pre-read immediately before opening a
    * buffered D1 write transaction. A uniqueness race then fails and rolls back
@@ -488,15 +513,18 @@ export async function recordKaraokeAttempt(input: {
     }
   }
 
+  const streakPreparation = input.streakPreparation
+  const streakActivityDate = streakPreparation?.activityDate ?? input.activityDate
   await input.client.execute({
     sql: `
       INSERT INTO song_engagement_days (
-        user_id, post_id, community_id, activity_date,
+        user_id, post_id, community_id, activity_date, activity_timezone,
         study_attempt_count, study_correct_count, study_target_count,
         karaoke_pass_count, qualified, created_at, updated_at
       )
-      VALUES (?1, ?2, ?3, ?4, 0, 0, 10, 1, 1, ?5, ?5)
+      VALUES (?1, ?2, ?3, ?4, ?6, 0, 0, 10, 1, 1, ?5, ?5)
       ON CONFLICT(user_id, post_id, activity_date) DO UPDATE SET
+        activity_timezone = excluded.activity_timezone,
         karaoke_pass_count = song_engagement_days.karaoke_pass_count + 1,
         qualified = 1,
         updated_at = ?5
@@ -505,8 +533,9 @@ export async function recordKaraokeAttempt(input: {
       input.userId,
       input.postId,
       input.communityId,
-      input.activityDate,
+      streakActivityDate,
       input.completedAt,
+      streakPreparation?.timezone ?? null,
     ],
   })
   if (input.emitRewardQualification) {
@@ -530,6 +559,14 @@ export async function recordKaraokeAttempt(input: {
     postId: input.postId,
     userId: input.userId,
   })
+  if (streakPreparation) {
+    await applyStreakActivityExpiry({
+      activeUntilAt: streakPreparation.activeUntilAt,
+      client: input.client,
+      postId: input.postId,
+      userId: input.userId,
+    })
+  }
 
   return {
     inserted: true,

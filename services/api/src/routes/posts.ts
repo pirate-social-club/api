@@ -5,7 +5,6 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { authenticateAdminOrUser, type AuthenticatedEnv } from "../lib/auth-middleware"
 import { trackApiEvent } from "../lib/analytics/track"
 import { castPostVote, clearPostVote, getPost } from "../lib/posts/post-service"
-import { resolveStudyTimezone } from "../lib/posts/post-study-service"
 import { serializeLocalizedPostResponse } from "../serializers/post"
 import { decodePublicPostId } from "../lib/public-ids"
 import { writeAuditEventForEnv } from "../lib/audit"
@@ -26,7 +25,6 @@ posts.get("/:postId", async (c) => {
     userId: actor.userId,
     postId: decodePublicPostId(c.req.param("postId")),
     locale: c.req.query("locale") ?? null,
-    studyTimezone: resolveStudyTimezone(c.req.raw.cf),
     communityRepository,
     userRepository: getUserRepository(c.env),
     profileRepository: getProfileRepository(c.env),

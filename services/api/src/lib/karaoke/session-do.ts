@@ -54,6 +54,7 @@ interface InitializeRequest {
   sessionExpiresAtMs: number;
   lines: ScorableKaraokeLine[];
   scoringPolicy: KaraokeScoringPolicy;
+  timezone?: string | null;
 }
 
 type SqlStorageValueLike = ArrayBuffer | string | number | null;
@@ -146,6 +147,7 @@ interface PersistedRuntimeMeta {
   subjectUserId: string;
   sessionStartedAtMs: number;
   sessionExpiresAtMs: number;
+  timezone?: string | null;
 }
 
 interface StoredRuntimeSnapshot extends StoredKaraokeSessionSnapshot {
@@ -395,6 +397,7 @@ export class KaraokeSessionRuntimeDO {
       sessionExpiresAtMs: body.sessionExpiresAtMs,
       sessionId: body.sessionId,
       subjectUserId: body.subjectUserId,
+      timezone: typeof body.timezone === "string" && body.timezone.trim() ? body.timezone.trim() : null,
     };
     await this.persistSnapshot(state);
     await this.ctx.storage.setAlarm?.(body.sessionExpiresAtMs);
@@ -791,10 +794,12 @@ export class KaraokeSessionRuntimeDO {
     const now = this.now();
     const payload = {
       activity_date: this.activityDateFromMeta(),
+      activity_timezone: this.meta.timezone ?? null,
       attempt_id: state.attemptId,
       completed_at: new Date(now).toISOString(),
       completion_reason: "completed",
       session_id: state.sessionId,
+      session_started_at: new Date(this.meta.sessionStartedAtMs).toISOString(),
       summary: state.summary,
     };
     this.ctx.storage.sql.exec(

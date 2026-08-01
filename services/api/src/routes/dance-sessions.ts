@@ -24,7 +24,7 @@ import {
   HttpError,
   notFoundError,
 } from "../lib/errors"
-import { studyActivityDate, STUDY_FALLBACK_TIMEZONE } from "../lib/posts/post-study-streak-read-service"
+import { studyActivityDate, STUDY_FALLBACK_TIMEZONE } from "../lib/posts/post-study-streak-time"
 import { decodePublicPostId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 

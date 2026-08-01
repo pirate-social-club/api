@@ -4,13 +4,16 @@ import { executeFirst } from "../db-helpers"
 import { nowIso } from "../helpers"
 import { rowValue } from "../sql-row"
 import type { Client } from "../sql-client"
+import {
+  addUtcDays,
+  studyActivityDate,
+  STUDY_FALLBACK_TIMEZONE,
+} from "./post-study-streak-time"
 
-export const STUDY_FALLBACK_TIMEZONE = "UTC"
 export const STREAK_MIN_STUDY_ATTEMPTS = 10
 
 const STREAK_LEADERBOARD_DEFAULT_LIMIT = 50
 const STREAK_LEADERBOARD_MAX_LIMIT = 100
-const STREAK_LEADERBOARD_OVERFETCH = 25
 
 type SongStreakLeaderboardIdentity = {
   avatar_ref?: string | null
@@ -20,6 +23,7 @@ type SongStreakLeaderboardIdentity = {
 }
 
 export type SongStreakLeaderboardEntry = {
+  active_until_at: string
   best_streak: number
   current_streak: number
   identity: SongStreakLeaderboardIdentity
@@ -31,11 +35,13 @@ export type SongStreakLeaderboardEntry = {
 }
 
 export type SongStreakViewerStanding = {
+  active_until_at: string | null
   alive: boolean
   best_streak: number
   current_streak: number
   karaoke_passed_today: boolean
   qualified_today: boolean
+  rank: number | null
   study_attempts_today: number
   study_target_today: number
   total_qualified_days: number
@@ -48,15 +54,18 @@ export type SongStreakSummary = {
 }
 
 type SongStreakRow = {
+  active_until_at?: unknown
   best_streak: unknown
   current_streak: unknown
   last_qualified_date: unknown
   streak_started_date: unknown
+  timezone?: unknown
   total_qualified_days: unknown
   user_id: unknown
 }
 
 type SongStreakDayRow = {
+  activity_date?: unknown
   karaoke_pass_count?: unknown
   post_id?: unknown
   qualified?: unknown
@@ -70,23 +79,8 @@ function readString(value: unknown): string | null {
   return trimmed || null
 }
 
-function addUtcDays(date: string, days: number): string {
-  const parsed = new Date(`${date}T00:00:00.000Z`)
-  parsed.setUTCDate(parsed.getUTCDate() + days)
-  return parsed.toISOString().slice(0, 10)
-}
-
 function placeholders(count: number, startIndex = 1): string {
   return Array.from({ length: count }, (_, index) => `?${startIndex + index}`).join(", ")
-}
-
-export function studyActivityDate(nowIsoValue: string, timezone: string): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    day: "2-digit",
-    month: "2-digit",
-    timeZone: timezone,
-    year: "numeric",
-  }).format(new Date(nowIsoValue))
 }
 
 export function clampStreakLeaderboardLimit(value?: number | null): number {
@@ -128,22 +122,60 @@ function sameStreakRank(left: StreakRankMetrics | null, right: StreakRankMetrics
     && left.bestStreak === right.bestStreak
 }
 
+// A streak is active only while now < active_until_at (today + yesterday grace
+// in the streak OWNER's pinned timezone, computed at qualification time — never
+// from the viewing user's clock). Lapsed standings project current_streak: 0
+// and rank: null; best_streak keeps the historical record. Stored rows are
+// never rewritten by reads.
 function viewerStanding(input: {
+  alive: boolean
   day: SongStreakDayRow | null
+  rank: number | null
   row: SongStreakRow | null
-  yesterday: string
 }): SongStreakViewerStanding {
-  const lastQualifiedDate = readString(input.row?.last_qualified_date)
+  const alive = input.alive
   return {
-    alive: Boolean(lastQualifiedDate && lastQualifiedDate >= input.yesterday),
+    active_until_at: readString(input.row?.active_until_at),
+    alive,
     best_streak: Number(input.row?.best_streak ?? 0),
-    current_streak: Number(input.row?.current_streak ?? 0),
+    current_streak: alive ? Number(input.row?.current_streak ?? 0) : 0,
     karaoke_passed_today: Number(input.day?.karaoke_pass_count ?? 0) > 0,
     qualified_today: Number(input.day?.qualified ?? 0) === 1,
+    rank: alive ? input.rank : null,
     study_attempts_today: Number(input.day?.study_attempt_count ?? 0),
     study_target_today: Number(input.day?.study_target_count ?? STREAK_MIN_STUDY_ATTEMPTS),
     total_qualified_days: Number(input.row?.total_qualified_days ?? 0),
   }
+}
+
+function streakAlive(row: SongStreakRow | null, now: string): boolean {
+  const activeUntilAt = readString(row?.active_until_at)
+  return Boolean(activeUntilAt && activeUntilAt > now)
+}
+
+async function countAliveAheadOfViewer(input: {
+  bestStreak: number
+  client: Client
+  currentStreak: number
+  now: string
+  postId: string
+}): Promise<number> {
+  // Competition rank over active streaks: ties on (current_streak, best_streak)
+  // share a rank, matching the entry-list ranking.
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT COUNT(*) AS ahead_count
+      FROM song_streaks
+      WHERE post_id = ?1
+        AND active_until_at > ?2
+        AND (
+          current_streak > ?3
+          OR (current_streak = ?3 AND best_streak > ?4)
+        )
+    `,
+    args: [input.postId, input.now, input.currentStreak, input.bestStreak],
+  }) as Record<string, unknown> | null
+  return Number(row?.ahead_count ?? 0)
 }
 
 export async function readSongStreakSummary(input: {
@@ -151,41 +183,56 @@ export async function readSongStreakSummary(input: {
   limit: number
   postId: string
   profileRepository: ProfileRepository
-  studyTimezone?: string
   userId: string
 }): Promise<{ date: string; summary: SongStreakSummary }> {
-  const today = studyActivityDate(nowIso(), input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
-  const yesterday = addUtcDays(today, -1)
-  const [boardResult, totalActiveRow, viewerRow, viewerDay] = await Promise.all([
+  const now = nowIso()
+  const [boardResult, totalActiveRow, viewerRow] = await Promise.all([
     input.client.execute({
       sql: `
-        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days,
+               last_qualified_date, active_until_at
         FROM song_streaks
         WHERE post_id = ?1
-          AND last_qualified_date >= ?2
+          AND active_until_at > ?2
         ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
         LIMIT ?3
       `,
-      args: [input.postId, yesterday, input.limit + STREAK_LEADERBOARD_OVERFETCH],
+      args: [input.postId, now, input.limit],
     }),
     executeFirst(input.client, {
-      sql: `SELECT COUNT(*) AS active_count FROM song_streaks WHERE post_id = ?1 AND last_qualified_date >= ?2`,
-      args: [input.postId, yesterday],
+      sql: `SELECT COUNT(*) AS active_count FROM song_streaks WHERE post_id = ?1 AND active_until_at > ?2`,
+      args: [input.postId, now],
     }) as Promise<Record<string, unknown> | null>,
     executeFirst(input.client, {
       sql: `
-        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days, last_qualified_date
+        SELECT user_id, current_streak, best_streak, streak_started_date, total_qualified_days,
+               last_qualified_date, active_until_at, timezone
         FROM song_streaks WHERE user_id = ?1 AND post_id = ?2
       `,
       args: [input.userId, input.postId],
     }) as Promise<SongStreakRow | null>,
+  ])
+
+  const viewerAlive = streakAlive(viewerRow, now)
+  const viewerTimezone = readString(viewerRow?.timezone) ?? STUDY_FALLBACK_TIMEZONE
+  const viewerToday = studyActivityDate(now, viewerTimezone)
+  const [viewerDay, viewerAheadCount] = await Promise.all([
     executeFirst(input.client, {
       sql: `
         SELECT qualified, study_attempt_count, study_target_count, karaoke_pass_count
         FROM song_engagement_days WHERE user_id = ?1 AND post_id = ?2 AND activity_date = ?3
       `,
-      args: [input.userId, input.postId, today],
+      args: [input.userId, input.postId, viewerToday],
     }) as Promise<SongStreakDayRow | null>,
+    viewerAlive
+      ? countAliveAheadOfViewer({
+        bestStreak: Number(viewerRow?.best_streak ?? 0),
+        client: input.client,
+        currentStreak: Number(viewerRow?.current_streak ?? 0),
+        now,
+        postId: input.postId,
+      })
+      : Promise.resolve(0),
   ])
 
   const rows = boardResult.rows as SongStreakRow[]
@@ -204,13 +251,14 @@ export async function readSongStreakSummary(input: {
       rank = entries.length + 1
     }
     entries.push({
+      active_until_at: readString(row.active_until_at) ?? now,
       best_streak: rankMetrics.bestStreak,
       current_streak: rankMetrics.currentStreak,
       identity: identities.get(userId) ?? profileIdentity(userId, null),
       is_viewer: userId === input.userId,
-      last_qualified_date: readString(row.last_qualified_date) ?? today,
+      last_qualified_date: readString(row.last_qualified_date) ?? viewerToday,
       rank,
-      streak_started_date: readString(row.streak_started_date) ?? today,
+      streak_started_date: readString(row.streak_started_date) ?? viewerToday,
       total_qualified_days: Number(row.total_qualified_days ?? 0),
     })
     previousRankMetrics = rankMetrics
@@ -218,11 +266,16 @@ export async function readSongStreakSummary(input: {
   }
 
   return {
-    date: today,
+    date: studyActivityDate(now, STUDY_FALLBACK_TIMEZONE),
     summary: {
       entries,
       total_active_streaks: Number(totalActiveRow?.active_count ?? 0),
-      viewer: viewerStanding({ day: viewerDay, row: viewerRow, yesterday }),
+      viewer: viewerStanding({
+        alive: viewerAlive,
+        day: viewerDay,
+        rank: viewerAheadCount + 1,
+        row: viewerRow,
+      }),
     },
   }
 }
@@ -232,63 +285,67 @@ export async function listPostStreakSummaries(input: {
   limit?: number | null
   postIds: string[]
   profileRepository: ProfileRepository
-  studyTimezone?: string
   userId: string
 }): Promise<Map<string, SongStreakSummary>> {
   const postIds = Array.from(new Set(input.postIds.map((postId) => postId.trim()).filter(Boolean)))
   if (postIds.length === 0) return new Map()
 
   const limit = clampStreakLeaderboardLimit(input.limit ?? 3)
-  const today = studyActivityDate(nowIso(), input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
-  const yesterday = addUtcDays(today, -1)
+  const now = nowIso()
+  const utcToday = studyActivityDate(now, STUDY_FALLBACK_TIMEZONE)
+  const dayBefore = addUtcDays(utcToday, -1)
+  const dayAfter = addUtcDays(utcToday, 1)
   const postIdPlaceholders = placeholders(postIds.length)
-  const activeDateIndex = postIds.length + 1
+  const nowIndex = postIds.length + 1
   const rowLimitIndex = postIds.length + 2
 
   const [boardResult, totalActiveResult, viewerResult, viewerDayResult] = await Promise.all([
     input.client.execute({
       sql: `
         SELECT post_id, user_id, current_streak, best_streak, streak_started_date,
-               total_qualified_days, last_qualified_date, board_rank
+               total_qualified_days, last_qualified_date, active_until_at, board_rank
         FROM (
           SELECT post_id, user_id, current_streak, best_streak, streak_started_date,
-                 total_qualified_days, last_qualified_date,
+                 total_qualified_days, last_qualified_date, active_until_at,
                  ROW_NUMBER() OVER (
                    PARTITION BY post_id
                    ORDER BY current_streak DESC, best_streak DESC, streak_started_date ASC, user_id ASC
                  ) AS board_rank
           FROM song_streaks
           WHERE post_id IN (${postIdPlaceholders})
-            AND last_qualified_date >= ?${activeDateIndex}
+            AND active_until_at > ?${nowIndex}
         )
         WHERE board_rank <= ?${rowLimitIndex}
         ORDER BY post_id ASC, board_rank ASC
       `,
-      args: [...postIds, yesterday, limit + STREAK_LEADERBOARD_OVERFETCH],
+      args: [...postIds, now, limit],
     }),
     input.client.execute({
       sql: `
         SELECT post_id, COUNT(*) AS active_count FROM song_streaks
-        WHERE post_id IN (${postIdPlaceholders}) AND last_qualified_date >= ?${activeDateIndex}
+        WHERE post_id IN (${postIdPlaceholders}) AND active_until_at > ?${nowIndex}
         GROUP BY post_id
       `,
-      args: [...postIds, yesterday],
+      args: [...postIds, now],
     }),
     input.client.execute({
       sql: `
         SELECT post_id, user_id, current_streak, best_streak, streak_started_date,
-               total_qualified_days, last_qualified_date
+               total_qualified_days, last_qualified_date, active_until_at, timezone
         FROM song_streaks WHERE user_id = ?1 AND post_id IN (${placeholders(postIds.length, 2)})
       `,
       args: [input.userId, ...postIds],
     }),
+    // The viewer's "today" depends on their pinned timezone per post, so fetch
+    // the three UTC-adjacent candidate dates and match per post below.
     input.client.execute({
       sql: `
-        SELECT post_id, qualified, study_attempt_count, study_target_count, karaoke_pass_count
+        SELECT post_id, activity_date, qualified, study_attempt_count, study_target_count, karaoke_pass_count
         FROM song_engagement_days
-        WHERE user_id = ?1 AND post_id IN (${placeholders(postIds.length, 2)}) AND activity_date = ?${postIds.length + 2}
+        WHERE user_id = ?1 AND post_id IN (${placeholders(postIds.length, 2)})
+          AND activity_date IN (?${postIds.length + 2}, ?${postIds.length + 3}, ?${postIds.length + 4})
       `,
-      args: [input.userId, ...postIds, today],
+      args: [input.userId, ...postIds, dayBefore, utcToday, dayAfter],
     }),
   ])
 
@@ -313,10 +370,11 @@ export async function listPostStreakSummaries(input: {
     if (postId) viewerRowsByPostId.set(postId, row)
   }
 
-  const viewerDaysByPostId = new Map<string, SongStreakDayRow>()
+  const viewerDaysByKey = new Map<string, SongStreakDayRow>()
   for (const row of viewerDayResult.rows as SongStreakDayRow[]) {
     const postId = readString(rowValue(row, "post_id"))
-    if (postId) viewerDaysByPostId.set(postId, row)
+    const activityDate = readString(rowValue(row, "activity_date"))
+    if (postId && activityDate) viewerDaysByKey.set(`${postId}${activityDate}`, row)
   }
 
   const identityUserIds = Array.from(new Set([...boardRowsByPostId.values()].flat().map((row) => readString(row.user_id) ?? "").filter(Boolean)))
@@ -337,25 +395,32 @@ export async function listPostStreakSummaries(input: {
         rank = entries.length + 1
       }
       entries.push({
+        active_until_at: readString(row.active_until_at) ?? now,
         best_streak: rankMetrics.bestStreak,
         current_streak: rankMetrics.currentStreak,
         identity: identities.get(userId) ?? profileIdentity(userId, null),
         is_viewer: userId === input.userId,
-        last_qualified_date: readString(row.last_qualified_date) ?? today,
+        last_qualified_date: readString(row.last_qualified_date) ?? utcToday,
         rank,
-        streak_started_date: readString(row.streak_started_date) ?? today,
+        streak_started_date: readString(row.streak_started_date) ?? utcToday,
         total_qualified_days: Number(row.total_qualified_days ?? 0),
       })
       previousRankMetrics = rankMetrics
       if (entries.length >= limit) break
     }
+    const viewerRow = viewerRowsByPostId.get(postId) ?? null
+    const viewerTimezone = readString(viewerRow?.timezone) ?? STUDY_FALLBACK_TIMEZONE
+    const viewerToday = studyActivityDate(now, viewerTimezone)
     summaries.set(postId, {
       entries,
       total_active_streaks: totalActiveByPostId.get(postId) ?? 0,
+      // Batch summaries (feeds) skip the rank query; the single-post read
+      // computes it. alive still comes from the stored expiry.
       viewer: viewerStanding({
-        day: viewerDaysByPostId.get(postId) ?? null,
-        row: viewerRowsByPostId.get(postId) ?? null,
-        yesterday,
+        alive: streakAlive(viewerRow, now),
+        day: viewerDaysByKey.get(`${postId}${viewerToday}`) ?? null,
+        rank: null,
+        row: viewerRow,
       }),
     })
   }

@@ -1383,11 +1383,18 @@ describe("community study routes", () => {
           INSERT INTO song_streaks (
             user_id, post_id, community_id, current_streak, best_streak,
             last_qualified_date, streak_started_date, total_qualified_days,
+            timezone, timezone_updated_at, active_until_at,
             created_at, updated_at
           )
-          VALUES (?1, 'pst_study_route_song', ?2, 3, 5, ?3, ?3, 8, ?4, ?4)
+          VALUES (?1, 'pst_study_route_song', ?2, 3, 5, ?3, ?3, 8, 'UTC', ?4, ?5, ?4, ?4)
         `,
-        args: [session.userId, communityId, today, "2026-06-29T08:00:00.000Z"],
+        args: [
+          session.userId,
+          communityId,
+          today,
+          "2026-06-29T08:00:00.000Z",
+          new Date(Date.now() + 86_400_000).toISOString(),
+        ],
       })
       await communityClient.execute({
         sql: `
@@ -1449,6 +1456,7 @@ describe("community study routes", () => {
       alive: true,
       current_streak: 3,
       qualified_today: false,
+      rank: 1,
       study_attempts_today: 3,
       study_target_today: 5,
     })

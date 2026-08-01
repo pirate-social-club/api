@@ -9,9 +9,11 @@ import type { Env } from "../../env"
 import { envFlag } from "../helpers"
 import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 import {
+  isKaraokeAttemptRankEligible,
   recordKaraokeAttempt,
   type KaraokeAttemptCompletionReason,
 } from "./karaoke-attempt-service"
+import { claimStreakTimezonePin, prepareStreakWrite } from "../posts/post-study-streak-write-service"
 import { getKaraokeSessionCreationRecordBySession } from "./session-creation-repository"
 
 export interface FinalizeKaraokeAttemptResult {
@@ -140,10 +142,12 @@ function parseStoredScoringPolicy(json: string | null): { model: string; provide
 
 export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
   activityDate: string
+  activityTimezone: string | null
   attemptId: string
   completedAt: string
   completionReason: KaraokeAttemptCompletionReason
   sessionId: string
+  sessionStartedAt: string | null
   summary: KaraokeSessionSummary
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -157,12 +161,22 @@ export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
   if (!isSummary(record.summary)) {
     throw new HttpError(400, "invalid_karaoke_finalize_payload", "summary is invalid", false)
   }
+  // Optional streak-owner-timezone metadata. Older runtimes do not send these;
+  // invalid values are dropped here and re-validated at pin resolution.
+  const activityTimezone = typeof record.activity_timezone === "string" && record.activity_timezone.trim()
+    ? record.activity_timezone.trim()
+    : null
+  const sessionStartedAt = typeof record.session_started_at === "string" && Number.isFinite(Date.parse(record.session_started_at))
+    ? record.session_started_at
+    : null
   return {
     activityDate: requireDateString(record.activity_date, "activity_date"),
+    activityTimezone,
     attemptId: requireString(record.attempt_id, "attempt_id"),
     completedAt: requireIsoString(record.completed_at, "completed_at"),
     completionReason,
     sessionId: requireString(record.session_id, "session_id"),
+    sessionStartedAt,
     summary: record.summary,
   }
 }
@@ -231,6 +245,34 @@ export async function finalizeKaraokeAttempt(input: {
       summary: input.payload.summary,
     })
 
+    // The pin claim is a compare-and-swap that must COMMIT before the
+    // preparation read (concurrent first qualifiers can't out-race it), and
+    // the preparation read must happen before the buffered write tx opens.
+    const streakPreparation = isKaraokeAttemptRankEligible({
+      completionReason: input.payload.completionReason,
+      summary: input.payload.summary,
+    })
+      ? await (async () => {
+        await claimStreakTimezonePin({
+          client: db.client,
+          communityId: creation.communityId,
+          now: input.payload.completedAt,
+          postId: creation.postId,
+          timezoneCandidate: input.payload.activityTimezone,
+          userId: creation.subjectUserId,
+        })
+        return prepareStreakWrite({
+          activityInstant: input.payload.sessionStartedAt ?? input.payload.completedAt,
+          client: db.client,
+          now: input.payload.completedAt,
+          postId: creation.postId,
+          qualified: true,
+          timezoneCandidate: input.payload.activityTimezone,
+          userId: creation.subjectUserId,
+        })
+      })()
+      : undefined
+
     const tx = await db.client.transaction("write")
     try {
       const result = await recordKaraokeAttempt({
@@ -245,6 +287,7 @@ export async function finalizeKaraokeAttempt(input: {
         scoringModel: scoringPolicy.model,
         scoringProvider: scoringPolicy.provider,
         sessionId: input.payload.sessionId,
+        streakPreparation,
         summary: input.payload.summary,
         userId: creation.subjectUserId,
         attemptKnownAbsent: true,

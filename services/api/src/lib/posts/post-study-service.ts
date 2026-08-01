@@ -72,20 +72,19 @@ import {
 import {
   clampStreakLeaderboardLimit,
   readSongStreakSummary,
-  studyActivityDate,
-  STUDY_FALLBACK_TIMEZONE,
   type SongStreakLeaderboardEntry,
   type SongStreakSummary,
   type SongStreakViewerStanding,
 } from "./post-study-streak-read-service"
 import {
-  recordStudyStreakMaterialization,
-  upsertCompletedStudySessionDay,
-} from "./post-study-streak-write-service"
+  isValidIanaTimezone,
+  studyActivityDate,
+  STUDY_FALLBACK_TIMEZONE,
+} from "./post-study-streak-time"
+import { claimStreakTimezonePin, prepareStreakWrite, recordCompletedSessionStreak } from "./post-study-streak-write-service"
 
 export { listPostStreakSummaries } from "./post-study-streak-read-service"
 export type { SongStreakSummary } from "./post-study-streak-read-service"
-export { upsertStudyStreakProgress } from "./post-study-streak-write-service"
 
 type StudyAccess = "ready" | "locked" | "processing" | "unavailable"
 
@@ -188,6 +187,7 @@ export type SongStudyAttemptRequest = {
   idempotency_key?: unknown
   session_id?: unknown
   selected_option_id?: unknown
+  timezone?: unknown
   transcript?: unknown
   type?: unknown
 }
@@ -230,12 +230,9 @@ export type SongStudyAttemptTiming = {
   outcome: string
   parallel_read_batch_ms?: number
   post_id: string
-  streak_deferred: boolean
-  streak_inline_ms?: number
   streak_target_count_ms?: number
   streak_writes_enabled: boolean
   total_ms: number
-  wait_until_available: boolean
   write_tx_ms?: number
 }
 
@@ -966,27 +963,23 @@ function previousDateString(date: string): string {
   return new Date(ms - 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 }
 
-async function projectStudyStreakCount(input: {
-  client: ReadClient
+function projectStudyStreakCount(input: {
   engagement: StudyEngagementProgress
   now: string
-  postId: string
+  streakRow: Record<string, unknown> | null
   studyTimezone?: string
-  userId: string
-}): Promise<number> {
-  const row = await executeFirst(input.client, {
-    sql: `
-      SELECT current_streak, last_qualified_date
-      FROM song_streaks
-      WHERE user_id = ?1
-        AND post_id = ?2
-    `,
-    args: [input.userId, input.postId],
-  }) as Record<string, unknown> | null
-  const current = Number(row?.current_streak ?? 0)
-  if (!input.engagement.qualifiedToday) return current
-  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
-  const lastQualifiedDate = readString(row?.last_qualified_date)
+}): number {
+  const current = Number(input.streakRow?.current_streak ?? 0)
+  const activeUntilAt = readString(input.streakRow?.active_until_at)
+  const alive = Boolean(activeUntilAt && activeUntilAt > input.now)
+  if (!input.engagement.qualifiedToday) {
+    // Lapsed streaks project 0: the stored count is historical (best_streak
+    // carries the record). Same read-time projection as the viewer standing.
+    return alive ? current : 0
+  }
+  const timezone = readString(input.streakRow?.timezone) ?? input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE
+  const today = studyActivityDate(input.now, timezone)
+  const lastQualifiedDate = readString(input.streakRow?.last_qualified_date)
   if (!lastQualifiedDate) return 1
   if (lastQualifiedDate >= today) return current
   if (lastQualifiedDate === previousDateString(today)) return current + 1
@@ -1003,7 +996,17 @@ async function getStudyAttemptProgressSnapshot(input: {
   studyTimezone?: string
   userId: string
 }): Promise<SongStudyAttemptProgress | undefined> {
-  const today = studyActivityDate(input.now, input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE)
+  const streakRow = await executeFirst(input.client, {
+    sql: `
+      SELECT current_streak, last_qualified_date, active_until_at, timezone
+      FROM song_streaks
+      WHERE user_id = ?1
+        AND post_id = ?2
+    `,
+    args: [input.userId, input.postId],
+  }) as Record<string, unknown> | null
+  const timezone = readString(streakRow?.timezone) ?? input.studyTimezone ?? STUDY_FALLBACK_TIMEZONE
+  const today = studyActivityDate(input.now, timezone)
   const row = await executeFirst(input.client, {
     sql: `
       SELECT study_attempt_count, study_correct_count, study_target_count, qualified
@@ -1021,25 +1024,21 @@ async function getStudyAttemptProgressSnapshot(input: {
     studyCorrectCount: Number(row.study_correct_count ?? 0),
     studyTargetCount: Number(row.study_target_count ?? 0),
   }
-  const [currentStreak, nextDueAt] = await Promise.all([
-    projectStudyStreakCount({
-      client: input.client,
-      engagement,
-      now: input.now,
-      postId: input.postId,
-      studyTimezone: input.studyTimezone,
-      userId: input.userId,
-    }),
-    getNextDueAt({
-      client: input.client,
-      includeSayItBack: input.includeSayItBack,
-      includeTranslation: input.includeTranslation,
-      now: input.now,
-      postId: input.postId,
-      targetLanguage: input.targetLanguage,
-      userId: input.userId,
-    }),
-  ])
+  const currentStreak = projectStudyStreakCount({
+    engagement,
+    now: input.now,
+    streakRow,
+    studyTimezone: input.studyTimezone,
+  })
+  const nextDueAt = await getNextDueAt({
+    client: input.client,
+    includeSayItBack: input.includeSayItBack,
+    includeTranslation: input.includeTranslation,
+    now: input.now,
+    postId: input.postId,
+    targetLanguage: input.targetLanguage,
+    userId: input.userId,
+  })
   const nextDueAtSeconds = toUnixSeconds(nextDueAt)
   return {
     current_streak: currentStreak,
@@ -1059,10 +1058,6 @@ export async function submitPostStudyAttempt(input: {
   env: Env
   postId: string
   studyTimezone?: string
-  testHooks?: {
-    beforeDeferredStreakMaterialization?: () => Promise<void>
-  }
-  waitUntil?: (promise: Promise<void>) => void
 }): Promise<SongStudyAttemptResult> {
   const idempotencyKey = readRequiredString(input.body.idempotency_key, "idempotency_key")
   const sessionId = readRequiredString(input.body.session_id, "session_id")
@@ -1072,6 +1067,10 @@ export async function submitPostStudyAttempt(input: {
     throw badRequestError("type must be say_it_back or translation_choice")
   }
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
+  // The streak day boundary belongs to the learner: prefer the device's IANA
+  // timezone from the client; fall back to the edge-derived one from the route.
+  const requestTimezone = readString(input.body.timezone)
+  const timezoneCandidate = isValidIanaTimezone(requestTimezone) ? requestTimezone : input.studyTimezone
 
   const timingEnabled = studyAttemptTimingLogsEnabled(input.env)
   const timingStartedAt = performance.now()
@@ -1079,11 +1078,9 @@ export async function submitPostStudyAttempt(input: {
   let parallelReadBatchMs: number | undefined
   let accessReadBatchMs: number | undefined
   let writeTxMs: number | undefined
-  let streakInlineMs: number | undefined
   let closeClientMs: number | undefined
   let timingOutcome = "error"
   let timingExerciseType: ExerciseType | undefined
-  let timingStreakDeferred = false
   let timingStreakWritesEnabled = false
   let resultForTiming: SongStudyAttemptResult | undefined
   let studyProgress: SongStudyAttemptProgress | undefined
@@ -1103,18 +1100,47 @@ export async function submitPostStudyAttempt(input: {
       if (summary.status !== "completed" || !summary.id) return
       const completedAt = nowIso()
       const completedSessionId = summary.id
+      // Pin/expiry resolution reads existing streak state, so it runs BEFORE
+      // the write tx (buffered D1 txs cannot read). The tx itself is then pure
+      // writes: day upsert + streak materialization + column apply, committed
+      // atomically — a leaderboard read right after the response is consistent.
+      // Pin establishment is a compare-and-swap that must COMMIT before the
+      // preparation read, so a concurrent first qualifier (e.g. a karaoke take
+      // landing at the same moment with a different device timezone) cannot
+      // make this session prepare dates/expiry under a losing timezone.
+      if (streakWritesEnabled && summary.qualified) {
+        await claimStreakTimezonePin({
+          client: db.client,
+          communityId: input.communityId,
+          now: completedAt,
+          postId: input.postId,
+          timezoneCandidate,
+          userId: input.actor.userId,
+        })
+      }
+      const preparation = streakWritesEnabled
+        ? await prepareStreakWrite({
+          activityInstant: completedAt,
+          client: db.client,
+          now: completedAt,
+          postId: input.postId,
+          qualified: summary.qualified,
+          timezoneCandidate,
+          userId: input.actor.userId,
+        })
+        : null
       await withTransaction(db.client, "write", async (tx) => {
-        if (streakWritesEnabled) {
-          await upsertCompletedStudySessionDay({
+        if (streakWritesEnabled && preparation) {
+          await recordCompletedSessionStreak({
             client: tx,
             communityId: input.communityId,
             completedExerciseCount: summary.completed_exercise_count,
             firstPassCorrectCount: summary.first_pass_correct_count,
             now: completedAt,
             postId: input.postId,
+            preparation,
             qualified: summary.qualified,
             requiredCorrectCount: summary.required_correct_count,
-            studyTimezone: input.studyTimezone,
             userId: input.actor.userId,
           })
         }
@@ -1132,33 +1158,6 @@ export async function submitPostStudyAttempt(input: {
           })
         }
       })
-      if (!streakWritesEnabled) return
-      const recordStreak = async () => {
-        await input.testHooks?.beforeDeferredStreakMaterialization?.()
-        await recordStudyStreakMaterialization({
-          communityId: input.communityId,
-          communityRepository: input.communityRepository,
-          env: input.env,
-          now: completedAt,
-          postId: input.postId,
-          studyTimezone: input.studyTimezone,
-          userId: input.actor.userId,
-        })
-      }
-      if (input.waitUntil) {
-        timingStreakDeferred = true
-        input.waitUntil(recordStreak().catch((error) => {
-          console.error("[song-study] streak progress update failed", {
-            error,
-            post_id: input.postId,
-            user_id: input.actor.userId,
-          })
-        }))
-      } else {
-        const streakInlineStartedAt = performance.now()
-        await recordStreak()
-        streakInlineMs = elapsedMs(streakInlineStartedAt)
-      }
     }
 
     const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey)
@@ -1412,11 +1411,8 @@ export async function submitPostStudyAttempt(input: {
         outcome: timingOutcome,
         parallel_read_batch_ms: parallelReadBatchMs,
         post_id: input.postId,
-        streak_deferred: timingStreakDeferred,
-        streak_inline_ms: streakInlineMs,
         streak_writes_enabled: timingStreakWritesEnabled,
         total_ms: elapsedMs(timingStartedAt),
-        wait_until_available: Boolean(input.waitUntil),
         write_tx_ms: writeTxMs,
       }
       if (resultForTiming) {
@@ -1432,14 +1428,16 @@ export async function submitPostStudyAttempt(input: {
 
 function isMissingStreakTableError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
+  // Shards not yet migrated to the streak template (1119) or the owner-timezone
+  // template (1149) degrade to "no streak data" instead of failing the read.
   return /no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)
+    || /no such column:\s*(timezone|timezone_updated_at|active_until_at)/iu.test(message)
 }
 
 export async function getPostStreakSummary(input: {
   client: Client
   postId: string
   profileRepository: ProfileRepository
-  studyTimezone?: string
   userRepository: UserRepository
   userId: string | null
 }): Promise<SongStreakSummary | null> {
@@ -1464,7 +1462,6 @@ export async function getPostStreakSummary(input: {
       limit: 3,
       postId: input.postId,
       profileRepository: input.profileRepository,
-      studyTimezone: input.studyTimezone,
       userId: input.userId,
     })).summary
   } catch (error) {
@@ -1481,7 +1478,6 @@ export async function getPostStreakLeaderboard(input: {
   limit?: number | null
   postId: string
   profileRepository: ProfileRepository
-  studyTimezone?: string
 }): Promise<SongStreakLeaderboard> {
   const limit = clampStreakLeaderboardLimit(input.limit)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
@@ -1498,14 +1494,22 @@ export async function getPostStreakLeaderboard(input: {
       userRepository: getUserRepository(input.env),
     })
 
-    const { date, summary } = await readSongStreakSummary({
-      client: db.client as Client,
-      limit,
-      postId: input.postId,
-      profileRepository: input.profileRepository,
-      studyTimezone: input.studyTimezone,
-      userId: input.actor.userId,
-    })
+    let date: string
+    let summary: SongStreakSummary
+    try {
+      ;({ date, summary } = await readSongStreakSummary({
+        client: db.client as Client,
+        limit,
+        postId: input.postId,
+        profileRepository: input.profileRepository,
+        userId: input.actor.userId,
+      }))
+    } catch (error) {
+      if (!isMissingStreakTableError(error)) throw error
+      // Shard not yet migrated to the streak templates: serve an empty board.
+      date = studyActivityDate(nowIso(), STUDY_FALLBACK_TIMEZONE)
+      summary = { entries: [], total_active_streaks: 0, viewer: null }
+    }
 
     return {
       community_id: publicCommunityId(input.communityId),
