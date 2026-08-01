@@ -314,24 +314,36 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
   const text = [copy.sayThis, input.intent.referenceText]
-  const disclosure = "The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading."
+  const disclosure = copy.disclosure
   if (input.includeDisclosure) {
     text.push(disclosure)
   }
+  let promptMessageId: number | null = null
+  let deliveryWarning: string | null = null
   try {
-    let promptMessageId: number | null = null
     if (input.intent.deliveryMode !== "audio") {
       const sent = await sendTelegramMessage(input.intent.bot, { chat_id: input.intent.telegramUserId, text: text.join("\n\n") })
       promptMessageId = sent.message_id
     }
     if (input.intent.deliveryMode !== "text") {
-      const audio = await cachedStudyPromptAudio({ env: input.env, intent: input.intent, language })
-      const sent = await sendTelegramVoice(input.intent.bot, {
-        chat_id: input.intent.telegramUserId,
-        voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
-        ...(input.intent.deliveryMode === "audio" ? { caption: input.includeDisclosure ? `${copy.sayThis}\n\n${disclosure}` : copy.sayThis } : {}),
-      })
-      promptMessageId ??= sent.message_id
+      try {
+        const audio = await cachedStudyPromptAudio({ env: input.env, intent: input.intent })
+        const sent = await sendTelegramVoice(input.intent.bot, {
+          chat_id: input.intent.telegramUserId,
+          voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
+          ...(input.intent.deliveryMode === "audio" ? { caption: input.includeDisclosure ? `${copy.sayThis}\n\n${disclosure}` : copy.sayThis } : {}),
+        })
+        promptMessageId ??= sent.message_id
+      } catch (error) {
+        deliveryWarning = error instanceof Error ? error.message : String(error)
+        if (promptMessageId === null) {
+          const fallback = await sendTelegramMessage(input.intent.bot, {
+            chat_id: input.intent.telegramUserId,
+            text: text.join("\n\n"),
+          })
+          promptMessageId = fallback.message_id
+        }
+      }
     }
     await client.execute({
       sql: `
@@ -339,10 +351,18 @@ async function deliverTelegramStudyVoicePrompt(input: {
         SET prompt_delivery_status = 'sent',
             prompt_message_id = ?2,
             prompt_sent_at = ?3,
+            last_error_code = ?4,
+            last_error_message = ?5,
             updated_at = ?3
         WHERE intent_id = ?1
       `,
-      args: [input.intent.intentId, promptMessageId, nowIso()],
+      args: [
+        input.intent.intentId,
+        promptMessageId,
+        nowIso(),
+        deliveryWarning ? "telegram_prompt_audio_fell_back_to_text" : null,
+        deliveryWarning,
+      ],
     })
   } catch (error) {
     await client.execute({
@@ -366,10 +386,9 @@ async function deliverTelegramStudyVoicePrompt(input: {
 async function cachedStudyPromptAudio(input: {
   env: Env
   intent: PreparedTelegramStudyVoiceIntent
-  language: string
 }): Promise<ArrayBuffer> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
-    `${input.intent.communityId}\n${input.language}\n${input.intent.referenceText}`,
+    `${input.intent.communityId}\n${input.intent.referenceText}`,
   ))
   const key = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
   const request = new Request(`https://telegram-study-audio.invalid/${key}.ogg`)
@@ -559,10 +578,11 @@ async function isKnownVoiceDelivery(input: {
   return Boolean(stringOrNull(rowValue(result.rows[0], "intent_id")))
 }
 
-async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string): Promise<void> {
+async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string, targetLanguage: string): Promise<void> {
+  const language = isStudyHelperLanguage(targetLanguage) ? targetLanguage : "en"
   await sendTelegramMessage(bot, {
     chat_id: chatId,
-    text: "This study exercise expired. Send /study to start again.",
+    text: getTelegramStudyCopy(language).exerciseExpired,
   }).catch((error) => {
     console.warn("[telegram-study] expired reply failed", {
       communityId: bot.communityId,
@@ -628,7 +648,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
       args: [intent.id, now, telegramMessageId, voiceFileId, voiceFileUniqueId],
     })
     if ((expired.rowsAffected ?? 0) === 1) {
-      await sendExpiredMessage(input.bot, chatId)
+      await sendExpiredMessage(input.bot, chatId, intent.targetLanguage)
     }
     return true
   }

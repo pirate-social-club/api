@@ -39,6 +39,7 @@ import {
 import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
+import { isLearnerVisibleRewardCampaign, learnerVisibleRewardCampaignSql } from "./reward-campaign-visibility"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -669,16 +670,7 @@ export async function getPublicActiveRewardCampaign(input: {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
   const row = await selectCampaign(input.client, nonEmpty(input.campaignId, "campaign_id"))
   const now = Date.now()
-  if (
-    !row
-    || requiredString(row, "status") !== "active"
-    || Date.parse(requiredString(row, "starts_at")) > now
-    || Date.parse(requiredString(row, "ends_at")) <= now
-    || !["study", "karaoke", "either"].includes(requiredString(row, "eligible_activity"))
-    || integer(rowValue(row, "daily_reward_cents")) <= 0
-    || integer(rowValue(row, "funded_cents")) <= integer(rowValue(row, "reserved_cents"))
-      + integer(rowValue(row, "credited_cents")) + integer(rowValue(row, "refunded_cents"))
-  ) {
+  if (!row || !isLearnerVisibleRewardCampaign(row, now)) {
     throw notFoundError("Active reward campaign not found")
   }
   assertRewardsCampaignAndSettlementChainsMatch(input.env)
@@ -696,11 +688,8 @@ export async function getPublicActiveRewardCampaignForSong(input: {
     sql: `
       SELECT ${CAMPAIGN_COLUMNS}
       FROM reward_campaigns
-      WHERE community_id = ?1 AND post_id = ?2 AND status = 'active'
-        AND starts_at <= ?3 AND ends_at > ?3
-        AND eligible_activity IN ('study', 'karaoke', 'either')
-        AND daily_reward_cents > 0
-        AND funded_cents > reserved_cents + credited_cents + refunded_cents
+      WHERE community_id = ?1 AND post_id = ?2
+        AND ${learnerVisibleRewardCampaignSql({ nowParameter: "?3" })}
       ORDER BY activated_at DESC, reward_campaign_id ASC
       LIMIT 1
     `,

@@ -22,6 +22,7 @@ import { rowValue } from "../sql-row"
 import type { ReadClient } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
 import { resolveRewardCampaignConfig } from "../rewards/reward-campaign-config"
+import { learnerVisibleRewardCampaignSql } from "../rewards/reward-campaign-visibility"
 import type { Env } from "../../env"
 import {
   answerTelegramCallbackQuery,
@@ -215,11 +216,8 @@ async function activeCampaignRewards(input: {
     sql: `
       SELECT post_id, daily_reward_cents
       FROM reward_campaigns
-      WHERE status = 'active'
+      WHERE ${learnerVisibleRewardCampaignSql({ nowParameter: "?1" })}
         AND eligible_activity IN ('study', 'either')
-        AND starts_at <= ?1 AND ends_at > ?1
-        AND funded_cents > reserved_cents + credited_cents + refunded_cents
-        AND daily_reward_cents > 0
         AND post_id IN (${placeholders})
     `,
     args: [nowIso(), ...input.postIds],
@@ -516,10 +514,10 @@ async function runTelegramChatStudyStart(input: {
   }
   const preference = await getUserStudyPreference(input.env, account.userId)
   if (!preference || input.forcePreferences) {
-    const initialLanguage = resolveRuntimeUiLocale(input.targetLanguage) ?? preference?.helperLanguage ?? "en"
+    const initialLanguage = preference?.helperLanguage ?? resolveRuntimeUiLocale(input.targetLanguage) ?? "en"
     const copy = getTelegramStudyCopy(initialLanguage)
     const session = await replaceActiveSession({
-      actionKind: "select_song", actionPayload: { currentDeliveryMode: preference?.deliveryMode ?? "both", preferenceStep: "language" }, bot: input.bot,
+      actionKind: "select_song", actionPayload: { currentDeliveryMode: preference?.deliveryMode ?? "text", preferenceStep: "language" }, bot: input.bot,
       env: input.env, status: "selecting", targetLanguage: initialLanguage,
       telegramUserId: input.telegramUserId, userId: account.userId,
     })
@@ -726,16 +724,14 @@ function feedbackText(input: {
   if (input.transcript !== undefined) {
     const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
     if (attempted?.type === "say_it_back") {
-      return `${copy.notQuite}\n\n${copy.lineWas}${copy.labelSeparator} “${attempted.reference_text}”\n${copy.youSaid}${copy.labelSeparator} “${input.transcript || "(nothing detected)"}”`
+      return `${copy.notQuite}\n\n${copy.lineWas}${copy.labelSeparator} “${attempted.reference_text}”\n${copy.youSaid}${copy.labelSeparator} “${input.transcript || copy.nothingDetected}”`
     }
   }
-  const missing = result.feedback?.missing?.length
-    ? ` Missing: ${result.feedback.missing.join(", ")}.`
-    : ""
-  const extra = result.feedback?.extra?.length
-    ? ` Extra: ${result.feedback.extra.join(", ")}.`
-    : ""
-  return `${copy.notQuite}${missing}${extra}`
+  const details = [
+    result.feedback?.missing?.length ? `${copy.missing}${copy.labelSeparator} ${result.feedback.missing.join(", ")}` : null,
+    result.feedback?.extra?.length ? `${copy.extra}${copy.labelSeparator} ${result.feedback.extra.join(", ")}` : null,
+  ].filter((value): value is string => Boolean(value))
+  return [copy.notQuite, ...details].join("\n")
 }
 
 async function sendCompletion(input: {
@@ -823,7 +819,7 @@ async function presentNextExercise(input: {
         promptText: exercise.prompt_text,
         question: exercise.question,
         sessionId: study.session?.id,
-        deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "both",
+        deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
         localizationNoticeSent,
       },
       env: input.env,
@@ -863,12 +859,12 @@ async function presentNextExercise(input: {
     previousActionToken: input.session.actionToken,
     targetLanguage: input.session.targetLanguage,
     telegramUserId: input.session.telegramUserId,
-    deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "both",
+    deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
-    deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "both",
+    deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     exerciseId: exercise.id,
     localizationNoticeSent,
   }
@@ -1026,27 +1022,42 @@ export async function handleTelegramChatStudyCallback(input: {
                post_id, target_language, status, action_token, action_kind, action_payload_json
         FROM telegram_chat_study_sessions
         WHERE chat_study_session_id = ?1 AND telegram_community_bot_id = ?2
-          AND telegram_user_id = ?3 AND status IN ('active', 'processing')
+          AND telegram_user_id = ?3
         LIMIT 1
       `,
       args: [checkMatch[1], input.bot.id, telegramUserId],
     })
     const session = parseSession(result.rows[0])
+    const language = session && isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
+    const copy = getTelegramStudyCopy(language)
     if (!session?.postId) {
-      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: "This button expired. Send /study to continue." }).catch(() => undefined)
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: copy.buttonExpired }).catch(() => undefined)
       return true
     }
-    const study = await getPostStudyPayload({
-      actor: { authType: "user", userId: session.userId }, communityId: session.communityId,
-      communityRepository: getCommunityRepository(input.env), env: input.env, postId: session.postId,
-      targetLanguage: session.targetLanguage,
-    })
-    const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
-    const copy = getTelegramStudyCopy(language)
-    const ready = study.translation_status === "ready"
-    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: ready ? copy.translationsReady : copy.pendingLocalization }).catch(() => undefined)
-    if (ready) {
-      await sendTelegramMessage(input.bot, { chat_id: chatId, text: copy.translationsReady }).catch(() => undefined)
+    if (!await claimCallback({ bot: input.bot, callbackQueryId, env: input.env, sessionId: session.id })) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    if (!["active", "processing"].includes(session.status)) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: copy.buttonExpired }).catch(() => undefined)
+      await finishCallback({ callbackQueryId, env: input.env })
+      return true
+    }
+    try {
+      const study = await getPostStudyPayload({
+        actor: { authType: "user", userId: session.userId }, communityId: session.communityId,
+        communityRepository: getCommunityRepository(input.env), env: input.env, postId: session.postId,
+        targetLanguage: session.targetLanguage,
+      })
+      const ready = study.translation_status === "ready"
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: ready ? copy.translationsReady : copy.pendingLocalization }).catch(() => undefined)
+      if (ready) {
+        await sendTelegramMessage(input.bot, { chat_id: chatId, text: copy.translationsReady }).catch(() => undefined)
+      }
+      await finishCallback({ callbackQueryId, env: input.env })
+    } catch (error) {
+      await finishCallback({ callbackQueryId, env: input.env, error }).catch(() => undefined)
+      throw error
     }
     return true
   }
@@ -1059,7 +1070,7 @@ export async function handleTelegramChatStudyCallback(input: {
   if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) {
     await answerTelegramCallbackQuery(input.bot, {
       callback_query_id: callbackQueryId,
-      text: "Study is not available here yet.",
+      text: getTelegramStudyCopy("en").studyUnavailable,
     }).catch(() => undefined)
     return true
   }
@@ -1072,7 +1083,7 @@ export async function handleTelegramChatStudyCallback(input: {
   if (!session || session.communityId !== input.bot.communityId) {
     await answerTelegramCallbackQuery(input.bot, {
       callback_query_id: callbackQueryId,
-      text: "This button expired. Send /study to continue.",
+      text: getTelegramStudyCopy("en").buttonExpired,
     }).catch(() => undefined)
     return true
   }
@@ -1091,7 +1102,7 @@ export async function handleTelegramChatStudyCallback(input: {
     await finishCallback({ callbackQueryId, env: input.env })
     await answerTelegramCallbackQuery(input.bot, {
       callback_query_id: callbackQueryId,
-      text: "That answer was already handled. Send /study if you need a new session.",
+      text: getTelegramStudyCopy(isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en").alreadyHandled,
     }).catch(() => undefined)
     return true
   }
@@ -1176,17 +1187,23 @@ export async function handleTelegramChatStudyCallback(input: {
       const selectedIndex = telegramStudySongSelectionIndex(currentPage, parsed.index)
       const postId = songs[selectedIndex]?.postId
       if (!postId) throw new Error("Song choice is no longer available")
+      const preference = await getUserStudyPreference(input.env, session.userId)
+      const helperLanguage = preference?.helperLanguage ?? (isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en")
+      const deliveryMode = preference?.deliveryMode ?? "text"
       session.postId = postId
+      session.targetLanguage = helperLanguage
+      session.actionPayload = { deliveryMode }
       const selected = await getControlPlaneClient(input.env).execute({
         sql: `
           UPDATE telegram_chat_study_sessions
-          SET post_id = ?2, status = 'active', updated_at = ?3
+          SET post_id = ?2, target_language = ?3, action_payload_json = ?4,
+              status = 'active', updated_at = ?5
           WHERE chat_study_session_id = ?1
-            AND action_token = ?4
+            AND action_token = ?6
             AND action_kind = 'select_song'
             AND status = 'processing'
         `,
-        args: [session.id, postId, nowIso(), session.actionToken],
+        args: [session.id, postId, helperLanguage, JSON.stringify({ deliveryMode }), nowIso(), session.actionToken],
       })
       if ((selected.rowsAffected ?? 0) !== 1) {
         throw new Error("Song choice is no longer active")
@@ -1261,7 +1278,7 @@ export async function handleTelegramChatStudyCallback(input: {
     await finishCallback({ callbackQueryId, env: input.env, error })
     await sendTelegramMessage(input.bot, {
       chat_id: chatId,
-      text: "I couldn't process that answer. Send /study to restart.",
+      text: getTelegramStudyCopy(isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en").processingError,
     }).catch(() => undefined)
     throw error
   }
