@@ -6,6 +6,7 @@ import { decryptActiveCommunityElevenLabsKey } from "./credential-service"
 import {
   getCommunityAssistantRuntimePolicy,
   getCommunityAssistantRuntimePolicyForCommunity,
+  getCommunityAssistantVoicePolicyForCommunity,
   type CommunityAssistantPolicy,
 } from "./service"
 import type { Env } from "../../../env"
@@ -318,6 +319,27 @@ export async function synthesizeCommunityAssistantSpeechForCommunity(input: {
   text: string
 }): Promise<CommunityAssistantSpeechResponse> {
   const policy = await getCommunityAssistantRuntimePolicyForCommunity({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  return synthesizeCommunityAssistantSpeechWithPolicy({
+    communityId: input.communityId,
+    env: input.env,
+    outputFormat: input.outputFormat,
+    policy,
+    text: normalizeSpeechText(input.text),
+  })
+}
+
+export async function synthesizeCommunityStudySpeechForCommunity(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+  outputFormat?: string | null
+  text: string
+}): Promise<CommunityAssistantSpeechResponse> {
+  const policy = await getCommunityAssistantVoicePolicyForCommunity({
     env: input.env,
     communityRepository: input.communityRepository,
     communityId: input.communityId,

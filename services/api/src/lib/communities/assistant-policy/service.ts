@@ -920,6 +920,22 @@ export async function getCommunityAssistantRuntimePolicyForCommunity(input: {
   return policy
 }
 
+export async function getCommunityAssistantVoicePolicyForCommunity(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+}): Promise<CommunityAssistantPolicy> {
+  const community = await requireLiveAssistantCommunity({
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  return readStoredPolicy({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    community,
+  })
+}
+
 export async function listCommunityAssistantModels(input: {
   env: Env
   communityRepository: CommunityAssistantRepository

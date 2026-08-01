@@ -160,6 +160,27 @@ async function seedReadyTranslationExercises(input: {
           now,
         ],
       })
+      await client.execute({
+        sql: `
+          INSERT INTO song_study_unit_localization (
+            id, unit_id, target_language, localization_version, status,
+            question, translation_text, options_json, correct_option_id,
+            explanation_text, max_attempts, generated_at, created_at, updated_at
+          ) VALUES (?1, ?2, 'zh', 5, 'ready', '选择最佳翻译。', ?3, ?4, ?5,
+                    '服务器生成的解释。', 1, ?6, ?6, ?6)
+        `,
+        args: [
+          `sul_chat_zh_${index + 1}`,
+          unitId,
+          `正确翻译 ${index + 1}`,
+          JSON.stringify([
+            { id: `opt_chat_zh_${index + 1}_correct`, text: `正确翻译 ${index + 1}` },
+            { id: `opt_chat_zh_${index + 1}_wrong`, text: `错误翻译 ${index + 1}` },
+          ]),
+          `opt_chat_zh_${index + 1}_correct`,
+          now,
+        ],
+      })
     }
     await client.execute({
       sql: `
@@ -502,6 +523,13 @@ describe("community study routes", () => {
         now,
       ],
     })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO user_study_preferences (user_id, helper_language, delivery_mode, created_at, updated_at)
+        VALUES (?1, 'zh', 'text', ?2, ?2)
+      `,
+      args: [session.userId, now],
+    })
     const originalFetch = globalThis.fetch
     const telegramBodies: Array<Record<string, unknown>> = []
     let messageId = 700
@@ -561,7 +589,7 @@ describe("community study routes", () => {
         },
       })
       expect(start.status).toBe(200)
-      expect(telegramBodies.some((body) => body.text === "Choose a song to study:")).toBe(false)
+      expect(telegramBodies.some((body) => body.text === "选择一首歌来学习：")).toBe(false)
       const welcome = telegramBodies.find((body) => typeof body.text === "string")
       const welcomeMarkup = welcome?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
@@ -593,8 +621,8 @@ describe("community study routes", () => {
       })
       expect(menuStudy.status).toBe(200)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(telegramBodies.some((body) => body.text === "Choose a song to study:")).toBe(false)
-      expect(telegramBodies.some((body) => body.text === "No songs are ready to study in this community yet.")).toBe(true)
+      expect(telegramBodies.some((body) => body.text === "选择一首歌来学习：")).toBe(false)
+      expect(telegramBodies.some((body) => body.text === "这个社区还没有可学习的歌曲。")).toBe(true)
       expect(telegramBodies.some((body) => String(body.text).includes("Route Song"))).toBe(false)
 
       telegramBodies.length = 0
@@ -653,7 +681,7 @@ describe("community study routes", () => {
         },
       })
       expect(unfundedStudy.status).toBe(200)
-      const unfundedPicker = telegramBodies.find((body) => body.text === "Choose a song to study:")
+      const unfundedPicker = telegramBodies.find((body) => body.text === "选择一首歌来学习：")
       const unfundedMarkup = unfundedPicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ text?: string }>>
       }
@@ -679,14 +707,14 @@ describe("community study routes", () => {
       ])
       expect(study.status).toBe(200)
       expect(studyRedelivery.status).toBe(200)
-      expect(telegramBodies.filter((body) => body.text === "Choose a song to study:")).toHaveLength(1)
+      expect(telegramBodies.filter((body) => body.text === "选择一首歌来学习：")).toHaveLength(1)
       expect(telegramBodies.some((body) => body.text === "That study menu was already used. Send /study to choose a song again.")).toBe(false)
       const studyDeliveries = await ctx.client.execute(
         "SELECT status FROM telegram_chat_study_message_deliveries",
       )
       expect(studyDeliveries.rows).toHaveLength(3)
       expect(studyDeliveries.rows.every((row) => row.status === "consumed")).toBe(true)
-      const picker = telegramBodies.find((body) => body.text === "Choose a song to study:")
+      const picker = telegramBodies.find((body) => body.text === "选择一首歌来学习：")
       expect(picker).toBeTruthy()
       const pickerMarkup = picker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
@@ -742,14 +770,14 @@ describe("community study routes", () => {
       })
       expect(select.status).toBe(200)
       const exercisePrompt = [...telegramBodies].reverse().find((body) =>
-        typeof body.text === "string" && body.text.includes("Choose the best translation.")
+        typeof body.text === "string" && body.text.includes("选择最佳翻译。")
       )
       expect(exercisePrompt).toBeTruthy()
       const answerMarkup = exercisePrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
-      const correctButton = answerButtons.find((button) => button.text === "Traducción correcta 1")
+      const correctButton = answerButtons.find((button) => button.text === "正确翻译 1")
       expect(correctButton?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
       expect(correctButton?.callback_data).not.toContain("opt_chat")
       expect(JSON.stringify(answerMarkup)).not.toContain("correct_option")
@@ -796,7 +824,7 @@ describe("community study routes", () => {
         })
         expect(attempts.rows).toHaveLength(1)
         expect(String(attempts.rows[0]?.idempotency_key)).toStartWith("telegram-chat-study:")
-        expect(attempts.rows[0]?.selected_option_id).toBe("opt_chat_1_correct")
+        expect(attempts.rows[0]?.selected_option_id).toBe("opt_chat_zh_1_correct")
       } finally {
         attemptsClient.close()
       }
@@ -816,7 +844,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const secondWrong = secondMarkup.inline_keyboard?.flat().find((button) =>
-        button.text === "Traducción incorrecta 2"
+        button.text === "错误翻译 2"
       )
       expect(secondWrong?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
       const bodiesBeforeWrongAnswer = telegramBodies.length
@@ -835,8 +863,8 @@ describe("community study routes", () => {
       expect(secondAnswer.status).toBe(200)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string"
-        && body.text.includes("❌ Traducción incorrecta 2")
-        && body.text.includes("✅ Correct answer: Traducción correcta 2")
+        && body.text.includes("❌ 错误翻译 2")
+        && body.text.includes("✅ 正确答案： 正确翻译 2")
       )).toBe(true)
       expect(telegramBodies.slice(bodiesBeforeWrongAnswer).some((body) =>
         body.text === "Not quite."
@@ -850,7 +878,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const retryCorrect = retryMarkup.inline_keyboard?.flat().find((button) =>
-        button.text === "Traducción correcta 2"
+        button.text === "正确翻译 2"
       )
       expect(retryCorrect?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
       const retryAnswer = await webhook({
@@ -868,7 +896,7 @@ describe("community study routes", () => {
       expect(retryAnswer.status).toBe(200)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string"
-        && body.text.startsWith("Study complete: Route Song")
+        && body.text.startsWith("学习完成: Route Song")
         && body.text.includes("Score:")
       )).toBe(true)
       const completed = await ctx.client.execute({
@@ -880,6 +908,45 @@ describe("community study routes", () => {
         `,
       })
       expect(completed.rows[0]?.status).toBe("completed")
+
+      telegramBodies.length = 0
+      const preferences = await webhook({
+        update_id: 5006,
+        message: {
+          chat: { id: 454545, type: "private" }, date: 1785499300,
+          from: { id: 454545, is_bot: false, language_code: "es" },
+          message_id: 620, text: "/preferences",
+        },
+      })
+      expect(preferences.status).toBe(200)
+      const languagePicker = telegramBodies.find((body) => body.text === "选择辅助语言：")
+      const languageButtons = (languagePicker?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }).inline_keyboard?.flat() ?? []
+      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "ქართული"])
+      await webhook({
+        update_id: 5007,
+        callback_query: {
+          id: "callback-preference-language", data: languageButtons[1]!.callback_data,
+          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 704 },
+        },
+      })
+      const deliveryPicker = telegramBodies.find((body) => body.text === "你希望如何接收练习提示？")
+      const deliveryButtons = (deliveryPicker?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }).inline_keyboard?.flat() ?? []
+      expect(deliveryButtons.map((button) => button.text)).toEqual(["音频", "文字", "音频和文字"])
+      await webhook({
+        update_id: 5008,
+        callback_query: {
+          id: "callback-preference-delivery", data: deliveryButtons[1]!.callback_data,
+          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 705 },
+        },
+      })
+      expect((await ctx.client.execute({
+        sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
+        args: [session.userId],
+      })).rows[0]).toMatchObject({ helper_language: "zh", delivery_mode: "text" })
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -898,6 +965,18 @@ describe("community study routes", () => {
     const communityId = "cmt_study_route_telegram_voice"
     await seedStudySong({ communityDbRoot: ctx.communityDbRoot, communityId })
     const now = "2026-06-29T08:00:00.000Z"
+    const policyClient = createClient({ url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId) })
+    await policyClient.execute({
+      sql: `
+        INSERT INTO community_assistant_policy (
+          id, community_id, enabled, display_name, voice_mode, tts_provider,
+          tts_voice, created_at, updated_at
+        ) VALUES ('cap_study_voice', ?1, 1, 'Study voice', 'voice_replies',
+                  'elevenlabs', 'voice-study-test', ?2, ?2)
+      `,
+      args: [communityId, now],
+    })
+    policyClient.close()
     await ctx.client.execute({
       sql: `
         INSERT INTO users (
@@ -1026,7 +1105,19 @@ describe("community study routes", () => {
     expect(intentsBeforeEligibleCreation.rows).toHaveLength(0)
 
     const originalFetch = globalThis.fetch
+    const originalCaches = globalThis.caches
+    const cachedAudio = new Map<string, Response>()
+    Object.defineProperty(globalThis, "caches", {
+      configurable: true,
+      value: {
+        open: async () => ({
+          match: async (request: Request) => cachedAudio.get(request.url)?.clone(),
+          put: async (request: Request, response: Response) => { cachedAudio.set(request.url, response.clone()) },
+        }),
+      } as unknown as CacheStorage,
+    })
     const telegramRequests: Request[] = []
+    let synthesisRequests = 0
     let transcriptionRequests = 0
     let forceTranscriptionFailure = false
     let forcePromptFailure = false
@@ -1056,6 +1147,12 @@ describe("community study routes", () => {
           confidence: 0.99,
           language_code: "es",
           text: exercise!.reference_text,
+        })
+      }
+      if (request.url.startsWith("https://api.elevenlabs.io/v1/text-to-speech/")) {
+        synthesisRequests += 1
+        return new Response(new Uint8Array([79, 103, 103, 83, 1]), {
+          headers: { "content-type": "audio/ogg" },
         })
       }
       if (forcePromptFailure && request.url.endsWith("/sendMessage")) {
@@ -1130,16 +1227,53 @@ describe("community study routes", () => {
       const secondChatPrompt = await telegramRequests.at(-1)!.clone().json() as { text: string }
       expect(secondChatPrompt.text).not.toContain("community bot owner can access and listen")
 
+      await ctx.client.execute("UPDATE telegram_chat_study_sessions SET status = 'canceled' WHERE chat_study_session_id = 'tcs_atomic_voice'")
+      await ctx.client.execute({
+          sql: `
+            INSERT INTO telegram_chat_study_sessions (
+              chat_study_session_id, telegram_community_bot_id, telegram_user_id,
+              user_id, community_id, post_id, target_language, status,
+              action_token, action_kind, action_payload_json, expires_at,
+              created_at, updated_at
+            ) VALUES ('tcs_audio', 'tcb_study_voice', '787878', ?1, ?2,
+                      'pst_study_route_song', 'es', 'active', 'audio-old',
+                      'answer_choice', '{}', '2099-01-01T00:00:00.000Z', ?3, ?3)
+          `,
+          args: [session.userId, communityId, now],
+        })
+      for (const suffix of ["one", "two"]) {
+        await createTelegramChatStudyVoiceIntent({
+          actor: { authType: "user", userId: session.userId },
+          chatStudySessionId: "tcs_audio",
+          communityId,
+          deliveryMode: "audio",
+          env: ctx.env,
+          exerciseId: exercise!.id,
+          nextActionToken: `audio-next-${suffix}`,
+          postId: "pst_study_route_song",
+          previousActionToken: suffix === "one" ? "audio-old" : "audio-next-one",
+          targetLanguage: "es",
+          telegramUserId: "787878",
+        })
+      }
+      expect(synthesisRequests).toBe(1)
+      const audioRequests = telegramRequests.filter((request) => request.url.endsWith("/sendVoice"))
+      expect(audioRequests).toHaveLength(2)
+      const audioForm = await audioRequests[0]!.clone().formData()
+      expect(audioForm.get("voice")).toBeInstanceOf(File)
+      expect((audioForm.get("voice") as File).type).toBe("audio/ogg")
+      expect(String(audioForm.get("caption"))).toBe("Say this:")
+
       forcePromptFailure = true
       await expect(createTelegramChatStudyVoiceIntent({
         actor: { authType: "user", userId: session.userId },
-        chatStudySessionId: "tcs_atomic_voice",
+        chatStudySessionId: "tcs_audio",
         communityId,
         env: ctx.env,
         exerciseId: exercise!.id,
         nextActionToken: "final-action-token",
         postId: "pst_study_route_song",
-        previousActionToken: "second-action-token",
+        previousActionToken: "audio-next-two",
         targetLanguage: "es",
         telegramUserId: "787878",
       })).rejects.toThrow("delivery is uncertain")
@@ -1150,7 +1284,7 @@ describe("community study routes", () => {
           FROM telegram_chat_study_sessions s
           JOIN telegram_study_voice_intents i
             ON i.chat_study_session_id = s.chat_study_session_id
-          WHERE s.chat_study_session_id = 'tcs_atomic_voice'
+          WHERE s.chat_study_session_id = 'tcs_audio'
             AND i.status = 'pending'
         `,
       })
@@ -1171,7 +1305,7 @@ describe("community study routes", () => {
           webhookSecret: "voice-secret",
         },
         chatId: "787878",
-        chatStudySessionId: "tcs_atomic_voice",
+        chatStudySessionId: "tcs_audio",
         env: ctx.env,
         result: {
           attempts_remaining: 1,
@@ -1204,7 +1338,7 @@ describe("community study routes", () => {
           webhookSecret: "voice-secret",
         },
         chatId: "787878",
-        chatStudySessionId: "tcs_atomic_voice",
+        chatStudySessionId: "tcs_audio",
         env: ctx.env,
         result: {
           attempts_remaining: 1,
@@ -1610,6 +1744,7 @@ describe("community study routes", () => {
       expect(telegramRequests.length).toBe(requestsBeforeExpiredReply + 1)
     } finally {
       globalThis.fetch = originalFetch
+      Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches })
     }
   }, 120_000)
 

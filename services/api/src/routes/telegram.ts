@@ -104,6 +104,7 @@ const telegram = new Hono<{ Bindings: Env }>()
 
 const TELEGRAM_START_MENU_STUDY = "menu:study"
 const TELEGRAM_START_MENU_ASSISTANT = "menu:assistant"
+const TELEGRAM_START_MENU_PREFERENCES = "menu:preferences"
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
@@ -311,6 +312,7 @@ function telegramCommunityStartMarkup(input: {
   const rows: Array<Array<Record<string, unknown>>> = []
   if (input.studyEnabled) {
     rows.push([{ text: "📚 Study songs", callback_data: TELEGRAM_START_MENU_STUDY }])
+    rows.push([{ text: "⚙️ Language & delivery", callback_data: TELEGRAM_START_MENU_PREFERENCES }])
   }
   if (input.assistantEnabled) {
     rows.push([{ text: "💬 Ask the assistant", callback_data: TELEGRAM_START_MENU_ASSISTANT }])
@@ -336,7 +338,8 @@ async function handleTelegramStartMenuCallback(input: {
   env: Env
 }): Promise<boolean> {
   if (input.callback.data !== TELEGRAM_START_MENU_STUDY
-    && input.callback.data !== TELEGRAM_START_MENU_ASSISTANT) {
+    && input.callback.data !== TELEGRAM_START_MENU_ASSISTANT
+    && input.callback.data !== TELEGRAM_START_MENU_PREFERENCES) {
     return false
   }
   const callbackQueryId = telegramIdentifier(input.callback.id)
@@ -364,7 +367,10 @@ async function handleTelegramStartMenuCallback(input: {
     bot: input.bot,
     chatId,
     env: input.env,
-    requestMessageId: input.callback.message?.message_id ?? null,
+    forcePreferences: input.callback.data === TELEGRAM_START_MENU_PREFERENCES,
+    requestMessageId: input.callback.data === TELEGRAM_START_MENU_PREFERENCES
+      ? null
+      : input.callback.message?.message_id ?? null,
     targetLanguage: telegramLanguageCode(input.callback.from?.language_code),
     telegramUserId,
   })
@@ -1228,7 +1234,7 @@ async function handleTelegramWebhookUpdate(
       const chatId = telegramIdentifier(message.chat?.id)
       const telegramUserId = telegramIdentifier(message.from?.id)
       if (
-        message.text?.trim().match(/^\/study(?:@[A-Za-z0-9_]{5,32})?$/u)
+        message.text?.trim().match(/^\/(?:study|preferences)(?:@[A-Za-z0-9_]{5,32})?$/u)
         && chatId
         && telegramUserId
       ) {
@@ -1237,6 +1243,7 @@ async function handleTelegramWebhookUpdate(
             bot,
             chatId,
             env,
+            forcePreferences: message.text?.trim().startsWith("/preferences") ?? false,
             requestMessageId: message.message_id ?? null,
             targetLanguage: telegramLanguageCode(message.from?.language_code),
             telegramUserId,

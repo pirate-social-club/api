@@ -13,7 +13,6 @@ import {
 import type { StudyPost } from "../posts/post-study-access"
 import {
   isSameLanguageStudyPair,
-  normalizeStudyTargetLanguage,
 } from "../posts/post-study-localization-service"
 import {
   splitLyricsForStudy,
@@ -36,6 +35,17 @@ import {
   telegramOnboardingWebAppReplyMarkup,
 } from "./onboarding-service"
 import { createTelegramChatStudyVoiceIntent } from "./study-voice-service"
+import { getTelegramStudyCopy, STUDY_LANGUAGE_BUTTONS } from "./study-copy"
+import { resolveRuntimeUiLocale } from "./telegram-locale"
+import {
+  getUserStudyPreference,
+  isStudyDeliveryMode,
+  isStudyHelperLanguage,
+  STUDY_DELIVERY_MODES,
+  type StudyDeliveryMode,
+  type StudyHelperLanguage,
+  upsertUserStudyPreference,
+} from "./study-preference-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 import {
   telegramIdentifier,
@@ -49,6 +59,7 @@ const CHAT_STUDY_SONG_PAGE_SIZE = 8
 const PREVIOUS_PAGE_INDEX = 98
 const NEXT_PAGE_INDEX = 99
 const CALLBACK_PREFIX = "study"
+const LOCALIZATION_CHECK_PREFIX = "study-check"
 
 type ChatStudyActionKind = "select_song" | "answer_choice" | "await_voice" | "none"
 
@@ -119,6 +130,20 @@ function actionToken(): string {
 
 function callbackData(token: string, index: number): string {
   return `${CALLBACK_PREFIX}:${token}:${index}`
+}
+
+function localizationCheckData(sessionId: string): string {
+  return `${LOCALIZATION_CHECK_PREFIX}:${sessionId}`
+}
+
+function languagePickerMarkup(token: string) {
+  return { inline_keyboard: STUDY_LANGUAGE_BUTTONS.map(({ label }, index) => [{ callback_data: callbackData(token, index), text: label }]) }
+}
+
+function deliveryPickerMarkup(token: string, language: StudyHelperLanguage) {
+  const copy = getTelegramStudyCopy(language)
+  const labels = [copy.deliveryAudio, copy.deliveryText, copy.deliveryBoth]
+  return { inline_keyboard: labels.map((text, index) => [{ callback_data: callbackData(token, index), text }]) }
 }
 
 export function telegramStudySongSelectionIndex(page: number, pageIndex: number): number {
@@ -435,10 +460,34 @@ async function replaceActiveSession(input: {
   }
 }
 
+async function sendSongPicker(input: {
+  accountUserId: string
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  env: Env
+  preference: { deliveryMode: StudyDeliveryMode; helperLanguage: StudyHelperLanguage }
+  telegramUserId: string
+}): Promise<void> {
+  const actor: ActorContext = { authType: "user", userId: input.accountUserId }
+  const songs = await listReadySongs({ actor, communityId: input.bot.communityId, env: input.env, targetLanguage: input.preference.helperLanguage })
+  const copy = getTelegramStudyCopy(input.preference.helperLanguage)
+  if (songs.length === 0) {
+    await sendTelegramMessage(input.bot, { chat_id: input.chatId, text: copy.noSongs })
+    return
+  }
+  const session = await replaceActiveSession({
+    actionKind: "select_song", actionPayload: { deliveryMode: input.preference.deliveryMode, page: 0, songs }, bot: input.bot,
+    env: input.env, status: "selecting", targetLanguage: input.preference.helperLanguage,
+    telegramUserId: input.telegramUserId, userId: input.accountUserId,
+  })
+  await sendTelegramMessage(input.bot, { chat_id: input.chatId, text: copy.chooseSong, reply_markup: songPickerMarkup(songs, session.actionToken, 0) })
+}
+
 async function runTelegramChatStudyStart(input: {
   bot: TelegramCommunityBotCredential
   chatId: string
   env: Env
+  forcePreferences?: boolean
   targetLanguage?: string | null
   telegramUserId: string
 }): Promise<boolean> {
@@ -465,42 +514,19 @@ async function runTelegramChatStudyStart(input: {
     })
     return true
   }
-  const actor: ActorContext = { authType: "user", userId: account.userId }
-  let targetLanguage = "en"
-  try {
-    targetLanguage = normalizeStudyTargetLanguage(input.targetLanguage)
-  } catch {
-    // Telegram language codes are advisory; an unknown client locale should
-    // not prevent a learner from starting the English study surface.
-  }
-  const songs = await listReadySongs({
-    actor,
-    communityId: input.bot.communityId,
-    env: input.env,
-    targetLanguage,
-  })
-  if (songs.length === 0) {
-    await sendTelegramMessage(input.bot, {
-      chat_id: input.chatId,
-      text: "No songs are ready to study in this community yet.",
+  const preference = await getUserStudyPreference(input.env, account.userId)
+  if (!preference || input.forcePreferences) {
+    const initialLanguage = resolveRuntimeUiLocale(input.targetLanguage) ?? preference?.helperLanguage ?? "en"
+    const copy = getTelegramStudyCopy(initialLanguage)
+    const session = await replaceActiveSession({
+      actionKind: "select_song", actionPayload: { currentDeliveryMode: preference?.deliveryMode ?? "both", preferenceStep: "language" }, bot: input.bot,
+      env: input.env, status: "selecting", targetLanguage: initialLanguage,
+      telegramUserId: input.telegramUserId, userId: account.userId,
     })
+    await sendTelegramMessage(input.bot, { chat_id: input.chatId, text: copy.chooseLanguage, reply_markup: languagePickerMarkup(session.actionToken) })
     return true
   }
-  const session = await replaceActiveSession({
-    actionKind: "select_song",
-    actionPayload: { page: 0, songs },
-    bot: input.bot,
-    env: input.env,
-    status: "selecting",
-    targetLanguage,
-    telegramUserId: input.telegramUserId,
-    userId: account.userId,
-  })
-  await sendTelegramMessage(input.bot, {
-    chat_id: input.chatId,
-    text: "Choose a song to study:",
-    reply_markup: songPickerMarkup(songs, session.actionToken, 0),
-  })
+  await sendSongPicker({ accountUserId: account.userId, bot: input.bot, chatId: input.chatId, env: input.env, preference, telegramUserId: input.telegramUserId })
   return true
 }
 
@@ -584,6 +610,7 @@ export async function startTelegramChatStudy(input: {
   bot: TelegramCommunityBotCredential
   chatId: string
   env: Env
+  forcePreferences?: boolean
   requestMessageId?: number | null
   targetLanguage?: string | null
   telegramUserId: string
@@ -693,11 +720,13 @@ function feedbackText(input: {
   transcript?: string
 }): string {
   const { result } = input
-  if (result.outcome === "correct") return "Correct."
+  const language = (isStudyHelperLanguage(input.study.target_language) ? input.study.target_language : "en")
+  const copy = getTelegramStudyCopy(language)
+  if (result.outcome === "correct") return copy.correct
   if (input.transcript !== undefined) {
     const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
     if (attempted?.type === "say_it_back") {
-      return `Not quite.\n\nThe line was: “${attempted.reference_text}”\nYou said: “${input.transcript || "(nothing detected)"}”`
+      return `${copy.notQuite}\n\n${copy.lineWas}${copy.labelSeparator} “${attempted.reference_text}”\n${copy.youSaid}${copy.labelSeparator} “${input.transcript || "(nothing detected)"}”`
     }
   }
   const missing = result.feedback?.missing?.length
@@ -706,7 +735,7 @@ function feedbackText(input: {
   const extra = result.feedback?.extra?.length
     ? ` Extra: ${result.feedback.extra.join(", ")}.`
     : ""
-  return `Not quite.${missing}${extra}`
+  return `${copy.notQuite}${missing}${extra}`
 }
 
 async function sendCompletion(input: {
@@ -738,7 +767,7 @@ async function sendCompletion(input: {
   const summary = score ? `\n\nScore: ${score}${streak}` : ""
   await sendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: `Study complete: ${input.study.title}${summary}`,
+    text: `${getTelegramStudyCopy(isStudyHelperLanguage(input.study.target_language) ? input.study.target_language : "en").complete}: ${input.study.title}${summary}`,
   })
 }
 
@@ -761,6 +790,17 @@ async function presentNextExercise(input: {
     postId: input.session.postId,
     targetLanguage: input.session.targetLanguage,
   })
+  let localizationNoticeSent = input.session.actionPayload.localizationNoticeSent === true
+  if (study.translation_status === "processing" && !localizationNoticeSent) {
+    const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
+    const copy = getTelegramStudyCopy(language)
+    await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: copy.pendingLocalization,
+      reply_markup: { inline_keyboard: [[{ callback_data: localizationCheckData(input.session.id), text: copy.checkAgain }]] },
+    })
+    localizationNoticeSent = true
+  }
   const exercise = study.access === "ready" ? eligibleExercise(study) : null
   if (input.lastResult && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
     await sendTelegramMessage(input.bot, {
@@ -783,6 +823,8 @@ async function presentNextExercise(input: {
         promptText: exercise.prompt_text,
         question: exercise.question,
         sessionId: study.session?.id,
+        deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "both",
+        localizationNoticeSent,
       },
       env: input.env,
       exerciseId: exercise.id,
@@ -821,9 +863,15 @@ async function presentNextExercise(input: {
     previousActionToken: input.session.actionToken,
     targetLanguage: input.session.targetLanguage,
     telegramUserId: input.session.telegramUserId,
+    deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "both",
+    localizationNoticeSent,
   })
   input.session.actionKind = "await_voice"
-  input.session.actionPayload = { exerciseId: exercise.id }
+  input.session.actionPayload = {
+    deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "both",
+    exerciseId: exercise.id,
+    localizationNoticeSent,
+  }
   input.session.actionToken = nextToken
   input.session.status = "active"
 }
@@ -964,6 +1012,44 @@ export async function handleTelegramChatStudyCallback(input: {
   callback: TelegramWebhookCallbackQuery
   env: Env
 }): Promise<boolean> {
+  const checkMatch = typeof input.callback.data === "string"
+    ? input.callback.data.match(/^study-check:(tcs_[A-Za-z0-9_-]+)$/u)
+    : null
+  if (checkMatch) {
+    const callbackQueryId = stringOrNull(input.callback.id)
+    const telegramUserId = telegramIdentifier(input.callback.from?.id)
+    const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+    if (!callbackQueryId || !telegramUserId || !chatId) return true
+    const result = await getControlPlaneClient(input.env).execute({
+      sql: `
+        SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
+               post_id, target_language, status, action_token, action_kind, action_payload_json
+        FROM telegram_chat_study_sessions
+        WHERE chat_study_session_id = ?1 AND telegram_community_bot_id = ?2
+          AND telegram_user_id = ?3 AND status IN ('active', 'processing')
+        LIMIT 1
+      `,
+      args: [checkMatch[1], input.bot.id, telegramUserId],
+    })
+    const session = parseSession(result.rows[0])
+    if (!session?.postId) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: "This button expired. Send /study to continue." }).catch(() => undefined)
+      return true
+    }
+    const study = await getPostStudyPayload({
+      actor: { authType: "user", userId: session.userId }, communityId: session.communityId,
+      communityRepository: getCommunityRepository(input.env), env: input.env, postId: session.postId,
+      targetLanguage: session.targetLanguage,
+    })
+    const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
+    const copy = getTelegramStudyCopy(language)
+    const ready = study.translation_status === "ready"
+    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId, text: ready ? copy.translationsReady : copy.pendingLocalization }).catch(() => undefined)
+    if (ready) {
+      await sendTelegramMessage(input.bot, { chat_id: chatId, text: copy.translationsReady }).catch(() => undefined)
+    }
+    return true
+  }
   const parsed = parseCallbackData(input.callback.data)
   if (!parsed) return false
   const callbackQueryId = stringOrNull(input.callback.id)
@@ -1013,7 +1099,31 @@ export async function handleTelegramChatStudyCallback(input: {
     callback_query_id: callbackQueryId,
   }).catch(() => undefined)
   try {
-    if (session.actionKind === "select_song") {
+    if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "language") {
+      const language = STUDY_LANGUAGE_BUTTONS[parsed.index]?.code
+      if (!language) throw new Error("Study language choice is no longer available")
+      const token = await updateSessionAction({
+        actionKind: "select_song",
+        actionPayload: { helperLanguage: language, preferenceStep: "delivery" },
+        env: input.env,
+        session,
+        status: "active",
+      })
+      session.targetLanguage = language
+      await sendTelegramMessage(input.bot, {
+        chat_id: chatId,
+        text: getTelegramStudyCopy(language).chooseDelivery,
+        reply_markup: deliveryPickerMarkup(token, language),
+      })
+    } else if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "delivery") {
+      const helperLanguage = session.actionPayload.helperLanguage
+      const deliveryMode = STUDY_DELIVERY_MODES[parsed.index]
+      if (!isStudyHelperLanguage(helperLanguage) || !isStudyDeliveryMode(deliveryMode)) {
+        throw new Error("Study delivery choice is no longer available")
+      }
+      const preference = await upsertUserStudyPreference({ deliveryMode, env: input.env, helperLanguage, userId: session.userId })
+      await sendSongPicker({ accountUserId: session.userId, bot: input.bot, chatId, env: input.env, preference, telegramUserId })
+    } else if (session.actionKind === "select_song") {
       const songs = Array.isArray(session.actionPayload.songs)
         ? session.actionPayload.songs.flatMap((value) => {
             if (!value || typeof value !== "object") return []
@@ -1050,13 +1160,13 @@ export async function handleTelegramChatStudyCallback(input: {
           await editTelegramMessageText(input.bot, {
             chat_id: chatId,
             message_id: callbackMessageId,
-            text: "Choose a song to study:",
+            text: getTelegramStudyCopy(session.targetLanguage as StudyHelperLanguage).chooseSong,
             reply_markup: songPickerMarkup(songs, token, page),
           })
         } else {
           await sendTelegramMessage(input.bot, {
             chat_id: chatId,
-            text: "Choose a song to study:",
+            text: getTelegramStudyCopy(session.targetLanguage as StudyHelperLanguage).chooseSong,
             reply_markup: songPickerMarkup(songs, token, page),
           })
         }
@@ -1125,8 +1235,9 @@ export async function handleTelegramChatStudyCallback(input: {
       const question = stringOrNull(session.actionPayload.question)
       const promptText = stringOrNull(session.actionPayload.promptText)
       if (Number.isSafeInteger(callbackMessageId) && selectedText && question && promptText) {
+        const copy = getTelegramStudyCopy(isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en")
         const correction = result.outcome !== "correct" && correctText
-          ? `\n✅ Correct answer: ${correctText}`
+          ? `\n✅ ${copy.correctAnswer}${copy.labelSeparator} ${correctText}`
           : ""
         await editTelegramMessageText(input.bot, {
           chat_id: chatId,

@@ -674,6 +674,10 @@ export async function getPublicActiveRewardCampaign(input: {
     || requiredString(row, "status") !== "active"
     || Date.parse(requiredString(row, "starts_at")) > now
     || Date.parse(requiredString(row, "ends_at")) <= now
+    || !["study", "karaoke", "either"].includes(requiredString(row, "eligible_activity"))
+    || integer(rowValue(row, "daily_reward_cents")) <= 0
+    || integer(rowValue(row, "funded_cents")) <= integer(rowValue(row, "reserved_cents"))
+      + integer(rowValue(row, "credited_cents")) + integer(rowValue(row, "refunded_cents"))
   ) {
     throw notFoundError("Active reward campaign not found")
   }
@@ -694,6 +698,9 @@ export async function getPublicActiveRewardCampaignForSong(input: {
       FROM reward_campaigns
       WHERE community_id = ?1 AND post_id = ?2 AND status = 'active'
         AND starts_at <= ?3 AND ends_at > ?3
+        AND eligible_activity IN ('study', 'karaoke', 'either')
+        AND daily_reward_cents > 0
+        AND funded_cents > reserved_cents + credited_cents + refunded_cents
       ORDER BY activated_at DESC, reward_campaign_id ASC
       LIMIT 1
     `,
