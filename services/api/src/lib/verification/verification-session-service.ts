@@ -66,6 +66,8 @@ export type ActiveIdentityNullifier = {
   userId: string
 }
 
+type NullifierScopedStatementBuilder = (sourceIdentityNullifierId: string) => InStatement
+
 export function isActiveIdentityNullifierUniqueConflict(error: unknown): boolean {
   let current: unknown = error
   while (current && typeof current === "object") {
@@ -1051,27 +1053,14 @@ async function finalizeZkPassportDocumentVerification(
     nullifierHash: normalizeHashLike(claims.uniqueIdentifier)
       ?? await sha256Hex(`zkpassport:unique-identifier:${claims.uniqueIdentifier}`),
   }
-  const activeNullifier = await client.execute({
-    sql: `
-      SELECT user_id
-      FROM identity_nullifiers
-      WHERE provider = ?1
-        AND mechanism = ?2
-        AND nullifier_hash = ?3
-        AND status = 'active'
-      LIMIT 1
-    `,
-    args: [identityNullifier.provider, identityNullifier.mechanism, identityNullifier.nullifierHash],
-  })
-  const activeNullifierUserId = typeof activeNullifier.rows[0]?.user_id === "string"
-    ? activeNullifier.rows[0].user_id
-    : null
-  if (activeNullifierUserId && activeNullifierUserId !== input.userId) {
+  const activeNullifier = await getActiveIdentityNullifier(client, identityNullifier)
+  if (activeNullifier && activeNullifier.userId !== input.userId) {
     throw eligibilityFailed("Identity proof is already linked to another user")
   }
 
-  const attestationInserts: InStatement[] = []
   const uniqueHumanAttestationId = makeId("att")
+  const candidateNullifierId = makeId("nul")
+  const documentAttestationBuilders: NullifierScopedStatementBuilder[] = []
   capabilities.unique_human = {
     state: "verified",
     provider: "zkpassport",
@@ -1079,7 +1068,7 @@ async function finalizeZkPassportDocumentVerification(
     mechanism: "zkpassport-unique-identifier",
     verified_at: unixSeconds(updatedAt),
   }
-  attestationInserts.push({
+  const uniqueHumanAttestationInsert: InStatement = {
     sql: `
       INSERT INTO user_attestations (
         user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
@@ -1087,31 +1076,51 @@ async function finalizeZkPassportDocumentVerification(
       ) VALUES (?1, ?2, ?3, 'zkpassport', 'unique_human', 'unique_human', 'accepted', ?4, ?5, ?6, NULL, ?5, ?5)
     `,
     args: [uniqueHumanAttestationId, input.userId, row.verification_session_id, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
-  })
-  let firstDocumentAttestationId: string | null = null
+  }
   const pushDocumentAttestation = (attestation: {
     capabilityKey: "minimum_age" | "nationality" | "gender"
     valueJson: Record<string, unknown>
   }): void => {
     const attestationId = makeId("att")
-    firstDocumentAttestationId ??= attestationId
-    attestationInserts.push({
-      sql: `
-        INSERT INTO user_attestations (
-          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
-          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, 'zkpassport', ?4, ?4, 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
-      `,
-      args: [
-        attestationId,
-        input.userId,
-        row.verification_session_id,
-        attestation.capabilityKey,
-        JSON.stringify({ state: "verified", ...attestation.valueJson }),
-        updatedAt,
-        expiresAt,
-      ],
-    })
+    documentAttestationBuilders.push((sourceIdentityNullifierId) => (
+      attestation.capabilityKey === "nationality"
+        ? {
+            sql: `
+              INSERT INTO user_attestations (
+                user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+                capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at,
+                source_identity_nullifier_id
+              ) VALUES (?1, ?2, ?3, 'zkpassport', ?4, ?4, 'accepted', ?5, ?6, ?7, NULL, ?6, ?6, ?8)
+            `,
+            args: [
+              attestationId,
+              input.userId,
+              row.verification_session_id,
+              attestation.capabilityKey,
+              JSON.stringify({ state: "verified", ...attestation.valueJson }),
+              updatedAt,
+              expiresAt,
+              sourceIdentityNullifierId,
+            ],
+          }
+        : {
+            sql: `
+              INSERT INTO user_attestations (
+                user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+                capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+              ) VALUES (?1, ?2, ?3, 'zkpassport', ?4, ?4, 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
+            `,
+            args: [
+              attestationId,
+              input.userId,
+              row.verification_session_id,
+              attestation.capabilityKey,
+              JSON.stringify({ state: "verified", ...attestation.valueJson }),
+              updatedAt,
+              expiresAt,
+            ],
+          }
+    ))
   }
 
   if (claims.minimumAge != null) {
@@ -1160,8 +1169,34 @@ async function finalizeZkPassportDocumentVerification(
   }
 
   const resultRef = claims.proofHash ?? input.proofHash ?? null
-  if (!activeNullifierUserId) {
-    attestationInserts.push({
+  const verificationSessionUpdate: InStatement = {
+    sql: `
+      UPDATE verification_sessions
+      SET status = 'verified',
+          result_ref = ?2,
+          failure_code = NULL,
+          completed_at = ?3,
+          updated_at = ?3
+      WHERE verification_session_id = ?1
+    `,
+    args: [input.verificationSessionId, resultRef, updatedAt],
+  }
+  const userCapabilityUpdate: InStatement = {
+    sql: `
+      UPDATE users
+      SET verification_state = 'verified',
+          capability_provider = 'zkpass',
+          verification_capabilities_json = ?2,
+          verified_at = ?3,
+          current_verification_session_id = ?1,
+          updated_at = ?3
+      WHERE user_id = ?4
+    `,
+    args: [input.verificationSessionId, JSON.stringify(capabilities), updatedAt, input.userId],
+  }
+  const buildBatchStatements = (resolvedNullifier: ActiveIdentityNullifier | null): InStatement[] => {
+    const sourceIdentityNullifierId = resolvedNullifier?.identityNullifierId ?? candidateNullifierId
+    const identityNullifierInsert: InStatement[] = resolvedNullifier ? [] : [{
       sql: `
         INSERT INTO identity_nullifiers (
           identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
@@ -1170,44 +1205,30 @@ async function finalizeZkPassportDocumentVerification(
         ) VALUES (?1, ?2, 'zkpassport', 'zkpassport-unique-identifier', ?3, ?4, ?5, 'active', ?6, NULL, ?6, ?6)
       `,
       args: [
-        makeId("nul"),
+        candidateNullifierId,
         input.userId,
         identityNullifier.nullifierHash,
         input.verificationSessionId,
         uniqueHumanAttestationId,
         updatedAt,
       ],
-    })
+    }]
+    return [
+      verificationSessionUpdate,
+      uniqueHumanAttestationInsert,
+      ...identityNullifierInsert,
+      ...documentAttestationBuilders.map((buildStatement) => buildStatement(sourceIdentityNullifierId)),
+      userCapabilityUpdate,
+    ]
   }
 
-  await client.batch([
-    {
-      sql: `
-        UPDATE verification_sessions
-        SET status = 'verified',
-            result_ref = ?2,
-            failure_code = NULL,
-            completed_at = ?3,
-            updated_at = ?3
-        WHERE verification_session_id = ?1
-      `,
-      args: [input.verificationSessionId, resultRef, updatedAt],
-    },
-    ...attestationInserts,
-    {
-      sql: `
-        UPDATE users
-        SET verification_state = 'verified',
-            capability_provider = 'zkpass',
-            verification_capabilities_json = ?2,
-            verified_at = ?3,
-            current_verification_session_id = ?1,
-            updated_at = ?3
-        WHERE user_id = ?4
-      `,
-      args: [input.verificationSessionId, JSON.stringify(capabilities), updatedAt, input.userId],
-    },
-  ], "write")
+  await writeVerificationBatchWithNullifierRetry({
+    client,
+    userId: input.userId,
+    identityNullifier,
+    activeNullifier,
+    buildBatchStatements,
+  })
 
   await approvePendingTelegramJoinGrantsAfterVerification({
     env,
@@ -1261,7 +1282,7 @@ async function finalizeVerification(
   }
   const uniqueHumanAttestationId = makeId("att")
   const candidateNullifierId = makeId("nul")
-  const capabilityAttestationInserts: InStatement[] = []
+  const capabilityAttestationBuilders: NullifierScopedStatementBuilder[] = []
 
   capabilities.unique_human = {
     state: "verified",
@@ -1288,7 +1309,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
-    capabilityAttestationInserts.push({
+    capabilityAttestationBuilders.push(() => ({
       sql: `
         INSERT INTO user_attestations (
           user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
@@ -1296,7 +1317,7 @@ async function finalizeVerification(
         ) VALUES (?1, ?2, ?3, ?4, 'age_over_18', 'age_over_18', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
       `,
       args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", age_over_18: true }), updatedAt, expiresAt],
-    })
+    }))
   }
 
   if (minimumAgeToMint != null && row.provider === "self") {
@@ -1308,7 +1329,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
-    capabilityAttestationInserts.push({
+    capabilityAttestationBuilders.push(() => ({
       sql: `
         INSERT INTO user_attestations (
           user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
@@ -1316,7 +1337,7 @@ async function finalizeVerification(
         ) VALUES (?1, ?2, ?3, ?4, 'minimum_age', 'minimum_age', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
       `,
       args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", minimum_age: minimumAgeToMint }), updatedAt, expiresAt],
-    })
+    }))
   }
 
   if (capsToMint.includes("nationality") && row.provider === "self") {
@@ -1329,7 +1350,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
-    capabilityAttestationInserts.push({
+    capabilityAttestationBuilders.push((sourceIdentityNullifierId) => ({
       sql: `
         INSERT INTO user_attestations (
           user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
@@ -1345,9 +1366,9 @@ async function finalizeVerification(
         JSON.stringify({ state: "verified", nationality: nationalityValue }),
         updatedAt,
         expiresAt,
-        activeNullifier?.identityNullifierId ?? candidateNullifierId,
+        sourceIdentityNullifierId,
       ],
-    })
+    }))
   }
 
   if (capsToMint.includes("gender") && row.provider === "self") {
@@ -1360,7 +1381,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
-    capabilityAttestationInserts.push({
+    capabilityAttestationBuilders.push(() => ({
       sql: `
         INSERT INTO user_attestations (
           user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
@@ -1368,7 +1389,7 @@ async function finalizeVerification(
         ) VALUES (?1, ?2, ?3, ?4, 'gender', 'gender', 'accepted', ?5, ?6, ?7, NULL, ?6, ?6)
       `,
       args: [makeId("att"), input.userId, input.verificationSessionId, row.provider, JSON.stringify({ state: "verified", gender: genderValue }), updatedAt, expiresAt],
-    })
+    }))
   }
 
   const attestationProofHash = typeof attestationData?.proof_hash === "string" ? attestationData.proof_hash : null
@@ -1419,13 +1440,9 @@ async function finalizeVerification(
         updatedAt,
       ],
     }]
-    const capabilityInserts = capabilityAttestationInserts.map((statement): InStatement => {
-      if (!statement.sql.includes("source_identity_nullifier_id")) return statement
-      return {
-        ...statement,
-        args: [...(statement.args ?? []).slice(0, -1), sourceIdentityNullifierId],
-      }
-    })
+    const capabilityInserts = capabilityAttestationBuilders.map((buildStatement) => (
+      buildStatement(sourceIdentityNullifierId)
+    ))
     return [
       verificationSessionUpdate,
       uniqueHumanAttestationInsert,
