@@ -130,7 +130,27 @@ export type TelegramStudyVoiceIntentResource = {
   status: "pending"
 }
 
-export async function createTelegramStudyVoiceIntent(input: {
+type PreparedTelegramStudyVoiceIntent = {
+  attemptNumber: number
+  bot: TelegramCommunityBotCredential
+  chatStudySessionId: string | null
+  communityId: string
+  createdAt: string
+  exerciseId: string
+  expiresAt: string
+  idempotencyKey: string
+  intentId: string
+  postId: string
+  referenceText: string
+  studySessionId: string
+  targetLanguage: string
+  telegramUserId: string
+  userId: string
+}
+
+type VoiceIntentExecutor = Pick<ReturnType<typeof getControlPlaneClient>, "execute">
+
+async function prepareTelegramStudyVoiceIntent(input: {
   actor: ActorContext | AdminActorContext
   chatStudySessionId?: string | null
   communityId: string
@@ -139,7 +159,7 @@ export async function createTelegramStudyVoiceIntent(input: {
   postId: string
   targetLanguage?: string | null
   telegramUserId?: string | null
-}): Promise<TelegramStudyVoiceIntentResource> {
+}): Promise<PreparedTelegramStudyVoiceIntent> {
   if (!isTelegramStudyVoiceEnabled(input.env, input.communityId)) {
     throw conflictError("Telegram study voice messages are not enabled for this community")
   }
@@ -191,10 +211,30 @@ export async function createTelegramStudyVoiceIntent(input: {
   const intentId = makeId("tsv")
   const idempotencyKey = `telegram-study:${intentId}`
   const attemptNumber = exercise.presentation_count + 1
-  const client = getControlPlaneClient(input.env)
-  const tx = await client.transaction("write")
-  try {
-    const active = await tx.execute({
+  return {
+    attemptNumber,
+    bot,
+    chatStudySessionId: input.chatStudySessionId ?? null,
+    communityId: input.communityId,
+    createdAt,
+    exerciseId: exercise.id,
+    expiresAt,
+    idempotencyKey,
+    intentId,
+    postId: input.postId,
+    referenceText: exercise.reference_text,
+    studySessionId: study.session.id,
+    targetLanguage: study.target_language ?? input.targetLanguage ?? "en",
+    telegramUserId,
+    userId: input.actor.userId,
+  }
+}
+
+async function persistTelegramStudyVoiceIntent(
+  executor: VoiceIntentExecutor,
+  intent: PreparedTelegramStudyVoiceIntent,
+): Promise<void> {
+  const active = await executor.execute({
       sql: `
         SELECT status
         FROM telegram_study_voice_intents
@@ -203,13 +243,13 @@ export async function createTelegramStudyVoiceIntent(input: {
           AND status IN ('pending', 'processing')
         LIMIT 1
       `,
-      args: [bot.id, telegramUserId],
+      args: [intent.bot.id, intent.telegramUserId],
     })
-    const activeStatus = stringOrNull(rowValue(active.rows[0], "status"))
-    if (activeStatus === "processing") {
-      throw conflictError("A Telegram study voice attempt is already being graded")
-    }
-    await tx.execute({
+  const activeStatus = stringOrNull(rowValue(active.rows[0], "status"))
+  if (activeStatus === "processing") {
+    throw conflictError("A Telegram study voice attempt is already being graded")
+  }
+  await executor.execute({
       sql: `
         UPDATE telegram_study_voice_intents
         SET status = 'canceled',
@@ -218,9 +258,9 @@ export async function createTelegramStudyVoiceIntent(input: {
           AND telegram_user_id = ?2
           AND status = 'pending'
       `,
-      args: [bot.id, telegramUserId, createdAt],
+      args: [intent.bot.id, intent.telegramUserId, intent.createdAt],
     })
-    await tx.execute({
+  await executor.execute({
       sql: `
         INSERT INTO telegram_study_voice_intents (
           intent_id, telegram_community_bot_id, telegram_user_id, user_id,
@@ -236,38 +276,38 @@ export async function createTelegramStudyVoiceIntent(input: {
         )
       `,
       args: [
-        intentId,
-        bot.id,
-        telegramUserId,
-        input.actor.userId,
-        input.communityId,
-        input.postId,
-        exercise.id,
-        study.target_language ?? input.targetLanguage ?? "en",
-        study.session.id,
-        attemptNumber,
-        idempotencyKey,
-        expiresAt,
-        createdAt,
-        input.chatStudySessionId ?? null,
+        intent.intentId,
+        intent.bot.id,
+        intent.telegramUserId,
+        intent.userId,
+        intent.communityId,
+        intent.postId,
+        intent.exerciseId,
+        intent.targetLanguage,
+        intent.studySessionId,
+        intent.attemptNumber,
+        intent.idempotencyKey,
+        intent.expiresAt,
+        intent.createdAt,
+        intent.chatStudySessionId,
       ],
     })
-    await tx.commit()
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+}
 
+async function deliverTelegramStudyVoicePrompt(input: {
+  env: Env
+  includeDisclosure: boolean
+  intent: PreparedTelegramStudyVoiceIntent
+}): Promise<void> {
+  const client = getControlPlaneClient(input.env)
+  const text = ["Say this line back:", input.intent.referenceText]
+  if (input.includeDisclosure) {
+    text.push("The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading.")
+  }
   try {
-    const sent = await sendTelegramMessage(bot, {
-      chat_id: telegramUserId,
-      text: [
-        "Say this line back:",
-        exercise.reference_text,
-        "The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading.",
-      ].join("\n\n"),
+    const sent = await sendTelegramMessage(input.intent.bot, {
+      chat_id: input.intent.telegramUserId,
+      text: text.join("\n\n"),
     })
     await client.execute({
       sql: `
@@ -278,7 +318,7 @@ export async function createTelegramStudyVoiceIntent(input: {
             updated_at = ?3
         WHERE intent_id = ?1
       `,
-      args: [intentId, sent.message_id, nowIso()],
+      args: [input.intent.intentId, sent.message_id, nowIso()],
     })
   } catch (error) {
     await client.execute({
@@ -290,20 +330,121 @@ export async function createTelegramStudyVoiceIntent(input: {
             updated_at = ?3
         WHERE intent_id = ?1
       `,
-      args: [intentId, error instanceof Error ? error.message : String(error), nowIso()],
+      args: [input.intent.intentId, error instanceof Error ? error.message : String(error), nowIso()],
     })
     throw providerUnavailable("Telegram study prompt delivery is uncertain", {
-      intent: intentId,
+      intent: input.intent.intentId,
     }, false)
   }
+}
 
+function intentResource(intent: PreparedTelegramStudyVoiceIntent): TelegramStudyVoiceIntentResource {
   return {
-    created: Math.floor(Date.parse(createdAt) / 1000),
-    expires_at: Math.floor(Date.parse(expiresAt) / 1000),
-    id: intentId,
+    created: Math.floor(Date.parse(intent.createdAt) / 1000),
+    expires_at: Math.floor(Date.parse(intent.expiresAt) / 1000),
+    id: intent.intentId,
     object: "telegram_study_voice_intent",
     status: "pending",
   }
+}
+
+export async function createTelegramStudyVoiceIntent(input: {
+  actor: ActorContext | AdminActorContext
+  chatStudySessionId?: string | null
+  communityId: string
+  env: Env
+  exerciseId: string
+  postId: string
+  targetLanguage?: string | null
+  telegramUserId?: string | null
+}): Promise<TelegramStudyVoiceIntentResource> {
+  const intent = await prepareTelegramStudyVoiceIntent(input)
+  const client = getControlPlaneClient(input.env)
+  const tx = await client.transaction("write")
+  try {
+    await persistTelegramStudyVoiceIntent(tx, intent)
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
+
+  await deliverTelegramStudyVoicePrompt({
+    env: input.env,
+    includeDisclosure: true,
+    intent,
+  })
+  return intentResource(intent)
+}
+
+export async function createTelegramChatStudyVoiceIntent(input: {
+  actor: ActorContext
+  chatStudySessionId: string
+  communityId: string
+  env: Env
+  exerciseId: string
+  nextActionToken: string
+  postId: string
+  previousActionToken: string
+  targetLanguage?: string | null
+  telegramUserId: string
+}): Promise<TelegramStudyVoiceIntentResource> {
+  const intent = await prepareTelegramStudyVoiceIntent(input)
+  const client = getControlPlaneClient(input.env)
+  const tx = await client.transaction("write")
+  let includeDisclosure = true
+  try {
+    const priorPrompt = await tx.execute({
+      sql: `
+        SELECT 1
+        FROM telegram_study_voice_intents
+        WHERE chat_study_session_id = ?1
+          AND prompt_delivery_status IN ('sent', 'uncertain')
+        LIMIT 1
+      `,
+      args: [input.chatStudySessionId],
+    })
+    includeDisclosure = priorPrompt.rows.length === 0
+    await persistTelegramStudyVoiceIntent(tx, intent)
+    const updated = await tx.execute({
+      sql: `
+        UPDATE telegram_chat_study_sessions
+        SET status = 'active',
+            action_token = ?2,
+            action_kind = 'await_voice',
+            action_payload_json = ?3,
+            study_session_id = ?4,
+            current_exercise_id = ?5,
+            prompt_message_id = NULL,
+            updated_at = ?6
+        WHERE chat_study_session_id = ?1
+          AND action_token = ?7
+          AND status IN ('processing', 'active')
+      `,
+      args: [
+        input.chatStudySessionId,
+        input.nextActionToken,
+        JSON.stringify({ exerciseId: input.exerciseId }),
+        intent.studySessionId,
+        input.exerciseId,
+        nowIso(),
+        input.previousActionToken,
+      ],
+    })
+    if ((updated.rowsAffected ?? 0) !== 1) {
+      throw new Error("Telegram study session is no longer active")
+    }
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
+  await deliverTelegramStudyVoicePrompt({ env: input.env, includeDisclosure, intent })
+  return intentResource(intent)
 }
 
 async function findVoiceIntent(input: {
@@ -379,6 +520,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
     chatId: string
     chatStudySessionId: string
     result: SongStudyAttemptResult
+    transcript: string
   }) => Promise<void>
   waitUntil?: (promise: Promise<void>) => void
 }): Promise<boolean> {
@@ -490,6 +632,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
 
   const processClaimedVoice = async (): Promise<void> => {
     let result: SongStudyAttemptResult
+    let transcriptText = ""
     try {
       const telegramFile = await getTelegramFile(input.bot, voiceFileId)
       if (!telegramFile.file_path?.trim()) {
@@ -510,6 +653,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
         file: new File([download.bytes], "telegram-study-voice.oga", { type: mimeType }),
         postId: intent.postId,
       })
+      transcriptText = transcription.text
       result = await submitPostStudyAttempt({
         actor,
         body: {
@@ -517,7 +661,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
           exercise_id: intent.exerciseId,
           idempotency_key: intent.idempotencyKey,
           session_id: intent.sessionId,
-          transcript: transcription.text,
+          transcript: transcriptText,
           type: "say_it_back",
         },
         communityId: intent.communityId,
@@ -600,6 +744,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
         chatId,
         chatStudySessionId: intent.chatStudySessionId,
         result,
+        transcript: transcriptText,
       }).catch(async (error) => {
         console.warn("[telegram-study] chat continuation failed", {
           communityId: intent.communityId,

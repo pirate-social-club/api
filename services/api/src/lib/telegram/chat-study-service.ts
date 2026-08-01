@@ -26,7 +26,7 @@ import {
   createTelegramOnboardingIntent,
   telegramOnboardingWebAppReplyMarkup,
 } from "./onboarding-service"
-import { createTelegramStudyVoiceIntent } from "./study-voice-service"
+import { createTelegramChatStudyVoiceIntent } from "./study-voice-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 import {
   telegramIdentifier,
@@ -520,8 +520,19 @@ function eligibleExercise(study: SongStudyPayload): SongStudyPayload["exercises"
   ) ?? null
 }
 
-function feedbackText(result: SongStudyAttemptResult): string {
+function feedbackText(input: {
+  result: SongStudyAttemptResult
+  study: SongStudyPayload
+  transcript?: string
+}): string {
+  const { result } = input
   if (result.outcome === "correct") return "Correct."
+  if (input.transcript !== undefined) {
+    const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
+    if (attempted?.type === "say_it_back") {
+      return `Not quite.\n\nThe line was: “${attempted.reference_text}”\nYou said: “${input.transcript || "(nothing detected)"}”`
+    }
+  }
   const missing = result.feedback?.missing?.length
     ? ` Missing: ${result.feedback.missing.join(", ")}.`
     : ""
@@ -569,7 +580,9 @@ async function presentNextExercise(input: {
   chatId: string
   env: Env
   lastResult?: SongStudyAttemptResult
+  suppressIncorrectFeedback?: boolean
   session: ChatStudySession
+  transcript?: string
 }): Promise<void> {
   if (!input.session.postId) throw new Error("Chat study session has no song")
   const actor: ActorContext = { authType: "user", userId: input.session.userId }
@@ -582,10 +595,10 @@ async function presentNextExercise(input: {
     targetLanguage: input.session.targetLanguage,
   })
   const exercise = study.access === "ready" ? eligibleExercise(study) : null
-  if (input.lastResult) {
+  if (input.lastResult && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: feedbackText(input.lastResult),
+      text: feedbackText({ result: input.lastResult, study, transcript: input.transcript }),
     })
   }
   if (!exercise) {
@@ -629,24 +642,23 @@ async function presentNextExercise(input: {
     })
     return
   }
-  await createTelegramStudyVoiceIntent({
+  const nextToken = actionToken()
+  await createTelegramChatStudyVoiceIntent({
     actor,
     chatStudySessionId: input.session.id,
     communityId: input.session.communityId,
     env: input.env,
     exerciseId: exercise.id,
+    nextActionToken: nextToken,
     postId: input.session.postId,
+    previousActionToken: input.session.actionToken,
     targetLanguage: input.session.targetLanguage,
     telegramUserId: input.session.telegramUserId,
   })
-  await updateSessionAction({
-    actionKind: "await_voice",
-    actionPayload: { exerciseId: exercise.id },
-    env: input.env,
-    exerciseId: exercise.id,
-    session: input.session,
-    studySessionId: study.session?.id ?? null,
-  })
+  input.session.actionKind = "await_voice"
+  input.session.actionPayload = { exerciseId: exercise.id }
+  input.session.actionToken = nextToken
+  input.session.status = "active"
 }
 
 async function loadSessionByAction(input: {
@@ -954,6 +966,7 @@ export async function handleTelegramChatStudyCallback(input: {
         env: input.env,
         lastResult: result,
         session,
+        suppressIncorrectFeedback: true,
       })
     }
     await finishCallback({ callbackQueryId, env: input.env })
@@ -975,6 +988,7 @@ export async function continueTelegramChatStudyAfterVoice(input: {
   chatStudySessionId: string
   env: Env
   result: SongStudyAttemptResult
+  transcript: string
 }): Promise<void> {
   const query = await getControlPlaneClient(input.env).execute({
     sql: `
@@ -997,5 +1011,6 @@ export async function continueTelegramChatStudyAfterVoice(input: {
     env: input.env,
     lastResult: input.result,
     session,
+    transcript: input.transcript,
   })
 }

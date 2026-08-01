@@ -9,8 +9,14 @@ import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt } from "./community-routes-test-helpers"
 import { encryptTelegramBotToken } from "../../../src/lib/telegram/bot-credential-crypto"
 import { encryptCredentialSecret } from "../../../src/lib/crypto/credential-secret"
-import { handleTelegramChatStudyCallback } from "../../../src/lib/telegram/chat-study-service"
-import { createTelegramStudyVoiceIntent } from "../../../src/lib/telegram/study-voice-service"
+import {
+  continueTelegramChatStudyAfterVoice,
+  handleTelegramChatStudyCallback,
+} from "../../../src/lib/telegram/chat-study-service"
+import {
+  createTelegramChatStudyVoiceIntent,
+  createTelegramStudyVoiceIntent,
+} from "../../../src/lib/telegram/study-voice-service"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -597,6 +603,7 @@ describe("community study routes", () => {
         button.text === "Traducción incorrecta 2"
       )
       expect(secondWrong?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
+      const bodiesBeforeWrongAnswer = telegramBodies.length
       const secondAnswer = await webhook({
         update_id: 5004,
         callback_query: {
@@ -615,6 +622,9 @@ describe("community study routes", () => {
         && body.text.includes("❌ Traducción incorrecta 2")
         && body.text.includes("✅ Correct answer: Traducción correcta 2")
       )).toBe(true)
+      expect(telegramBodies.slice(bodiesBeforeWrongAnswer).some((body) =>
+        body.text === "Not quite."
+      )).toBe(false)
       const retryPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string"
         && body.text.includes("Line two for route study")
@@ -803,6 +813,7 @@ describe("community study routes", () => {
     const telegramRequests: Request[] = []
     let transcriptionRequests = 0
     let forceTranscriptionFailure = false
+    let forcePromptFailure = false
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
       if (request.url.endsWith("/getFile")) {
@@ -831,6 +842,9 @@ describe("community study routes", () => {
           text: exercise!.reference_text,
         })
       }
+      if (forcePromptFailure && request.url.endsWith("/sendMessage")) {
+        throw new Error("simulated Telegram timeout")
+      }
       telegramRequests.push(request)
       return new Response(JSON.stringify({
         ok: true,
@@ -838,6 +852,168 @@ describe("community study routes", () => {
       }), { headers: { "content-type": "application/json" } })
     }) as typeof fetch
     try {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO telegram_chat_study_sessions (
+            chat_study_session_id, telegram_community_bot_id, telegram_user_id,
+            user_id, community_id, post_id, target_language, status,
+            action_token, action_kind, action_payload_json, expires_at,
+            created_at, updated_at
+          ) VALUES (
+            'tcs_atomic_voice', 'tcb_study_voice', '787878', ?1, ?2,
+            'pst_study_route_song', 'es', 'active', 'old-action-token',
+            'answer_choice', '{}', '2099-01-01T00:00:00.000Z', ?3, ?3
+          )
+        `,
+        args: [session.userId, communityId, now],
+      })
+      await expect(createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        chatStudySessionId: "tcs_atomic_voice",
+        communityId,
+        env: ctx.env,
+        exerciseId: exercise!.id,
+        nextActionToken: "next-action-token",
+        postId: "pst_study_route_song",
+        previousActionToken: "stale-action-token",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })).rejects.toThrow("no longer active")
+      expect((await ctx.client.execute(
+        "SELECT intent_id FROM telegram_study_voice_intents",
+      )).rows).toHaveLength(0)
+      expect(telegramRequests).toHaveLength(0)
+
+      await createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        chatStudySessionId: "tcs_atomic_voice",
+        communityId,
+        env: ctx.env,
+        exerciseId: exercise!.id,
+        nextActionToken: "next-action-token",
+        postId: "pst_study_route_song",
+        previousActionToken: "old-action-token",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })
+      const firstChatPrompt = await telegramRequests.at(-1)!.clone().json() as { text: string }
+      expect(firstChatPrompt.text).toContain("community bot owner can access and listen")
+
+      await createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        chatStudySessionId: "tcs_atomic_voice",
+        communityId,
+        env: ctx.env,
+        exerciseId: exercise!.id,
+        nextActionToken: "second-action-token",
+        postId: "pst_study_route_song",
+        previousActionToken: "next-action-token",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })
+      const secondChatPrompt = await telegramRequests.at(-1)!.clone().json() as { text: string }
+      expect(secondChatPrompt.text).not.toContain("community bot owner can access and listen")
+
+      forcePromptFailure = true
+      await expect(createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        chatStudySessionId: "tcs_atomic_voice",
+        communityId,
+        env: ctx.env,
+        exerciseId: exercise!.id,
+        nextActionToken: "final-action-token",
+        postId: "pst_study_route_song",
+        previousActionToken: "second-action-token",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })).rejects.toThrow("delivery is uncertain")
+      forcePromptFailure = false
+      const atomicState = await ctx.client.execute({
+        sql: `
+          SELECT s.action_kind, s.action_token, i.prompt_delivery_status
+          FROM telegram_chat_study_sessions s
+          JOIN telegram_study_voice_intents i
+            ON i.chat_study_session_id = s.chat_study_session_id
+          WHERE s.chat_study_session_id = 'tcs_atomic_voice'
+            AND i.status = 'pending'
+        `,
+      })
+      expect(atomicState.rows[0]).toMatchObject({
+        action_kind: "await_voice",
+        action_token: "final-action-token",
+        prompt_delivery_status: "uncertain",
+      })
+      forcePromptFailure = false
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_atomic_voice",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: { extra: ["wrong"], matched: [], missing: ["line"] },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "wrong words",
+      })
+      const reveal = await Promise.all(telegramRequests.map(async (request) =>
+        request.url.endsWith("/sendMessage")
+          ? await request.clone().json() as { text?: string }
+          : {}
+      ))
+      expect(reveal.some((body) =>
+        body.text?.includes(`The line was: “${exercise!.reference_text}”`)
+        && body.text.includes("You said: “wrong words”")
+        && !body.text.includes("Missing:")
+      )).toBe(true)
+      const requestsBeforeEmptyTranscript = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_atomic_voice",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: { extra: [], matched: [], missing: ["line"] },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "",
+      })
+      const emptyTranscriptMessages = await Promise.all(
+        telegramRequests.slice(requestsBeforeEmptyTranscript).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {}
+        ),
+      )
+      expect(emptyTranscriptMessages.some((body) =>
+        body.text?.includes("You said: “(nothing detected)”")
+        && !body.text.includes("Missing:")
+      )).toBe(true)
+      await ctx.client.execute("DELETE FROM telegram_study_voice_intents")
+      await ctx.client.execute("DELETE FROM telegram_chat_study_sessions")
+      telegramRequests.length = 0
+
       const response = await app.request(
         `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
         {
