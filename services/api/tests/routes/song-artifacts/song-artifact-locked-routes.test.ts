@@ -2514,6 +2514,8 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x4444444444444444444444444444444444444444",
     })
@@ -3102,6 +3104,8 @@ describe("song artifact locked routes", () => {
       FILEBASE_S3_SECRET_KEY: "test-filebase-secret",
       FILEBASE_S3_ENDPOINT: "https://s3.filebase.test",
       FILEBASE_MEDIA_BUCKET: "pirate-media",
+      OPENROUTER_API_KEY: "test-openrouter-key",
+      OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
       STORY_CDR_WRITER_PRIVATE_KEY: "0x3000000000000000000000000000000000000000000000000000000000000003",
       STORY_ROYALTY_SPG_NFT_CONTRACT: "0x4444444444444444444444444444444444444444",
     })

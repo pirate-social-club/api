@@ -198,7 +198,9 @@ async function classifyLyricsAgeGate(input: {
       body: JSON.stringify({
         model,
         temperature: 0,
-        max_completion_tokens: 120,
+        // Leave enough room for reasoning-capable providers to emit the strict
+        // JSON object. A 120-token cap can truncate an otherwise valid answer.
+        max_completion_tokens: 500,
         response_format: {
           type: "json_schema",
           json_schema: {
@@ -314,21 +316,29 @@ export async function evaluateLyricsModeration(input: {
   }
 
   const providerResult = await classifyLyricsAgeGate(input)
-  const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
-  const providerOutcome = providerFailed
-    ? {
-        analysisState: "allow" as const,
-        contentSafetyState: "pending" as const,
-        ageGatePolicy: "none" as const,
-      }
-    : resolveProviderLyricsOutcome(providerResult as Record<string, unknown>)
+  const providerError = providerResult && typeof providerResult.error === "string"
+    ? providerResult.error
+    : providerResult
+      ? null
+      : "empty_response"
+  if (providerError) {
+    // A missing, truncated, or invalid classifier response is not a "safe"
+    // verdict. Reuse the retryable provider-failure path so publication cannot
+    // silently continue without an age-gate decision.
+    throw providerUnavailable("Song lyrics classification is temporarily unavailable", {
+      provider: "openrouter",
+      provider_error: providerError,
+      reason: "song_lyrics_classification_failed",
+    })
+  }
+  const providerOutcome = resolveProviderLyricsOutcome(providerResult!)
 
   return {
     analysisState: providerOutcome.analysisState,
     contentSafetyState: providerOutcome.contentSafetyState,
     ageGatePolicy: providerOutcome.ageGatePolicy,
-    moderationStatus: providerFailed ? "failed" : "completed",
-    moderationError: providerFailed ? String(providerResult?.error || "OpenRouter song lyrics classification failed") : null,
+    moderationStatus: "completed",
+    moderationError: null,
     moderationResult: {
       provider: "openrouter",
       provider_result: providerResult,
