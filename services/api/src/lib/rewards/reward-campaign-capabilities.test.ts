@@ -40,11 +40,11 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.nationality_payout_tiers).toBe("binding_preview")
   })
 
-  test("fails closed for providers that cannot bind nationality to a reward document", () => {
+  test("keeps draft tier terms available when the configured provider cannot preview binding", () => {
     expect(getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_IDENTITY_PROVIDER: "very",
-    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("unavailable")
+    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("draft_only")
     expect(getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_IDENTITY_PROVIDER: "unknown",
