@@ -832,6 +832,44 @@ async function getSetupIntentRequest(input: {
 }
 
 describe("community Telegram routes", () => {
+  test("provider-link fallback materializes Telegram account without displacing another attachment", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const first = await exchangeJwt(ctx.env, "telegram-provider-materialize")
+    const second = await exchangeJwt(ctx.env, "telegram-provider-conflict")
+    const now = "2026-08-01T05:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO auth_provider_links (
+          auth_provider_link_id, user_id, provider, provider_subject,
+          provider_user_ref, status, linked_at, created_at, updated_at
+        ) VALUES
+          ('apl_materialize', ?1, 'telegram', '880001', 'materialize', 'active', ?3, ?3, ?3),
+          ('apl_conflict', ?2, 'telegram', '880002', 'conflict', 'active', ?3, ?3, ?3)
+      `,
+      args: [first.userId, second.userId, now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO telegram_accounts (
+          telegram_user_id, user_id, username, first_seen_at, last_seen_at, updated_at
+        ) VALUES ('880003', ?1, 'existing_account', ?2, ?2, ?2)
+      `,
+      args: [second.userId, now],
+    })
+
+    expect(await resolveTelegramAccount({ env: ctx.env, telegramUserId: "880001" }))
+      .toEqual({ userId: first.userId })
+    expect(await getTelegramAccount({ client: ctx.client, telegramUserId: "880001" }))
+      .toEqual({ telegram_user_id: "880001", user_id: first.userId })
+
+    expect(await resolveTelegramAccount({ env: ctx.env, telegramUserId: "880002" }))
+      .toEqual({ userId: second.userId })
+    expect(await getTelegramAccount({ client: ctx.client, telegramUserId: "880002" })).toBeNull()
+    expect(await getTelegramAccount({ client: ctx.client, telegramUserId: "880003" }))
+      .toEqual({ telegram_user_id: "880003", user_id: second.userId })
+  })
+
   test("owner can save a community-owned bot token without exposing plaintext", async () => {
     const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
     const telegramRequests = installTelegramApiMock(async (request) => {

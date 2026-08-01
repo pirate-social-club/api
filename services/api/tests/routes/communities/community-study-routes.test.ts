@@ -10,6 +10,7 @@ import { exchangeJwt } from "./community-routes-test-helpers"
 import { encryptTelegramBotToken } from "../../../src/lib/telegram/bot-credential-crypto"
 import { encryptCredentialSecret } from "../../../src/lib/crypto/credential-secret"
 import { handleTelegramChatStudyCallback } from "../../../src/lib/telegram/chat-study-service"
+import { createTelegramStudyVoiceIntent } from "../../../src/lib/telegram/study-voice-service"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -1048,22 +1049,36 @@ describe("community study routes", () => {
         communityClient.close()
       }
 
-      const nextIntentResponse = await app.request(
-        `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
-        {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${session.accessToken}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({
-            exercise_id: nextExercise!.id,
-            target_language: "es",
-          }),
-        },
-        ctx.env,
-      )
-      expect(nextIntentResponse.status).toBe(201)
+      await ctx.client.execute({
+        sql: "DELETE FROM telegram_accounts WHERE telegram_user_id = '787878'",
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO telegram_accounts (
+            telegram_user_id, user_id, username, first_seen_at, last_seen_at, updated_at
+          ) VALUES ('787879', ?1, 'other_student_account', ?2, ?2, ?2)
+        `,
+        args: [session.userId, now],
+      })
+      const nextIntent = await createTelegramStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        communityId,
+        env: ctx.env,
+        exerciseId: nextExercise!.id,
+        postId: "pst_study_route_song",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })
+      expect(nextIntent.status).toBe("pending")
+      const chatOriginIntent = await ctx.client.execute({
+        sql: `
+          SELECT telegram_user_id
+          FROM telegram_study_voice_intents
+          WHERE intent_id = ?1
+        `,
+        args: [nextIntent.id],
+      })
+      expect(chatOriginIntent.rows[0]?.telegram_user_id).toBe("787878")
       await ctx.client.execute({
         sql: `
           UPDATE telegram_study_voice_intents
@@ -1113,6 +1128,17 @@ describe("community study routes", () => {
         status: "failed",
       })
       forceTranscriptionFailure = false
+      await ctx.client.execute({
+        sql: "DELETE FROM telegram_accounts WHERE telegram_user_id = '787879'",
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO telegram_accounts (
+            telegram_user_id, user_id, username, first_seen_at, last_seen_at, updated_at
+          ) VALUES ('787878', ?1, 'student', ?2, ?2, ?2)
+        `,
+        args: [session.userId, now],
+      })
 
       const expiringIntentResponse = await app.request(
         `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
