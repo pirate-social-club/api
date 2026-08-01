@@ -55,20 +55,31 @@ describe("admin auth middleware", () => {
     })
   })
 
-  test("version endpoint exposes the active karaoke scoring contract", async () => {
+  test("version endpoint exposes Worker identity and the active karaoke scoring contract", async () => {
     const response = await app.request("http://pirate.test/__version", undefined, {
       ENVIRONMENT: "test",
       PIRATE_API_PUBLIC_ORIGIN: "http://pirate.test",
+      CF_VERSION_METADATA: {
+        id: "worker-version-id",
+        tag: "worker-version-tag",
+        timestamp: "2026-05-26T17:52:00Z",
+      },
     })
     expect(response.status).toBe(200)
     const body = await json(response) as {
       karaoke_scoring_version: number
       karaoke_runtime: { version: string; git_sha: string }
+      worker_version: { id: string; tag: string; timestamp: string }
     }
     expect(body.karaoke_scoring_version).toBe(KARAOKE_SCORING_VERSION)
     expect(body.karaoke_runtime).toEqual({
       version: KARAOKE_RUNTIME_BUILD.version,
       git_sha: KARAOKE_RUNTIME_BUILD.gitSha,
+    })
+    expect(body.worker_version).toEqual({
+      id: "worker-version-id",
+      tag: "worker-version-tag",
+      timestamp: "2026-05-26T17:52:00Z",
     })
   })
 

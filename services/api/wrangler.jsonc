@@ -17,6 +17,9 @@
   "observability": {
     "enabled": true
   },
+  "version_metadata": {
+    "binding": "CF_VERSION_METADATA"
+  },
   "cache": {
     "enabled": false
   },
@@ -163,6 +166,9 @@
       // hits this worker; it's a deploy-and-verify surface for step 1-7 of
       // the D1-native workstream.
       "name": "pirate-api-d1-staging",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
@@ -345,6 +351,9 @@
     },
     "staging": {
       "name": "pirate-api-staging",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
@@ -591,6 +600,9 @@
     },
     "production": {
       "name": "api-core",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      },
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
