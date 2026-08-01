@@ -10,9 +10,13 @@ import { exchangeJwt } from "./community-routes-test-helpers"
 import { encryptTelegramBotToken } from "../../../src/lib/telegram/bot-credential-crypto"
 import { encryptCredentialSecret } from "../../../src/lib/crypto/credential-secret"
 import {
+  batchReadyPostIds,
   continueTelegramChatStudyAfterVoice,
   handleTelegramChatStudyCallback,
+  telegramStudySongSelectionIndex,
 } from "../../../src/lib/telegram/chat-study-service"
+import { resolvePostStudyCapability } from "../../../src/lib/posts/post-study-service"
+import type { StudyPost } from "../../../src/lib/posts/post-study-access"
 import {
   createTelegramChatStudyVoiceIntent,
   createTelegramStudyVoiceIntent,
@@ -175,6 +179,143 @@ async function seedReadyTranslationExercises(input: {
 }
 
 describe("community study routes", () => {
+  test("maps page-relative Telegram song callbacks beyond the two-digit absolute index boundary", () => {
+    expect(telegramStudySongSelectionIndex(12, 3)).toBe(99)
+  })
+
+  test("keeps batched Telegram readiness in parity with per-post study capability rules", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const communityId = "cmt_study_capability_parity"
+    const viewerUserId = "study-capability-viewer"
+    await seedStudySong({ communityDbRoot: ctx.communityDbRoot, communityId })
+    const client = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    const now = "2026-06-29T08:00:00.000Z"
+    const posts: StudyPost[] = [
+      { post_id: "pst_locked", access_mode: "locked", asset_id: "ast_locked" },
+      { post_id: "pst_purchased", access_mode: "locked", asset_id: "ast_purchased" },
+      { post_id: "pst_stale", access_mode: "public", asset_id: "ast_stale" },
+      { post_id: "pst_lyrics_only", access_mode: "public", asset_id: "ast_lyrics_only" },
+      { post_id: "pst_same_language", access_mode: "public", asset_id: "ast_same_language" },
+      { post_id: "pst_translation", access_mode: "public", asset_id: "ast_translation" },
+    ].map((post) => ({
+      ...post,
+      access_mode: post.access_mode as StudyPost["access_mode"],
+      author_user_id: "route_author",
+      age_gate_policy: "none" as const,
+      community_id: communityId,
+      lyrics: "A study-ready lyric line",
+      post_type: "song",
+      song_cover_art_ref: null,
+      song_title: post.post_id,
+      source_language: "en",
+      status: "published",
+      title: post.post_id,
+      visibility: "public",
+    }))
+    try {
+      for (const post of posts) {
+        await client.execute({
+          sql: `
+            INSERT INTO posts (
+              post_id, community_id, author_user_id, identity_mode, post_type,
+              status, song_mode, title, lyrics, source_language, rights_basis,
+              analysis_state, content_safety_state, age_gate_policy, created_at,
+              updated_at, access_mode, asset_id, visibility, song_title
+            ) VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original', ?1,
+                      ?4, 'en', 'original', 'allow', 'safe', 'none', ?5, ?5,
+                      ?6, ?7, 'public', ?1)
+          `,
+          args: [
+            post.post_id,
+            communityId,
+            post.author_user_id,
+            post.lyrics,
+            now,
+            post.access_mode,
+            post.asset_id,
+          ],
+        })
+      }
+      await client.execute({
+        sql: `
+          INSERT INTO purchases (
+            purchase_id, community_id, listing_id, asset_id, buyer_user_id,
+            settlement_wallet_attachment_id, purchase_price_usd, settlement_chain,
+            settlement_token, settlement_tx_ref, created_at
+          ) VALUES ('pur_parity', ?1, 'lst_parity', 'ast_purchased', ?2,
+                    'wla_parity', 1, 'base', 'usdc', '0xparity', ?3)
+        `,
+        args: [communityId, viewerUserId, now],
+      })
+      await client.execute({
+        sql: `
+          INSERT INTO purchase_entitlements (
+            purchase_entitlement_id, purchase_id, community_id, buyer_user_id,
+            entitlement_kind, target_ref, status, granted_at, created_at, updated_at
+          ) VALUES ('pet_parity', 'pur_parity', ?1, ?2, 'asset_access',
+                    'ast_purchased', 'active', ?3, ?3, ?3)
+        `,
+        args: [communityId, viewerUserId, now],
+      })
+      for (const postId of ["pst_locked", "pst_purchased", "pst_stale", "pst_same_language", "pst_translation"]) {
+        await client.execute({
+          sql: `
+            INSERT INTO song_study_unit (
+              id, post_id, line_id, line_index, source_language, prompt_text,
+              reference_text, say_it_back_status, unit_version, max_attempts,
+              created_at, updated_at
+            ) VALUES (?1, ?2, 'line_001', 0, 'en', 'A study-ready lyric line',
+                      'A study-ready lyric line', 'ready', ?3, 2, ?4, ?4)
+          `,
+          args: [`stu_${postId}`, postId, postId === "pst_stale" ? 1 : 2, now],
+        })
+      }
+      for (const postId of ["pst_same_language", "pst_translation"]) {
+        await client.execute({
+          sql: `
+            INSERT INTO song_study_unit_localization (
+              id, unit_id, target_language, localization_version, status,
+              question, translation_text, options_json, correct_option_id,
+              max_attempts, generated_at, created_at, updated_at
+            ) VALUES (?1, ?2, 'es', 5, 'ready', 'Choose.', 'Lista',
+                      '[{"id":"correct","text":"Lista"},{"id":"wrong","text":"No"}]',
+                      'correct', 1, ?3, ?3, ?3)
+          `,
+          args: [`sul_${postId}`, `stu_${postId}`, now],
+        })
+      }
+
+      const assertParity = async (matrixPosts: typeof posts, targetLanguage: string, credentialAvailable: boolean) => {
+        const batch = await batchReadyPostIds({
+          client,
+          credentialAvailable,
+          posts: matrixPosts,
+          targetLanguage,
+          viewerUserId,
+        })
+        for (const post of matrixPosts) {
+          const capability = await resolvePostStudyCapability({
+            client,
+            hasActiveElevenLabsCredential: async () => credentialAvailable,
+            post,
+            targetLanguage,
+            viewerUserId,
+          })
+          expect(batch.has(post.post_id), post.post_id).toBe(capability?.status === "ready")
+        }
+      }
+
+      await assertParity(posts.filter((post) => post.post_id !== "pst_same_language"), "es", true)
+      await assertParity(posts.filter((post) => post.post_id === "pst_same_language"), "en", false)
+      await assertParity(posts.filter((post) => post.post_id === "pst_translation"), "es", false)
+    } finally {
+      client.close()
+    }
+  })
+
   test("GET /communities/:communityId/posts/:postId/study is registered and returns a gated study payload", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -262,6 +403,19 @@ describe("community study routes", () => {
       CREDENTIAL_WRAP_KEY: wrapKey,
       CREDENTIAL_WRAP_KEY_VERSION: "1",
       PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_MAX_BUDGET_CENTS: "10000",
+      REWARDS_CAMPAIGN_MAX_DURATION_SECONDS: "7776000",
+      REWARDS_CAMPAIGN_MAX_REWARD_CENTS: "100",
+      REWARDS_CAMPAIGN_MIN_BUDGET_CENTS: "100",
+      REWARDS_CAMPAIGN_MIN_DURATION_SECONDS: "3600",
+      REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS: "900",
+      REWARDS_CAMPAIGN_RPC_URL: "https://mainnet.base.org",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x01c84e513CC823255A9651885Fb59E363B47d55a",
+      REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      REWARDS_PAYOUTS_ENABLED: "true",
       TELEGRAM_STUDY_VOICE_COMMUNITY_IDS: communityId,
       TELEGRAM_STUDY_VOICE_ENABLED: "true",
     })
@@ -288,6 +442,24 @@ describe("community study routes", () => {
           provisioning_state, transfer_state, created_at, updated_at
         ) VALUES (?1, 'route_author', 'Chat Study', 'open', 'active',
                   'active', 'none', ?2, ?2)
+      `,
+      args: [communityId, now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+          community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+          status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+          budget_cents, funded_cents, terms_hash, starts_at, ends_at,
+          activated_at, created_at, updated_at
+        ) VALUES (
+          'rcp_chat_study', 'route_author', 'chat-study-campaign', ?1,
+          'pst_study_route_song', 'sab_chat_study', 'route_author', 'active',
+          'study', 75, 75, 1000, 0, 'chat-study-terms',
+          '2026-07-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z',
+          '2026-07-01T00:00:00.000Z', ?2, ?2
+        )
       `,
       args: [communityId, now],
     })
@@ -445,7 +617,50 @@ describe("community study routes", () => {
       await publicSongClient.execute(
         "UPDATE posts SET visibility = 'public' WHERE post_id = 'pst_study_route_song'",
       )
+      await publicSongClient.execute({
+        sql: `
+          WITH RECURSIVE sequence(value) AS (
+            SELECT 1
+            UNION ALL
+            SELECT value + 1 FROM sequence WHERE value < 40
+          )
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, identity_mode, post_type,
+            status, song_mode, title, source_language, rights_basis,
+            analysis_state, content_safety_state, age_gate_policy, created_at,
+            updated_at, access_mode, visibility, song_title
+          )
+          SELECT printf('pst_unready_%02d', value), ?1, 'route_author', 'public',
+                 'song', 'published', 'original', printf('Unready %02d', value),
+                 'en', 'original', 'allow', 'safe', 'none',
+                 '2026-07-01T00:00:00.000Z', '2026-07-01T00:00:00.000Z',
+                 'public', 'public', printf('Unready %02d', value)
+          FROM sequence
+        `,
+        args: [communityId],
+      })
       publicSongClient.close()
+
+      telegramBodies.length = 0
+      const unfundedStudy = await webhook({
+        update_id: 5010,
+        message: {
+          chat: { id: 454545, type: "private" },
+          date: 1785499201,
+          from: { id: 454545, is_bot: false, language_code: "es" },
+          message_id: 610,
+          text: "/study",
+        },
+      })
+      expect(unfundedStudy.status).toBe(200)
+      const unfundedPicker = telegramBodies.find((body) => body.text === "Choose a song to study:")
+      const unfundedMarkup = unfundedPicker?.reply_markup as {
+        inline_keyboard?: Array<Array<{ text?: string }>>
+      }
+      expect(unfundedMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song")
+      await ctx.client.execute(
+        "UPDATE reward_campaigns SET funded_cents = 1000 WHERE reward_campaign_id = 'rcp_chat_study'",
+      )
 
       telegramBodies.length = 0
       const studyUpdate = {
@@ -469,14 +684,15 @@ describe("community study routes", () => {
       const studyDeliveries = await ctx.client.execute(
         "SELECT status FROM telegram_chat_study_message_deliveries",
       )
-      expect(studyDeliveries.rows).toHaveLength(2)
+      expect(studyDeliveries.rows).toHaveLength(3)
       expect(studyDeliveries.rows.every((row) => row.status === "consumed")).toBe(true)
       const picker = telegramBodies.find((body) => body.text === "Choose a song to study:")
       expect(picker).toBeTruthy()
       const pickerMarkup = picker?.reply_markup as {
-        inline_keyboard?: Array<Array<{ callback_data?: string }>>
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const songCallback = pickerMarkup.inline_keyboard?.[0]?.[0]?.callback_data
+      expect(pickerMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song · earn up to $0.75/day")
       expect(songCallback).toMatch(/^study:[a-f0-9]{18}:0$/)
       expect(songCallback!.length).toBeLessThanOrEqual(64)
       expect(songCallback).not.toContain("pst_")
