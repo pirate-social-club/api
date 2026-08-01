@@ -700,7 +700,25 @@ describe("rewards routes", () => {
       chain_id: 84532,
       ends_at: expect.any(Number),
     })
-    expect(offerRateLimitCalls).toBe(2)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'paused' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect((await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)).status).toBe(404)
+    expect((await app.request(
+      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      {}, ctx.env,
+    )).status).toBe(404)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'active', reserved_cents = funded_cents WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect((await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)).status).toBe(404)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET reserved_cents = 0 WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(offerRateLimitCalls).toBe(5)
     offerRateLimitAllows = false
     const rateLimitedOffer = await app.request(
       "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",

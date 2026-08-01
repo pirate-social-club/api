@@ -920,6 +920,26 @@ export async function getCommunityAssistantRuntimePolicyForCommunity(input: {
   return policy
 }
 
+export async function getCommunityAssistantVoicePolicyForCommunity(input: {
+  env: Env
+  communityRepository: CommunityAssistantRepository
+  communityId: string
+}): Promise<CommunityAssistantPolicy> {
+  // Study prompts intentionally share the community's configured voice without
+  // requiring assistant chat to be enabled or an OpenRouter key to exist. TTS
+  // still fails closed on voice_mode, tts_provider, tts_voice, and the active
+  // per-community ElevenLabs credential in speech-service.ts.
+  const community = await requireLiveAssistantCommunity({
+    communityRepository: input.communityRepository,
+    communityId: input.communityId,
+  })
+  return readStoredPolicy({
+    env: input.env,
+    communityRepository: input.communityRepository,
+    community,
+  })
+}
+
 export async function listCommunityAssistantModels(input: {
   env: Env
   communityRepository: CommunityAssistantRepository
