@@ -181,6 +181,12 @@ export async function selectRewardIdentityBinding(input: {
     throw codedConflictError(DOCUMENT_INELIGIBLE, "The selected identity document has no active bound nationality evidence")
   }
 
+  // Retrying the same user intent must preserve the binding id and selected_at;
+  // Slice 3 snapshots those values as decision evidence. Only a genuine change
+  // of document enters the supersede-and-insert transaction below.
+  const current = await getRewardIdentityBinding({ ...input, now })
+  if (current.active_binding?.identity_nullifier_id === input.identityNullifierId) return current
+
   const tx = await input.client.transaction("write")
   try {
     // POST is both initial selection and authenticated reselection. The old

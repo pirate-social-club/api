@@ -1530,10 +1530,19 @@ describe("rewards routes", () => {
       body: JSON.stringify({ identity_nullifier_id: nullifierId }),
     }, ctx.env)
     expect(selected.status).toBe(201)
-    expect(await json(selected)).toMatchObject({
+    const selectedBody = await json(selected) as { active_binding: { id: string; selected_at: number } }
+    expect(selectedBody).toMatchObject({
       capability: "selected",
       active_binding: { identity_nullifier_id: nullifierId, nationality: "USA" },
     })
+
+    const retry = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ identity_nullifier_id: nullifierId }),
+    }, ctx.env)
+    expect(retry.status).toBe(201)
+    expect((await json(retry) as { active_binding: unknown }).active_binding).toEqual(selectedBody.active_binding)
   })
 
   test("reward reads and payouts fail closed when their independent flags are not true", async () => {

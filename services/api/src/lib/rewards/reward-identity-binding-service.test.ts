@@ -109,6 +109,31 @@ describe("reward identity document selection", () => {
     ])
   })
 
+  test("retries the same document selection without changing binding identity", async () => {
+    const client = await setup()
+    await seedDocument(client, { id: "nul_self_a", nationality: "USA" })
+    const first = await selectRewardIdentityBinding({
+      env: SELF_ENV,
+      client,
+      userId: "usr_reward_binding",
+      identityNullifierId: "nul_self_a",
+      now: NOW,
+    })
+    const retry = await selectRewardIdentityBinding({
+      env: SELF_ENV,
+      client,
+      userId: "usr_reward_binding",
+      identityNullifierId: "nul_self_a",
+      now: "2026-08-01T11:00:00.000Z",
+    })
+
+    expect(retry.active_binding).toEqual(first.active_binding)
+    const count = await client.execute({
+      sql: "SELECT COUNT(*) AS count FROM reward_identity_bindings WHERE user_id = 'usr_reward_binding'",
+    })
+    expect(Number(count.rows[0]?.count ?? 0)).toBe(1)
+  })
+
   test("keeps an active binding valid after evidence expiry without offering stale evidence for selection", async () => {
     const client = await setup()
     await seedDocument(client, { id: "nul_expiring", nationality: "USA", expiresAt: "2026-08-02T10:00:00.000Z" })
