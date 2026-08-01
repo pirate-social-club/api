@@ -1497,6 +1497,45 @@ describe("rewards routes", () => {
     expect(response.status).toBe(401)
   })
 
+  test("selects a nullifier-scoped nationality document through the authenticated rewards route", async () => {
+    const ctx = await createRouteTestContext({ REWARDS_IDENTITY_PROVIDER: "self" })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-binding-route-user")
+    const now = "2026-08-01T10:00:00.000Z"
+    await addNullifier(ctx, session.userId, now)
+    const nullifierId = `idn_rewards_${session.userId}`
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, provider, attestation_type, capability_key, status,
+          value_json, verified_at, created_at, updated_at, source_identity_nullifier_id
+        ) VALUES ('att_reward_binding_route', ?1, 'self', 'nationality', 'nationality',
+          'accepted', ?2, ?3, ?3, ?3, ?4)
+      `,
+      args: [session.userId, JSON.stringify({ nationality: "USA" }), now, nullifierId],
+    })
+
+    const before = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(before.status).toBe(200)
+    expect(await json(before)).toMatchObject({
+      capability: "selection_required",
+      selectable_documents: [{ identity_nullifier_id: nullifierId, nationality: "USA" }],
+    })
+
+    const selected = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ identity_nullifier_id: nullifierId }),
+    }, ctx.env)
+    expect(selected.status).toBe(201)
+    expect(await json(selected)).toMatchObject({
+      capability: "selected",
+      active_binding: { identity_nullifier_id: nullifierId, nationality: "USA" },
+    })
+  })
+
   test("reward reads and payouts fail closed when their independent flags are not true", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",

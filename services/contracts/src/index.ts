@@ -2929,6 +2929,35 @@ export type RewardCampaignIncidentRecoveryResponse = {
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
+export type RewardIdentityBindingCapability = "unavailable" | "selection_required" | "selected";
+
+export type RewardIdentityBindingDocument = {
+  identity_nullifier_id: string;
+  provider: "self";
+  nationality: string;
+  verified_at: number;
+};
+
+export type RewardIdentityBinding = {
+  id: string;
+  identity_nullifier_id: string;
+  provider: "self";
+  nationality: string;
+  status: "active";
+  selected_at: number;
+};
+
+export type RewardIdentityBindingResponse = {
+  capability: RewardIdentityBindingCapability;
+  provider: "self" | "very" | null;
+  active_binding: RewardIdentityBinding | null;
+  selectable_documents: Array<RewardIdentityBindingDocument>;
+};
+
+export type RewardIdentityBindingSelectRequest = {
+  identity_nullifier_id: string;
+};
+
 export type RewardCampaignCapabilities = {
   enabled: boolean;
   post_eligible: boolean;
@@ -2939,7 +2968,7 @@ export type RewardCampaignCapabilities = {
   max_duration_seconds: number;
   default_duration_seconds: number;
   eligible_activities: Array<RewardCampaignEligibleActivity>;
-  nationality_payout_tiers: "unavailable" | "draft_only";
+  nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview";
   chain_id: number;
   token_address: string;
 };
@@ -4601,6 +4630,7 @@ export const apiRoutes = {
   notificationsMarkRead: "/notifications/mark-read",
   notificationsDismissTask: "/notifications/dismiss-task",
   meRewards: "/me/rewards",
+  meRewardsIdentityBinding: "/me/rewards/identity-binding",
   meRewardsCashouts: "/me/rewards/cashouts",
   rewardCampaigns: "/reward_campaigns",
   rewardSongPolicies: (communityId: string, postId: string) => `/reward_song_policies/${communityId}/${postId}`,

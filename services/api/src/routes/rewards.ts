@@ -38,6 +38,11 @@ import { getRewardPoolRefundPolicyReadiness } from "../lib/rewards/reward-pool-r
 import { getRewardBackendFlipReadiness } from "../lib/rewards/reward-backend-flip-readiness"
 import { getRewardSolvencyGateStatus } from "../lib/rewards/reward-solvency-gate"
 import {
+  getRewardIdentityBinding,
+  selectRewardIdentityBinding,
+} from "../lib/rewards/reward-identity-binding-service"
+import type { RewardIdentityBindingSelectRequest } from "@pirate/api-contracts"
+import {
   enqueueRewardRehearsalScenario,
   getRewardEpochCapRehearsalSnapshot,
   isRewardRehearsalScenario,
@@ -177,6 +182,32 @@ rewards.get("/me/rewards", async (c) => {
   return c.json(result, 200, {
     "cache-control": "no-store",
   })
+})
+
+rewards.get("/me/rewards/identity-binding", async (c) => {
+  const actor = c.get("actor")
+  const result = await getRewardIdentityBinding({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    userId: actor.userId,
+  })
+  return c.json(result, 200, { "cache-control": "no-store" })
+})
+
+rewards.post("/me/rewards/identity-binding", async (c) => {
+  const actor = c.get("actor")
+  const body = await c.req.json<RewardIdentityBindingSelectRequest>().catch(() => null)
+  const identityNullifierId = body && typeof body === "object"
+    ? body.identity_nullifier_id?.trim()
+    : ""
+  if (!identityNullifierId) throw badRequestError("identity_nullifier_id is required")
+  const result = await selectRewardIdentityBinding({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    userId: actor.userId,
+    identityNullifierId,
+  })
+  return c.json(result, 201, { "cache-control": "no-store" })
 })
 
 rewards.post("/me/rewards/cashouts", async (c) => {

@@ -1253,13 +1253,14 @@ async function handleTelegramWebhookUpdate(
         bot,
         env,
         message,
-        onChatStudyAttemptComplete: ({ chatId: completionChatId, chatStudySessionId, result }) =>
+        onChatStudyAttemptComplete: ({ chatId: completionChatId, chatStudySessionId, result, transcript }) =>
           continueTelegramChatStudyAfterVoice({
             bot,
             chatId: completionChatId,
             chatStudySessionId,
             env,
             result,
+            transcript,
           }),
         waitUntil,
       })) {

@@ -24,6 +24,7 @@ const enabledEnv = {
   PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
   PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
   PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
+  REWARDS_IDENTITY_PROVIDER: "self",
 } as unknown as Env
 
 describe("getRewardCampaignCapabilities", () => {
@@ -36,7 +37,18 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.max_reward_cents).toBe(100)
     expect(capabilities.chain_id).toBe(84_532)
     expect(capabilities.eligible_activities).toEqual(["study", "karaoke", "either"])
-    expect(capabilities.nationality_payout_tiers).toBe("draft_only")
+    expect(capabilities.nationality_payout_tiers).toBe("binding_preview")
+  })
+
+  test("fails closed for providers that cannot bind nationality to a reward document", () => {
+    expect(getRewardCampaignCapabilities({
+      ...enabledEnv,
+      REWARDS_IDENTITY_PROVIDER: "very",
+    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("unavailable")
+    expect(getRewardCampaignCapabilities({
+      ...enabledEnv,
+      REWARDS_IDENTITY_PROVIDER: "unknown",
+    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("unavailable")
   })
 
   test("never exposes the campaign RPC URL or the treasury address", () => {

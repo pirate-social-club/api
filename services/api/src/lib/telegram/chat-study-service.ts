@@ -2,18 +2,27 @@ import type { ActorContext } from "../auth-middleware"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
+import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
 import { makeId, nowIso } from "../helpers"
 import {
   getPostStudyPayload,
-  resolvePostStudyCapability,
   submitPostStudyAttempt,
   type SongStudyAttemptResult,
   type SongStudyPayload,
 } from "../posts/post-study-service"
-import { getStudyPostById } from "../posts/post-study-access"
-import { normalizeStudyTargetLanguage } from "../posts/post-study-localization-service"
+import type { StudyPost } from "../posts/post-study-access"
+import {
+  isSameLanguageStudyPair,
+  normalizeStudyTargetLanguage,
+} from "../posts/post-study-localization-service"
+import {
+  splitLyricsForStudy,
+  STUDY_UNIT_GENERATION_VERSION,
+} from "../posts/post-study-unit-service"
 import { rowValue } from "../sql-row"
+import type { ReadClient } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
+import { resolveRewardCampaignConfig } from "../rewards/reward-campaign-config"
 import type { Env } from "../../env"
 import {
   answerTelegramCallbackQuery,
@@ -26,7 +35,7 @@ import {
   createTelegramOnboardingIntent,
   telegramOnboardingWebAppReplyMarkup,
 } from "./onboarding-service"
-import { createTelegramStudyVoiceIntent } from "./study-voice-service"
+import { createTelegramChatStudyVoiceIntent } from "./study-voice-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 import {
   telegramIdentifier,
@@ -35,7 +44,7 @@ import {
 
 const CHAT_STUDY_TTL_MS = 30 * 60 * 1000
 const CALLBACK_PROCESSING_LEASE_MS = 2 * 60 * 1000
-const CHAT_STUDY_SONG_LIMIT = 40
+const CHAT_STUDY_SONG_QUERY_PAGE_SIZE = 40
 const CHAT_STUDY_SONG_PAGE_SIZE = 8
 const PREVIOUS_PAGE_INDEX = 98
 const NEXT_PAGE_INDEX = 99
@@ -57,6 +66,7 @@ type ChatStudySession = {
 }
 
 type ReadySong = {
+  dailyRewardCents?: number
   postId: string
   title: string
 }
@@ -111,6 +121,22 @@ function callbackData(token: string, index: number): string {
   return `${CALLBACK_PREFIX}:${token}:${index}`
 }
 
+export function telegramStudySongSelectionIndex(page: number, pageIndex: number): number {
+  return page * CHAT_STUDY_SONG_PAGE_SIZE + pageIndex
+}
+
+function formatUsdCents(cents: number): string {
+  const dollars = cents / 100
+  return `$${Number.isInteger(dollars) ? dollars.toFixed(0) : dollars.toFixed(2)}`
+}
+
+function songButtonText(song: ReadySong): string {
+  const reward = song.dailyRewardCents
+    ? ` · earn up to ${formatUsdCents(song.dailyRewardCents)}/day`
+    : ""
+  return `${song.title.slice(0, Math.max(1, 60 - reward.length))}${reward}`
+}
+
 function songPickerMarkup(songs: ReadySong[], token: string, page: number) {
   const start = page * CHAT_STUDY_SONG_PAGE_SIZE
   const pageSongs = songs.slice(start, start + CHAT_STUDY_SONG_PAGE_SIZE)
@@ -124,12 +150,133 @@ function songPickerMarkup(songs: ReadySong[], token: string, page: number) {
   return {
     inline_keyboard: [
       ...pageSongs.map((song, offset) => [{
-        callback_data: callbackData(token, start + offset),
-        text: song.title.slice(0, 60),
+        callback_data: callbackData(token, offset),
+        text: songButtonText(song),
       }]),
       ...(navigation.length > 0 ? [navigation] : []),
     ],
   }
+}
+
+function studyPostFromRow(row: unknown): StudyPost | null {
+  const postId = stringOrNull(rowValue(row, "post_id"))
+  const communityId = stringOrNull(rowValue(row, "community_id"))
+  if (!postId || !communityId) return null
+  return {
+    access_mode: stringOrNull(rowValue(row, "access_mode")) as StudyPost["access_mode"],
+    age_gate_policy: (stringOrNull(rowValue(row, "age_gate_policy")) ?? "none") as StudyPost["age_gate_policy"],
+    asset_id: stringOrNull(rowValue(row, "asset_id")),
+    author_user_id: stringOrNull(rowValue(row, "author_user_id")),
+    community_id: communityId,
+    lyrics: stringOrNull(rowValue(row, "lyrics")),
+    post_id: postId,
+    post_type: stringOrNull(rowValue(row, "post_type")) ?? "",
+    song_cover_art_ref: stringOrNull(rowValue(row, "song_cover_art_ref")),
+    song_title: stringOrNull(rowValue(row, "song_title")),
+    source_language: stringOrNull(rowValue(row, "source_language")),
+    status: stringOrNull(rowValue(row, "status")) ?? "",
+    title: stringOrNull(rowValue(row, "title")),
+    visibility: stringOrNull(rowValue(row, "visibility")) ?? "public",
+  }
+}
+
+async function activeCampaignRewards(input: {
+  env: Env
+  postIds: string[]
+}): Promise<Map<string, number>> {
+  if (input.postIds.length === 0 || !resolveRewardCampaignConfig(input.env).enabled) return new Map()
+  const placeholders = input.postIds.map((_, index) => `?${index + 2}`).join(", ")
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT post_id, daily_reward_cents
+      FROM reward_campaigns
+      WHERE status = 'active'
+        AND eligible_activity IN ('study', 'either')
+        AND starts_at <= ?1 AND ends_at > ?1
+        AND funded_cents > reserved_cents + credited_cents + refunded_cents
+        AND daily_reward_cents > 0
+        AND post_id IN (${placeholders})
+    `,
+    args: [nowIso(), ...input.postIds],
+  })
+  return new Map(result.rows.flatMap((row) => {
+    const postId = stringOrNull(rowValue(row, "post_id"))
+    const dailyRewardCents = Number(rowValue(row, "daily_reward_cents"))
+    return postId && Number.isSafeInteger(dailyRewardCents) && dailyRewardCents > 0
+      ? [[postId, dailyRewardCents] as const]
+      : []
+  }))
+}
+
+// Batched equivalent of resolvePostStudyCapability (post-study-service.ts).
+// Keep both paths aligned; the cross-path capability matrix test guards their parity.
+export async function batchReadyPostIds(input: {
+  client: ReadClient
+  credentialAvailable: boolean
+  posts: StudyPost[]
+  targetLanguage: string
+  viewerUserId: string
+}): Promise<Set<string>> {
+  if (input.posts.length === 0) return new Set()
+  const placeholders = input.posts.map((_, index) => `?${index + 3}`).join(", ")
+  const result = await input.client.execute({
+    sql: `
+      SELECT p.post_id,
+        CASE WHEN COALESCE(p.access_mode, 'public') <> 'locked'
+          OR p.author_user_id = ?2
+          OR EXISTS (
+            SELECT 1 FROM purchase_entitlements entitlement
+            WHERE entitlement.community_id = p.community_id
+              AND entitlement.buyer_user_id = ?2
+              AND entitlement.target_ref = p.asset_id
+              AND entitlement.entitlement_kind = 'asset_access'
+              AND entitlement.status = 'active'
+          ) THEN 1 ELSE 0 END AS accessible,
+        EXISTS (SELECT 1 FROM song_study_unit unit WHERE unit.post_id = p.post_id) AS has_units,
+        EXISTS (
+          SELECT 1 FROM song_study_unit unit
+          WHERE unit.post_id = p.post_id AND unit.unit_version < ${STUDY_UNIT_GENERATION_VERSION}
+        ) AS has_stale_units,
+        EXISTS (
+          SELECT 1 FROM song_study_unit unit
+          WHERE unit.post_id = p.post_id AND unit.say_it_back_status = 'ready'
+        ) AS has_say_it_back,
+        EXISTS (
+          SELECT 1
+          FROM song_study_unit unit
+          JOIN song_study_unit_localization localization ON localization.unit_id = unit.id
+          WHERE unit.post_id = p.post_id
+            AND localization.target_language = ?1
+            AND localization.status = 'ready'
+            AND localization.translation_text IS NOT NULL
+            AND localization.options_json IS NOT NULL
+            AND localization.correct_option_id IS NOT NULL
+        ) AS has_translation
+      FROM posts p
+      WHERE p.post_id IN (${placeholders})
+    `,
+    args: [input.targetLanguage, input.viewerUserId, ...input.posts.map((post) => post.post_id)],
+  })
+  const rows = new Map(result.rows.flatMap((row) => {
+    const postId = stringOrNull(rowValue(row, "post_id"))
+    return postId ? [[postId, row] as const] : []
+  }))
+  return new Set(input.posts.flatMap((post) => {
+    const row = rows.get(post.post_id)
+    if (!row || Number(rowValue(row, "accessible")) !== 1) return []
+    const unitsCurrent = Number(rowValue(row, "has_units")) === 1
+      && Number(rowValue(row, "has_stale_units")) === 0
+    const ready = unitsCurrent
+      ? (
+          (input.credentialAvailable && Number(rowValue(row, "has_say_it_back")) === 1)
+          || (
+            !isSameLanguageStudyPair(post.source_language, input.targetLanguage)
+            && Number(rowValue(row, "has_translation")) === 1
+          )
+        )
+      : input.credentialAvailable && splitLyricsForStudy(post.lyrics).length > 0
+    return ready ? [post.post_id] : []
+  }))
 }
 
 function parseCallbackData(value: unknown): { index: number; token: string } | null {
@@ -152,38 +299,58 @@ async function listReadySongs(input: {
     if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
       return []
     }
-    const rows = await db.client.execute({
-      sql: `
-        SELECT post_id
-        FROM posts
-        WHERE community_id = ?1
-          AND post_type = 'song'
-          AND status = 'published'
-          AND visibility = 'public'
-        ORDER BY created_at DESC, post_id DESC
-        LIMIT ${CHAT_STUDY_SONG_LIMIT}
-      `,
-      args: [input.communityId],
-    })
     const ready: ReadySong[] = []
-    for (const row of rows.rows) {
-      const postId = stringOrNull(rowValue(row, "post_id"))
-      if (!postId) continue
-      const post = await getStudyPostById(db.client, postId)
-      if (!post) continue
-      const capability = await resolvePostStudyCapability({
-        client: db.client,
-        env: input.env,
-        post,
-        targetLanguage: input.targetLanguage,
-        viewerUserId: input.actor.userId,
+    let cursorCreatedAt: string | null = null
+    let cursorPostId: string | null = null
+    const credentialAvailable = await hasActiveCommunityElevenLabsCredential({
+      env: input.env,
+      communityId: input.communityId,
+    })
+    while (true) {
+      const rows = await db.client.execute({
+        sql: `
+          SELECT post_id, community_id, author_user_id, post_type, status, visibility,
+                 lyrics, title, song_title, song_cover_art_ref, source_language,
+                 access_mode, age_gate_policy, asset_id, created_at
+          FROM posts
+          WHERE community_id = ?1
+            AND post_type = 'song'
+            AND status = 'published'
+            AND visibility = 'public'
+            AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND post_id < ?3))
+          ORDER BY created_at DESC, post_id DESC
+          LIMIT ${CHAT_STUDY_SONG_QUERY_PAGE_SIZE}
+        `,
+        args: [input.communityId, cursorCreatedAt, cursorPostId],
       })
-      if (capability?.status !== "ready") continue
-      ready.push({
-        postId,
-        title: post.song_title?.trim() || post.title?.trim() || "Untitled song",
+      const posts = rows.rows.flatMap((row) => {
+        const post = studyPostFromRow(row)
+        return post ? [post] : []
       })
-      if (ready.length >= CHAT_STUDY_SONG_LIMIT) break
+      const [readyPostIds, rewards] = await Promise.all([
+        batchReadyPostIds({
+          client: db.client,
+          credentialAvailable,
+          posts,
+          targetLanguage: input.targetLanguage,
+          viewerUserId: input.actor.userId,
+        }),
+        activeCampaignRewards({ env: input.env, postIds: posts.map((post) => post.post_id) }),
+      ])
+      posts.forEach((post) => {
+        if (!readyPostIds.has(post.post_id)) return
+        const dailyRewardCents = rewards.get(post.post_id)
+        ready.push({
+          ...(dailyRewardCents ? { dailyRewardCents } : {}),
+          postId: post.post_id,
+          title: post.song_title?.trim() || post.title?.trim() || "Untitled song",
+        })
+      })
+      if (rows.rows.length < CHAT_STUDY_SONG_QUERY_PAGE_SIZE) break
+      const last = rows.rows.at(-1)
+      cursorCreatedAt = stringOrNull(rowValue(last, "created_at"))
+      cursorPostId = stringOrNull(rowValue(last, "post_id"))
+      if (!cursorCreatedAt || !cursorPostId) break
     }
     return ready
   } finally {
@@ -520,8 +687,19 @@ function eligibleExercise(study: SongStudyPayload): SongStudyPayload["exercises"
   ) ?? null
 }
 
-function feedbackText(result: SongStudyAttemptResult): string {
+function feedbackText(input: {
+  result: SongStudyAttemptResult
+  study: SongStudyPayload
+  transcript?: string
+}): string {
+  const { result } = input
   if (result.outcome === "correct") return "Correct."
+  if (input.transcript !== undefined) {
+    const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
+    if (attempted?.type === "say_it_back") {
+      return `Not quite.\n\nThe line was: “${attempted.reference_text}”\nYou said: “${input.transcript || "(nothing detected)"}”`
+    }
+  }
   const missing = result.feedback?.missing?.length
     ? ` Missing: ${result.feedback.missing.join(", ")}.`
     : ""
@@ -569,7 +747,9 @@ async function presentNextExercise(input: {
   chatId: string
   env: Env
   lastResult?: SongStudyAttemptResult
+  suppressIncorrectFeedback?: boolean
   session: ChatStudySession
+  transcript?: string
 }): Promise<void> {
   if (!input.session.postId) throw new Error("Chat study session has no song")
   const actor: ActorContext = { authType: "user", userId: input.session.userId }
@@ -582,10 +762,10 @@ async function presentNextExercise(input: {
     targetLanguage: input.session.targetLanguage,
   })
   const exercise = study.access === "ready" ? eligibleExercise(study) : null
-  if (input.lastResult) {
+  if (input.lastResult && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: feedbackText(input.lastResult),
+      text: feedbackText({ result: input.lastResult, study, transcript: input.transcript }),
     })
   }
   if (!exercise) {
@@ -629,24 +809,23 @@ async function presentNextExercise(input: {
     })
     return
   }
-  await createTelegramStudyVoiceIntent({
+  const nextToken = actionToken()
+  await createTelegramChatStudyVoiceIntent({
     actor,
     chatStudySessionId: input.session.id,
     communityId: input.session.communityId,
     env: input.env,
     exerciseId: exercise.id,
+    nextActionToken: nextToken,
     postId: input.session.postId,
+    previousActionToken: input.session.actionToken,
     targetLanguage: input.session.targetLanguage,
     telegramUserId: input.session.telegramUserId,
   })
-  await updateSessionAction({
-    actionKind: "await_voice",
-    actionPayload: { exerciseId: exercise.id },
-    env: input.env,
-    exerciseId: exercise.id,
-    session: input.session,
-    studySessionId: study.session?.id ?? null,
-  })
+  input.session.actionKind = "await_voice"
+  input.session.actionPayload = { exerciseId: exercise.id }
+  input.session.actionToken = nextToken
+  input.session.status = "active"
 }
 
 async function loadSessionByAction(input: {
@@ -840,7 +1019,14 @@ export async function handleTelegramChatStudyCallback(input: {
             if (!value || typeof value !== "object") return []
             const postId = stringOrNull((value as Record<string, unknown>).postId)
             const title = stringOrNull((value as Record<string, unknown>).title)
-            return postId && title ? [{ postId, title }] : []
+            const dailyRewardCents = Number((value as Record<string, unknown>).dailyRewardCents)
+            return postId && title
+              ? [{
+                  ...(Number.isSafeInteger(dailyRewardCents) && dailyRewardCents > 0 ? { dailyRewardCents } : {}),
+                  postId,
+                  title,
+                }]
+              : []
           })
         : []
       const currentPage = Number(session.actionPayload.page)
@@ -877,7 +1063,8 @@ export async function handleTelegramChatStudyCallback(input: {
         await finishCallback({ callbackQueryId, env: input.env })
         return true
       }
-      const postId = songs[parsed.index]?.postId
+      const selectedIndex = telegramStudySongSelectionIndex(currentPage, parsed.index)
+      const postId = songs[selectedIndex]?.postId
       if (!postId) throw new Error("Song choice is no longer available")
       session.postId = postId
       const selected = await getControlPlaneClient(input.env).execute({
@@ -954,6 +1141,7 @@ export async function handleTelegramChatStudyCallback(input: {
         env: input.env,
         lastResult: result,
         session,
+        suppressIncorrectFeedback: true,
       })
     }
     await finishCallback({ callbackQueryId, env: input.env })
@@ -975,6 +1163,7 @@ export async function continueTelegramChatStudyAfterVoice(input: {
   chatStudySessionId: string
   env: Env
   result: SongStudyAttemptResult
+  transcript: string
 }): Promise<void> {
   const query = await getControlPlaneClient(input.env).execute({
     sql: `
@@ -997,5 +1186,6 @@ export async function continueTelegramChatStudyAfterVoice(input: {
     env: input.env,
     lastResult: input.result,
     session,
+    transcript: input.transcript,
   })
 }

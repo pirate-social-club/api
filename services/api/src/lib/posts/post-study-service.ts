@@ -510,6 +510,8 @@ export async function resolvePostStudyCapability(input: {
   targetLanguage?: string | null
   viewerUserId?: string | null
 }): Promise<PostStudyCapability | null> {
+  // Keep readiness semantics in parity with Telegram's batched picker query in
+  // batchReadyPostIds (chat-study-service.ts); the cross-path matrix test guards both.
   if (input.post.post_type !== "song") return null
   let targetLanguage: string
   try {
