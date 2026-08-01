@@ -617,9 +617,6 @@ export type Post = {
   analysis_result_ref?: string | null
   content_safety_state: "pending" | "safe" | "sensitive" | "adult"
   age_gate_policy: "none" | "18_plus"
-  age_gate_source?: "author" | "community_default" | "post_moderation" | "bundle_moderation" | "moderator" | "legacy_unknown" | null
-  age_gate_evidence_ref?: string | null
-  age_gate_set_at?: string | null
   publish_failure_code?: PostPublishFailureCodeValue | null
   publish_failure_message?: string | null
   publish_failure_retryable?: boolean | null

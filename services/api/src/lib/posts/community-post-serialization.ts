@@ -86,9 +86,6 @@ export type PostRow = {
   analysis_result_ref: string | null
   content_safety_state: Post["content_safety_state"]
   age_gate_policy: Post["age_gate_policy"]
-  age_gate_source: Post["age_gate_source"]
-  age_gate_evidence_ref: string | null
-  age_gate_set_at: string | null
   asset_story_ip_id: string | null
   asset_story_royalty_registration_status: "none" | "pending" | "registered" | "failed" | null
   idempotency_key: string
@@ -179,9 +176,6 @@ export function toPostRow(row: unknown): PostRow {
     analysis_result_ref: stringOrNull(rowValue(row, "analysis_result_ref")),
     content_safety_state: requiredString(row, "content_safety_state") as Post["content_safety_state"],
     age_gate_policy: requiredString(row, "age_gate_policy") as Post["age_gate_policy"],
-    age_gate_source: stringOrNull(rowValue(row, "age_gate_source")) as Post["age_gate_source"],
-    age_gate_evidence_ref: stringOrNull(rowValue(row, "age_gate_evidence_ref")),
-    age_gate_set_at: stringOrNull(rowValue(row, "age_gate_set_at")),
     asset_story_ip_id: stringOrNull(rowValue(row, "asset_story_ip_id")),
     asset_story_royalty_registration_status: stringOrNull(rowValue(row, "asset_story_royalty_registration_status")) as PostRow["asset_story_royalty_registration_status"],
     idempotency_key: stringOrNull(rowValue(row, "idempotency_key")) ?? "",
@@ -276,9 +270,6 @@ export function serializePost(row: PostRow): Post {
     analysis_result_ref: row.analysis_result_ref,
     content_safety_state: row.content_safety_state,
     age_gate_policy: row.age_gate_policy,
-    age_gate_source: row.age_gate_source,
-    age_gate_evidence_ref: row.age_gate_evidence_ref,
-    age_gate_set_at: row.age_gate_set_at,
     publish_failure_code: row.publish_failure_code,
     publish_failure_message: row.publish_failure_message,
     publish_failure_retryable: row.publish_failure_retryable == null ? null : row.publish_failure_retryable === 1,

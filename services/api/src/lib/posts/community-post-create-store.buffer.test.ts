@@ -22,7 +22,6 @@ const FULL_SCHEMA: PostProjectionSchema = {
   hasSongCoverArtRef: true,
   hasSongDurationMs: true,
   hasAsyncPublishColumns: true,
-  hasAgeGateProvenanceColumns: true,
 }
 
 function recordingExecutor() {

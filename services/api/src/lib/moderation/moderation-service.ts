@@ -412,13 +412,7 @@ async function planModerationAction(input: {
       case "age_gate":
         return {
           mutation: { previousAgeGatePolicy: post.age_gate_policy, nextAgeGatePolicy: "18_plus", publicReadPostId: postId },
-          applyWrites: (executor) => setPostAgeGatePolicy({
-            executor,
-            postId,
-            ageGatePolicy: "18_plus",
-            evidenceRef: `moderation_case:${input.caseRow.moderation_case_id}`,
-            now: input.now,
-          }),
+          applyWrites: (executor) => setPostAgeGatePolicy({ executor, postId, ageGatePolicy: "18_plus", now: input.now }),
         }
       default:
         throw badRequestError("Unsupported moderation action")
