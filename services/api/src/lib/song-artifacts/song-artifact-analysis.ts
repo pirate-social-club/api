@@ -2,6 +2,7 @@ import type { Env } from "../../env"
 import { trimEnv } from "../env-strings"
 import { providerUnavailable } from "../errors"
 import { DEFAULT_OPENROUTER_MODEL } from "../openrouter-client"
+import { SONG_LYRICS_CONTENT_CLASSIFICATION_PROMPT } from "./song-lyrics-content-policy"
 import type { Post, SongArtifactUpload } from "../../types"
 import {
   decryptActiveCommunityElevenLabsKey,
@@ -225,11 +226,7 @@ async function classifyLyricsAgeGate(input: {
         messages: [
           {
             role: "system",
-            content:
-              "Classify song lyrics for age-gating only. Never recommend blocking or review. " +
-              "Return adult only for explicit sexual content suitable for 18+ gating. " +
-              "Return sensitive for profanity or mature themes that do not require 18+ gating. " +
-              "Return safe otherwise.",
+            content: SONG_LYRICS_CONTENT_CLASSIFICATION_PROMPT,
           },
           {
             role: "user",
