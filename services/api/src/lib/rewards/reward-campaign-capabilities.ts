@@ -58,6 +58,7 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
   } catch {
     return DISABLED
   }
+  const identityProvider = resolveRewardIdentityProvider(env.REWARDS_IDENTITY_PROVIDER)
 
   return {
     enabled: true,
@@ -76,9 +77,11 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
     eligible_activities: ELIGIBLE_ACTIVITIES,
     // Tier terms are persistable but deliberately cannot be funded until
     // claim-time nationality resolution and lot exposure accounting ship.
-    nationality_payout_tiers: resolveRewardIdentityProvider(env.REWARDS_IDENTITY_PROVIDER) === "self"
+    nationality_payout_tiers: identityProvider === "self"
       ? "binding_preview"
-      : "unavailable",
+      : identityProvider === "very"
+        ? "draft_only"
+        : "unavailable",
     chain_id: config.chainId,
     token_address: config.tokenAddress,
     // Deliberately omits rpcUrl (may carry a provider credential) and
