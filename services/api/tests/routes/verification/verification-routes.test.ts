@@ -71,6 +71,54 @@ async function completeSelfNationalityVerification(input: {
   return createdBody.id.replace(/^ver_/u, "")
 }
 
+async function completeZkPassportNationalityVerification(input: {
+  env: Env
+  accessToken: string
+  uniqueIdentifier: string
+  nationality: string
+}): Promise<Response> {
+  setZkPassportProviderForTests({
+    startSession: async (sessionInput) => ({
+      upstreamSessionRef: `zkpassport-nationality:${sessionInput.verificationSessionId}`,
+      launch: {
+        domain: "pirate.test",
+        name: "Pirate",
+        logo: null,
+        purpose: "Verify document attributes for Pirate community access",
+        scope: "pirate-document-proof-test",
+        binding: "binding",
+        validity_seconds: 3600,
+        dev_mode: true,
+        requested_capabilities: ["nationality"],
+        verification_requirements: [],
+      },
+    }),
+    getSessionOutcome: async () => ({
+      status: "verified",
+      claims: {
+        uniqueIdentifier: input.uniqueIdentifier,
+        proofHash: `proof:${input.uniqueIdentifier}`,
+        nationality: input.nationality,
+        minimumAge: null,
+        gender: null,
+      },
+    }),
+  } satisfies import("../../../src/lib/verification/zkpassport-provider").ZkPassportProvider)
+
+  const created = await requestJson("http://pirate.test/verification-sessions", {
+    provider: "zkpassport",
+    requested_capabilities: ["nationality"],
+  }, input.env, input.accessToken)
+  expect(created.status).toBe(201)
+  const createdBody = await json(created) as { id: string }
+  return requestJson(
+    `http://pirate.test/verification-sessions/${createdBody.id}/complete`,
+    { provider_payload_ref: { proofs: [], queryResult: { ok: true } } },
+    input.env,
+    input.accessToken,
+  )
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -437,6 +485,135 @@ describe("verification routes", () => {
     expect(nullifierRows.rows[0]?.provider).toBe("zkpassport")
     expect(nullifierRows.rows[0]?.mechanism).toBe("zkpassport-unique-identifier")
     expect(typeof nullifierRows.rows[0]?.source_user_attestation_id).toBe("string")
+
+    const nationalityEvidence = await ctx.client.execute({
+      sql: `
+        SELECT a.source_identity_nullifier_id, n.identity_nullifier_id
+        FROM user_attestations a
+        JOIN identity_nullifiers n
+          ON n.identity_nullifier_id = a.source_identity_nullifier_id
+        WHERE a.user_id = ?1
+          AND a.provider = 'zkpassport'
+          AND a.capability_key = 'nationality'
+      `,
+      args: [session.userId],
+    })
+    expect(nationalityEvidence.rows).toHaveLength(1)
+    expect(nationalityEvidence.rows[0]?.source_identity_nullifier_id).toBe(
+      nationalityEvidence.rows[0]?.identity_nullifier_id,
+    )
+  })
+
+  test("zkpassport same-document re-verification binds new evidence to the existing nullifier", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "zkpassport-nationality-reverify-user")
+    const input = {
+      env: ctx.env,
+      accessToken: session.accessToken,
+      uniqueIdentifier: "zkpassport-reverify-document",
+      nationality: "USA",
+    }
+
+    expect((await completeZkPassportNationalityVerification(input)).status).toBe(200)
+    expect((await completeZkPassportNationalityVerification(input)).status).toBe(200)
+
+    const evidence = await ctx.client.execute({
+      sql: `
+        SELECT a.source_verification_session_id AS attestation_session,
+               a.source_identity_nullifier_id,
+               n.source_verification_session_id AS nullifier_session
+        FROM user_attestations a
+        JOIN identity_nullifiers n
+          ON n.identity_nullifier_id = a.source_identity_nullifier_id
+        WHERE a.user_id = ?1
+          AND a.provider = 'zkpassport'
+          AND a.capability_key = 'nationality'
+        ORDER BY a.created_at, a.user_attestation_id
+      `,
+      args: [session.userId],
+    })
+    expect(evidence.rows).toHaveLength(2)
+    expect(evidence.rows[0]?.source_identity_nullifier_id).toBe(evidence.rows[1]?.source_identity_nullifier_id)
+    expect(evidence.rows[1]?.attestation_session).not.toBe(evidence.rows[1]?.nullifier_session)
+  })
+
+  test("concurrent zkpassport finalizations preserve both attestations on one nullifier", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "zkpassport-nationality-concurrent-user")
+    const input = {
+      env: ctx.env,
+      accessToken: session.accessToken,
+      uniqueIdentifier: "zkpassport-concurrent-document",
+      nationality: "USA",
+    }
+
+    const completions = await Promise.all([
+      completeZkPassportNationalityVerification(input),
+      completeZkPassportNationalityVerification(input),
+    ])
+    expect(completions.map((response) => response.status)).toEqual([200, 200])
+
+    const nullifiers = await ctx.client.execute({
+      sql: `
+        SELECT identity_nullifier_id
+        FROM identity_nullifiers
+        WHERE user_id = ?1
+          AND provider = 'zkpassport'
+          AND mechanism = 'zkpassport-unique-identifier'
+          AND status = 'active'
+      `,
+      args: [session.userId],
+    })
+    expect(nullifiers.rows).toHaveLength(1)
+    const evidence = await ctx.client.execute({
+      sql: `
+        SELECT source_identity_nullifier_id
+        FROM user_attestations
+        WHERE user_id = ?1
+          AND provider = 'zkpassport'
+          AND capability_key = 'nationality'
+      `,
+      args: [session.userId],
+    })
+    expect(evidence.rows).toHaveLength(2)
+    expect(evidence.rows.every((row) => (
+      row.source_identity_nullifier_id === nullifiers.rows[0]?.identity_nullifier_id
+    ))).toBe(true)
+  })
+
+  test("zkpassport rejects another user reusing an active document nullifier", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const first = await exchangeJwt(ctx.env, "zkpassport-nationality-owner")
+    const second = await exchangeJwt(ctx.env, "zkpassport-nationality-reuser")
+    const document = "zkpassport-cross-user-document"
+
+    expect((await completeZkPassportNationalityVerification({
+      env: ctx.env,
+      accessToken: first.accessToken,
+      uniqueIdentifier: document,
+      nationality: "USA",
+    })).status).toBe(200)
+    expect((await completeZkPassportNationalityVerification({
+      env: ctx.env,
+      accessToken: second.accessToken,
+      uniqueIdentifier: document,
+      nationality: "USA",
+    })).status).toBe(403)
+
+    const secondEvidence = await ctx.client.execute({
+      sql: `
+        SELECT user_attestation_id
+        FROM user_attestations
+        WHERE user_id = ?1
+          AND provider = 'zkpassport'
+          AND capability_key = 'nationality'
+      `,
+      args: [second.userId],
+    })
+    expect(secondEvidence.rows).toHaveLength(0)
   })
 
   test("self nationality evidence references the exact created nullifier", async () => {
