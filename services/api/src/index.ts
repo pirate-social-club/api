@@ -257,6 +257,7 @@ async function buildVersionPayload(env: Env) {
     git_sha: buildVersion.git_sha,
     git_ref: buildVersion.git_ref,
     build_timestamp: buildVersion.build_timestamp,
+    worker_version: env.CF_VERSION_METADATA ?? null,
     karaoke_scoring_version: KARAOKE_SCORING_VERSION,
     karaoke_runtime: {
       version: KARAOKE_RUNTIME_BUILD.version,

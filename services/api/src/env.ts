@@ -14,6 +14,11 @@ export type Env = {
   BUILD_GIT_REF?: string
   BUILD_GIT_SHA?: string
   BUILD_TIMESTAMP?: string
+  CF_VERSION_METADATA?: {
+    id: string
+    tag: string
+    timestamp: string
+  }
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string
