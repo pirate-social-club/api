@@ -7148,6 +7148,55 @@ const spec = {
         }
       }
     },
+    "/me/rewards/identity-binding": {
+      "get": {
+        "operationId": "me_rewards_identity_binding_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get explicit reward-document selection state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardIdentityBindingResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "me_rewards_identity_binding_create",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Select an eligible Self document for future reward evaluation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardIdentityBindingSelectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardIdentityBindingResponse"
+                }
+              }
+            }
+          },
+          "409": {}
+        }
+      }
+    },
     "/me/rewards/cashouts": {
       "post": {
         "operationId": "me_rewards_cashouts",
@@ -17244,6 +17293,56 @@ const spec = {
           }
         }
       },
+      "RewardIdentityBindingResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capability",
+          "provider",
+          "active_binding",
+          "selectable_documents"
+        ],
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/RewardIdentityBindingCapability"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "very"
+            ],
+            "nullable": true
+          },
+          "active_binding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RewardIdentityBinding"
+              }
+            ],
+            "nullable": true
+          },
+          "selectable_documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardIdentityBindingDocument"
+            }
+          }
+        }
+      },
+      "RewardIdentityBindingSelectRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "identity_nullifier_id"
+        ],
+        "properties": {
+          "identity_nullifier_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
       "RewardCashoutRequest": {
         "type": "object",
         "required": [
@@ -17341,7 +17440,8 @@ const spec = {
             "type": "string",
             "enum": [
               "unavailable",
-              "draft_only"
+              "draft_only",
+              "binding_preview"
             ]
           },
           "chain_id": {
@@ -22712,6 +22812,85 @@ const spec = {
           "failure_reason": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "RewardIdentityBindingCapability": {
+        "type": "string",
+        "enum": [
+          "unavailable",
+          "selection_required",
+          "selected"
+        ]
+      },
+      "RewardIdentityBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "identity_nullifier_id",
+          "provider",
+          "nationality",
+          "status",
+          "selected_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "identity_nullifier_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self"
+            ]
+          },
+          "nationality": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active"
+            ]
+          },
+          "selected_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardIdentityBindingDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "identity_nullifier_id",
+          "provider",
+          "nationality",
+          "verified_at"
+        ],
+        "properties": {
+          "identity_nullifier_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self"
+            ]
+          },
+          "nationality": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3
+          },
+          "verified_at": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
