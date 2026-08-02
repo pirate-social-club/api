@@ -26,7 +26,7 @@ export type RewardNationalityShadowOutcome =
   | "identity_evidence_conflict"
 
 export type RewardNationalityShadowDecision = {
-  capability: "binding_preview" | "unavailable"
+  capability: "binding_preview" | "paused" | "unavailable"
   persisted: boolean
   persistence: RewardNationalityShadowPersistence
   evaluatorVersion: string | null
@@ -178,6 +178,24 @@ export async function resolveRewardNationalityBindingShadow(input: {
   client: Executor
   userId: string
 }): Promise<RewardNationalityShadowDecision> {
+  if (input.env.REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED !== "true") {
+    return {
+      capability: "paused",
+      persisted: false,
+      persistence: "not_applicable",
+      evaluatorVersion: null,
+      outcome: null,
+      retryability: null,
+      rewardIdentityBindingId: null,
+      identityNullifierId: null,
+      userAttestationId: null,
+      nationality: null,
+      rewardIdentityId: null,
+      bindingSelectedAt: null,
+      evidenceVerificationSessionId: null,
+      evidenceVerifiedAt: null,
+    }
+  }
   if (resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER) !== "self") {
     return {
       capability: "unavailable",

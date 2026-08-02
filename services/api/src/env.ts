@@ -424,6 +424,11 @@ export type Env = {
   REWARDS_CAMPAIGN_MAX_DURATION_SECONDS?: string
   // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
   REWARDS_IDENTITY_PROVIDER?: string
+  /**
+   * Explicit opt-in for nationality shadow evidence reads and writes. Unset or
+   * any value other than "true" pauses collection without affecting rewards.
+   */
+  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED?: string
   REWARDS_DAILY_STREAK_CENTS?: string
   REWARDS_DAILY_USER_CAP_CENTS?: string
   REWARDS_STREAK_MILESTONE_7_CENTS?: string

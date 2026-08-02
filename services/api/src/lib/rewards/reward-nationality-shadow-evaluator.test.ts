@@ -10,8 +10,15 @@ import {
 } from "./reward-nationality-shadow-evaluator"
 
 const NOW = "2026-08-02T10:00:00.000Z"
-const SELF_ENV = { REWARDS_IDENTITY_PROVIDER: "self" } as Env
-const VERY_ENV = { REWARDS_IDENTITY_PROVIDER: "very" } as Env
+const SELF_ENV = {
+  REWARDS_IDENTITY_PROVIDER: "self",
+  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "true",
+} as Env
+const VERY_ENV = {
+  REWARDS_IDENTITY_PROVIDER: "very",
+  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "true",
+} as Env
+const PAUSED_ENV = { REWARDS_IDENTITY_PROVIDER: "self" } as Env
 let cleanup: (() => Promise<void>) | null = null
 
 afterEach(async () => {
@@ -151,6 +158,21 @@ async function evaluate(client: Client, eventId: string, env = SELF_ENV) {
 }
 
 describe("reward nationality shadow evaluation", () => {
+  test("does not resolve or persist nationality evidence unless collection is explicitly enabled", async () => {
+    const client = await setup()
+    await seedNullifier(client, { id: "nul_paused", hash: "hash_paused", nationality: "CAN" })
+    await bind(client, "nul_paused")
+
+    expect(await evaluate(client, "rqe_shadow_paused", PAUSED_ENV)).toMatchObject({
+      capability: "paused",
+      persisted: false,
+      persistence: "not_applicable",
+      evaluatorVersion: null,
+      outcome: null,
+    })
+    expect((await client.execute("SELECT COUNT(*) AS count FROM reward_claim_identity_evidence")).rows[0]?.count).toBe(0)
+  })
+
   test("resolves nationality and reward identity from the selected nullifier, never the account slot or oldest document", async () => {
     const client = await setup()
     await seedNullifier(client, { id: "nul_oldest", hash: "hash_oldest", nationality: "USA" })
