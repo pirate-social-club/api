@@ -2411,6 +2411,7 @@ export type SongStudyAttemptRequest = {
   attempt_number: number;
   selected_option_id?: string;
   transcript?: string;
+  timezone?: string;
 };
 
 export type SongStudyAttemptResult = {
@@ -2495,6 +2496,7 @@ export type SongStreakLeaderboardEntry = {
   total_qualified_days: number;
   streak_started_date: string;
   last_qualified_date: string;
+  active_until_at: string;
   is_viewer: boolean;
 };
 
@@ -2513,6 +2515,8 @@ export type SongStreakViewerStanding = {
   study_attempts_today: number;
   study_target_today: number;
   karaoke_passed_today: boolean;
+  rank?: number | null;
+  active_until_at?: string | null;
 };
 
 export type LocalizedPostResponse = {

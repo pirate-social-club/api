@@ -107,7 +107,6 @@ export async function getPost(input: {
   userId: string
   postId: string
   locale?: string | null
-  studyTimezone?: string
   communityRepository: PostReadCommunityRepository
   userRepository: UserRepository
   profileRepository?: ProfileRepository | null
@@ -145,7 +144,6 @@ export async function getPost(input: {
       post,
       locale: input.locale ?? undefined,
       ageGateViewerState,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
     response.community = await getCommunityPreview({
@@ -162,7 +160,6 @@ export async function getPost(input: {
       responses: [response],
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
     return response
@@ -281,7 +278,6 @@ export async function listCommunityPosts(input: {
   userId: string
   communityId: string
   locale?: string | null
-  studyTimezone?: string
   limit?: string | null
   cursor?: string | null
   flairId?: string | null
@@ -321,7 +317,6 @@ export async function listCommunityPosts(input: {
       songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems: feed.items,
       locale: input.locale,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
       ageGateState,
     })
@@ -342,7 +337,6 @@ export async function listCommunityPosts(input: {
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
 
@@ -360,7 +354,6 @@ export async function listPendingCommunityPosts(input: {
   userId: string
   communityId: string
   locale?: string | null
-  studyTimezone?: string
   limit?: string | null
   communityRepository: PostReadCommunityRepository
   userRepository: UserRepository
@@ -390,7 +383,6 @@ export async function listPendingCommunityPosts(input: {
       songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems,
       locale: input.locale,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
       ageGateState,
     })
@@ -427,7 +419,6 @@ export async function listCommunityEvents(input: {
   userId: string
   communityId: string
   locale?: string | null
-  studyTimezone?: string
   from?: string | null
   to?: string | null
   limit?: string | null
@@ -470,7 +461,6 @@ export async function listCommunityEvents(input: {
       songArtifactExecutor: getControlPlaneClient(input.env),
       feedItems,
       locale: input.locale,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
       ageGateState,
     })
@@ -481,7 +471,6 @@ export async function listCommunityEvents(input: {
       responses: items,
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
 

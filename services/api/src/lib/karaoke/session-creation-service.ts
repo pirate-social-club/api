@@ -78,6 +78,7 @@ export interface KaraokeSessionCreationDependencies {
     sessionExpiresAtMs: number
     lines: ScorableKaraokeLine[]
     scoringPolicy: KaraokeScoringPolicy
+    timezone?: string | null
   }): Promise<{ errorCode?: string | null; status: number }>
   issueToken(input: { claims: KaraokeGatewayClaims }): Promise<string>
   loadPayload(): Promise<SongKaraokePayload>
@@ -279,6 +280,7 @@ export async function createKaraokeSession(input: {
   idempotencyKey: string
   postId: string
   subjectUserId: string
+  timezone?: string | null
 }): Promise<KaraokeSessionCreateResponse> {
   const nowMs = input.deps.nowMs()
   const key: KaraokeSessionCreationKey = {
@@ -340,6 +342,7 @@ export async function createKaraokeSession(input: {
         sessionExpiresAtMs,
         sessionId,
         subjectUserId: input.subjectUserId,
+        timezone: input.timezone ?? null,
       })
       if (runtime.errorCode?.startsWith("karaoke_stt_unconfigured_")) {
         failureCode = "karaoke_stt_unconfigured"

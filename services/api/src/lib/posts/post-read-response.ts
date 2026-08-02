@@ -59,7 +59,6 @@ export async function buildLocalizedPostFeedResponses(input: {
   locale?: string | null
   viewerUserId: string | null
   ageGateState: AgeGateViewerState | null
-  studyTimezone?: string
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
 }): Promise<LocalizedPostResponse[]> {
   const studyEnabledCache = new Map<string, Promise<boolean>>()
@@ -101,7 +100,6 @@ export async function buildLocalizedPostReadResponse(input: {
   locale?: string | null
   viewerUserId: string | null
   ageGateViewerState: AgeGateViewerState | null
-  studyTimezone?: string
 }): Promise<LocalizedPostResponse> {
   const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, input.post.post_id)
   const metrics = await getPostReadMetrics({
@@ -147,7 +145,6 @@ export async function hydrateSongStreakSummariesForResponses(input: {
   client: Client
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
-  studyTimezone?: string
   viewerUserId?: string | null
 }): Promise<void> {
   if (!input.profileRepository || !input.viewerUserId) return
@@ -182,7 +179,6 @@ export async function hydrateSongStreakSummariesForResponses(input: {
         limit: 3,
         postIds: responses.map((response) => response.post.post_id),
         profileRepository: input.profileRepository,
-        studyTimezone: input.studyTimezone,
         userId: input.viewerUserId,
       })
       for (const response of responses) {
@@ -190,7 +186,8 @@ export async function hydrateSongStreakSummariesForResponses(input: {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (/no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)) {
+      if (/no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)
+        || /no such column:\s*(timezone|timezone_updated_at|active_until_at)/iu.test(message)) {
         for (const response of eligibleResponses.filter((candidate) => candidate.post.community_id === communityId)) {
           response.streak_summary = null
         }
@@ -208,7 +205,6 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
   responses: LocalizedPostResponse[]
   communityRepository?: PostReadResponseCommunityRepository | null
   profileRepository?: ProfileRepository | null
-  studyTimezone?: string
   viewerUserId?: string | null
   enqueueOnRead?: boolean
 }): Promise<void> {
@@ -230,7 +226,6 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
     client: input.client,
     responses: input.responses,
     profileRepository: input.profileRepository,
-    studyTimezone: input.studyTimezone,
     viewerUserId: input.viewerUserId,
   })
 

@@ -16,7 +16,6 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
-import { getWaitUntil } from "./execution-context"
 
 function parseLeaderboardLimit(value: string | undefined): number | undefined {
   if (value == null || value.trim() === "") return undefined
@@ -55,7 +54,6 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       limit,
       postId,
       profileRepository,
-      studyTimezone: resolveStudyTimezone(c.req.raw.cf),
     })
     return c.json(payload, 200)
   })
@@ -72,7 +70,6 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       env: c.env,
       postId,
       studyTimezone: resolveStudyTimezone(c.req.raw.cf),
-      waitUntil: getWaitUntil(c),
     })
     const timing = getSongStudyAttemptTiming(result)
     if (timing) {

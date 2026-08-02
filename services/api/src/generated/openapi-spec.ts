@@ -3856,6 +3856,22 @@ const spec = {
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "timezone": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "headers": {
@@ -15009,6 +15025,9 @@ const spec = {
           },
           "transcript": {
             "type": "string"
+          },
+          "timezone": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -21487,6 +21506,7 @@ const spec = {
           "total_qualified_days",
           "streak_started_date",
           "last_qualified_date",
+          "active_until_at",
           "is_viewer"
         ],
         "properties": {
@@ -21509,6 +21529,9 @@ const spec = {
             "type": "string"
           },
           "last_qualified_date": {
+            "type": "string"
+          },
+          "active_until_at": {
             "type": "string"
           },
           "is_viewer": {
@@ -21553,6 +21576,14 @@ const spec = {
           },
           "karaoke_passed_today": {
             "type": "boolean"
+          },
+          "rank": {
+            "type": "integer",
+            "nullable": true
+          },
+          "active_until_at": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false

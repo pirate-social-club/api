@@ -305,6 +305,7 @@ describe("serializeLocalizedPostResponse feed pruning", () => {
     const response = makeLocalizedResponse(makeLinkPost({ post_type: "song" }), "en")
     response.streak_summary = {
       entries: [{
+        active_until_at: "2026-07-08T04:00:00.000Z",
         best_streak: 23,
         current_streak: 21,
         identity: {
@@ -321,11 +322,13 @@ describe("serializeLocalizedPostResponse feed pruning", () => {
       }],
       total_active_streaks: 5,
       viewer: {
+        active_until_at: "2026-07-08T04:00:00.000Z",
         alive: true,
         best_streak: 14,
         current_streak: 14,
         karaoke_passed_today: false,
         qualified_today: false,
+        rank: 2,
         study_attempts_today: 6,
         study_target_today: 10,
         total_qualified_days: 19,

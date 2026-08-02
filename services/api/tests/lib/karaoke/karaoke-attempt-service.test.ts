@@ -3,6 +3,7 @@ import { createClient } from "@libsql/client"
 import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
 
 import { karaokeAttemptServiceTestHooks, recordKaraokeAttempt } from "../../../src/lib/karaoke/karaoke-attempt-service"
+import { claimStreakTimezonePin, prepareStreakWrite } from "../../../src/lib/posts/post-study-streak-write-service"
 import type { InStatement, QueryResult, ReadClient } from "../../../src/lib/sql-client"
 
 async function createKaraokeAttemptSchema(client: ReturnType<typeof createClient>): Promise<void> {
@@ -49,6 +50,7 @@ async function createSongStreakSchema(client: ReturnType<typeof createClient>): 
       post_id TEXT NOT NULL,
       community_id TEXT NOT NULL,
       activity_date TEXT NOT NULL,
+      activity_timezone TEXT,
       study_attempt_count INTEGER NOT NULL DEFAULT 0,
       study_correct_count INTEGER NOT NULL DEFAULT 0,
       study_target_count INTEGER NOT NULL DEFAULT 10,
@@ -69,6 +71,9 @@ async function createSongStreakSchema(client: ReturnType<typeof createClient>): 
       last_qualified_date TEXT NOT NULL,
       streak_started_date TEXT NOT NULL,
       total_qualified_days INTEGER NOT NULL,
+      timezone TEXT,
+      timezone_updated_at TEXT,
+      active_until_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       PRIMARY KEY (user_id, post_id)
@@ -269,6 +274,25 @@ describe("recordKaraokeAttempt streak persistence", () => {
         },
       }
 
+      // Pin establishment (atomic compare-and-swap) and pin/expiry resolution
+      // both read/write existing streak state, so they happen on the plain
+      // client BEFORE the buffered write unit is opened — mirroring the
+      // finalize flow. The claim commits on its own and never joins the batch.
+      await claimStreakTimezonePin({
+        client,
+        communityId: "cmt_karaoke",
+        now: "2026-07-17T05:10:05.055Z",
+        postId: "pst_song",
+        userId: "usr_karaoke",
+      })
+      const streakPreparation = await prepareStreakWrite({
+        activityInstant: "2026-07-17T05:10:05.055Z",
+        client,
+        now: "2026-07-17T05:10:05.055Z",
+        postId: "pst_song",
+        qualified: true,
+        userId: "usr_karaoke",
+      })
       const result = await recordKaraokeAttempt({
         activityDate: "2026-07-17",
         attemptKnownAbsent: true,
@@ -283,6 +307,7 @@ describe("recordKaraokeAttempt streak persistence", () => {
         sessionId: "session_buffered_d1",
         attemptId: "attempt_buffered_d1",
         emitRewardQualification: true,
+        streakPreparation,
         summary: passingSummary(),
         userId: "usr_karaoke",
       })
@@ -290,10 +315,20 @@ describe("recordKaraokeAttempt streak persistence", () => {
       expect(result).toEqual({ inserted: true, rankEligible: true, streakCredited: true })
       expect(statements[0]?.sql).toContain("INSERT INTO karaoke_attempt")
       expect(statements[0]?.sql).not.toContain("INSERT OR IGNORE")
+      // The buffered unit is pure writes: no bare SELECT is emitted, and the
+      // grace-expiry apply is exactly one trailing UPDATE. The pin claim was a
+      // separate, already-committed statement — nothing in the batch touches
+      // the pin columns.
+      expect(statements.filter((statement) => /^\s*SELECT/iu.test(statement.sql))).toEqual([])
+      expect(statements.every((statement) => !statement.sql.includes("timezone_updated_at"))).toBe(true)
+      const streakApplies = statements.filter((statement) => /^\s*UPDATE\s+song_streaks/iu.test(statement.sql))
+      expect(streakApplies).toHaveLength(1)
+      expect(streakApplies[0]?.sql).toContain("MAX(COALESCE(active_until_at")
+      expect(statements.at(-1)).toBe(streakApplies[0])
       await client.batch(statements, "write")
 
-      const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days")
-      expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+      const day = await client.execute("SELECT karaoke_pass_count, qualified, activity_timezone FROM song_engagement_days")
+      expect(day.rows[0]).toEqual({ activity_timezone: "UTC", karaoke_pass_count: 1, qualified: 1 })
       const attempt = await client.execute("SELECT scoring_diagnostics_json FROM karaoke_attempt")
       expect(JSON.parse(String(attempt.rows[0]?.scoring_diagnostics_json))).toEqual({
         calibration: {
@@ -317,8 +352,14 @@ describe("recordKaraokeAttempt streak persistence", () => {
           timingScore: 0.88,
         }],
       })
-      const streak = await client.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
-      expect(streak.rows[0]).toEqual({ current_streak: 1, best_streak: 1, total_qualified_days: 1 })
+      const streak = await client.execute("SELECT current_streak, best_streak, total_qualified_days, timezone, active_until_at FROM song_streaks")
+      expect(streak.rows[0]).toEqual({
+        active_until_at: "2026-07-19T00:00:00.000Z",
+        current_streak: 1,
+        best_streak: 1,
+        timezone: "UTC",
+        total_qualified_days: 1,
+      })
       const outbox = await client.execute("SELECT activity, qualification_policy_version FROM reward_qualification_outbox")
       expect(outbox.rows[0]).toEqual({
         activity: "karaoke",
@@ -349,6 +390,21 @@ describe("recordKaraokeAttempt streak persistence", () => {
         batch: (statements, mode) => client.batch(statements, mode),
       }
 
+      await claimStreakTimezonePin({
+        client,
+        communityId: "cmt_karaoke",
+        now: "2026-07-17T05:10:05.055Z",
+        postId: "pst_song",
+        userId: "usr_karaoke",
+      })
+      const streakPreparation = await prepareStreakWrite({
+        activityInstant: "2026-07-17T05:10:05.055Z",
+        client,
+        now: "2026-07-17T05:10:05.055Z",
+        postId: "pst_song",
+        qualified: true,
+        userId: "usr_karaoke",
+      })
       const result = await recordKaraokeAttempt({
         activityDate: "2026-07-17",
         client: d1TransactionLikeClient,
@@ -361,13 +417,19 @@ describe("recordKaraokeAttempt streak persistence", () => {
         scoringProvider: "elevenlabs",
         sessionId: "session_d1",
         attemptId: "attempt_d1",
+        streakPreparation,
         summary: passingSummary(),
         userId: "usr_karaoke",
       })
 
       expect(result).toEqual({ inserted: true, rankEligible: true, streakCredited: true })
-      const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days")
-      expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+      const day = await client.execute("SELECT karaoke_pass_count, qualified, activity_timezone FROM song_engagement_days")
+      expect(day.rows[0]).toEqual({ activity_timezone: "UTC", karaoke_pass_count: 1, qualified: 1 })
+      const streak = await client.execute("SELECT timezone, active_until_at FROM song_streaks")
+      expect(streak.rows[0]).toEqual({
+        active_until_at: "2026-07-19T00:00:00.000Z",
+        timezone: "UTC",
+      })
     } finally {
       client.close()
     }
@@ -404,6 +466,21 @@ describe("recordKaraokeAttempt streak persistence", () => {
         },
       ])
 
+      await claimStreakTimezonePin({
+        client,
+        communityId: "cmt_karaoke",
+        now: "2026-07-10T23:58:00.000Z",
+        postId: "pst_song",
+        userId: "usr_karaoke",
+      })
+      const streakPreparation = await prepareStreakWrite({
+        activityInstant: "2026-07-10T23:58:00.000Z",
+        client,
+        now: "2026-07-10T23:58:00.000Z",
+        postId: "pst_song",
+        qualified: true,
+        userId: "usr_karaoke",
+      })
       const result = await recordKaraokeAttempt({
         activityDate: "2026-07-10",
         client,
@@ -416,6 +493,7 @@ describe("recordKaraokeAttempt streak persistence", () => {
         scoringProvider: "pirate-karaoke-runtime",
         sessionId: "session_bridge",
         attemptId: "attempt_bridge",
+        streakPreparation,
         summary: passingSummary(),
         userId: "usr_karaoke",
       })
@@ -425,16 +503,18 @@ describe("recordKaraokeAttempt streak persistence", () => {
         rankEligible: true,
         streakCredited: true,
       })
-      const streak = await client.execute("SELECT current_streak, best_streak, last_qualified_date, streak_started_date, total_qualified_days FROM song_streaks")
+      const streak = await client.execute("SELECT current_streak, best_streak, last_qualified_date, streak_started_date, total_qualified_days, timezone, active_until_at FROM song_streaks")
       expect(streak.rows[0]).toEqual({
+        active_until_at: "2026-07-13T00:00:00.000Z",
         current_streak: 3,
         best_streak: 3,
         last_qualified_date: "2026-07-11",
         streak_started_date: "2026-07-09",
+        timezone: "UTC",
         total_qualified_days: 3,
       })
-      const day = await client.execute("SELECT karaoke_pass_count, qualified FROM song_engagement_days WHERE activity_date = '2026-07-10'")
-      expect(day.rows[0]).toEqual({ karaoke_pass_count: 1, qualified: 1 })
+      const day = await client.execute("SELECT karaoke_pass_count, qualified, activity_timezone FROM song_engagement_days WHERE activity_date = '2026-07-10'")
+      expect(day.rows[0]).toEqual({ activity_timezone: "UTC", karaoke_pass_count: 1, qualified: 1 })
 
       const replay = await recordKaraokeAttempt({
         activityDate: "2026-07-10",

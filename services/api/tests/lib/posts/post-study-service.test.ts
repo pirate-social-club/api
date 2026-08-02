@@ -21,8 +21,18 @@ import {
   resolvePostStudyCapability,
   submitPostStudyAttempt as submitPostStudyAttemptRaw,
   transcribePostStudyAudio,
-  upsertStudyStreakProgress,
 } from "../../../src/lib/posts/post-study-service"
+import {
+  addUtcDays,
+  endOfGraceUtcInstant,
+  studyActivityDate,
+} from "../../../src/lib/posts/post-study-streak-time"
+import {
+  claimStreakTimezonePin,
+  prepareStreakWrite,
+  recordCompletedSessionStreak,
+} from "../../../src/lib/posts/post-study-streak-write-service"
+import { recordKaraokeAttempt } from "../../../src/lib/karaoke/karaoke-attempt-service"
 import type { Env, LocalizedPostResponse } from "../../../src/types"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
@@ -101,6 +111,15 @@ function env(overrides: Partial<Env> = {}): Env {
   } as Env
 }
 
+// Env without the D1 shard stub: openCommunityWriteClient then takes the local
+// community-db path, whose write transactions are interactive libsql
+// transactions (mid-transaction reads see prior writes). The D1 shard path
+// buffers write txs and returns empty results for in-tx reads.
+function localEnv(overrides: Partial<Env> = {}): Env {
+  const { COMMUNITY_D1_SHARD: _shard, ...rest } = env(overrides)
+  return rest as Env
+}
+
 async function submitPostStudyAttempt(
   input: Omit<Parameters<typeof submitPostStudyAttemptRaw>[0], "body"> & {
     body: Parameters<typeof submitPostStudyAttemptRaw>[0]["body"] & { test_target_language?: unknown }
@@ -124,6 +143,123 @@ async function submitPostStudyAttempt(
     ...input,
     body: { ...body, session_id: sessionId },
   })
+}
+
+// Runs the full seeded ready-pack session with every first pass correct, so
+// the completing attempt qualifies the day and materializes the streak inline.
+async function completeQualifyingStudySession(input: {
+  env: Env
+  idempotencyPrefix: string
+  timezone?: string
+}): Promise<void> {
+  const attempts = [
+    {
+      exercise_id: "stu:stu_1:say_it_back:en",
+      transcript: "I was lost in the midnight waves",
+      type: "say_it_back" as const,
+    },
+    {
+      exercise_id: "stu:stu_2:translation_choice:es",
+      selected_option_id: "opt_a",
+      type: "translation_choice" as const,
+    },
+    {
+      exercise_id: "stu:stu_2:say_it_back:en",
+      transcript: "Hold me close until the morning",
+      type: "say_it_back" as const,
+    },
+  ]
+  for (const [index, attempt] of attempts.entries()) {
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        idempotency_key: `${input.idempotencyPrefix}-${index}`,
+        test_target_language: "es",
+        timezone: input.timezone,
+        ...attempt,
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: input.env,
+      postId: POST_ID,
+    })
+  }
+}
+
+// Runs the full seeded ready-pack session without a single correct answer.
+// The session only completes once every card is exhausted (3 presentations
+// each), which is what an unqualified completion looks like. Returns the
+// final (completing) attempt result.
+async function completeUnqualifiedStudySession(input: {
+  env: Env
+  idempotencyPrefix: string
+}): Promise<Awaited<ReturnType<typeof submitPostStudyAttempt>>> {
+  const cards = [
+    { exercise_id: "stu:stu_1:say_it_back:en", transcript: "totally different words", type: "say_it_back" as const },
+    { exercise_id: "stu:stu_2:translation_choice:es", selected_option_id: "opt_b", type: "translation_choice" as const },
+    { exercise_id: "stu:stu_2:say_it_back:en", transcript: "still entirely wrong", type: "say_it_back" as const },
+  ]
+  let lastResult: Awaited<ReturnType<typeof submitPostStudyAttempt>> | undefined
+  for (const [cardIndex, card] of cards.entries()) {
+    for (let attemptNumber = 1; attemptNumber <= 3; attemptNumber += 1) {
+      lastResult = await submitPostStudyAttempt({
+        actor: learnerActor,
+        body: {
+          attempt_number: attemptNumber,
+          idempotency_key: `${input.idempotencyPrefix}-${cardIndex}-${attemptNumber}`,
+          test_target_language: "es",
+          ...card,
+        },
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: input.env,
+        postId: POST_ID,
+      })
+    }
+  }
+  if (!lastResult) throw new Error("unqualified session helper ran no attempts")
+  return lastResult
+}
+
+// Rank-eligible karaoke summary (mirrors the karaoke-attempt-service tests):
+// high scores, fully calibrated timing, no problem lines.
+function passingKaraokeSummary() {
+  return {
+    confidenceMean: 0.95,
+    finalScore: 0.92,
+    lineCount: 10,
+    lineDiagnostics: [{
+      confidenceScore: 0.95,
+      finalizedReason: "line_end" as const,
+      lineId: "line-1",
+      medianSignedDeltaMs: 120,
+      recognizedWordCount: 5,
+      score: 0.92,
+      textScore: 0.9,
+      timingScore: 0.88,
+    }],
+    lowConfidenceLineCount: 0,
+    lyricsScore: 0.9,
+    missedWords: [],
+    noRecognitionLineCount: 0,
+    phoneticUnavailableLineCount: 0,
+    scoredLineCount: 10,
+    strongestLines: [],
+    timingCalibration: {
+      matchedWordCount: 30,
+      measuredLineCount: 10,
+      offsetMs: 120,
+      rawOffsetMs: 120,
+      reason: null,
+      residualSpreadMs: 40,
+      state: "calibrated" as const,
+    },
+    timingScore: 0.88,
+    timingTrend: "on_time" as const,
+    uncertainLineCount: 0,
+    weakestLines: [],
+  }
 }
 
 async function exec(sql: string, args: unknown[] = []): Promise<void> {
@@ -1389,63 +1525,30 @@ describe("post study service", () => {
     }])
   })
 
-  test("does not materialize a streak before a wrong-answer session completes", async () => {
+  test("records the unqualified day inline but no streak when a wrong-answer session completes", async () => {
     await seedSongPost()
     await seedReadyPack()
-    const waitUntilPromises: Array<Promise<void>> = []
-    const waitUntil = (promise: Promise<void>) => waitUntilPromises.push(promise)
 
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_1:say_it_back:en",
-        idempotency_key: "study-streak-wrong-say",
-        test_target_language: "es",
-        transcript: "totally different words",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
+    await completeUnqualifiedStudySession({
       env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
-      postId: POST_ID,
-      waitUntil,
-    })
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-streak-wrong-choice",
-        selected_option_id: "opt_b",
-        type: "translation_choice",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
-      postId: POST_ID,
-      waitUntil,
-    })
-    await submitPostStudyAttempt({
-      actor: learnerActor,
-      body: {
-        attempt_number: 1,
-        exercise_id: "stu:stu_2:say_it_back:en",
-        idempotency_key: "study-streak-wrong-say-second",
-        test_target_language: "es",
-        transcript: "still entirely wrong",
-        type: "say_it_back",
-      },
-      communityId: COMMUNITY_ID,
-      communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
-      postId: POST_ID,
-      waitUntil,
+      idempotencyPrefix: "study-streak-wrong",
     })
 
-    await Promise.all(waitUntilPromises)
+    // Streak writes are inline now: the completed unqualified session's day row
+    // is visible immediately, and the streak materialization is an idempotent
+    // no-op for unqualified days.
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledger.rows).toEqual([])
+    expect(ledger.rows.map((row) => ({
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      qualified: 0,
+      study_attempt_count: 3,
+      study_correct_count: 0,
+      study_target_count: 3,
+    }])
     const streaks = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
     expect(Number(streaks.rows[0]?.count ?? 0)).toBe(0)
   })
@@ -1484,21 +1587,16 @@ describe("post study service", () => {
     expect(Number(attempts.rows[0]?.count ?? 0)).toBe(1)
   })
 
-  test("does not schedule deferred streak materialization before session completion", async () => {
+  test("writes no streak rows before the study session completes", async () => {
     await seedSongPost()
     await seedReadyPack()
-    const waitUntilPromises: Array<Promise<void>> = []
-    let releaseDeferredStreak: (() => void) | undefined
-    const deferredStreakGate = new Promise<void>((resolve) => {
-      releaseDeferredStreak = resolve
-    })
 
     const result = await submitPostStudyAttempt({
       actor: learnerActor,
       body: {
         attempt_number: 1,
         exercise_id: "stu:stu_2:translation_choice:es",
-        idempotency_key: "study-streak-wait-until",
+        idempotency_key: "study-streak-before-completion",
         selected_option_id: "opt_a",
         type: "translation_choice",
       },
@@ -1506,32 +1604,23 @@ describe("post study service", () => {
       communityRepository: repo,
       env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
       postId: POST_ID,
-      testHooks: {
-        beforeDeferredStreakMaterialization: () => deferredStreakGate,
-      },
-      waitUntil: (promise) => waitUntilPromises.push(promise),
     })
 
     expect(result.outcome).toBe("correct")
-    expect(waitUntilPromises).toHaveLength(0)
-
-    const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
-    expect(ledgerBeforeWaitUntil.rows).toEqual([])
-    const streakBeforeWaitUntil = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
-    expect(Number(streakBeforeWaitUntil.rows[0]?.count ?? 0)).toBe(0)
-
-    releaseDeferredStreak?.()
-    await Promise.all(waitUntilPromises)
+    expect(result.session?.status).toBe("active")
 
     const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count FROM song_engagement_days")
     expect(ledger.rows).toEqual([])
+    const streaks = await client!.execute("SELECT COUNT(*) AS count FROM song_streaks")
+    expect(Number(streaks.rows[0]?.count ?? 0)).toBe(0)
   })
 
-  test("records engagement progress inline for multiple waitUntil-deferred attempts", async () => {
+  test("records the engagement day and streak inline when the session completes", async () => {
     await seedSongPost()
     await seedReadyPack()
-    const waitUntilPromises: Array<Promise<void>> = []
-    const waitUntil = (promise: Promise<void>) => waitUntilPromises.push(promise)
+    // Local path: timezone pin resolution and the active_until_at refresh read
+    // inside the write transaction, which requires interactive transactions.
+    const attemptEnv = localEnv({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
 
     await submitPostStudyAttempt({
       actor: learnerActor,
@@ -1545,9 +1634,8 @@ describe("post study service", () => {
       },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      env: attemptEnv,
       postId: POST_ID,
-      waitUntil,
     })
     await submitPostStudyAttempt({
       actor: learnerActor,
@@ -1560,9 +1648,8 @@ describe("post study service", () => {
       },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      env: attemptEnv,
       postId: POST_ID,
-      waitUntil,
     })
     const finalAttempt = await submitPostStudyAttempt({
       actor: learnerActor,
@@ -1576,9 +1663,8 @@ describe("post study service", () => {
       },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      env: attemptEnv,
       postId: POST_ID,
-      waitUntil,
     })
     expect(finalAttempt.study_progress).toMatchObject({
       current_streak: 1,
@@ -1589,27 +1675,38 @@ describe("post study service", () => {
     })
     expect(typeof finalAttempt.study_progress?.next_due_at).toBe("number")
 
-    expect(waitUntilPromises).toHaveLength(1)
-    const ledgerBeforeWaitUntil = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified FROM song_engagement_days")
-    expect(ledgerBeforeWaitUntil.rows.map((row) => ({
+    // No deferred flush: both the day row and the materialized streak are
+    // committed before the completing attempt responds.
+    const ledger = await client!.execute("SELECT study_attempt_count, study_correct_count, study_target_count, qualified, activity_timezone FROM song_engagement_days")
+    expect(ledger.rows.map((row) => ({
+      activity_timezone: row.activity_timezone,
       qualified: Number(row.qualified),
       study_attempt_count: Number(row.study_attempt_count),
       study_correct_count: Number(row.study_correct_count),
       study_target_count: Number(row.study_target_count),
     }))).toEqual([{
+      activity_timezone: "UTC",
       qualified: 1,
       study_attempt_count: 3,
       study_correct_count: 3,
       study_target_count: 3,
     }])
 
-    await Promise.all(waitUntilPromises)
-    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days FROM song_streaks")
+    const utcToday = studyActivityDate(new Date().toISOString(), "UTC")
+    const streak = await client!.execute("SELECT current_streak, best_streak, total_qualified_days, timezone, active_until_at FROM song_streaks")
     expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
       best_streak: Number(row.best_streak),
       current_streak: Number(row.current_streak),
+      timezone: row.timezone,
       total_qualified_days: Number(row.total_qualified_days),
-    }))).toEqual([{ best_streak: 1, current_streak: 1, total_qualified_days: 1 }])
+    }))).toEqual([{
+      active_until_at: endOfGraceUtcInstant(utcToday, "UTC"),
+      best_streak: 1,
+      current_streak: 1,
+      timezone: "UTC",
+      total_qualified_days: 1,
+    }])
   })
 
   test("streak leaderboard excludes dead streaks and returns the viewer standing", async () => {
@@ -1618,17 +1715,22 @@ describe("post study service", () => {
     const today = new Date().toISOString().slice(0, 10)
     const yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
     const stale = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10)
+    // Reads never consult the viewer clock: eligibility comes from the stored
+    // active_until_at, so seeds must carry the grace expiry explicitly.
+    const lapsedActiveUntil = new Date(Date.now() - 86_400_000).toISOString()
+    const activeUntil = new Date(Date.now() + 86_400_000).toISOString()
     await exec(`
       INSERT INTO song_streaks (
         user_id, post_id, community_id, current_streak, best_streak,
         last_qualified_date, streak_started_date, total_qualified_days,
+        timezone, timezone_updated_at, active_until_at,
         created_at, updated_at
       )
       VALUES
-        (?1, ?2, ?3, 2, 4, ?4, ?5, 5, ?6, ?6),
-        ('usr_peer', ?2, ?3, 7, 7, ?5, ?5, 7, ?6, ?6),
-        (?1, ?7, ?3, 3, 3, ?5, ?5, 3, ?6, ?6)
-    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, stale, yesterday, NOW, SECOND_POST_ID])
+        (?1, ?2, ?3, 2, 4, ?4, ?5, 5, 'UTC', ?6, ?8, ?6, ?6),
+        ('usr_peer', ?2, ?3, 7, 7, ?5, ?5, 7, 'UTC', ?6, ?9, ?6, ?6),
+        (?1, ?7, ?3, 3, 3, ?5, ?5, 3, 'UTC', ?6, ?9, ?6, ?6)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, stale, yesterday, NOW, SECOND_POST_ID, lapsedActiveUntil, activeUntil])
     await exec(`
       INSERT INTO song_engagement_days (
         user_id, post_id, community_id, activity_date,
@@ -1660,22 +1762,28 @@ describe("post study service", () => {
     expect(leaderboard.date).toBe(today)
     expect(leaderboard.total_active_streaks).toBe(1)
     expect(leaderboard.entries.map((entry) => ({
+      active_until_at: entry.active_until_at,
       current_streak: entry.current_streak,
       handle: entry.identity.handle,
       is_viewer: entry.is_viewer,
       rank: entry.rank,
     }))).toEqual([{
+      active_until_at: activeUntil,
       current_streak: 7,
       handle: "peer",
       is_viewer: false,
       rank: 1,
     }])
+    // Lapsed standing: current_streak projects to 0 and rank drops, while
+    // best_streak/total_qualified_days keep the historical record.
     expect(leaderboard.viewer).toEqual({
+      active_until_at: lapsedActiveUntil,
       alive: false,
       best_streak: 4,
-      current_streak: 2,
+      current_streak: 0,
       karaoke_passed_today: false,
       qualified_today: false,
+      rank: null,
       study_attempts_today: 3,
       study_target_today: 5,
       total_qualified_days: 5,
@@ -1724,23 +1832,31 @@ describe("post study service", () => {
       viewerUserId: LEARNER_ID,
     })
     expect(response.streak_summary).toEqual(summary)
-    expect(secondResponse.streak_summary).toEqual(secondSummary)
+    // Batch summaries skip the per-viewer rank query (rank: null); the
+    // single-post read computes it.
+    expect(secondSummary?.viewer?.rank).toBe(1)
+    expect(secondResponse.streak_summary).toEqual(secondSummary ? {
+      ...secondSummary,
+      viewer: secondSummary.viewer ? { ...secondSummary.viewer, rank: null } : secondSummary.viewer,
+    } : secondSummary)
   })
 
   test("streak leaderboard gives equal streaks equal rank and anonymizes missing profiles", async () => {
     await seedSongPost()
     const today = new Date().toISOString().slice(0, 10)
+    const activeUntil = new Date(Date.now() + 86_400_000).toISOString()
     await exec(`
       INSERT INTO song_streaks (
         user_id, post_id, community_id, current_streak, best_streak,
         last_qualified_date, streak_started_date, total_qualified_days,
+        timezone, timezone_updated_at, active_until_at,
         created_at, updated_at
       )
       VALUES
-        ('usr_alpha', ?1, ?2, 4, 6, ?3, ?3, 6, ?4, ?4),
-        ('usr_missing', ?1, ?2, 4, 6, ?3, ?3, 6, ?4, ?4),
-        ('usr_third', ?1, ?2, 3, 6, ?3, ?3, 6, ?4, ?4)
-    `, [POST_ID, COMMUNITY_ID, today, NOW])
+        ('usr_alpha', ?1, ?2, 4, 6, ?3, ?3, 6, 'UTC', ?4, ?5, ?4, ?4),
+        ('usr_missing', ?1, ?2, 4, 6, ?3, ?3, 6, 'UTC', ?4, ?5, ?4, ?4),
+        ('usr_third', ?1, ?2, 3, 6, ?3, ?3, 6, 'UTC', ?4, ?5, ?4, ?4)
+    `, [POST_ID, COMMUNITY_ID, today, NOW, activeUntil])
     const missingProfileRepository = {
       ...profileRepository,
       async listProfilesByUserIds(userIds: string[]) {
@@ -1776,31 +1892,46 @@ describe("post study service", () => {
     ])
   })
 
-  test("streak summary hydration reads the viewer timezone day", async () => {
+  test("streak summary hydration reads the viewer pinned-timezone day", async () => {
     await seedSongPost()
-    const currentUtcHour = new Date().getUTCHours()
-    const studyTimezone = currentUtcHour < 10 ? "Pacific/Honolulu" : "Pacific/Kiritimati"
     const now = new Date().toISOString()
+    // Pick a zone whose calendar date differs from the UTC date right now, so
+    // the pinned zone — not any request context — decides which day row counts.
+    const currentUtcHour = new Date().getUTCHours()
+    const pinnedTimezone = currentUtcHour < 10 ? "Pacific/Honolulu" : "Pacific/Kiritimati"
+    const pinnedToday = studyActivityDate(now, pinnedTimezone)
+    const utcToday = studyActivityDate(now, "UTC")
+    expect(pinnedToday).not.toBe(utcToday)
+    const activeUntil = new Date(Date.now() + 86_400_000).toISOString()
 
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
-      now,
-      postId: POST_ID,
-      studyTargetCount: 1,
-      studyTimezone,
-      userId: LEARNER_ID,
-    })
+    await exec(`
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        timezone, timezone_updated_at, active_until_at,
+        created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, 1, 1, ?4, ?4, 1, ?5, ?6, ?7, ?6, ?6)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, pinnedToday, pinnedTimezone, NOW, activeUntil])
+    await exec(`
+      INSERT INTO song_engagement_days (
+        user_id, post_id, community_id, activity_date, activity_timezone,
+        study_attempt_count, study_correct_count, study_target_count,
+        karaoke_pass_count, qualified, created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, ?4, ?5, 1, 1, 1, 0, 1, ?6, ?6)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, pinnedToday, pinnedTimezone, NOW])
 
-    const utcSummary = await getPostStreakSummary({
+    const summary = await getPostStreakSummary({
       client: client!,
       postId: POST_ID,
       profileRepository: profileRepository as never,
       userRepository: {} as never,
       userId: LEARNER_ID,
     })
-    expect(utcSummary?.viewer?.qualified_today).toBe(false)
+    expect(summary?.viewer?.qualified_today).toBe(true)
+    expect(summary?.viewer?.study_attempts_today).toBe(1)
+    expect(summary?.viewer?.study_target_today).toBe(1)
 
     const response = {
       post: {
@@ -1814,7 +1945,6 @@ describe("post study service", () => {
       client: client!,
       responses: [response],
       profileRepository: profileRepository as never,
-      studyTimezone,
       viewerUserId: LEARNER_ID,
     })
     expect(response.streak_summary?.viewer?.qualified_today).toBe(true)
@@ -1822,52 +1952,70 @@ describe("post study service", () => {
     expect(response.streak_summary?.viewer?.study_target_today).toBe(1)
   })
 
+  // Drives the write path the way the service does: claimStreakTimezonePin
+  // (atomic compare-and-swap, commits on its own) THEN prepareStreakWrite
+  // (reads the definitive pin) THEN recordCompletedSessionStreak (pure writes).
+  async function recordQualifiedDay(input: {
+    now: string
+    timezoneCandidate?: string
+  }): Promise<void> {
+    await claimStreakTimezonePin({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      now: input.now,
+      postId: POST_ID,
+      timezoneCandidate: input.timezoneCandidate,
+      userId: LEARNER_ID,
+    })
+    const preparation = await prepareStreakWrite({
+      activityInstant: input.now,
+      client: client!,
+      now: input.now,
+      postId: POST_ID,
+      qualified: true,
+      timezoneCandidate: input.timezoneCandidate,
+      userId: LEARNER_ID,
+    })
+    await recordCompletedSessionStreak({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      completedExerciseCount: 1,
+      firstPassCorrectCount: 1,
+      now: input.now,
+      postId: POST_ID,
+      preparation,
+      qualified: true,
+      requiredCorrectCount: 1,
+      userId: LEARNER_ID,
+    })
+  }
+
   test("streak materialization extends consecutive days, resets gaps, and ignores stale qualified dates", async () => {
     await seedSongPost()
 
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
-      now: "2026-07-01T12:00:00.000Z",
-      postId: POST_ID,
-      studyTargetCount: 1,
-      userId: LEARNER_ID,
-    })
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
-      now: "2026-07-02T12:00:00.000Z",
-      postId: POST_ID,
-      studyTargetCount: 1,
-      userId: LEARNER_ID,
-    })
+    await recordQualifiedDay({ now: "2026-07-01T12:00:00.000Z" })
+    await recordQualifiedDay({ now: "2026-07-02T12:00:00.000Z" })
 
-    let streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days FROM song_streaks")
+    let streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days, timezone, active_until_at FROM song_streaks")
     expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
       best_streak: Number(row.best_streak),
       current_streak: Number(row.current_streak),
       last_qualified_date: row.last_qualified_date,
       streak_started_date: row.streak_started_date,
+      timezone: row.timezone,
       total_qualified_days: Number(row.total_qualified_days),
     }))).toEqual([{
+      active_until_at: "2026-07-04T00:00:00.000Z",
       best_streak: 2,
       current_streak: 2,
       last_qualified_date: "2026-07-02",
       streak_started_date: "2026-07-01",
+      timezone: "UTC",
       total_qualified_days: 2,
     }])
 
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
-      now: "2026-07-01T18:00:00.000Z",
-      postId: POST_ID,
-      studyTargetCount: 1,
-      userId: LEARNER_ID,
-    })
+    await recordQualifiedDay({ now: "2026-07-01T18:00:00.000Z" })
 
     streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days FROM song_streaks")
     expect(streak.rows.map((row) => ({
@@ -1884,15 +2032,7 @@ describe("post study service", () => {
       total_qualified_days: 2,
     }])
 
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
-      now: "2026-07-04T12:00:00.000Z",
-      postId: POST_ID,
-      studyTargetCount: 1,
-      userId: LEARNER_ID,
-    })
+    await recordQualifiedDay({ now: "2026-07-04T12:00:00.000Z" })
 
     streak = await client!.execute("SELECT current_streak, best_streak, streak_started_date, last_qualified_date, total_qualified_days FROM song_streaks")
     expect(streak.rows.map((row) => ({
@@ -1910,28 +2050,16 @@ describe("post study service", () => {
     }])
   })
 
-  test("study streak days use the learner timezone instead of the UTC calendar", async () => {
+  test("study streak days use the learner pinned timezone instead of the UTC calendar", async () => {
     await seedSongPost()
 
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
+    await recordQualifiedDay({
       now: "2026-07-02T06:30:00.000Z",
-      postId: POST_ID,
-      studyTargetCount: 1,
-      studyTimezone: "America/Los_Angeles",
-      userId: LEARNER_ID,
+      timezoneCandidate: "America/Los_Angeles",
     })
-    await upsertStudyStreakProgress({
-      client: client!,
-      communityId: COMMUNITY_ID,
-      isCorrect: true,
+    await recordQualifiedDay({
       now: "2026-07-03T06:30:00.000Z",
-      postId: POST_ID,
-      studyTargetCount: 1,
-      studyTimezone: "America/Los_Angeles",
-      userId: LEARNER_ID,
+      timezoneCandidate: "America/Los_Angeles",
     })
 
     const days = await client!.execute("SELECT activity_date, activity_timezone, qualified FROM song_engagement_days ORDER BY activity_date")
@@ -1944,16 +2072,601 @@ describe("post study service", () => {
       { activity_date: "2026-07-02", activity_timezone: "America/Los_Angeles", qualified: 1 },
     ])
 
-    const streak = await client!.execute("SELECT current_streak, last_qualified_date, streak_started_date FROM song_streaks")
+    const streak = await client!.execute("SELECT current_streak, last_qualified_date, streak_started_date, timezone, active_until_at FROM song_streaks")
     expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
       current_streak: Number(row.current_streak),
       last_qualified_date: row.last_qualified_date,
       streak_started_date: row.streak_started_date,
+      timezone: row.timezone,
     }))).toEqual([{
+      active_until_at: "2026-07-04T07:00:00.000Z",
       current_streak: 2,
       last_qualified_date: "2026-07-02",
       streak_started_date: "2026-07-01",
+      timezone: "America/Los_Angeles",
     }])
+  })
+
+  test("first qualifying session pins the device timezone and the leaderboard reflects it immediately", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    // Local path: the pin is resolved and refreshed inside the write
+    // transaction, which requires interactive transactions (see localEnv).
+    const attemptEnv = localEnv({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    await completeQualifyingStudySession({
+      env: attemptEnv,
+      idempotencyPrefix: "study-streak-pin-first",
+      timezone: "America/New_York",
+    })
+
+    const nyToday = studyActivityDate(new Date().toISOString(), "America/New_York")
+    const expectedActiveUntil = endOfGraceUtcInstant(nyToday, "America/New_York")
+    const streak = await client!.execute("SELECT current_streak, last_qualified_date, timezone, timezone_updated_at, active_until_at FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      timezone: row.timezone,
+    }))).toEqual([{
+      active_until_at: expectedActiveUntil,
+      current_streak: 1,
+      last_qualified_date: nyToday,
+      timezone: "America/New_York",
+    }])
+    expect(typeof streak.rows[0]?.timezone_updated_at).toBe("string")
+
+    const days = await client!.execute("SELECT activity_date, activity_timezone, qualified FROM song_engagement_days")
+    expect(days.rows.map((row) => ({
+      activity_date: row.activity_date,
+      activity_timezone: row.activity_timezone,
+      qualified: Number(row.qualified),
+    }))).toEqual([{
+      activity_date: nyToday,
+      activity_timezone: "America/New_York",
+      qualified: 1,
+    }])
+
+    // Materialization is inline: the very next read already shows the viewer.
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+    })
+    expect(leaderboard.total_active_streaks).toBe(1)
+    expect(leaderboard.entries.map((entry) => ({
+      active_until_at: entry.active_until_at,
+      current_streak: entry.current_streak,
+      is_viewer: entry.is_viewer,
+      rank: entry.rank,
+    }))).toEqual([{
+      active_until_at: expectedActiveUntil,
+      current_streak: 1,
+      is_viewer: true,
+      rank: 1,
+    }])
+    expect(leaderboard.viewer).toMatchObject({
+      active_until_at: expectedActiveUntil,
+      alive: true,
+      current_streak: 1,
+      qualified_today: true,
+      rank: 1,
+    })
+  })
+
+  test("qualifying session writes a leaderboard-visible streak through the buffered D1 write path", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    // Default env: COMMUNITY_D1_SHARD routes writes through the D1 client,
+    // whose write transactions buffer statements and commit them as one batch
+    // (in-tx reads return empty results). Pin resolution and the grace-expiry
+    // apply must therefore be read-before-tx + pure-write — this guards the
+    // regression where a buffered tx silently dropped both.
+    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    await completeQualifyingStudySession({
+      env: attemptEnv,
+      idempotencyPrefix: "study-streak-buffered-d1",
+      timezone: "America/New_York",
+    })
+
+    const nyToday = studyActivityDate(new Date().toISOString(), "America/New_York")
+    const expectedActiveUntil = endOfGraceUtcInstant(nyToday, "America/New_York")
+    const streak = await client!.execute("SELECT current_streak, last_qualified_date, timezone, active_until_at FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      timezone: row.timezone,
+    }))).toEqual([{
+      active_until_at: expectedActiveUntil,
+      current_streak: 1,
+      last_qualified_date: nyToday,
+      timezone: "America/New_York",
+    }])
+
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+    })
+    expect(leaderboard.total_active_streaks).toBe(1)
+    expect(leaderboard.entries.map((entry) => ({
+      active_until_at: entry.active_until_at,
+      current_streak: entry.current_streak,
+      is_viewer: entry.is_viewer,
+      rank: entry.rank,
+    }))).toEqual([{
+      active_until_at: expectedActiveUntil,
+      current_streak: 1,
+      is_viewer: true,
+      rank: 1,
+    }])
+    expect(leaderboard.viewer).toMatchObject({
+      active_until_at: expectedActiveUntil,
+      alive: true,
+      current_streak: 1,
+      rank: 1,
+    })
+  })
+
+  // Shared assertions for the first-qualification race scenarios: exactly one
+  // pin (the first committed claim's zone), both writes merged into ONE
+  // engagement day keyed by the winner-tz date, and the grace expiry computed
+  // under the winning zone.
+  async function expectRaceOutcome(input: {
+    loserTimezone: string
+    winnerTimezone: string
+  }): Promise<void> {
+    const instant = new Date().toISOString()
+    const winnerDate = studyActivityDate(instant, input.winnerTimezone)
+    // The scenario picked zones whose dates differ at this instant — otherwise
+    // the merge below would happen regardless of which pin won.
+    expect(studyActivityDate(instant, input.loserTimezone)).not.toBe(winnerDate)
+
+    const streak = await client!.execute("SELECT current_streak, best_streak, last_qualified_date, streak_started_date, total_qualified_days, timezone, active_until_at FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      streak_started_date: row.streak_started_date,
+      timezone: row.timezone,
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{
+      active_until_at: endOfGraceUtcInstant(winnerDate, input.winnerTimezone),
+      best_streak: 1,
+      current_streak: 1,
+      last_qualified_date: winnerDate,
+      streak_started_date: winnerDate,
+      timezone: input.winnerTimezone,
+      total_qualified_days: 1,
+    }])
+
+    const days = await client!.execute("SELECT activity_date, activity_timezone, study_attempt_count, study_correct_count, study_target_count, karaoke_pass_count, qualified FROM song_engagement_days")
+    expect(days.rows.map((row) => ({
+      activity_date: row.activity_date,
+      activity_timezone: row.activity_timezone,
+      karaoke_pass_count: Number(row.karaoke_pass_count),
+      qualified: Number(row.qualified),
+      study_attempt_count: Number(row.study_attempt_count),
+      study_correct_count: Number(row.study_correct_count),
+      study_target_count: Number(row.study_target_count),
+    }))).toEqual([{
+      activity_date: winnerDate,
+      activity_timezone: input.winnerTimezone,
+      karaoke_pass_count: 1,
+      qualified: 1,
+      study_attempt_count: 3,
+      study_correct_count: 3,
+      study_target_count: 3,
+    }])
+  }
+
+  // New York vs a Pacific zone, chosen so the two candidates disagree on the
+  // calendar date of "now" (a same-date pair could not prove the loser's zone
+  // was overridden). Exactly one of Kiritimati (+14:00) / Honolulu (-10:00)
+  // always differs from New York.
+  function raceTimezones(): { karaoke: string; study: string } {
+    const now = new Date().toISOString()
+    const study = "America/New_York"
+    const karaoke = studyActivityDate(now, "Pacific/Kiritimati") !== studyActivityDate(now, study)
+      ? "Pacific/Kiritimati"
+      : "Pacific/Honolulu"
+    return { karaoke, study }
+  }
+
+  test("first-qualification race: the first committed pin claim wins over a later karaoke claim", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    const timezones = raceTimezones()
+    const now = new Date().toISOString()
+
+    // Claims race: study's commits first, karaoke's identical-moment claim loses.
+    await claimStreakTimezonePin({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      now,
+      postId: POST_ID,
+      timezoneCandidate: timezones.study,
+      userId: LEARNER_ID,
+    })
+    await claimStreakTimezonePin({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      now,
+      postId: POST_ID,
+      timezoneCandidate: timezones.karaoke,
+      userId: LEARNER_ID,
+    })
+
+    // Karaoke's write lands first (record order reversed vs claim order); its
+    // preparation re-reads the committed winner pin.
+    const karaokePreparation = await prepareStreakWrite({
+      activityInstant: now,
+      client: client!,
+      now,
+      postId: POST_ID,
+      qualified: true,
+      timezoneCandidate: timezones.karaoke,
+      userId: LEARNER_ID,
+    })
+    await recordKaraokeAttempt({
+      activityDate: studyActivityDate(now, "UTC"),
+      client: client!,
+      communityId: COMMUNITY_ID,
+      completedAt: now,
+      completionReason: "completed",
+      karaokeRevisionId: "krv_race",
+      postId: POST_ID,
+      scoringModel: "text-timing-v1",
+      scoringProvider: "pirate-karaoke-runtime",
+      sessionId: "session_race_study_first",
+      attemptId: "attempt_race_study_first",
+      streakPreparation: karaokePreparation,
+      summary: passingKaraokeSummary(),
+      userId: LEARNER_ID,
+    })
+
+    // Study's write lands second, through the public path: its own claim loses
+    // to the committed pin and its preparation follows the winning zone.
+    await completeQualifyingStudySession({
+      env: attemptEnv,
+      idempotencyPrefix: "study-streak-race-study-first",
+      timezone: timezones.study,
+    })
+
+    await expectRaceOutcome({
+      loserTimezone: timezones.karaoke,
+      winnerTimezone: timezones.study,
+    })
+  })
+
+  test("first-qualification race: a karaoke first claim wins over study even when study writes first", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    const timezones = raceTimezones()
+    const now = new Date().toISOString()
+
+    // Reverse claim order: karaoke's claim commits first and wins.
+    await claimStreakTimezonePin({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      now,
+      postId: POST_ID,
+      timezoneCandidate: timezones.karaoke,
+      userId: LEARNER_ID,
+    })
+    await claimStreakTimezonePin({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      now,
+      postId: POST_ID,
+      timezoneCandidate: timezones.study,
+      userId: LEARNER_ID,
+    })
+
+    // Reverse record order too: study writes first this time. The outcome must
+    // depend only on claim order, never on prepare/record order.
+    await completeQualifyingStudySession({
+      env: attemptEnv,
+      idempotencyPrefix: "study-streak-race-karaoke-first",
+      timezone: timezones.study,
+    })
+    const karaokePreparation = await prepareStreakWrite({
+      activityInstant: now,
+      client: client!,
+      now,
+      postId: POST_ID,
+      qualified: true,
+      timezoneCandidate: timezones.karaoke,
+      userId: LEARNER_ID,
+    })
+    await recordKaraokeAttempt({
+      activityDate: studyActivityDate(now, "UTC"),
+      client: client!,
+      communityId: COMMUNITY_ID,
+      completedAt: now,
+      completionReason: "completed",
+      karaokeRevisionId: "krv_race",
+      postId: POST_ID,
+      scoringModel: "text-timing-v1",
+      scoringProvider: "pirate-karaoke-runtime",
+      sessionId: "session_race_karaoke_first",
+      attemptId: "attempt_race_karaoke_first",
+      streakPreparation: karaokePreparation,
+      summary: passingKaraokeSummary(),
+      userId: LEARNER_ID,
+    })
+
+    await expectRaceOutcome({
+      loserTimezone: timezones.study,
+      winnerTimezone: timezones.karaoke,
+    })
+  })
+
+  test("a committed pin claim with no qualification write is recovered cleanly by the retry", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    const claimNow = new Date().toISOString()
+
+    // Crashed state: the pin claim committed its placeholder row, then the
+    // qualification write failed and landed nothing.
+    await claimStreakTimezonePin({
+      client: client!,
+      communityId: COMMUNITY_ID,
+      now: claimNow,
+      postId: POST_ID,
+      timezoneCandidate: "America/New_York",
+      userId: LEARNER_ID,
+    })
+    const placeholder = await client!.execute("SELECT current_streak, last_qualified_date, timezone, active_until_at FROM song_streaks")
+    expect(placeholder.rows.map((row) => ({
+      active_until_at: row.active_until_at,
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      timezone: row.timezone,
+    }))).toEqual([{
+      active_until_at: null,
+      current_streak: 0,
+      last_qualified_date: "",
+      timezone: "America/New_York",
+    }])
+
+    // The learner retries; the qualifying session completes this time.
+    await completeQualifyingStudySession({
+      env: attemptEnv,
+      idempotencyPrefix: "study-streak-claim-retry",
+      timezone: "America/New_York",
+    })
+
+    const nyToday = studyActivityDate(new Date().toISOString(), "America/New_York")
+    const expectedActiveUntil = endOfGraceUtcInstant(nyToday, "America/New_York")
+    const streak = await client!.execute("SELECT current_streak, best_streak, last_qualified_date, streak_started_date, total_qualified_days, timezone, timezone_updated_at, active_until_at FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
+      best_streak: Number(row.best_streak),
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      streak_started_date: row.streak_started_date,
+      timezone: row.timezone,
+      timezone_updated_at: row.timezone_updated_at,
+      total_qualified_days: Number(row.total_qualified_days),
+    }))).toEqual([{
+      // Pin reused, still stamped with the FIRST claim's timestamp: the retry's
+      // claim neither adopted nor refreshed it. The placeholder was upgraded
+      // in place, not left behind or duplicated.
+      active_until_at: expectedActiveUntil,
+      best_streak: 1,
+      current_streak: 1,
+      last_qualified_date: nyToday,
+      streak_started_date: nyToday,
+      timezone: "America/New_York",
+      timezone_updated_at: claimNow,
+      total_qualified_days: 1,
+    }])
+
+    // Exactly one qualification landed despite the retry.
+    const days = await client!.execute("SELECT activity_date, activity_timezone, qualified FROM song_engagement_days")
+    expect(days.rows.map((row) => ({
+      activity_date: row.activity_date,
+      activity_timezone: row.activity_timezone,
+      qualified: Number(row.qualified),
+    }))).toEqual([{
+      activity_date: nyToday,
+      activity_timezone: "America/New_York",
+      qualified: 1,
+    }])
+
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+    })
+    expect(leaderboard.total_active_streaks).toBe(1)
+    expect(leaderboard.entries.map((entry) => ({
+      current_streak: entry.current_streak,
+      is_viewer: entry.is_viewer,
+      rank: entry.rank,
+    }))).toEqual([{
+      current_streak: 1,
+      is_viewer: true,
+      rank: 1,
+    }])
+    expect(leaderboard.viewer).toMatchObject({
+      active_until_at: expectedActiveUntil,
+      alive: true,
+      current_streak: 1,
+      rank: 1,
+    })
+  })
+
+  test("a second qualification inside the 7-day window keeps the original pin", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const now = new Date().toISOString()
+    const nyToday = studyActivityDate(now, "America/New_York")
+    const nyYesterday = addUtcDays(nyToday, -1)
+    // Existing pin from a recent first qualification; still alive in the grace day.
+    await exec(`
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        timezone, timezone_updated_at, active_until_at,
+        created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, 1, 1, ?4, ?4, 1, 'America/New_York', ?5, ?6, ?5, ?5)
+    `, [
+      LEARNER_ID,
+      POST_ID,
+      COMMUNITY_ID,
+      nyYesterday,
+      now,
+      endOfGraceUtcInstant(nyYesterday, "America/New_York"),
+    ])
+
+    await completeQualifyingStudySession({
+      env: localEnv({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" }),
+      idempotencyPrefix: "study-streak-pin-kept",
+      timezone: "Pacific/Kiritimati",
+    })
+
+    // The pinned zone wins: day key, streak extension, and grace expiry all
+    // follow America/New_York, and the pin timestamp is untouched.
+    const streak = await client!.execute("SELECT current_streak, last_qualified_date, timezone, timezone_updated_at, active_until_at FROM song_streaks")
+    expect(streak.rows.map((row) => ({
+      active_until_at: row.active_until_at,
+      current_streak: Number(row.current_streak),
+      last_qualified_date: row.last_qualified_date,
+      timezone: row.timezone,
+      timezone_updated_at: row.timezone_updated_at,
+    }))).toEqual([{
+      active_until_at: endOfGraceUtcInstant(nyToday, "America/New_York"),
+      current_streak: 2,
+      last_qualified_date: nyToday,
+      timezone: "America/New_York",
+      timezone_updated_at: now,
+    }])
+
+    const days = await client!.execute("SELECT activity_date, activity_timezone, qualified FROM song_engagement_days")
+    expect(days.rows.map((row) => ({
+      activity_date: row.activity_date,
+      activity_timezone: row.activity_timezone,
+      qualified: Number(row.qualified),
+    }))).toEqual([{
+      activity_date: nyToday,
+      activity_timezone: "America/New_York",
+      qualified: 1,
+    }])
+  })
+
+  test("viewer rank shares a tied rank and counts the streaks ahead", async () => {
+    await seedSongPost()
+    const today = new Date().toISOString().slice(0, 10)
+    const yesterday = addUtcDays(today, -1)
+    const activeUntil = new Date(Date.now() + 86_400_000).toISOString()
+    await exec(`
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        timezone, timezone_updated_at, active_until_at,
+        created_at, updated_at
+      )
+      VALUES
+        ('usr_leader', ?1, ?2, 5, 5, ?3, ?4, 5, 'UTC', ?5, ?6, ?5, ?5),
+        ('usr_peer', ?1, ?2, 3, 4, ?3, ?4, 4, 'UTC', ?5, ?6, ?5, ?5),
+        (?7, ?1, ?2, 3, 4, ?3, ?3, 4, 'UTC', ?5, ?6, ?5, ?5)
+    `, [POST_ID, COMMUNITY_ID, today, yesterday, NOW, activeUntil, LEARNER_ID])
+
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+    })
+
+    expect(leaderboard.entries.map((entry) => ({
+      rank: entry.rank,
+      user_id: entry.identity.user_id,
+    }))).toEqual([
+      { rank: 1, user_id: "usr_leader" },
+      { rank: 2, user_id: "usr_peer" },
+      { rank: 2, user_id: LEARNER_ID },
+    ])
+    expect(leaderboard.viewer).toMatchObject({
+      alive: true,
+      current_streak: 3,
+      rank: 2,
+    })
+  })
+
+  test("lapsed streak projects zero in the viewer standing and the attempt snapshot", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const stale = new Date(Date.now() - 3 * 86_400_000).toISOString().slice(0, 10)
+    const lapsedActiveUntil = new Date(Date.now() - 86_400_000).toISOString()
+    await exec(`
+      INSERT INTO song_streaks (
+        user_id, post_id, community_id, current_streak, best_streak,
+        last_qualified_date, streak_started_date, total_qualified_days,
+        timezone, timezone_updated_at, active_until_at,
+        created_at, updated_at
+      )
+      VALUES (?1, ?2, ?3, 5, 8, ?4, ?4, 9, 'UTC', ?5, ?6, ?5, ?5)
+    `, [LEARNER_ID, POST_ID, COMMUNITY_ID, stale, NOW, lapsedActiveUntil])
+
+    const leaderboard = await getPostStreakLeaderboard({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      limit: 10,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+    })
+    expect(leaderboard.total_active_streaks).toBe(0)
+    expect(leaderboard.entries).toEqual([])
+    expect(leaderboard.viewer).toMatchObject({
+      active_until_at: lapsedActiveUntil,
+      alive: false,
+      best_streak: 8,
+      current_streak: 0,
+      qualified_today: false,
+      rank: null,
+      total_qualified_days: 9,
+    })
+
+    // A completed but unqualified session keeps the lapsed projection at 0 in
+    // the attempt snapshot too (the stored count is historical only).
+    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    const finalAttempt = await completeUnqualifiedStudySession({
+      env: attemptEnv,
+      idempotencyPrefix: "study-streak-lapsed",
+    })
+    expect(finalAttempt.study_progress).toMatchObject({
+      current_streak: 0,
+      qualified_today: false,
+      study_attempt_count: 3,
+      study_correct_count: 0,
+      study_target_count: 3,
+    })
   })
 
   test("resumes the fixed session with mastered-card progress", async () => {

@@ -18,6 +18,7 @@ import {
 } from "../lib/karaoke/session-creation-repository"
 import { createKaraokeSession } from "../lib/karaoke/session-creation-service"
 import { getPostKaraokePayload, loadPublicPostKaraokePayloadCacheContext } from "../lib/posts/post-karaoke-service"
+import { isValidIanaTimezone } from "../lib/posts/post-study-streak-time"
 import { decodePublicPostId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import {
@@ -280,6 +281,11 @@ export function registerCommunityKaraokeSessionRoutes(communities: Hono<Authenti
     const idempotencyKey = requireIdempotencyKey(c.req.header("idempotency-key"))
     const postId = decodePublicPostId(c.req.param("postId"))
     const client = getControlPlaneClient(c.env)
+    // Optional device timezone for streak day boundaries. Invalid/absent values
+    // fall back to the pinned zone (or UTC on first qualification).
+    const requestBody = await c.req.json<{ timezone?: unknown }>().catch(() => null)
+    const requestedTimezone = typeof requestBody?.timezone === "string" ? requestBody.timezone.trim() : ""
+    const timezone = isValidIanaTimezone(requestedTimezone) ? requestedTimezone : null
 
     const { communityId, communityRepository, profileRepository, userRepository } = await getResolvedCommunityRouteContext(c)
     const result = await createKaraokeSession({
@@ -287,6 +293,7 @@ export function registerCommunityKaraokeSessionRoutes(communities: Hono<Authenti
       idempotencyKey,
       postId,
       subjectUserId: actor.userId,
+      timezone,
       deps: {
         claim: (input) => claimKaraokeSessionCreation({ client, ...input }),
         fail: (input) => failKaraokeSessionCreation({ client, ...input }),
