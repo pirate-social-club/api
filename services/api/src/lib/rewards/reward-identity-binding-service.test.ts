@@ -148,6 +148,15 @@ describe("reward identity document selection", () => {
     expect(afterExpiry.capability).toBe("selected")
     expect(afterExpiry.active_binding?.identity_nullifier_id).toBe("nul_expiring")
     expect(afterExpiry.selectable_documents).toEqual([])
+
+    const retry = await selectRewardIdentityBinding({
+      env: SELF_ENV,
+      client,
+      userId: "usr_reward_binding",
+      identityNullifierId: "nul_expiring",
+      now: "2026-09-02T10:00:00.000Z",
+    })
+    expect(retry.active_binding).toEqual(afterExpiry.active_binding)
   })
 
   test("fails closed on conflicting nationality evidence for one document", async () => {

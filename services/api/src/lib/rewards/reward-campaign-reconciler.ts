@@ -9,6 +9,11 @@ import { openCommunityWriteClient } from "../communities/community-read-access"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
+import {
+  persistRewardNationalityBindingShadow,
+  resolveRewardNationalityBindingShadow,
+  type RewardNationalityShadowDecision,
+} from "./reward-nationality-shadow-evaluator"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
@@ -405,8 +410,22 @@ export async function creditRewardCampaignQualification(input: {
   }
   const provider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
   const identity = await resolveActiveRewardIdentity(input.client, input.candidate.userId, provider)
+  let shadowDecision: RewardNationalityShadowDecision | null = null
+  try {
+    shadowDecision = await resolveRewardNationalityBindingShadow({
+      env: input.env,
+      client: input.client,
+      userId: input.candidate.userId,
+    })
+  } catch (error) {
+    console.error("[reward-campaigns] nationality shadow resolution failed", {
+      reward_qualification_event_id: input.candidate.eventId,
+      error,
+    })
+  }
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
-  return withTransaction(input.client, "write", async (tx) => {
+  const shadowContext: { value: { campaignId: string; evaluatedAt: string } | null } = { value: null }
+  const creditResult: { result: CreditResult; amountCents: number } = await withTransaction(input.client, "write", async (tx) => {
     const campaign = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_id, eligible_activity, min_score_bps, daily_reward_cents,
@@ -456,6 +475,7 @@ export async function creditRewardCampaignQualification(input: {
       amountCents: amount,
       now: projectionNow,
     })
+    shadowContext.value = { campaignId, evaluatedAt: projectionNow }
     if (Number(rowValue(campaignRow, "owner_blocked") ?? 0) === 1) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
@@ -663,6 +683,29 @@ export async function creditRewardCampaignQualification(input: {
     })
     return { result: "credited", amountCents: amount }
   })
+
+  // Shadow evidence is deliberately outside the money transaction. A failed
+  // diagnostic write must never roll back or suppress an otherwise valid
+  // uniform reward. The immutable campaign funding block remains the authority
+  // preventing tier amounts from reaching this path.
+  if (shadowContext.value && shadowDecision) {
+    try {
+      await persistRewardNationalityBindingShadow({
+        client: input.client,
+        rewardQualificationEventId: input.candidate.eventId,
+        rewardCampaignId: shadowContext.value.campaignId,
+        userId: input.candidate.userId,
+        now: shadowContext.value.evaluatedAt,
+        decision: shadowDecision,
+      })
+    } catch (error) {
+      console.error("[reward-campaigns] nationality shadow evaluation failed", {
+        reward_qualification_event_id: input.candidate.eventId,
+        error,
+      })
+    }
+  }
+  return creditResult
 }
 
 export async function reconcileRewardCampaigns(input: {

@@ -10,6 +10,17 @@ export type ActiveRewardIdentity = {
   provider: RewardIdentityProvider
 }
 
+export async function deriveRewardIdentityId(
+  provider: RewardIdentityProvider,
+  mechanism: string,
+  nullifierHash: string,
+): Promise<string> {
+  const material = `${provider}:${mechanism}:${nullifierHash}`
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material))
+  const hex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+  return `rwi_${hex}`
+}
+
 export function resolveRewardIdentityProvider(raw: string | undefined): RewardIdentityProvider | null {
   const provider = String(raw ?? "").trim().toLowerCase()
   return provider === "self" || provider === "very" ? provider : null
@@ -70,8 +81,5 @@ export async function resolveActiveRewardIdentity(
   const mechanism = stringOrNull(rowValue(row, "mechanism"))
   const nullifierHash = stringOrNull(rowValue(row, "nullifier_hash"))
   if (!mechanism || !nullifierHash) return null
-  const material = `${requiredProvider}:${mechanism}:${nullifierHash}`
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material))
-  const hex = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
-  return { id: `rwi_${hex}`, provider: requiredProvider }
+  return { id: await deriveRewardIdentityId(requiredProvider, mechanism, nullifierHash), provider: requiredProvider }
 }
