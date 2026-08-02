@@ -282,6 +282,98 @@ describe("moderation routes", () => {
     expect(actionBody.actions[0]?.action_type).toBe("remove")
   })
 
+  test("records an evidence-backed content-rating transition atomically", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const owner = await exchangeJwt(ctx.env, "moderation-content-rating-owner")
+    await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+    const community = await createCommunity(ctx.env, owner.accessToken, "Content Rating Review Club")
+    const createdPost = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts`,
+      {
+        post_type: "text",
+        title: "Rating review",
+        body: "Review this content rating",
+        idempotency_key: "moderation-content-rating-post",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(createdPost.status).toBe(201)
+    const postBody = await json(createdPost) as { id: string }
+    const rawPostId = postBody.id.replace(/^post_/, "")
+    const communityClient = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, community.communityId),
+    })
+    try {
+      await communityClient.execute({
+        sql: "UPDATE posts SET content_safety_state = 'adult', age_gate_policy = '18_plus' WHERE post_id = ?1",
+        args: [rawPostId],
+      })
+    } finally {
+      communityClient.close()
+    }
+
+    const report = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/posts/${postBody.id}/reports`,
+      { reason_code: "sexual_content", note: "Rating policy review" },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(report.status).toBe(201)
+    const cases = await app.request(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases`,
+      { headers: { authorization: `Bearer ${owner.accessToken}` } },
+      ctx.env,
+    )
+    const casesBody = await json(cases) as { items: Array<{ moderation_case_id: string }> }
+    const moderationCaseId = casesBody.items[0]?.moderation_case_id
+    expect(typeof moderationCaseId).toBe("string")
+
+    const missingEvidence = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}/actions`,
+      { action_type: "set_content_rating", content_safety_state: "sensitive", note: "Human review" },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(missingEvidence.status).toBe(400)
+
+    const action = await requestJson(
+      `http://pirate.test/communities/${community.communityId}/moderation/cases/${moderationCaseId}/actions`,
+      {
+        action_type: "set_content_rating",
+        content_safety_state: "sensitive",
+        evidence_ref: "policy-review://2026-08-02/rating-review",
+        note: "Human review found innuendo without a directly depicted sexual act.",
+      },
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(action.status).toBe(200)
+    const actionBody = await json(action) as {
+      post: { content_safety_state: string; age_gate_policy: string } | null
+      actions: Array<{
+        action_type: string
+        previous_content_safety_state: string | null
+        next_content_safety_state: string | null
+        previous_age_gate_policy: string | null
+        next_age_gate_policy: string | null
+        evidence_ref: string | null
+      }>
+    }
+    expect(actionBody.post?.content_safety_state).toBe("sensitive")
+    expect(actionBody.post?.age_gate_policy).toBe("none")
+    expect(actionBody.actions[0]).toMatchObject({
+      action_type: "set_content_rating",
+      previous_content_safety_state: "adult",
+      next_content_safety_state: "sensitive",
+      previous_age_gate_policy: "18_plus",
+      next_age_gate_policy: "none",
+      evidence_ref: "policy-review://2026-08-02/rating-review",
+    })
+  })
+
   test("owners approve review-held draft posts with restore, not dismiss", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

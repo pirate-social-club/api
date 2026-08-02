@@ -16,7 +16,7 @@ type UserReportReasonCode =
   | "graphic_content"
   | "misleading"
   | "other"
-type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate"
+type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate" | "set_content_rating"
 
 export type CreateUserReportRequest = ApiCreateUserReportRequest
 export type CreateModerationActionRequest = ApiCreateModerationActionRequest
@@ -56,6 +56,11 @@ export type ModerationAction = {
   actor_user_id: string
   action_type: ModerationActionType
   note?: string | null
+  previous_content_safety_state?: Post["content_safety_state"] | null
+  next_content_safety_state?: Exclude<Post["content_safety_state"], "pending"> | null
+  previous_age_gate_policy?: Post["age_gate_policy"] | null
+  next_age_gate_policy?: Post["age_gate_policy"] | null
+  evidence_ref?: string | null
   created_at: string
 }
 

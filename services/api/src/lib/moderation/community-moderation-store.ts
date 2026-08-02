@@ -78,6 +78,11 @@ function serializeModerationAction(row: unknown): ModerationAction {
     actor_user_id: requiredString(row, "actor_user_id"),
     action_type: requiredString(row, "action_type") as ModerationAction["action_type"],
     note: stringOrNull(rowValue(row, "note")),
+    previous_content_safety_state: stringOrNull(rowValue(row, "previous_content_safety_state")) as ModerationAction["previous_content_safety_state"],
+    next_content_safety_state: stringOrNull(rowValue(row, "next_content_safety_state")) as ModerationAction["next_content_safety_state"],
+    previous_age_gate_policy: stringOrNull(rowValue(row, "previous_age_gate_policy")) as ModerationAction["previous_age_gate_policy"],
+    next_age_gate_policy: stringOrNull(rowValue(row, "next_age_gate_policy")) as ModerationAction["next_age_gate_policy"],
+    evidence_ref: stringOrNull(rowValue(row, "evidence_ref")),
     created_at: requiredString(row, "created_at"),
   }
 }
@@ -406,7 +411,9 @@ export async function listModerationActionsForCase(input: {
   const result = await input.executor.execute({
     sql: `
       SELECT moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
-             actor_user_id, action_type, note, created_at
+             actor_user_id, action_type, note, created_at,
+             previous_content_safety_state, next_content_safety_state,
+             previous_age_gate_policy, next_age_gate_policy, evidence_ref
       FROM moderation_actions
       WHERE moderation_case_id = ?1
       ORDER BY created_at ASC, moderation_action_id ASC
@@ -426,6 +433,9 @@ export async function createModerationAction(input: {
   nextStatus?: string | null
   previousAgeGatePolicy?: "none" | "18_plus" | null
   nextAgeGatePolicy?: "none" | "18_plus" | null
+  previousContentSafetyState?: "pending" | "safe" | "sensitive" | "adult" | null
+  nextContentSafetyState?: "safe" | "sensitive" | "adult" | null
+  evidenceRef?: string | null
 }): Promise<ModerationAction> {
   const moderationActionId = makeId("mac")
   await input.executor.execute({
@@ -433,11 +443,12 @@ export async function createModerationAction(input: {
       INSERT INTO moderation_actions (
         moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
         actor_user_id, action_type, note, created_at, previous_post_status, next_post_status,
-        previous_age_gate_policy, next_age_gate_policy
+        previous_age_gate_policy, next_age_gate_policy,
+        previous_content_safety_state, next_content_safety_state, evidence_ref
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10, ?11,
-        ?12, ?13
+        ?12, ?13, ?14, ?15, ?16
       )
     `,
     args: [
@@ -454,6 +465,9 @@ export async function createModerationAction(input: {
       input.nextStatus ?? null,
       input.previousAgeGatePolicy ?? null,
       input.nextAgeGatePolicy ?? null,
+      input.previousContentSafetyState ?? null,
+      input.nextContentSafetyState ?? null,
+      input.evidenceRef?.trim() || null,
     ],
   })
   // Deterministic projection of the inserted row — buffer-safe (no in-tx readback).
@@ -466,6 +480,11 @@ export async function createModerationAction(input: {
     actor_user_id: input.actorUserId,
     action_type: input.body.action_type,
     note: input.body.note?.trim() || null,
+    previous_content_safety_state: input.previousContentSafetyState ?? null,
+    next_content_safety_state: input.nextContentSafetyState ?? null,
+    previous_age_gate_policy: input.previousAgeGatePolicy ?? null,
+    next_age_gate_policy: input.nextAgeGatePolicy ?? null,
+    evidence_ref: input.evidenceRef?.trim() || null,
     created_at: input.now,
   }
 }
@@ -522,6 +541,25 @@ export async function setPostAgeGatePolicy(input: {
       WHERE post_id = ?1
     `,
     args: [input.postId, input.ageGatePolicy, input.now],
+  })
+}
+
+export async function setPostContentRating(input: {
+  executor: DbExecutor
+  postId: string
+  contentSafetyState: "safe" | "sensitive" | "adult"
+  ageGatePolicy: "none" | "18_plus"
+  now: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE posts
+      SET content_safety_state = ?2,
+          age_gate_policy = ?3,
+          updated_at = ?4
+      WHERE post_id = ?1
+    `,
+    args: [input.postId, input.contentSafetyState, input.ageGatePolicy, input.now],
   })
 }
 
