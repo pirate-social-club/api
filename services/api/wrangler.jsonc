@@ -345,6 +345,12 @@
     },
     "staging": {
       "name": "pirate-api-staging",
+      "r2_buckets": [
+        {
+          "binding": "TELEGRAM_STUDY_TTS_CACHE",
+          "bucket_name": "telegram-study-tts-cache-staging"
+        }
+      ],
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
@@ -501,6 +507,7 @@
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
         "TELEGRAM_STUDY_VOICE_ENABLED": "false",
         "TELEGRAM_STUDY_VOICE_COMMUNITY_IDS": "",
+        "TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET": "50000",
         "REWARDS_ACCRUAL_ENABLED": "true",
         "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED": "false",
         "REWARDS_READS_ENABLED": "true",
@@ -592,6 +599,12 @@
     },
     "production": {
       "name": "api-core",
+      "r2_buckets": [
+        {
+          "binding": "TELEGRAM_STUDY_TTS_CACHE",
+          "bucket_name": "telegram-study-tts-cache"
+        }
+      ],
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
@@ -840,6 +853,7 @@
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
         "TELEGRAM_STUDY_VOICE_ENABLED": "true",
         "TELEGRAM_STUDY_VOICE_COMMUNITY_IDS": "cmt_fb2bacac74b144eaa58802b476eb9f3b",
+        "TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET": "50000",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",
 	        "PASSPORT_SCORER_ID": "12028"
