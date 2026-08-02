@@ -23,6 +23,8 @@ import {
   createTelegramChatStudyVoiceIntent,
   createTelegramStudyVoiceIntent,
 } from "../../../src/lib/telegram/study-voice-service"
+import { telegramStudyPlaybackButton } from "../../../src/lib/telegram/chat-study-playback-service"
+import { getTelegramStudyCopy } from "../../../src/lib/telegram/study-copy"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -202,6 +204,20 @@ async function seedReadyTranslationExercises(input: {
 }
 
 describe("community study routes", () => {
+  test("localizes the Telegram song playback button in every study locale", () => {
+    const expected = {
+      en: "🎵 Play song",
+      zh: "🎵 播放歌曲",
+      ar: "🎵 تشغيل الأغنية",
+      ka: "🎵 სიმღერის დაკვრა",
+    } as const
+    for (const [language, label] of Object.entries(expected)) {
+      const locale = language as keyof typeof expected
+      expect(getTelegramStudyCopy(locale).playSong).toBe(label)
+      expect(telegramStudyPlaybackButton("tcs_localized", locale).text).toBe(getTelegramStudyCopy(locale).playSong)
+    }
+  })
+
   test("maps page-relative Telegram song callbacks beyond the two-digit absolute index boundary", () => {
     expect(telegramStudySongSelectionIndex(12, 3)).toBe(99)
   })
@@ -916,7 +932,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
-      const replayButton = answerButtons.find((button) => button.text === "🎵 Play song")
+      const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
       expect(replayButton?.callback_data).toBe(`study-play:${String(selectingSession.rows[0]?.chat_study_session_id)}`)
       await webhook({
         update_id: 5013,

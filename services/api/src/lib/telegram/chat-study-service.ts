@@ -900,7 +900,10 @@ async function presentNextExercise(input: {
             callback_data: callbackData(token, index),
             text: option.text.slice(0, 60),
           }]),
-          [telegramStudyPlaybackButton(input.session.id)],
+          [telegramStudyPlaybackButton(
+            input.session.id,
+            isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en",
+          )],
         ],
       },
     })

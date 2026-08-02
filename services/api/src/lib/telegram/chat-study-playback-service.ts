@@ -10,6 +10,8 @@ import { fetchSongArtifactBytes } from "../song-artifacts/song-artifact-storage"
 import type { Env } from "../../env"
 import { sendTelegramAudio } from "./bot-api"
 import type { TelegramCommunityBotCredential } from "./community-bot-service"
+import { getTelegramStudyCopy } from "./study-copy"
+import type { StudyHelperLanguage } from "./study-preference-service"
 
 const PLAYBACK_CALLBACK_PREFIX = "study-play"
 
@@ -22,10 +24,10 @@ export function parseTelegramStudyPlaybackCallback(value: unknown): string | nul
   return value.match(/^study-play:(tcs_[A-Za-z0-9_-]+)$/u)?.[1] ?? null
 }
 
-export function telegramStudyPlaybackButton(sessionId: string) {
+export function telegramStudyPlaybackButton(sessionId: string, language: StudyHelperLanguage) {
   return {
     callback_data: telegramStudyPlaybackCallbackData(sessionId),
-    text: "🎵 Play song",
+    text: getTelegramStudyCopy(language).playSong,
   }
 }
 

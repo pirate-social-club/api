@@ -325,7 +325,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const text = [copy.sayThis, input.intent.referenceText]
   const disclosure = copy.disclosure
   const playbackMarkup = input.intent.chatStudySessionId
-    ? { inline_keyboard: [[telegramStudyPlaybackButton(input.intent.chatStudySessionId)]] }
+    ? { inline_keyboard: [[telegramStudyPlaybackButton(input.intent.chatStudySessionId, language)]] }
     : undefined
   if (input.includeDisclosure) {
     text.push(disclosure)
