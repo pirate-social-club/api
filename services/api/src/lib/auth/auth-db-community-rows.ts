@@ -213,8 +213,8 @@ export function toCommunityCommentProjectionRow(row: unknown): CommunityCommentP
     parent_comment_id: stringOrNull(rowValue(row, "parent_comment_id")),
     depth: requiredNumber(row, "depth"),
     status: requiredString(row, "status") as CommunityCommentProjectionRow["status"],
-    source_created_at: requiredString(row, "source_created_at"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
+    source_created_at: isoUtcFromRow(rowValue(row, "source_created_at")),
+    created_at: isoUtcFromRow(rowValue(row, "created_at")),
+    updated_at: isoUtcFromRow(rowValue(row, "updated_at")),
   }
 }

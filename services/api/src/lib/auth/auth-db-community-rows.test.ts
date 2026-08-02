@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
+  toCommunityCommentProjectionRow,
+  toCommunityFollowProjectionRow,
   toCommunityMembershipProjectionRow,
   toCommunityPostProjectionRow,
   toCommunityRow,
@@ -120,6 +122,42 @@ describe("sibling control-plane row timestamp codecs", () => {
       source_updated_at: new Date(iso),
       created_at: new Date(iso),
       updated_at: new Date(iso),
+    })
+
+    expect(row.source_updated_at).toBe(iso)
+    expect(row.created_at).toBe(iso)
+    expect(row.updated_at).toBe(iso)
+  })
+
+  test("canonicalizes every TIMESTAMPTZ field in comment projections", () => {
+    const row = toCommunityCommentProjectionRow({
+      projection_id: "ccp_timestamp",
+      community_id: "cmt_timestamp",
+      thread_root_post_id: "post_timestamp",
+      source_comment_id: "comment_timestamp",
+      parent_comment_id: null,
+      depth: 0,
+      status: "published",
+      source_created_at: new Date(iso),
+      created_at: new Date(iso),
+      updated_at: new Date(iso),
+    })
+
+    expect(row.source_created_at).toBe(iso)
+    expect(row.created_at).toBe(iso)
+    expect(row.updated_at).toBe(iso)
+  })
+
+  test("keeps TEXT-backed follow projection timestamps as strings", () => {
+    const row = toCommunityFollowProjectionRow({
+      projection_id: "cfp_timestamp",
+      community_id: "cmt_timestamp",
+      user_id: "usr_owner",
+      follow_state: "active",
+      source_updated_at: iso,
+      unfollowed_at: null,
+      created_at: iso,
+      updated_at: iso,
     })
 
     expect(row.source_updated_at).toBe(iso)
