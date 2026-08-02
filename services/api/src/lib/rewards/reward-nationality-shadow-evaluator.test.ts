@@ -3,7 +3,11 @@ import type { Env } from "../../env"
 import type { Client } from "../sql-client"
 import { createControlPlaneTestClient } from "../../../tests/helpers"
 import { deriveRewardIdentityId } from "../verification/unique-human-eligibility"
-import { evaluateRewardNationalityBindingShadow } from "./reward-nationality-shadow-evaluator"
+import {
+  evaluateRewardNationalityBindingShadow,
+  REWARD_NATIONALITY_EVALUATOR_VERSION,
+  resolveRewardNationalityBindingShadow,
+} from "./reward-nationality-shadow-evaluator"
 
 const NOW = "2026-08-02T10:00:00.000Z"
 const SELF_ENV = { REWARDS_IDENTITY_PROVIDER: "self" } as Env
@@ -153,6 +157,17 @@ describe("reward nationality shadow evaluation", () => {
     await seedNullifier(client, { id: "nul_selected", hash: "hash_selected", nationality: "CAN" })
     await bind(client, "nul_selected")
 
+    expect(await resolveRewardNationalityBindingShadow({
+      env: SELF_ENV,
+      client,
+      userId: "usr_shadow",
+    })).toMatchObject({
+      persisted: false,
+      persistence: "not_attempted",
+      evaluatorVersion: REWARD_NATIONALITY_EVALUATOR_VERSION,
+      outcome: "resolved",
+    })
+
     const before = await client.execute({
       sql: `SELECT funded_cents, reserved_cents, credited_cents, refunded_cents
         FROM reward_campaigns WHERE reward_campaign_id = 'rcp_shadow'`,
@@ -162,6 +177,8 @@ describe("reward nationality shadow evaluation", () => {
     expect(decision).toMatchObject({
       capability: "binding_preview",
       persisted: true,
+      persistence: "written",
+      evaluatorVersion: REWARD_NATIONALITY_EVALUATOR_VERSION,
       outcome: "resolved",
       retryability: "resolved",
       rewardIdentityBindingId: "rib_nul_selected",
@@ -199,6 +216,8 @@ describe("reward nationality shadow evaluation", () => {
       now: "2026-08-02T11:00:00.000Z",
     })).toMatchObject({
       persisted: true,
+      persistence: "written",
+      evaluatorVersion: REWARD_NATIONALITY_EVALUATOR_VERSION,
       outcome: "nationality_evidence_missing",
       retryability: "retryable",
     })
@@ -229,8 +248,32 @@ describe("reward nationality shadow evaluation", () => {
   test("does not create a permanently pending per-claim row for an unsupported provider", async () => {
     const client = await setup()
     const decision = await evaluate(client, "rqe_shadow_6", VERY_ENV)
-    expect(decision).toMatchObject({ capability: "unavailable", persisted: false, outcome: null })
+    expect(decision).toMatchObject({
+      capability: "unavailable",
+      persisted: false,
+      persistence: "not_applicable",
+      evaluatorVersion: null,
+      outcome: null,
+    })
     expect((await client.execute("SELECT COUNT(*) AS count FROM reward_claim_identity_evidence")).rows[0]?.count).toBe(0)
+  })
+
+  test("distinguishes a missing qualification from an immutable existing snapshot", async () => {
+    const client = await setup()
+    const decision = await evaluateRewardNationalityBindingShadow({
+      env: SELF_ENV,
+      client,
+      rewardQualificationEventId: "rqe_not_ingested",
+      rewardCampaignId: "rcp_shadow",
+      userId: "usr_shadow",
+      now: NOW,
+    })
+    expect(decision).toMatchObject({
+      persisted: false,
+      persistence: "not_recorded",
+      evaluatorVersion: REWARD_NATIONALITY_EVALUATOR_VERSION,
+      outcome: "identity_document_not_selected",
+    })
   })
 
   test("keeps the first shadow snapshot immutable across retries", async () => {
@@ -247,8 +290,14 @@ describe("reward nationality shadow evaluation", () => {
       now: "2026-08-02T12:00:00.000Z",
     })
     expect(first.persisted).toBe(true)
-    expect(retry.persisted).toBe(false)
-    const rows = await client.execute("SELECT evaluated_at, COUNT(*) OVER () AS count FROM reward_claim_identity_evidence")
-    expect(rows.rows).toEqual([{ evaluated_at: NOW, count: 1 }])
+    expect(first.persistence).toBe("written")
+    expect(retry.persisted).toBe(true)
+    expect(retry.persistence).toBe("already_recorded")
+    const rows = await client.execute("SELECT evaluator_version, evaluated_at, COUNT(*) OVER () AS count FROM reward_claim_identity_evidence")
+    expect(rows.rows).toEqual([{
+      evaluator_version: REWARD_NATIONALITY_EVALUATOR_VERSION,
+      evaluated_at: NOW,
+      count: 1,
+    }])
   })
 })

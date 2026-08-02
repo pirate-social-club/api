@@ -9,6 +9,15 @@ import {
 
 type Executor = { execute(statement: InStatement | string): Promise<QueryResult> }
 
+export const REWARD_NATIONALITY_EVALUATOR_VERSION = "nationality_binding_v1"
+
+export type RewardNationalityShadowPersistence =
+  | "not_applicable"
+  | "not_attempted"
+  | "written"
+  | "already_recorded"
+  | "not_recorded"
+
 export type RewardNationalityShadowOutcome =
   | "resolved"
   | "identity_document_not_selected"
@@ -19,6 +28,8 @@ export type RewardNationalityShadowOutcome =
 export type RewardNationalityShadowDecision = {
   capability: "binding_preview" | "unavailable"
   persisted: boolean
+  persistence: RewardNationalityShadowPersistence
+  evaluatorVersion: string | null
   outcome: RewardNationalityShadowOutcome | null
   retryability: "resolved" | "retryable" | "terminal" | null
   rewardIdentityBindingId: string | null
@@ -31,7 +42,10 @@ export type RewardNationalityShadowDecision = {
   evidenceVerifiedAt: string | null
 }
 
-type CandidateDecision = Omit<RewardNationalityShadowDecision, "capability" | "persisted">
+type CandidateDecision = Omit<
+  RewardNationalityShadowDecision,
+  "capability" | "persisted" | "persistence" | "evaluatorVersion"
+>
 
 function parseNationality(value: unknown): string | null {
   let parsed = value
@@ -168,6 +182,8 @@ export async function resolveRewardNationalityBindingShadow(input: {
     return {
       capability: "unavailable",
       persisted: false,
+      persistence: "not_applicable",
+      evaluatorVersion: null,
       outcome: null,
       retryability: null,
       rewardIdentityBindingId: null,
@@ -182,7 +198,13 @@ export async function resolveRewardNationalityBindingShadow(input: {
   }
 
   const decision = await resolveDecision(input.client, input.userId)
-  return { capability: "binding_preview", persisted: false, ...decision }
+  return {
+    capability: "binding_preview",
+    persisted: false,
+    persistence: "not_attempted",
+    evaluatorVersion: REWARD_NATIONALITY_EVALUATOR_VERSION,
+    ...decision,
+  }
 }
 
 export async function persistRewardNationalityBindingShadow(input: {
@@ -205,9 +227,9 @@ export async function persistRewardNationalityBindingShadow(input: {
         identity_nullifier_id, user_attestation_id, provider, outcome,
         retryability, nationality, reward_identity_id, binding_selected_at,
         evidence_verification_session_id, evidence_verified_at,
-        evaluated_at, created_at
+        evaluator_version, evaluated_at, created_at
       ) SELECT
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'self', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'self', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16
       WHERE EXISTS (
         SELECT 1 FROM reward_qualification_events
         WHERE reward_qualification_event_id = ?2
@@ -223,6 +245,7 @@ export async function persistRewardNationalityBindingShadow(input: {
         binding_selected_at = excluded.binding_selected_at,
         evidence_verification_session_id = excluded.evidence_verification_session_id,
         evidence_verified_at = excluded.evidence_verified_at,
+        evaluator_version = excluded.evaluator_version,
         evaluated_at = excluded.evaluated_at
       WHERE reward_claim_identity_evidence.retryability = 'retryable'
     `,
@@ -231,10 +254,26 @@ export async function persistRewardNationalityBindingShadow(input: {
       input.userId, decision.rewardIdentityBindingId, decision.identityNullifierId,
       decision.userAttestationId, decision.outcome, decision.retryability,
       decision.nationality, decision.rewardIdentityId, decision.bindingSelectedAt,
-      decision.evidenceVerificationSessionId, decision.evidenceVerifiedAt, input.now,
+      decision.evidenceVerificationSessionId, decision.evidenceVerifiedAt,
+      decision.evaluatorVersion, input.now,
     ],
   })
-  return { ...decision, persisted: (inserted.rowsAffected ?? inserted.rows.length) > 0 }
+  if ((inserted.rowsAffected ?? inserted.rows.length) > 0) {
+    return { ...decision, persisted: true, persistence: "written" }
+  }
+  const existing = await input.client.execute({
+    sql: `
+      SELECT reward_claim_identity_evidence_id
+      FROM reward_claim_identity_evidence
+      WHERE reward_qualification_event_id = ?1
+      LIMIT 1
+    `,
+    args: [input.rewardQualificationEventId],
+  })
+  if (existing.rows.length > 0) {
+    return { ...decision, persisted: true, persistence: "already_recorded" }
+  }
+  return { ...decision, persisted: false, persistence: "not_recorded" }
 }
 
 export async function evaluateRewardNationalityBindingShadow(input: {
