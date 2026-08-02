@@ -1029,6 +1029,7 @@ async function finalizeZkPassportDocumentVerification(
   input: VerificationCompletionInput,
   claims: ZkPassportVerifiedClaims,
 ): Promise<VerificationSession> {
+  const verificationSessionId = row.verification_session_id
   const existingAttestations = await getAttestationsBySourceSessionId(client, input.verificationSessionId, input.userId)
   if (existingAttestations.some((a) => a.status === "accepted")) {
     await approvePendingTelegramJoinGrantsAfterVerification({
@@ -1075,7 +1076,7 @@ async function finalizeZkPassportDocumentVerification(
         capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
       ) VALUES (?1, ?2, ?3, 'zkpassport', 'unique_human', 'unique_human', 'accepted', ?4, ?5, ?6, NULL, ?5, ?5)
     `,
-    args: [uniqueHumanAttestationId, input.userId, row.verification_session_id, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
+    args: [uniqueHumanAttestationId, input.userId, verificationSessionId, JSON.stringify({ state: "verified" }), updatedAt, expiresAt],
   }
   const pushDocumentAttestation = (attestation: {
     capabilityKey: "minimum_age" | "nationality" | "gender"
@@ -1095,7 +1096,7 @@ async function finalizeZkPassportDocumentVerification(
             args: [
               attestationId,
               input.userId,
-              row.verification_session_id,
+              verificationSessionId,
               attestation.capabilityKey,
               JSON.stringify({ state: "verified", ...attestation.valueJson }),
               updatedAt,
@@ -1113,7 +1114,7 @@ async function finalizeZkPassportDocumentVerification(
             args: [
               attestationId,
               input.userId,
-              row.verification_session_id,
+              verificationSessionId,
               attestation.capabilityKey,
               JSON.stringify({ state: "verified", ...attestation.valueJson }),
               updatedAt,
@@ -1179,7 +1180,7 @@ async function finalizeZkPassportDocumentVerification(
           updated_at = ?3
       WHERE verification_session_id = ?1
     `,
-    args: [input.verificationSessionId, resultRef, updatedAt],
+    args: [verificationSessionId, resultRef, updatedAt],
   }
   const userCapabilityUpdate: InStatement = {
     sql: `
@@ -1192,7 +1193,7 @@ async function finalizeZkPassportDocumentVerification(
           updated_at = ?3
       WHERE user_id = ?4
     `,
-    args: [input.verificationSessionId, JSON.stringify(capabilities), updatedAt, input.userId],
+    args: [verificationSessionId, JSON.stringify(capabilities), updatedAt, input.userId],
   }
   const buildBatchStatements = (resolvedNullifier: ActiveIdentityNullifier | null): InStatement[] => {
     const sourceIdentityNullifierId = resolvedNullifier?.identityNullifierId ?? candidateNullifierId
@@ -1208,7 +1209,7 @@ async function finalizeZkPassportDocumentVerification(
         candidateNullifierId,
         input.userId,
         identityNullifier.nullifierHash,
-        input.verificationSessionId,
+        verificationSessionId,
         uniqueHumanAttestationId,
         updatedAt,
       ],

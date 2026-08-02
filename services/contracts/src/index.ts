@@ -2074,7 +2074,7 @@ export type ModerationSignalSeverity = "low" | "medium" | "high";
 
 export type UserReportReasonCode = "spam" | "harassment" | "hate" | "sexual_content" | "graphic_content" | "misleading" | "other";
 
-export type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate";
+export type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate" | "set_content_rating";
 
 export type CreateUserReportRequest = {
   reason_code: UserReportReasonCode;
@@ -2119,6 +2119,11 @@ export type ModerationAction = {
   actor_user: string;
   action_type: ModerationActionType;
   note?: string | null;
+  previous_content_safety_state?: "pending" | "safe" | "sensitive" | "adult" | null;
+  next_content_safety_state?: "safe" | "sensitive" | "adult" | null;
+  previous_age_gate_policy?: "none" | "18_plus" | null;
+  next_age_gate_policy?: "none" | "18_plus" | null;
+  evidence_ref?: string | null;
   created: number;
 };
 
@@ -2168,6 +2173,8 @@ export type ModerationCaseListResponse = {
 export type CreateModerationActionRequest = {
   action_type: ModerationActionType;
   note?: string | null;
+  content_safety_state?: "safe" | "sensitive" | "adult";
+  evidence_ref?: string | null;
 };
 
 export type MediaAnalysisResult = {
