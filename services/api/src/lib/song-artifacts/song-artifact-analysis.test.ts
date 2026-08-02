@@ -146,9 +146,12 @@ describe("song artifact analysis", () => {
 describe("song lyrics moderation provider failure semantics", () => {
   test("reserves enough completion budget for a strict classifier response", async () => {
     let maxCompletionTokens: unknown = null
+    let systemPrompt = ""
     globalThis.fetch = mockFetch(async (_input, init) => {
       const requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>
       maxCompletionTokens = requestBody.max_completion_tokens
+      const messages = requestBody.messages as Array<{ role?: string; content?: string }>
+      systemPrompt = messages.find((message) => message.role === "system")?.content ?? ""
       return new Response(JSON.stringify({
         choices: [{ message: { content: JSON.stringify({ age_gate_rating: "safe", reason: "No mature content." }) } }],
       }), { headers: { "content-type": "application/json" } })
@@ -160,6 +163,10 @@ describe("song lyrics moderation provider failure semantics", () => {
     })
 
     expect(maxCompletionTokens).toBe(500)
+    expect(systemPrompt).toContain("lyrics as a whole and in context")
+    expect(systemPrompt).toContain("sexual innuendo when the lyrics do not meet the adult threshold")
+    expect(systemPrompt).toContain("directly depict a sexual act")
+    expect(systemPrompt).toContain("Mild isolated language")
     expect(result.moderationStatus).toBe("completed")
     expect(result.contentSafetyState).toBe("safe")
     expect(result.ageGatePolicy).toBe("none")

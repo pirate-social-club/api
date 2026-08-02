@@ -6,7 +6,7 @@ import type {
 
 import type { Env } from "../../env"
 import { makeId } from "../helpers"
-import type { InStatement, QueryResult } from "../sql-client"
+import type { Client, InStatement, QueryResult } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { codedConflictError } from "../errors"
 import { resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
@@ -19,6 +19,13 @@ type BoundDocument = RewardIdentityBindingDocument & { expiresAt: string | null 
 const BINDING_EXISTS = "reward_identity_binding_exists"
 const DOCUMENT_INELIGIBLE = "reward_identity_document_ineligible"
 const PROVIDER_UNSUPPORTED = "reward_identity_provider_unsupported"
+
+function isEvidenceCurrent(document: BoundDocument, now: string): boolean {
+  if (document.expiresAt == null) return true
+  const expiresAtMs = Date.parse(document.expiresAt)
+  const nowMs = Date.parse(now)
+  return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs > nowMs
+}
 
 function parseNationality(value: unknown): string | null {
   let parsed = value
@@ -34,10 +41,9 @@ function parseNationality(value: unknown): string | null {
   return /^[A-Z]{3}$/.test(nationality) ? nationality : null
 }
 
-async function listSelectableDocuments(
+async function listBoundDocuments(
   client: Executor,
   userId: string,
-  now: string,
 ): Promise<BoundDocument[]> {
   const result = await client.execute({
     sql: `
@@ -50,13 +56,12 @@ async function listSelectableDocuments(
        AND a.capability_key = 'nationality'
        AND a.status = 'accepted'
        AND a.revoked_at IS NULL
-       AND (a.expires_at IS NULL OR a.expires_at > ?2)
       WHERE n.user_id = ?1
         AND n.provider = 'self'
         AND n.status = 'active'
       ORDER BY n.first_seen_at ASC, n.identity_nullifier_id ASC, a.verified_at DESC
     `,
-    args: [userId, now],
+    args: [userId],
   })
 
   const grouped = new Map<string, BoundDocument[]>()
@@ -88,7 +93,7 @@ async function listSelectableDocuments(
 async function findActiveBinding(
   client: Executor,
   userId: string,
-  selectableDocuments: BoundDocument[],
+  boundDocuments: BoundDocument[],
 ): Promise<RewardIdentityBinding | null> {
   const result = await client.execute({
     sql: `
@@ -101,7 +106,7 @@ async function findActiveBinding(
   })
   const row = result.rows[0]
   const identityNullifierId = stringOrNull(rowValue(row, "identity_nullifier_id"))
-  const document = selectableDocuments.find((candidate) => candidate.identity_nullifier_id === identityNullifierId)
+  const document = boundDocuments.find((candidate) => candidate.identity_nullifier_id === identityNullifierId)
   const bindingId = stringOrNull(rowValue(row, "reward_identity_binding_id"))
   const selectedAt = stringOrNull(rowValue(row, "selected_at"))
   if (!document || !bindingId || !selectedAt) return null
@@ -125,26 +130,43 @@ export async function getRewardIdentityBinding(input: {
   if (provider !== "self") {
     return { capability: "unavailable", provider, active_binding: null, selectable_documents: [] }
   }
-  const documents = await listSelectableDocuments(input.client, input.userId, input.now ?? new Date().toISOString())
-  const activeBinding = await findActiveBinding(input.client, input.userId, documents)
+  const now = input.now ?? new Date().toISOString()
+  const boundDocuments = await listBoundDocuments(input.client, input.userId)
+  // Evidence expiry means the user must re-prove before selecting a document;
+  // it does not revoke a document or invalidate a selection already made from
+  // accepted, unrevoked evidence. Nullifier revocation still invalidates it.
+  const selectableDocuments = boundDocuments.filter((document) => isEvidenceCurrent(document, now))
+  const activeBinding = await findActiveBinding(input.client, input.userId, boundDocuments)
   return {
     capability: activeBinding ? "selected" : "selection_required",
     provider: "self",
     active_binding: activeBinding,
-    selectable_documents: documents.map(({ expiresAt: _expiresAt, ...document }) => document),
+    selectable_documents: selectableDocuments.map(({ expiresAt: _expiresAt, ...document }) => document),
   }
 }
 
-function isActiveBindingConflict(error: unknown): boolean {
-  const value = error as { code?: unknown; constraint?: unknown; message?: unknown }
-  const material = `${String(value.code ?? "")} ${String(value.constraint ?? "")} ${String(value.message ?? "")}`.toLowerCase()
-  return material.includes("idx_reward_identity_bindings_user_active")
-    || (material.includes("unique") && material.includes("reward_identity_bindings.user_id"))
+export function isActiveRewardIdentityBindingUniqueConflict(error: unknown): boolean {
+  let current: unknown = error
+  while (current && typeof current === "object") {
+    const record = current as Record<string, unknown>
+    const code = typeof record.code === "string" ? record.code : ""
+    const constraint = typeof record.constraint === "string" ? record.constraint : ""
+    const message = typeof record.message === "string" ? record.message : ""
+    const isUnique = code === "23505"
+      || code === "SQLITE_CONSTRAINT_UNIQUE"
+      || /unique constraint|duplicate key/iu.test(message)
+    const isActiveBinding = constraint === "idx_reward_identity_bindings_user_active"
+      || message.includes("idx_reward_identity_bindings_user_active")
+      || message.includes("reward_identity_bindings.user_id")
+    if (isUnique && isActiveBinding) return true
+    current = record.cause
+  }
+  return false
 }
 
 export async function selectRewardIdentityBinding(input: {
   env: Env
-  client: Executor
+  client: Client
   userId: string
   identityNullifierId: string
   now?: string
@@ -153,26 +175,49 @@ export async function selectRewardIdentityBinding(input: {
     throw codedConflictError(PROVIDER_UNSUPPORTED, "Reward document selection requires the Self identity provider")
   }
   const now = input.now ?? new Date().toISOString()
-  const documents = await listSelectableDocuments(input.client, input.userId, now)
+  const documents = (await listBoundDocuments(input.client, input.userId))
+    .filter((document) => isEvidenceCurrent(document, now))
   if (!documents.some((document) => document.identity_nullifier_id === input.identityNullifierId)) {
     throw codedConflictError(DOCUMENT_INELIGIBLE, "The selected identity document has no active bound nationality evidence")
   }
 
+  // Retrying the same user intent must preserve the binding id and selected_at;
+  // Slice 3 snapshots those values as decision evidence. Only a genuine change
+  // of document enters the supersede-and-insert transaction below.
+  const current = await getRewardIdentityBinding({ ...input, now })
+  if (current.active_binding?.identity_nullifier_id === input.identityNullifierId) return current
+
+  const tx = await input.client.transaction("write")
   try {
-    await input.client.execute({
+    // POST is both initial selection and authenticated reselection. The old
+    // binding and its replacement transition atomically, so the user is never
+    // left with zero active bindings after a failed insert.
+    await tx.execute({
       sql: `
-        INSERT INTO reward_identity_bindings (
-          reward_identity_binding_id, user_id, identity_nullifier_id, status,
-          selected_at, superseded_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, 'active', ?4, NULL, ?4, ?4)
+        UPDATE reward_identity_bindings
+        SET status = 'superseded', superseded_at = ?2, updated_at = ?2
+        WHERE user_id = ?1 AND status = 'active'
       `,
-      args: [makeId("rib"), input.userId, input.identityNullifierId, now],
+      args: [input.userId, now],
     })
+    await tx.execute({
+        sql: `
+          INSERT INTO reward_identity_bindings (
+            reward_identity_binding_id, user_id, identity_nullifier_id, status,
+            selected_at, superseded_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, 'active', ?4, NULL, ?4, ?4)
+        `,
+        args: [makeId("rib"), input.userId, input.identityNullifierId, now],
+      })
+    await tx.commit()
   } catch (error) {
-    if (isActiveBindingConflict(error)) {
-      throw codedConflictError(BINDING_EXISTS, "An active reward identity document is already selected")
+    await tx.rollback().catch(() => undefined)
+    if (isActiveRewardIdentityBindingUniqueConflict(error)) {
+      throw codedConflictError(BINDING_EXISTS, "Reward identity selection changed concurrently; retry with the current state")
     }
     throw error
+  } finally {
+    tx.close()
   }
   return getRewardIdentityBinding({ ...input, now })
 }

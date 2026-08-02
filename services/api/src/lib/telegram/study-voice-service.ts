@@ -16,7 +16,14 @@ import {
   downloadTelegramFile,
   getTelegramFile,
   sendTelegramMessage,
+  sendTelegramVoice,
 } from "./bot-api"
+import {
+  synthesizeCommunityStudySpeechForCommunity,
+  TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
+} from "../communities/assistant-policy/speech-service"
+import { getTelegramStudyCopy } from "./study-copy"
+import { isStudyHelperLanguage, type StudyDeliveryMode } from "./study-preference-service"
 import {
   decryptActiveCommunityTelegramBotOrNull,
   type TelegramCommunityBotCredential,
@@ -146,6 +153,8 @@ type PreparedTelegramStudyVoiceIntent = {
   targetLanguage: string
   telegramUserId: string
   userId: string
+  deliveryMode: StudyDeliveryMode
+  localizationNoticeSent?: boolean
 }
 
 type VoiceIntentExecutor = Pick<ReturnType<typeof getControlPlaneClient>, "execute">
@@ -159,6 +168,7 @@ async function prepareTelegramStudyVoiceIntent(input: {
   postId: string
   targetLanguage?: string | null
   telegramUserId?: string | null
+  deliveryMode?: StudyDeliveryMode
 }): Promise<PreparedTelegramStudyVoiceIntent> {
   if (!isTelegramStudyVoiceEnabled(input.env, input.communityId)) {
     throw conflictError("Telegram study voice messages are not enabled for this community")
@@ -227,6 +237,7 @@ async function prepareTelegramStudyVoiceIntent(input: {
     targetLanguage: study.target_language ?? input.targetLanguage ?? "en",
     telegramUserId,
     userId: input.actor.userId,
+    deliveryMode: input.deliveryMode ?? "text",
   }
 }
 
@@ -300,25 +311,58 @@ async function deliverTelegramStudyVoicePrompt(input: {
   intent: PreparedTelegramStudyVoiceIntent
 }): Promise<void> {
   const client = getControlPlaneClient(input.env)
-  const text = ["Say this line back:", input.intent.referenceText]
+  const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
+  const copy = getTelegramStudyCopy(language)
+  const text = [copy.sayThis, input.intent.referenceText]
+  const disclosure = copy.disclosure
   if (input.includeDisclosure) {
-    text.push("The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading.")
+    text.push(disclosure)
   }
+  let promptMessageId: number | null = null
+  let deliveryWarning: string | null = null
   try {
-    const sent = await sendTelegramMessage(input.intent.bot, {
-      chat_id: input.intent.telegramUserId,
-      text: text.join("\n\n"),
-    })
+    if (input.intent.deliveryMode !== "audio") {
+      const sent = await sendTelegramMessage(input.intent.bot, { chat_id: input.intent.telegramUserId, text: text.join("\n\n") })
+      promptMessageId = sent.message_id
+    }
+    if (input.intent.deliveryMode !== "text") {
+      try {
+        const audio = await cachedStudyPromptAudio({ env: input.env, intent: input.intent })
+        const sent = await sendTelegramVoice(input.intent.bot, {
+          chat_id: input.intent.telegramUserId,
+          voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
+          ...(input.intent.deliveryMode === "audio" ? { caption: input.includeDisclosure ? `${copy.sayThis}\n\n${disclosure}` : copy.sayThis } : {}),
+        })
+        promptMessageId ??= sent.message_id
+      } catch (error) {
+        deliveryWarning = error instanceof Error ? error.message : String(error)
+        if (promptMessageId === null) {
+          const fallback = await sendTelegramMessage(input.intent.bot, {
+            chat_id: input.intent.telegramUserId,
+            text: text.join("\n\n"),
+          })
+          promptMessageId = fallback.message_id
+        }
+      }
+    }
     await client.execute({
       sql: `
         UPDATE telegram_study_voice_intents
         SET prompt_delivery_status = 'sent',
             prompt_message_id = ?2,
             prompt_sent_at = ?3,
+            last_error_code = ?4,
+            last_error_message = ?5,
             updated_at = ?3
         WHERE intent_id = ?1
       `,
-      args: [input.intent.intentId, sent.message_id, nowIso()],
+      args: [
+        input.intent.intentId,
+        promptMessageId,
+        nowIso(),
+        deliveryWarning ? "telegram_prompt_audio_fell_back_to_text" : null,
+        deliveryWarning,
+      ],
     })
   } catch (error) {
     await client.execute({
@@ -334,8 +378,38 @@ async function deliverTelegramStudyVoicePrompt(input: {
     })
     throw providerUnavailable("Telegram study prompt delivery is uncertain", {
       intent: input.intent.intentId,
+      cause: error instanceof Error ? error.message : String(error),
     }, false)
   }
+}
+
+async function cachedStudyPromptAudio(input: {
+  env: Env
+  intent: PreparedTelegramStudyVoiceIntent
+}): Promise<ArrayBuffer> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
+    `${input.intent.communityId}\n${input.intent.referenceText}`,
+  ))
+  const key = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+  const request = new Request(`https://telegram-study-audio.invalid/${key}.ogg`)
+  const cache = typeof caches === "undefined"
+    ? null
+    : await caches.open("telegram-study-audio").catch(() => null)
+  const cached = cache ? await cache.match(request).catch(() => undefined) : undefined
+  if (cached) return cached.arrayBuffer()
+  const speech = await synthesizeCommunityStudySpeechForCommunity({
+    env: input.env,
+    communityRepository: getCommunityRepository(input.env),
+    communityId: input.intent.communityId,
+    outputFormat: TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
+    text: input.intent.referenceText,
+  })
+  if (cache) {
+    await cache.put(request, new Response(speech.audio, {
+      headers: { "cache-control": "public, max-age=2592000", "content-type": "audio/ogg" },
+    })).catch(() => undefined)
+  }
+  return speech.audio
 }
 
 function intentResource(intent: PreparedTelegramStudyVoiceIntent): TelegramStudyVoiceIntentResource {
@@ -390,6 +464,8 @@ export async function createTelegramChatStudyVoiceIntent(input: {
   previousActionToken: string
   targetLanguage?: string | null
   telegramUserId: string
+  deliveryMode?: StudyDeliveryMode
+  localizationNoticeSent?: boolean
 }): Promise<TelegramStudyVoiceIntentResource> {
   const intent = await prepareTelegramStudyVoiceIntent(input)
   const client = getControlPlaneClient(input.env)
@@ -400,11 +476,13 @@ export async function createTelegramChatStudyVoiceIntent(input: {
       sql: `
         SELECT 1
         FROM telegram_study_voice_intents
-        WHERE chat_study_session_id = ?1
+        WHERE telegram_community_bot_id = ?1
+          AND telegram_user_id = ?2
+          AND chat_study_session_id IS NOT NULL
           AND prompt_delivery_status IN ('sent', 'uncertain')
         LIMIT 1
       `,
-      args: [input.chatStudySessionId],
+      args: [intent.bot.id, intent.telegramUserId],
     })
     includeDisclosure = priorPrompt.rows.length === 0
     await persistTelegramStudyVoiceIntent(tx, intent)
@@ -426,7 +504,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
       args: [
         input.chatStudySessionId,
         input.nextActionToken,
-        JSON.stringify({ exerciseId: input.exerciseId }),
+        JSON.stringify({ deliveryMode: input.deliveryMode ?? "text", exerciseId: input.exerciseId, localizationNoticeSent: input.localizationNoticeSent === true }),
         intent.studySessionId,
         input.exerciseId,
         nowIso(),
@@ -500,10 +578,11 @@ async function isKnownVoiceDelivery(input: {
   return Boolean(stringOrNull(rowValue(result.rows[0], "intent_id")))
 }
 
-async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string): Promise<void> {
+async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string, targetLanguage: string): Promise<void> {
+  const language = isStudyHelperLanguage(targetLanguage) ? targetLanguage : "en"
   await sendTelegramMessage(bot, {
     chat_id: chatId,
-    text: "This study exercise expired. Send /study to start again.",
+    text: getTelegramStudyCopy(language).exerciseExpired,
   }).catch((error) => {
     console.warn("[telegram-study] expired reply failed", {
       communityId: bot.communityId,
@@ -569,7 +648,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
       args: [intent.id, now, telegramMessageId, voiceFileId, voiceFileUniqueId],
     })
     if ((expired.rowsAffected ?? 0) === 1) {
-      await sendExpiredMessage(input.bot, chatId)
+      await sendExpiredMessage(input.bot, chatId, intent.targetLanguage)
     }
     return true
   }

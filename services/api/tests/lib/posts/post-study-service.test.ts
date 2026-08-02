@@ -1104,6 +1104,7 @@ describe("post study service", () => {
     })
 
     expect(payload.access).toBe("processing")
+    expect(payload.translation_status).toBe("processing")
     expect(payload.exercise_count).toBe(0)
     expect(payload.exercises).toEqual([])
     expect(payload.unavailable_reason).toBeUndefined()
@@ -1119,6 +1120,27 @@ describe("post study service", () => {
       job_id: expect.stringMatching(/^cjb_/),
       status: "queued",
     }])
+  })
+
+  test("keeps voice ready while cross-language translations are being prepared", async () => {
+    await seedSongPost()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({
+        OPENROUTER_API_KEY: "test-openrouter-key",
+        OPENROUTER_BASE_URL: "https://openrouter.test/api/v1",
+        OPENROUTER_TRANSLATION_MODEL: "test/study-generator",
+      }),
+      postId: POST_ID,
+      targetLanguage: "zh",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.translation_status).toBe("processing")
+    expect(payload.exercises.length).toBeGreaterThan(0)
+    expect(payload.exercises.every((exercise) => exercise.type === "say_it_back")).toBe(true)
   })
 
   test("returns unavailable without lazy generation when study is disabled", async () => {
@@ -4360,6 +4382,9 @@ describe("post study same-language suppression", () => {
     })
 
     expect(payload.access).toBe("ready")
+    expect(new Set(payload.exercises.map((exercise) => exercise.type))).toEqual(
+      new Set(["translation_choice", "say_it_back"]),
+    )
     const translationChoice = payload.exercises.find((exercise) => exercise.type === "translation_choice")
     expect(translationChoice).toBeDefined()
     expect(translationChoice?.line_id).toBe("line_002")

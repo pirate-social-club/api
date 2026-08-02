@@ -226,18 +226,21 @@ export async function monitorRewardCampaigns(input: {
     if (recorded.held) summary.held += 1
     summary.incidents.push({ incident_id: recorded.incidentId, campaign_id: campaignId, kind: "accounting_mismatch", reason: "campaign_accounting_counters_mismatch", details })
   }
-  const effectFilter = `f.status = 'confirmed' AND c.status IN ('scheduled','active','paused','operational_hold','exhausted','ended')`
+  // A campaign effect is permanently tied to the chain on which it was funded.
+  // Never verify a legacy-chain receipt through the currently configured chain's
+  // provider: transaction hashes and block numbers are not cross-chain evidence.
+  const chainId = config.chainId
+  const effectFilter = `f.status = 'confirmed' AND f.chain_id = ?1 AND c.status IN ('scheduled','active','paused','operational_hold','exhausted','ended')`
   const effectCount = await input.client.execute({
     sql: `SELECT COUNT(*) AS count FROM reward_campaign_funding_effects f JOIN reward_campaigns c ON c.reward_campaign_id = f.reward_campaign_id WHERE ${effectFilter}`,
-    args: [],
+    args: [chainId],
   })
   const effectTotal = Number(rowValue(effectCount.rows[0], "count") ?? 0)
   const effects = await input.client.execute({
-    sql: `SELECT f.reward_campaign_funding_effect_id, f.reward_campaign_id, f.tx_hash, f.confirmed_block_number, f.confirmed_block_hash FROM reward_campaign_funding_effects f JOIN reward_campaigns c ON c.reward_campaign_id = f.reward_campaign_id WHERE ${effectFilter} ORDER BY f.reward_campaign_id, f.reward_campaign_funding_effect_id LIMIT ?1 OFFSET ?2`,
-    args: [limit, rotatingPageOffset(now, effectTotal, limit)],
+    sql: `SELECT f.reward_campaign_funding_effect_id, f.reward_campaign_id, f.tx_hash, f.confirmed_block_number, f.confirmed_block_hash FROM reward_campaign_funding_effects f JOIN reward_campaigns c ON c.reward_campaign_id = f.reward_campaign_id WHERE ${effectFilter} ORDER BY f.reward_campaign_id, f.reward_campaign_funding_effect_id LIMIT ?2 OFFSET ?3`,
+    args: [chainId, limit, rotatingPageOffset(now, effectTotal, limit)],
   })
-  const rpcUrl = String(input.env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
-  const chainId = Number(input.env.REWARDS_CAMPAIGN_CHAIN_ID)
+  const rpcUrl = config.rpcUrl
   const provider = input.finalityProvider
     ?? (rpcUrl && Number.isSafeInteger(chainId) && chainId > 0
       ? createRewardCampaignFinalityProvider(rpcUrl, chainId)

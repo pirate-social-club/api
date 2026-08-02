@@ -1,0 +1,11 @@
+[
+  {"id":"synthetic-safe","lyrics":"Sunlight on the water, friends singing on the road home.","expected":"safe"},
+  {"id":"synthetic-mild-language","lyrics":"This damn night is a mess and I am angry as hell.","expected":"safe"},
+  {"id":"synthetic-strong-profanity","lyrics":"Fuck this shit, every fucking night I lose my mind.","expected":"sensitive"},
+  {"id":"synthetic-substance","lyrics":"We drank whiskey and smoked all night until the room spun.","expected":"sensitive"},
+  {"id":"synthetic-innuendo","lyrics":"Come upstairs, you know what I want; we can keep it between us.","expected":"sensitive"},
+  {"id":"synthetic-explicit-sex","lyrics":"They performed oral sex, then had intercourse on the floor.","expected":"adult"},
+  {"id":"tip-your-drink-up","public_post_id":"post_pst_b47dce054f454cbbbc3aa6abe885458c"},
+  {"id":"flash-of-fantasy","public_post_id":"post_pst_2c8ee670eb7c485fae8b4a8f2a25c356"},
+  {"id":"in-time-girl","public_post_id":"post_pst_69ff5f9345c946d7902a4e1c43a53ed2"}
+]

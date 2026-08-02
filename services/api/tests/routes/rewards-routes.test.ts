@@ -700,7 +700,25 @@ describe("rewards routes", () => {
       chain_id: 84532,
       ends_at: expect.any(Number),
     })
-    expect(offerRateLimitCalls).toBe(2)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'paused' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect((await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)).status).toBe(404)
+    expect((await app.request(
+      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      {}, ctx.env,
+    )).status).toBe(404)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'active', reserved_cents = funded_cents WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect((await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)).status).toBe(404)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET reserved_cents = 0 WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(offerRateLimitCalls).toBe(5)
     offerRateLimitAllows = false
     const rateLimitedOffer = await app.request(
       "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
@@ -1530,10 +1548,19 @@ describe("rewards routes", () => {
       body: JSON.stringify({ identity_nullifier_id: nullifierId }),
     }, ctx.env)
     expect(selected.status).toBe(201)
-    expect(await json(selected)).toMatchObject({
+    const selectedBody = await json(selected) as { active_binding: { id: string; selected_at: number } }
+    expect(selectedBody).toMatchObject({
       capability: "selected",
       active_binding: { identity_nullifier_id: nullifierId, nationality: "USA" },
     })
+
+    const retry = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ identity_nullifier_id: nullifierId }),
+    }, ctx.env)
+    expect(retry.status).toBe(201)
+    expect((await json(retry) as { active_binding: unknown }).active_binding).toEqual(selectedBody.active_binding)
   })
 
   test("reward reads and payouts fail closed when their independent flags are not true", async () => {

@@ -178,6 +178,7 @@ export type SongStudyPayload = {
   study_pack_version?: number
   target_language?: string | null
   title: string
+  translation_status?: "not_applicable" | "processing" | "ready" | "unavailable"
   unavailable_reason?: StudyUnavailableReason
 }
 
@@ -729,6 +730,13 @@ export async function getPostStudyPayload(input: {
 
     const includeSayItBack = availability.includeSayItBack
     const includeTranslation = availability.includeTranslation
+    const translationStatus: SongStudyPayload["translation_status"] = !includeTranslation
+      ? "not_applicable"
+      : pack?.status === "ready"
+        ? "ready"
+        : pack?.status === "unavailable"
+          ? "unavailable"
+          : "processing"
     const now = nowIso()
     const reServeDueReviews = dueReviewServingEnabled(input.env)
     const canonicalExerciseRows = availability.canonicalExerciseRows
@@ -780,12 +788,14 @@ export async function getPostStudyPayload(input: {
           session,
           source_language: pack?.source_language ?? post.source_language,
           study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
+          translation_status: translationStatus,
         }
       }
       if (availability.access === "processing") {
         return {
           ...basePayload({ access: "processing", post, targetLanguage }),
           source_language: pack?.source_language ?? post.source_language,
+          translation_status: translationStatus,
         }
       }
       return {
@@ -802,6 +812,7 @@ export async function getPostStudyPayload(input: {
       session,
       source_language: pack?.source_language ?? post.source_language,
       study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
+      translation_status: translationStatus,
     }
   } finally {
     await db.close()

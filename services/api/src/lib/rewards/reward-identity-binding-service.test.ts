@@ -4,6 +4,7 @@ import type { Client } from "../sql-client"
 import { createControlPlaneTestClient } from "../../../tests/helpers"
 import {
   getRewardIdentityBinding,
+  isActiveRewardIdentityBindingUniqueConflict,
   selectRewardIdentityBinding,
   supersedeRewardIdentityBindingsForNullifier,
 } from "./reward-identity-binding-service"
@@ -38,7 +39,7 @@ async function setup(): Promise<Client> {
 
 async function seedDocument(
   client: Client,
-  input: { id: string; nationality: string; provider?: "self" | "very"; status?: "active" | "revoked"; attestationId?: string },
+  input: { id: string; nationality: string; provider?: "self" | "very"; status?: "active" | "revoked"; attestationId?: string; expiresAt?: string | null },
 ): Promise<void> {
   const provider = input.provider ?? "self"
   await client.execute({
@@ -57,9 +58,9 @@ async function seedDocument(
         user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
         capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at,
         source_identity_nullifier_id
-      ) VALUES (?1, 'usr_reward_binding', NULL, ?2, 'nationality', 'nationality', 'accepted', ?3, ?4, NULL, NULL, ?4, ?4, ?5)
+      ) VALUES (?1, 'usr_reward_binding', NULL, ?2, 'nationality', 'nationality', 'accepted', ?3, ?4, ?5, NULL, ?4, ?4, ?6)
     `,
-    args: [input.attestationId ?? `att_${input.id}`, provider, JSON.stringify({ nationality: input.nationality }), NOW, input.id],
+    args: [input.attestationId ?? `att_${input.id}`, provider, JSON.stringify({ nationality: input.nationality }), NOW, input.expiresAt ?? null, input.id],
   })
 }
 
@@ -85,19 +86,68 @@ describe("reward identity document selection", () => {
     expect(selected.active_binding?.identity_nullifier_id).toBe("nul_self_a")
   })
 
-  test("uses the partial unique constraint as authority for one active selection", async () => {
+  test("atomically supersedes the old binding when the user reselects", async () => {
     const client = await setup()
     await seedDocument(client, { id: "nul_self_a", nationality: "USA" })
     await seedDocument(client, { id: "nul_self_b", nationality: "CAN" })
     await selectRewardIdentityBinding({ env: SELF_ENV, client, userId: "usr_reward_binding", identityNullifierId: "nul_self_a", now: NOW })
 
-    await expect(selectRewardIdentityBinding({
+    const selected = await selectRewardIdentityBinding({
       env: SELF_ENV,
       client,
       userId: "usr_reward_binding",
       identityNullifierId: "nul_self_b",
+      now: "2026-08-01T11:00:00.000Z",
+    })
+    expect(selected.active_binding?.identity_nullifier_id).toBe("nul_self_b")
+    const rows = await client.execute({
+      sql: "SELECT identity_nullifier_id, status FROM reward_identity_bindings WHERE user_id = 'usr_reward_binding' ORDER BY selected_at",
+    })
+    expect(rows.rows).toEqual([
+      { identity_nullifier_id: "nul_self_a", status: "superseded" },
+      { identity_nullifier_id: "nul_self_b", status: "active" },
+    ])
+  })
+
+  test("retries the same document selection without changing binding identity", async () => {
+    const client = await setup()
+    await seedDocument(client, { id: "nul_self_a", nationality: "USA" })
+    const first = await selectRewardIdentityBinding({
+      env: SELF_ENV,
+      client,
+      userId: "usr_reward_binding",
+      identityNullifierId: "nul_self_a",
       now: NOW,
-    })).rejects.toMatchObject({ status: 409, code: "reward_identity_binding_exists" })
+    })
+    const retry = await selectRewardIdentityBinding({
+      env: SELF_ENV,
+      client,
+      userId: "usr_reward_binding",
+      identityNullifierId: "nul_self_a",
+      now: "2026-08-01T11:00:00.000Z",
+    })
+
+    expect(retry.active_binding).toEqual(first.active_binding)
+    const count = await client.execute({
+      sql: "SELECT COUNT(*) AS count FROM reward_identity_bindings WHERE user_id = 'usr_reward_binding'",
+    })
+    expect(Number(count.rows[0]?.count ?? 0)).toBe(1)
+  })
+
+  test("keeps an active binding valid after evidence expiry without offering stale evidence for selection", async () => {
+    const client = await setup()
+    await seedDocument(client, { id: "nul_expiring", nationality: "USA", expiresAt: "2026-08-02T10:00:00.000Z" })
+    await selectRewardIdentityBinding({ env: SELF_ENV, client, userId: "usr_reward_binding", identityNullifierId: "nul_expiring", now: NOW })
+
+    const afterExpiry = await getRewardIdentityBinding({
+      env: SELF_ENV,
+      client,
+      userId: "usr_reward_binding",
+      now: "2026-09-02T10:00:00.000Z",
+    })
+    expect(afterExpiry.capability).toBe("selected")
+    expect(afterExpiry.active_binding?.identity_nullifier_id).toBe("nul_expiring")
+    expect(afterExpiry.selectable_documents).toEqual([])
   })
 
   test("fails closed on conflicting nationality evidence for one document", async () => {
@@ -157,5 +207,19 @@ describe("reward identity document selection", () => {
       identityNullifierId: "nul_self_a",
       now: "2026-08-01T11:00:00.000Z",
     })).toBe(1)
+  })
+
+  test("classifies only unique violations for the active-binding constraint and follows causes", () => {
+    const conflict = Object.assign(new Error('duplicate key value violates unique constraint "idx_reward_identity_bindings_user_active"'), {
+      code: "23505",
+      constraint: "idx_reward_identity_bindings_user_active",
+    })
+    expect(isActiveRewardIdentityBindingUniqueConflict(conflict)).toBe(true)
+    expect(isActiveRewardIdentityBindingUniqueConflict(Object.assign(
+      new Error("UNIQUE constraint failed: reward_identity_bindings.user_id"),
+      { code: "SQLITE_CONSTRAINT_UNIQUE" },
+    ))).toBe(true)
+    expect(isActiveRewardIdentityBindingUniqueConflict(new Error("index idx_reward_identity_bindings_user_active unavailable"))).toBe(false)
+    expect(isActiveRewardIdentityBindingUniqueConflict(new Error("outer", { cause: conflict }))).toBe(true)
   })
 })
