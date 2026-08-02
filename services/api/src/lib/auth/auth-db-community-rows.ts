@@ -5,6 +5,7 @@ import {
   stringOrNull,
 } from "../sql-row"
 import type { Job, Post } from "../../types"
+import { isoUtcFromRow } from "../bookings/codecs"
 
 export type CommunityRow = {
   community_id: string
@@ -131,8 +132,8 @@ export function toCommunityRow(row: unknown): CommunityRow {
     follower_count: typeof rowValue(row, "follower_count") === "number"
       ? rowValue(row, "follower_count") as number
       : null,
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
+    created_at: isoUtcFromRow(rowValue(row, "created_at")),
+    updated_at: isoUtcFromRow(rowValue(row, "updated_at")),
   }
 }
 
