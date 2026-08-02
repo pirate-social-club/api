@@ -827,6 +827,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
     return false
   }
   let leaseId: string | null = null
+  let claimedByRecovery = false
   if (Date.parse(intent.expiresAt) <= Date.parse(now)) {
     if (!intent.chatStudySessionId) {
       const expired = await getControlPlaneClient(input.env).execute({
@@ -865,6 +866,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
     if (recovery === "handled") return true
     intent = recovery.intent
     leaseId = recovery.leaseId
+    claimedByRecovery = true
   }
   if (leaseId === null
     && intent.status === "processing"
@@ -925,6 +927,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
     if (claim.rowsAffected !== 1) return true
   }
   const claimedLeaseId = leaseId
+  const requireLeaseMatch = claimedByRecovery ? 0 : 1
 
   const processClaimedVoice = async (): Promise<void> => {
     let result: SongStudyAttemptResult
@@ -975,9 +978,9 @@ export async function handleTelegramStudyVoiceMessage(input: {
               updated_at = ?3
           WHERE intent_id = ?1
             AND status = 'processing'
-            AND processing_lease_id = ?2
+            AND (?4 = 0 OR processing_lease_id = ?2)
         `,
-        args: [intent.id, claimedLeaseId, nowIso()],
+        args: [intent.id, claimedLeaseId, nowIso(), requireLeaseMatch],
       })
     } catch (error) {
       const processingAttemptCount = intent.processingAttemptCount + 1
@@ -996,9 +999,9 @@ export async function handleTelegramStudyVoiceMessage(input: {
                 updated_at = ?4
             WHERE intent_id = ?1
               AND status = 'processing'
-              AND processing_lease_id = ?2
+              AND (?5 = 0 OR processing_lease_id = ?2)
           `,
-          args: [intent.id, claimedLeaseId, errorMessage, failedAt],
+          args: [intent.id, claimedLeaseId, errorMessage, failedAt, requireLeaseMatch],
         })
         await sendTelegramMessage(input.bot, {
           chat_id: chatId,
@@ -1024,9 +1027,9 @@ export async function handleTelegramStudyVoiceMessage(input: {
               updated_at = ?4
           WHERE intent_id = ?1
             AND status = 'processing'
-            AND processing_lease_id = ?2
+            AND (?6 = 0 OR processing_lease_id = ?2)
         `,
-        args: [intent.id, claimedLeaseId, errorMessage, failedAt, retryExpiresAt],
+        args: [intent.id, claimedLeaseId, errorMessage, failedAt, retryExpiresAt, requireLeaseMatch],
       })
       await sendTelegramMessage(input.bot, {
         chat_id: chatId,

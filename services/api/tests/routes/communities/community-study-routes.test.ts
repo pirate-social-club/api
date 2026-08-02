@@ -1994,10 +1994,11 @@ describe("community study routes", () => {
       expect(telegramRequests.length).toBeGreaterThan(requestsBeforeExpiredReply)
 
       const nextChatIntent = recoveredIntents.rows.find((row) => row.status === "pending")
-      expect(nextChatIntent?.intent_id).toBeTruthy()
+      const nextChatIntentId = String(nextChatIntent?.intent_id ?? "")
+      expect(nextChatIntentId).toBeTruthy()
       await ctx.client.execute({
         sql: "UPDATE telegram_study_voice_intents SET expires_at = '2020-01-01T00:00:00.000Z' WHERE intent_id = ?1",
-        args: [nextChatIntent?.intent_id],
+        args: [nextChatIntentId],
       })
       await ctx.client.execute(
         "UPDATE telegram_chat_study_sessions SET expires_at = '2020-01-01T00:00:00.000Z' WHERE chat_study_session_id = 'tcs_expired_recovery'",
