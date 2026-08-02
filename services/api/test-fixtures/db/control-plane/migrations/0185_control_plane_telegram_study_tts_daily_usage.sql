@@ -6,7 +6,10 @@ CREATE TABLE telegram_study_tts_daily_usage (
   updated_at TEXT NOT NULL,
   PRIMARY KEY (community_id, usage_day),
   CONSTRAINT chk_telegram_study_tts_daily_usage_day
-    CHECK (length(usage_day) = 10 AND usage_day = date(usage_day)),
+    CHECK (
+      length(usage_day) = 10
+      AND usage_day = CAST(date(usage_day) AS TEXT)
+    ),
   CONSTRAINT chk_telegram_study_tts_daily_usage_character_count
     CHECK (character_count >= 0),
   CONSTRAINT fk_telegram_study_tts_daily_usage_community
