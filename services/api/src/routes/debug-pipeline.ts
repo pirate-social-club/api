@@ -151,6 +151,20 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
       continue
     }
     const now = new Date().toISOString()
+    const poolRow = await c.env.COMMUNITY_D1_SHARD.communityD1GetPoolRow({
+      adminToken: c.env.SHARD_ADMIN_TOKEN,
+      bindingName,
+    })
+    if (!poolRow.ok || poolRow.value.row?.communityId !== communityId) {
+      results.push({
+        community_id: communityId,
+        binding_name: bindingName,
+        ok: false,
+        error: poolRow.ok ? "pool_allocation_changed" : poolRow.code,
+      })
+      continue
+    }
+    const expectedPoolVersion = poolRow.value.row.version
     await client.execute({
       sql: `
         UPDATE community_database_routing
@@ -164,6 +178,7 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
       adminToken: c.env.SHARD_ADMIN_TOKEN,
       communityId,
       bindingName,
+      expectedPoolVersion,
       now,
     })
     if (!reclaimed.ok) {

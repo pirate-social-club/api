@@ -252,6 +252,14 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
           `d1_native provisioning failed: bootstrap guard rejected load (${loadResult.message})`,
         )
       }
+      if (loadResult.code === "shard_snapshot_mismatch") {
+        throw new HttpError(
+          409,
+          "d1_snapshot_mismatch",
+          `d1_native provisioning found a committed bootstrap from a different snapshot revision (${loadResult.message})`,
+          false,
+        )
+      }
       throw internalError(
         `d1_native provisioning failed: shard communityD1LoadSnapshot returned ${loadResult.code}: ${loadResult.message}`,
       )
