@@ -1965,15 +1965,22 @@ describe("community study routes", () => {
       expect(concurrentExpiredWebhook.status).toBe(200)
       expect(backgroundTasks).toHaveLength(1)
       await Promise.all(backgroundTasks)
-      const recoveredIntents = await ctx.client.execute({
-        sql: `
-          SELECT intent_id, status, telegram_voice_message_id,
-                 telegram_voice_file_id, telegram_voice_file_unique_id
-          FROM telegram_study_voice_intents
-          WHERE chat_study_session_id = 'tcs_expired_recovery'
-          ORDER BY created_at, intent_id
-        `,
-      })
+      let recoveredIntents = await ctx.client.execute({ sql: "SELECT 1 WHERE 0" })
+      for (let index = 0; index < 30; index += 1) {
+        recoveredIntents = await ctx.client.execute({
+          sql: `
+            SELECT intent_id, status, telegram_voice_message_id,
+                   telegram_voice_file_id, telegram_voice_file_unique_id
+            FROM telegram_study_voice_intents
+            WHERE chat_study_session_id = 'tcs_expired_recovery'
+            ORDER BY created_at, intent_id
+          `,
+        })
+        if (recoveredIntents.rows.some((row) =>
+          row.telegram_voice_message_id === 657 && row.status === "consumed"
+        )) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
       const staleRecoveredIntent = recoveredIntents.rows.find((row) => row.intent_id === expiringIntent.id)
       const claimedReplacements = recoveredIntents.rows.filter((row) => row.telegram_voice_message_id === 657)
       expect(staleRecoveredIntent).toMatchObject({
