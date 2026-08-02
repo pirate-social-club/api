@@ -783,6 +783,56 @@ async function recoverExpiredChatVoiceIntent(input: {
   }
 }
 
+async function consumeClaimedVoiceIntent(input: {
+  claimedByRecovery: boolean
+  consumedAt: string
+  env: Env
+  intentId: string
+  leaseId: string
+}): Promise<void> {
+  const client = getControlPlaneClient(input.env)
+  const tx = await client.transaction("write")
+  try {
+    const consumed = await tx.execute({
+      sql: `
+        UPDATE telegram_study_voice_intents
+        SET status = 'consumed', consumed_at = ?3,
+            processing_lease_id = NULL, processing_lease_expires_at = NULL,
+            updated_at = ?3
+        WHERE intent_id = ?1
+          AND status = 'processing'
+          AND (?4 = 0 OR processing_lease_id = ?2)
+      `,
+      args: [input.intentId, input.leaseId, input.consumedAt, input.claimedByRecovery ? 0 : 1],
+    })
+    if (input.claimedByRecovery && (consumed.rowsAffected ?? 0) !== 1) {
+      await tx.execute({
+        sql: `
+          UPDATE telegram_study_voice_intents
+          SET status = 'consumed', consumed_at = ?2,
+              processing_lease_id = NULL, processing_lease_expires_at = NULL,
+              updated_at = ?2
+          WHERE intent_id = ?1
+        `,
+        args: [input.intentId, input.consumedAt],
+      })
+    }
+    const verified = await tx.execute({
+      sql: "SELECT status FROM telegram_study_voice_intents WHERE intent_id = ?1 LIMIT 1",
+      args: [input.intentId],
+    })
+    if (stringOrNull(rowValue(verified.rows[0], "status")) !== "consumed") {
+      throw new Error("Telegram voice intent could not be consumed")
+    }
+    await tx.commit()
+  } catch (error) {
+    await tx.rollback().catch(() => undefined)
+    throw error
+  } finally {
+    tx.close()
+  }
+}
+
 export async function handleTelegramStudyVoiceMessage(input: {
   bot: TelegramCommunityBotCredential
   env: Env
@@ -968,36 +1018,13 @@ export async function handleTelegramStudyVoiceMessage(input: {
         env: input.env,
         postId: intent.postId,
       })
-      const consumed = await getControlPlaneClient(input.env).execute({
-        sql: `
-          UPDATE telegram_study_voice_intents
-          SET status = 'consumed',
-              consumed_at = ?3,
-              processing_lease_id = NULL,
-              processing_lease_expires_at = NULL,
-              updated_at = ?3
-          WHERE intent_id = ?1
-            AND status = 'processing'
-            AND (?4 = 0 OR processing_lease_id = ?2)
-        `,
-        args: [intent.id, claimedLeaseId, nowIso(), requireLeaseMatch],
+      await consumeClaimedVoiceIntent({
+        claimedByRecovery,
+        consumedAt: nowIso(),
+        env: input.env,
+        intentId: intent.id,
+        leaseId: claimedLeaseId,
       })
-      if (claimedByRecovery && (consumed.rowsAffected ?? 0) !== 1) {
-        const recoveredConsumedAt = nowIso()
-        const recoveredConsumed = await getControlPlaneClient(input.env).execute({
-          sql: `
-            UPDATE telegram_study_voice_intents
-            SET status = 'consumed', consumed_at = ?2,
-                processing_lease_id = NULL, processing_lease_expires_at = NULL,
-                updated_at = ?2
-            WHERE intent_id = ?1
-          `,
-          args: [intent.id, recoveredConsumedAt],
-        })
-        if ((recoveredConsumed.rowsAffected ?? 0) !== 1) {
-          throw new Error("Recovered Telegram voice intent could not be consumed")
-        }
-      }
     } catch (error) {
       const processingAttemptCount = intent.processingAttemptCount + 1
       const errorMessage = error instanceof Error ? error.message : String(error)
