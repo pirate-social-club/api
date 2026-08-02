@@ -23,6 +23,7 @@ import {
   TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
 } from "../communities/assistant-policy/speech-service"
 import { getTelegramStudyCopy } from "./study-copy"
+import { telegramStudyPlaybackButton } from "./chat-study-playback-service"
 import { isStudyHelperLanguage, type StudyDeliveryMode } from "./study-preference-service"
 import {
   decryptActiveCommunityTelegramBotOrNull,
@@ -323,6 +324,9 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const copy = getTelegramStudyCopy(language)
   const text = [copy.sayThis, input.intent.referenceText]
   const disclosure = copy.disclosure
+  const playbackMarkup = input.intent.chatStudySessionId
+    ? { inline_keyboard: [[telegramStudyPlaybackButton(input.intent.chatStudySessionId)]] }
+    : undefined
   if (input.includeDisclosure) {
     text.push(disclosure)
   }
@@ -330,7 +334,11 @@ async function deliverTelegramStudyVoicePrompt(input: {
   let deliveryWarning: string | null = null
   try {
     if (input.intent.deliveryMode !== "audio") {
-      const sent = await sendTelegramMessage(input.intent.bot, { chat_id: input.intent.telegramUserId, text: text.join("\n\n") })
+      const sent = await sendTelegramMessage(input.intent.bot, {
+        chat_id: input.intent.telegramUserId,
+        text: text.join("\n\n"),
+        reply_markup: playbackMarkup,
+      })
       promptMessageId = sent.message_id
     }
     if (input.intent.deliveryMode !== "text") {
@@ -340,6 +348,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
           chat_id: input.intent.telegramUserId,
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
           ...(input.intent.deliveryMode === "audio" ? { caption: input.includeDisclosure ? `${copy.sayThis}\n\n${disclosure}` : copy.sayThis } : {}),
+          reply_markup: playbackMarkup,
         })
         promptMessageId ??= sent.message_id
       } catch (error) {
@@ -348,6 +357,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
           const fallback = await sendTelegramMessage(input.intent.bot, {
             chat_id: input.intent.telegramUserId,
             text: text.join("\n\n"),
+            reply_markup: playbackMarkup,
           })
           promptMessageId = fallback.message_id
         }

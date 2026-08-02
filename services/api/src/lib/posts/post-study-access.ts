@@ -15,6 +15,7 @@ export type StudyPost = {
   post_id: string
   post_type: string
   song_cover_art_ref: string | null
+  song_artifact_bundle_id?: string | null
   song_title: string | null
   source_language: string | null
   status: string
@@ -27,7 +28,8 @@ export async function getStudyPostById(client: ReadClient, postId: string): Prom
     sql: `
       SELECT post_id, community_id, author_user_id, post_type, status, visibility,
              lyrics,
-             title, song_title, song_cover_art_ref, source_language, access_mode, age_gate_policy, asset_id
+             title, song_title, song_cover_art_ref, song_artifact_bundle_id,
+             source_language, access_mode, age_gate_policy, asset_id
       FROM posts
       WHERE post_id = ?1
       LIMIT 1
@@ -45,6 +47,7 @@ export async function getStudyPostById(client: ReadClient, postId: string): Prom
     post_id: readString(row.post_id) ?? "",
     post_type: readString(row.post_type) ?? "",
     song_cover_art_ref: readString(row.song_cover_art_ref),
+    song_artifact_bundle_id: readString(row.song_artifact_bundle_id),
     song_title: readString(row.song_title),
     source_language: readString(row.source_language),
     status: readString(row.status) ?? "",
