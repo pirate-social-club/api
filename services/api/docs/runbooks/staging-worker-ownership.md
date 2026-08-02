@@ -84,16 +84,17 @@ anything:
 
 ## Current holds
 
-- **2026-08-02 16:08Z–16:45Z — D1 allocation-fencing staging smoke.** Codex
-  holds `pirate-api-staging` on API
-  `0c50c6dd7b641727f8fd8833f0248b47617c4df9` while verifying canonical
-  community timestamps and fenced D1-native community provisioning. Do not
-  redeploy during this window; the hold will be released when evidence is
-  collected.
+None.
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
+
+- **2026-08-02** — D1 allocation-fencing staging smoke passed on API
+  `0c50c6dd7`. Real community provisioning reached `active`, its job succeeded,
+  and the community was archived. An authenticated read serialized `created` as
+  finite Unix seconds (`2026-08-02T16:13:30.000Z`), with no timestamp-decoder
+  error. Staging was left on `0c50c6dd7` (Worker `fb01442d`).
 
 - **2026-08-02** — The unreleased 2026-07-27 Lit rewards E2E rehearsal hold on
   API `ef87f6069` was invalidated by later shared-staging deploys; the Worker was
