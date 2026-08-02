@@ -32,6 +32,18 @@ evidence are terminal for that qualification. Retryable rows may advance when
 the user supplies evidence. Resolved and terminal rows are immutable decision
 snapshots.
 
+Every row carries an `evaluator_version`. The original resolver and all rows
+backfilled before its first logic change are `nationality_binding_v1`. A future
+resolver version may advance a retryable row and replace that version, but the
+database conflict predicate keeps resolved and terminal decisions frozen with
+the evaluator version that produced them.
+
+Evidence expiry is intentionally not a shadow-evaluation filter. Expiry means
+the user must re-prove before making a new document selection; it does not
+revoke an existing selection or its accepted evidence. Revocation, nullifier
+status, provider/user mismatch, and conflicting bound nationalities still fail
+closed.
+
 Shadow evaluation runs only after the uniform reward transaction finishes and
 its errors are non-blocking. It never branches credit flow, reserves budget, or
 updates campaign, contribution-lot, reservation, reward-event, claim, pending

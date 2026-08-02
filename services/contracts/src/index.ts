@@ -140,6 +140,7 @@ export type Profile = {
   bio?: string | null;
   bio_source?: "ens" | "manual" | "none" | null;
   preferred_locale?: string | null;
+  explicit_content_preference?: "show" | "hide";
   display_verified_nationality_badge?: boolean | null;
   nationality_badge_country?: string | null;
   linked_handles?: Array<LinkedHandle> | null;
