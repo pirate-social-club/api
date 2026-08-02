@@ -623,19 +623,6 @@ async function isKnownVoiceDelivery(input: {
   return Boolean(stringOrNull(rowValue(result.rows[0], "intent_id")))
 }
 
-async function sendExpiredMessage(bot: TelegramCommunityBotCredential, chatId: string, targetLanguage: string): Promise<void> {
-  const language = isStudyHelperLanguage(targetLanguage) ? targetLanguage : "en"
-  await sendTelegramMessage(bot, {
-    chat_id: chatId,
-    text: getTelegramStudyCopy(language).exerciseExpired,
-  }).catch((error) => {
-    console.warn("[telegram-study] expired reply failed", {
-      communityId: bot.communityId,
-      error: error instanceof Error ? error.message : String(error),
-    })
-  })
-}
-
 async function sendChatStudyRestart(input: {
   bot: TelegramCommunityBotCredential
   chatId: string
@@ -659,6 +646,31 @@ async function sendChatStudyRestart(input: {
       error: error instanceof Error ? error.message : String(error),
     })
   })
+}
+
+async function createLegacyRestartSession(input: {
+  bot: TelegramCommunityBotCredential
+  env: Env
+  intent: VoiceIntentRow
+  now: string
+}): Promise<string> {
+  const sessionId = makeId("tcs")
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO telegram_chat_study_sessions (
+        chat_study_session_id, telegram_community_bot_id, telegram_user_id,
+        user_id, community_id, post_id, target_language, status,
+        action_token, action_kind, action_payload_json, expires_at,
+        created_at, updated_at
+      ) VALUES (
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'failed', ?8, 'none', '{}', ?9, ?9, ?9
+      )
+    `,
+    args: [sessionId, input.bot.id, input.intent.telegramUserId, input.intent.userId,
+      input.intent.communityId, input.intent.postId, input.intent.targetLanguage,
+      crypto.randomUUID().replaceAll("-", "").slice(0, 18), input.now],
+  })
+  return sessionId
 }
 
 async function recoverExpiredChatVoiceIntent(input: {
@@ -784,7 +796,6 @@ async function recoverExpiredChatVoiceIntent(input: {
 }
 
 async function consumeClaimedVoiceIntent(input: {
-  claimedByRecovery: boolean
   consumedAt: string
   env: Env
   intentId: string
@@ -793,7 +804,7 @@ async function consumeClaimedVoiceIntent(input: {
   const client = getControlPlaneClient(input.env)
   const tx = await client.transaction("write")
   try {
-    const consumed = await tx.execute({
+    await tx.execute({
       sql: `
         UPDATE telegram_study_voice_intents
         SET status = 'consumed', consumed_at = ?3,
@@ -801,22 +812,10 @@ async function consumeClaimedVoiceIntent(input: {
             updated_at = ?3
         WHERE intent_id = ?1
           AND status = 'processing'
-          AND (?4 = 0 OR processing_lease_id = ?2)
+          AND processing_lease_id = ?2
       `,
-      args: [input.intentId, input.leaseId, input.consumedAt, input.claimedByRecovery ? 0 : 1],
+      args: [input.intentId, input.leaseId, input.consumedAt],
     })
-    if (input.claimedByRecovery && (consumed.rowsAffected ?? 0) !== 1) {
-      await tx.execute({
-        sql: `
-          UPDATE telegram_study_voice_intents
-          SET status = 'consumed', consumed_at = ?2,
-              processing_lease_id = NULL, processing_lease_expires_at = NULL,
-              updated_at = ?2
-          WHERE intent_id = ?1
-        `,
-        args: [input.intentId, input.consumedAt],
-      })
-    }
     const verified = await tx.execute({
       sql: "SELECT status FROM telegram_study_voice_intents WHERE intent_id = ?1 LIMIT 1",
       args: [input.intentId],
@@ -891,7 +890,18 @@ export async function handleTelegramStudyVoiceMessage(input: {
         args: [intent.id, now, telegramMessageId, voiceFileId, voiceFileUniqueId],
       })
       if ((expired.rowsAffected ?? 0) === 1) {
-        await sendExpiredMessage(input.bot, chatId, intent.targetLanguage)
+        const restartSessionId = await createLegacyRestartSession({
+          bot: input.bot,
+          env: input.env,
+          intent,
+          now,
+        })
+        await sendChatStudyRestart({
+          bot: input.bot,
+          chatId,
+          chatStudySessionId: restartSessionId,
+          targetLanguage: intent.targetLanguage,
+        })
       }
       return true
     }
@@ -1019,7 +1029,6 @@ export async function handleTelegramStudyVoiceMessage(input: {
         postId: intent.postId,
       })
       await consumeClaimedVoiceIntent({
-        claimedByRecovery,
         consumedAt: nowIso(),
         env: input.env,
         intentId: intent.id,

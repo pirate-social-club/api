@@ -25,6 +25,7 @@ type StudyCopy = {
   translationsReady: string
   sayThis: string
   startAgain: string
+  suggested: string
   studyUnavailable: string
   buttonExpired: string
   alreadyHandled: string
@@ -40,7 +41,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "This study exercise expired.", extra: "Extra", lineWas: "The line was", labelSeparator: ":", missing: "Missing",
     noSongs: "No songs are ready to study in this community yet.", notQuite: "Not quite", nothingDetected: "(nothing detected)",
     pendingLocalization: "Translations are being prepared. Voice practice is ready now.", processingError: "I couldn't process that answer. Send /study to restart.", sayThis: "Say this:",
-    startAgain: "Start again", studyUnavailable: "Study is not available here yet.", translationsReady: "Translations are ready.", youSaid: "You said",
+    startAgain: "Start again", studyUnavailable: "Study is not available here yet.", suggested: "Suggested", translationsReady: "Translations are ready.", youSaid: "You said",
   },
   zh: {
     checkAgain: "再检查", chooseDelivery: "你希望如何接收练习提示？", chooseLanguage: "选择辅助语言：",
@@ -50,7 +51,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "此学习练习已过期。", extra: "多说", lineWas: "原句是", labelSeparator: "：", missing: "漏说",
     noSongs: "这个社区还没有可学习的歌曲。", notQuite: "还不完全正确", nothingDetected: "（未检测到语音）",
     pendingLocalization: "翻译正在准备中。现在可以先进行语音练习。", processingError: "无法处理这个答案。请发送 /study 重新开始。", sayThis: "请说：",
-    startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", translationsReady: "翻译已准备好。", youSaid: "你说的是",
+    startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", suggested: "推荐", translationsReady: "翻译已准备好。", youSaid: "你说的是",
   },
   ar: {
     checkAgain: "تحقق مجددًا", chooseDelivery: "كيف تريد تلقي التمارين؟", chooseLanguage: "اختر لغة المساعدة:",
@@ -60,7 +61,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "انتهت صلاحية هذا التمرين.", extra: "إضافي", lineWas: "كان السطر", labelSeparator: ":", missing: "ناقص",
     noSongs: "لا توجد أغانٍ جاهزة للدراسة في هذا المجتمع بعد.", notQuite: "ليس تمامًا", nothingDetected: "(لم يتم اكتشاف شيء)",
     pendingLocalization: "يجري إعداد الترجمات. التدريب الصوتي متاح الآن.", processingError: "تعذر معالجة الإجابة. أرسل /study للبدء مجددًا.", sayThis: "قل هذا:",
-    startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
+    startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", suggested: "مقترح", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
   },
   ka: {
     checkAgain: "ხელახლა შემოწმება", chooseDelivery: "როგორ გსურთ სავარჯიშოების მიღება?", chooseLanguage: "აირჩიეთ დამხმარე ენა:",
@@ -70,7 +71,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "ამ სავარჯიშოს ვადა გაუვიდა.", extra: "ზედმეტი", lineWas: "სტრიქონი იყო", labelSeparator: ":", missing: "აკლია",
     noSongs: "ამ თემში სასწავლად მზად სიმღერები ჯერ არ არის.", notQuite: "მთლად არა", nothingDetected: "(ვერაფერი დაფიქსირდა)",
     pendingLocalization: "თარგმანები მზადდება. ხმოვანი ვარჯიში უკვე შეგიძლიათ.", processingError: "პასუხი ვერ დამუშავდა. თავიდან დასაწყებად გაგზავნეთ /study.", sayThis: "თქვით:",
-    startAgain: "თავიდან დაწყება", studyUnavailable: "სწავლა აქ ჯერ ხელმისაწვდომი არ არის.", translationsReady: "თარგმანები მზადაა.", youSaid: "თქვენ თქვით",
+    startAgain: "თავიდან დაწყება", studyUnavailable: "სწავლა აქ ჯერ ხელმისაწვდომი არ არის.", suggested: "რეკომენდებული", translationsReady: "თარგმანები მზადაა.", youSaid: "თქვენ თქვით",
   },
 }
 

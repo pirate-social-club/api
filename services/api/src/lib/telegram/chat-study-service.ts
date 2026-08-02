@@ -143,11 +143,17 @@ function orderedLanguageButtons(suggested: StudyHelperLanguage | null) {
     : STUDY_LANGUAGE_BUTTONS
 }
 
-function languagePickerMarkup(token: string, buttons: typeof STUDY_LANGUAGE_BUTTONS, suggested: StudyHelperLanguage | null) {
+function languagePickerMarkup(
+  token: string,
+  buttons: typeof STUDY_LANGUAGE_BUTTONS,
+  suggested: StudyHelperLanguage | null,
+  language: StudyHelperLanguage,
+) {
+  const copy = getTelegramStudyCopy(language)
   return {
     inline_keyboard: buttons.map(({ code, label }, index) => [{
       callback_data: callbackData(token, index),
-      text: code === suggested ? `${label} · Suggested` : label,
+      text: code === suggested ? `${label} · ${copy.suggested}` : label,
     }]),
   }
 }
@@ -548,7 +554,7 @@ async function runTelegramChatStudyStart(input: {
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: copy.chooseLanguage,
-      reply_markup: languagePickerMarkup(session.actionToken, buttons, suggestedLanguage),
+      reply_markup: languagePickerMarkup(session.actionToken, buttons, suggestedLanguage, initialLanguage),
     })
     await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
     return true
@@ -1061,6 +1067,13 @@ export async function handleTelegramChatStudyCallback(input: {
     const telegramUserId = telegramIdentifier(input.callback.from?.id)
     const chatId = telegramIdentifier(input.callback.message?.chat?.id)
     if (!callbackQueryId || !telegramUserId || !chatId) return true
+    if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) {
+      await answerTelegramCallbackQuery(input.bot, {
+        callback_query_id: callbackQueryId,
+        text: getTelegramStudyCopy("en").studyUnavailable,
+      }).catch(() => undefined)
+      return true
+    }
     const result = await getControlPlaneClient(input.env).execute({
       sql: `
         SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
