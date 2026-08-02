@@ -312,7 +312,7 @@ function telegramCommunityStartMarkup(input: {
   const rows: Array<Array<Record<string, unknown>>> = []
   if (input.studyEnabled) {
     rows.push([{ text: "📚 Study songs", callback_data: TELEGRAM_START_MENU_STUDY }])
-    rows.push([{ text: "⚙️ Language & delivery", callback_data: TELEGRAM_START_MENU_PREFERENCES }])
+    rows.push([{ text: "⚙️ Language", callback_data: TELEGRAM_START_MENU_PREFERENCES }])
   }
   if (input.assistantEnabled) {
     rows.push([{ text: "💬 Ask the assistant", callback_data: TELEGRAM_START_MENU_ASSISTANT }])

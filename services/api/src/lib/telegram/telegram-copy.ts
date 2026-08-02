@@ -44,7 +44,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "Verify to join",
     },
     start: {
-      alreadyJoined: ({ community }) => `You've already joined "${community}".`,
+      alreadyJoined: ({ community }) => `Welcome to ${community} 🎵\n\nWhat would you like to do?`,
       fallback: ({ community }) => `Open ${community} in Pirate to continue.`,
       gateFailed: ({ community }) =>
         `Your Pirate account does not meet ${community}'s requirements yet. Open Pirate to review what is missing.`,
@@ -74,7 +74,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "تحقق للانضمام",
     },
     start: {
-      alreadyJoined: ({ community }) => `أنت في ${community}.`,
+      alreadyJoined: ({ community }) => `مرحبًا بك في ${community} 🎵\n\nماذا تريد أن تفعل؟`,
       fallback: ({ community }) => `افتح ${community} في Pirate للمتابعة.`,
       gateFailed: ({ community }) =>
         `حسابك في Pirate لا يستوفي متطلبات ${community} بعد. افتح Pirate لمعرفة ما ينقصك.`,
@@ -104,7 +104,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "验证并加入",
     },
     start: {
-      alreadyJoined: ({ community }) => `你已加入 ${community}。`,
+      alreadyJoined: ({ community }) => `欢迎来到 ${community} 🎵\n\n你想做什么？`,
       fallback: ({ community }) => `在 Pirate 中打开 ${community} 以继续。`,
       gateFailed: ({ community }) =>
         `你的 Pirate 账号暂未满足 ${community} 的要求。打开 Pirate 查看还需要完成什么。`,
@@ -134,7 +134,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "გაიარეთ ვერიფიკაცია",
     },
     start: {
-      alreadyJoined: ({ community }) => `თქვენ უკვე ხართ ${community}-ში.`,
+      alreadyJoined: ({ community }) => `მოგესალმებით ${community}-ში 🎵\n\nრის გაკეთება გსურთ?`,
       fallback: ({ community }) => `გასაგრძელებლად გახსენით ${community} Pirate-ში.`,
       gateFailed: ({ community }) =>
         `თქვენი Pirate ანგარიში ჯერ არ აკმაყოფილებს ${community}-ის მოთხოვნებს. გახსენით Pirate და ნახეთ, რა არის დასასრულებელი.`,

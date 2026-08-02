@@ -597,6 +597,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:study")).toBe(true)
+      expect(welcomeMarkup.inline_keyboard?.flat().find((button) => button.callback_data === "menu:preferences")?.text).toBe("⚙️ Language")
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:assistant")).toBe(false)
       const sessionsAfterStart = await ctx.client.execute(
         "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
@@ -788,6 +789,11 @@ describe("community study routes", () => {
       )?.callback_data
       expect(secondPageSongCallback).toMatch(/^study:[a-f0-9]{18}:0$/)
 
+      await ctx.client.execute({
+        sql: "UPDATE telegram_chat_study_sessions SET expires_at = ?2 WHERE chat_study_session_id = ?1",
+        args: [selectingSession.rows[0]?.chat_study_session_id, new Date(Date.now() + 60_000).toISOString()],
+      })
+
       const select = await webhook({
         update_id: 5002,
         callback_query: {
@@ -825,6 +831,11 @@ describe("community study routes", () => {
         typeof body.text === "string" && body.text.includes("选择最佳翻译。")
       )
       expect(exercisePrompt).toBeTruthy()
+      const mcqDeliveryWindow = await ctx.client.execute({
+        sql: "SELECT expires_at FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
+        args: [selectingSession.rows[0]?.chat_study_session_id],
+      })
+      expect(Date.parse(String(mcqDeliveryWindow.rows[0]?.expires_at))).toBeGreaterThan(Date.now() + 29 * 60_000)
       const answerMarkup = exercisePrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -986,7 +997,7 @@ describe("community study routes", () => {
       const languageButtons = (languagePicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "ქართული"])
+      expect(languageButtons.map((button) => button.text)).toEqual(["English · 推荐", "中文", "العربية", "ქართული"])
       await webhook({
         update_id: 5007,
         callback_query: {
@@ -1010,6 +1021,39 @@ describe("community study routes", () => {
         sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
         args: [session.userId],
       })).rows[0]).toMatchObject({ helper_language: "zh", delivery_mode: "text" })
+
+      await ctx.client.execute({
+        sql: "DELETE FROM user_study_preferences WHERE user_id = ?1",
+        args: [session.userId],
+      })
+      telegramBodies.length = 0
+      const firstRun = await webhook({
+        update_id: 5009,
+        message: {
+          chat: { id: 454545, type: "private" }, date: 1785499301,
+          from: { id: 454545, is_bot: false, language_code: "zh" },
+          message_id: 621, text: "/study",
+        },
+      })
+      expect(firstRun.status).toBe(200)
+      const firstRunLanguagePicker = telegramBodies.find((body) => body.text === "选择辅助语言：")
+      const firstRunLanguageButtons = (firstRunLanguagePicker?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }).inline_keyboard?.flat() ?? []
+      expect(firstRunLanguageButtons.map((button) => button.text)).toEqual(["中文 · 推荐", "English", "العربية", "ქართული"])
+      await webhook({
+        update_id: 5011,
+        callback_query: {
+          id: "callback-first-run-language", data: firstRunLanguageButtons[0]!.callback_data,
+          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 706 },
+        },
+      })
+      expect(telegramBodies.some((body) => body.text === "你希望如何接收练习提示？")).toBe(false)
+      expect(telegramBodies.some((body) => body.text === "选择一首歌来学习：")).toBe(true)
+      expect((await ctx.client.execute({
+        sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
+        args: [session.userId],
+      })).rows[0]).toMatchObject({ helper_language: "zh", delivery_mode: "both" })
 
       await ctx.client.execute({
         sql: `
@@ -1434,6 +1478,21 @@ describe("community study routes", () => {
         last_error_code: "telegram_prompt_audio_fell_back_to_text",
         prompt_delivery_status: "sent",
       })
+      const refreshedWindow = await ctx.client.execute({
+        sql: `
+          SELECT i.prompt_sent_at, i.expires_at AS intent_expires_at,
+                 s.expires_at AS session_expires_at
+          FROM telegram_study_voice_intents i
+          JOIN telegram_chat_study_sessions s
+            ON s.chat_study_session_id = i.chat_study_session_id
+          WHERE i.chat_study_session_id = 'tcs_audio' AND i.status = 'pending'
+        `,
+      })
+      expect(refreshedWindow.rows[0]?.intent_expires_at).toBe(refreshedWindow.rows[0]?.session_expires_at)
+      expect(
+        Date.parse(String(refreshedWindow.rows[0]?.intent_expires_at))
+          - Date.parse(String(refreshedWindow.rows[0]?.prompt_sent_at)),
+      ).toBe(30 * 60 * 1000)
 
       cachedAudio.clear()
       await createTelegramChatStudyVoiceIntent({
@@ -1846,29 +1905,109 @@ describe("community study routes", () => {
         args: [session.userId, now],
       })
 
-      const expiringIntentResponse = await app.request(
-        `http://pirate.test/communities/${communityId}/posts/pst_study_route_song/study/telegram_voice_intents`,
+      const legacyExpiredIntent = await createTelegramStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        communityId,
+        env: ctx.env,
+        exerciseId: nextExercise!.id,
+        postId: "pst_study_route_song",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })
+      await ctx.client.execute({
+        sql: "UPDATE telegram_study_voice_intents SET expires_at = '2020-01-01T00:00:00.000Z' WHERE intent_id = ?1",
+        args: [legacyExpiredIntent.id],
+      })
+      const legacyRequestsBefore = telegramRequests.length
+      expect((await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
         {
           method: "POST",
           headers: {
-            authorization: `Bearer ${session.accessToken}`,
             "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
           },
           body: JSON.stringify({
-            exercise_id: nextExercise!.id,
-            target_language: "es",
+            ...voiceUpdate,
+            update_id: 90035,
+            message: {
+              ...voiceUpdate.message,
+              message_id: 660,
+              voice: {
+                ...voiceUpdate.message.voice,
+                file_id: "voice-study-file-legacy-expired",
+                file_unique_id: "voice-study-unique-legacy-expired",
+              },
+            },
           }),
         },
         ctx.env,
+      )).status).toBe(200)
+      const legacyRestartRequest = telegramRequests.slice(legacyRequestsBefore).find((request) => request.url.endsWith("/sendMessage"))
+      const legacyRestartBody = await legacyRestartRequest!.clone().json() as {
+        reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
+      }
+      const legacyRestartData = legacyRestartBody.reply_markup?.inline_keyboard?.flat()[0]?.callback_data
+      expect(legacyRestartData).toMatch(/^study-restart:tcs_[A-Za-z0-9_-]+$/)
+      expect((await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify({
+            update_id: 90036,
+            callback_query: {
+              id: "callback-legacy-study-restart",
+              data: legacyRestartData,
+              from: { id: 787878, is_bot: false, language_code: "en" },
+              message: { chat: { id: 787878, type: "private" }, message_id: 901 },
+            },
+          }),
+        },
+        ctx.env,
+      )).status).toBe(200)
+      expect(telegramRequests.slice(legacyRequestsBefore).some((request) => request.url.endsWith("/answerCallbackQuery"))).toBe(true)
+      await ctx.client.execute(
+        "UPDATE telegram_chat_study_sessions SET status = 'canceled' WHERE telegram_community_bot_id = 'tcb_study_voice' AND status IN ('selecting', 'active', 'processing')",
       )
-      expect(expiringIntentResponse.status).toBe(201)
+
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO telegram_chat_study_sessions (
+            chat_study_session_id, telegram_community_bot_id, telegram_user_id,
+            user_id, community_id, post_id, target_language, status,
+            action_token, action_kind, action_payload_json, expires_at,
+            created_at, updated_at
+          ) VALUES (
+            'tcs_expired_recovery', 'tcb_study_voice', '787878', ?1, ?2,
+            'pst_study_route_song', 'es', 'active', 'recovery-old-action',
+            'answer_choice', '{}', '2099-01-01T00:00:00.000Z', ?3, ?3
+          )
+        `,
+        args: [session.userId, communityId, now],
+      })
+      const expiringIntent = await createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        chatStudySessionId: "tcs_expired_recovery",
+        communityId,
+        env: ctx.env,
+        exerciseId: nextExercise!.id,
+        nextActionToken: "recovery-await-action",
+        postId: "pst_study_route_song",
+        previousActionToken: "recovery-old-action",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })
       await ctx.client.execute({
         sql: `
           UPDATE telegram_study_voice_intents
           SET expires_at = '2020-01-01T00:00:00.000Z'
-          WHERE telegram_community_bot_id = 'tcb_study_voice'
-            AND status = 'pending'
+          WHERE intent_id = ?1
         `,
+        args: [expiringIntent.id],
       })
       const expiredVoiceUpdate = {
         ...voiceUpdate,
@@ -1884,31 +2023,87 @@ describe("community study routes", () => {
         },
       }
       const requestsBeforeExpiredReply = telegramRequests.length
-      const expiredWebhook = await app.request(
-        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
-        {
+      backgroundTasks.length = 0
+      const expiredWebhookRequest = () => app.fetch(
+        new Request("http://pirate.test/telegram/community-bots/tgb_study_voice/webhook", {
           method: "POST",
           headers: {
             "content-type": "application/json",
             "x-telegram-bot-api-secret-token": "voice-secret",
           },
           body: JSON.stringify(expiredVoiceUpdate),
-        },
+        }),
         ctx.env,
+        executionCtx,
       )
+      const [expiredWebhook, concurrentExpiredWebhook] = await Promise.all([
+        expiredWebhookRequest(),
+        expiredWebhookRequest(),
+      ])
       expect(expiredWebhook.status).toBe(200)
-      const expiredIntent = await ctx.client.execute({
-        sql: `
-          SELECT status
-          FROM telegram_study_voice_intents
-          WHERE telegram_community_bot_id = 'tcb_study_voice'
-            AND telegram_voice_message_id = 657
-        `,
+      expect(concurrentExpiredWebhook.status).toBe(200)
+      expect(backgroundTasks).toHaveLength(1)
+      await Promise.all(backgroundTasks)
+      let recoveredIntents = await ctx.client.execute({ sql: "SELECT 1 WHERE 0" })
+      for (let index = 0; index < 30; index += 1) {
+        recoveredIntents = await ctx.client.execute({
+          sql: `
+            SELECT intent_id, status, telegram_voice_message_id,
+                   telegram_voice_file_id, telegram_voice_file_unique_id
+            FROM telegram_study_voice_intents
+            WHERE chat_study_session_id = 'tcs_expired_recovery'
+            ORDER BY created_at, intent_id
+          `,
+        })
+        if (recoveredIntents.rows.some((row) =>
+          row.telegram_voice_message_id === 657 && row.status === "consumed"
+        )) break
+        await new Promise((resolve) => setTimeout(resolve, 10))
+      }
+      const staleRecoveredIntent = recoveredIntents.rows.find((row) => row.intent_id === expiringIntent.id)
+      const claimedReplacements = recoveredIntents.rows.filter((row) => row.telegram_voice_message_id === 657)
+      expect(staleRecoveredIntent).toMatchObject({
+        intent_id: expiringIntent.id,
+        status: "expired",
+        telegram_voice_file_id: null,
+        telegram_voice_file_unique_id: null,
+        telegram_voice_message_id: null,
       })
-      expect(expiredIntent.rows[0]?.status).toBe("expired")
-      expect(telegramRequests.length).toBe(requestsBeforeExpiredReply + 1)
+      expect(claimedReplacements).toHaveLength(1)
+      expect(claimedReplacements[0]).toMatchObject({
+        status: "consumed",
+        telegram_voice_file_id: "voice-study-file-expired",
+        telegram_voice_file_unique_id: "voice-study-unique-expired",
+        telegram_voice_message_id: 657,
+      })
+      expect(String(claimedReplacements[0]?.intent_id)).not.toBe(expiringIntent.id)
+      expect(telegramRequests.length).toBeGreaterThan(requestsBeforeExpiredReply)
 
-      const expiredRedelivery = await app.request(
+      const nextChatIntent = recoveredIntents.rows.find((row) => row.status === "pending")
+      const nextChatIntentId = String(nextChatIntent?.intent_id ?? "")
+      expect(nextChatIntentId).toBeTruthy()
+      await ctx.client.execute({
+        sql: "UPDATE telegram_study_voice_intents SET expires_at = '2020-01-01T00:00:00.000Z' WHERE intent_id = ?1",
+        args: [nextChatIntentId],
+      })
+      await ctx.client.execute(
+        "UPDATE telegram_chat_study_sessions SET current_exercise_id = 'ex_moved_on', expires_at = '2099-01-01T00:00:00.000Z' WHERE chat_study_session_id = 'tcs_expired_recovery'",
+      )
+      const movedOnVoiceUpdate = {
+        ...voiceUpdate,
+        update_id: 9005,
+        message: {
+          ...voiceUpdate.message,
+          message_id: 658,
+          voice: {
+            ...voiceUpdate.message.voice,
+            file_id: "voice-study-file-moved-on",
+            file_unique_id: "voice-study-unique-moved-on",
+          },
+        },
+      }
+      const requestsBeforeMovedOn = telegramRequests.length
+      expect((await app.request(
         "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
         {
           method: "POST",
@@ -1916,12 +2111,138 @@ describe("community study routes", () => {
             "content-type": "application/json",
             "x-telegram-bot-api-secret-token": "voice-secret",
           },
-          body: JSON.stringify(expiredVoiceUpdate),
+          body: JSON.stringify(movedOnVoiceUpdate),
+        },
+        ctx.env,
+      )).status).toBe(200)
+      const movedOnRestartRequest = telegramRequests.slice(requestsBeforeMovedOn).find((request) => request.url.endsWith("/sendMessage"))
+      const movedOnRestartBody = await movedOnRestartRequest!.clone().json() as {
+        reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
+      }
+      expect(movedOnRestartBody.reply_markup?.inline_keyboard?.flat()).toContainEqual({
+        callback_data: "study-restart:tcs_expired_recovery",
+        text: "Start again",
+      })
+
+      await ctx.client.execute({
+        sql: `
+          UPDATE telegram_chat_study_sessions
+          SET action_token = 'recovery-dead-old', action_kind = 'answer_choice',
+              current_exercise_id = ?2, expires_at = '2099-01-01T00:00:00.000Z'
+          WHERE chat_study_session_id = ?1
+        `,
+        args: ["tcs_expired_recovery", nextExercise!.id],
+      })
+      const deadSessionIntent = await createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId },
+        chatStudySessionId: "tcs_expired_recovery",
+        communityId,
+        env: ctx.env,
+        exerciseId: nextExercise!.id,
+        nextActionToken: "recovery-dead-await",
+        postId: "pst_study_route_song",
+        previousActionToken: "recovery-dead-old",
+        targetLanguage: "es",
+        telegramUserId: "787878",
+      })
+      await ctx.client.execute({
+        sql: "UPDATE telegram_study_voice_intents SET expires_at = '2020-01-01T00:00:00.000Z' WHERE intent_id = ?1",
+        args: [deadSessionIntent.id],
+      })
+      await ctx.client.execute(
+        "UPDATE telegram_chat_study_sessions SET expires_at = '2020-01-01T00:00:00.000Z' WHERE chat_study_session_id = 'tcs_expired_recovery'",
+      )
+      const restartVoiceUpdate = {
+        ...voiceUpdate,
+        update_id: 9006,
+        message: {
+          ...voiceUpdate.message,
+          message_id: 659,
+          voice: {
+            ...voiceUpdate.message.voice,
+            file_id: "voice-study-file-restart",
+            file_unique_id: "voice-study-unique-restart",
+          },
+        },
+      }
+      const requestsBeforeRestart = telegramRequests.length
+      const restartVoiceWebhook = await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(restartVoiceUpdate),
         },
         ctx.env,
       )
-      expect(expiredRedelivery.status).toBe(200)
-      expect(telegramRequests.length).toBe(requestsBeforeExpiredReply + 1)
+      expect(restartVoiceWebhook.status).toBe(200)
+      const restartRequest = telegramRequests.slice(requestsBeforeRestart).find((request) => request.url.endsWith("/sendMessage"))
+      const restartBody = await restartRequest!.clone().json() as {
+        reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
+        text?: string
+      }
+      expect(restartBody.text).toBe("This study exercise expired.")
+      expect(restartBody.reply_markup?.inline_keyboard?.flat()).toContainEqual({
+        callback_data: "study-restart:tcs_expired_recovery",
+        text: "Start again",
+      })
+      const restartCallback = {
+        update_id: 9007,
+        callback_query: {
+          id: "callback-study-restart",
+          data: "study-restart:tcs_expired_recovery",
+          from: { id: 787878, is_bot: false, language_code: "en" },
+          message: { chat: { id: 787878, type: "private" }, message_id: 900 },
+        },
+      }
+      ctx.env.TELEGRAM_STUDY_VOICE_ENABLED = "false"
+      const beforeGatedRestart = telegramRequests.length
+      expect((await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(restartCallback),
+        },
+        ctx.env,
+      )).status).toBe(200)
+      const gatedRestartAnswer = telegramRequests.slice(beforeGatedRestart).find((request) => request.url.endsWith("/answerCallbackQuery"))
+      expect(await gatedRestartAnswer!.clone().json()).toMatchObject({ text: "Study is not available here yet." })
+      ctx.env.TELEGRAM_STUDY_VOICE_ENABLED = "true"
+      const beforeRestartCallback = telegramRequests.length
+      expect((await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(restartCallback),
+        },
+        ctx.env,
+      )).status).toBe(200)
+      const afterRestartCallback = telegramRequests.length
+      expect(afterRestartCallback).toBeGreaterThan(beforeRestartCallback)
+      expect((await app.request(
+        "http://pirate.test/telegram/community-bots/tgb_study_voice/webhook",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-telegram-bot-api-secret-token": "voice-secret",
+          },
+          body: JSON.stringify(restartCallback),
+        },
+        ctx.env,
+      )).status).toBe(200)
+      expect(telegramRequests.length).toBe(afterRestartCallback + 1)
     } finally {
       globalThis.fetch = originalFetch
       Object.defineProperty(globalThis, "caches", { configurable: true, value: originalCaches })
