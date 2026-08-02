@@ -1388,6 +1388,26 @@ describe("community Telegram routes", () => {
     expect(sendBody.text).toBe("თქვენ ახლა ხართ Community Auto Join Club-ში.")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("საზოგადოების გახსნა")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/c/com_${communityId}`)
+
+    const returning = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId,
+      secret: webhookSecret,
+      body: {
+        update_id: 6,
+        message: {
+          message_id: 6,
+          chat: { id: 9002, type: "private" },
+          from: { id: 5002, language_code: "zh" },
+          text: "/start",
+        },
+      },
+    })
+    expect(returning.status).toBe(200)
+    const returningRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(returningRequests).toHaveLength(2)
+    const returningBody = await returningRequests[1]!.json() as { text?: string }
+    expect(returningBody.text).toBe("欢迎来到 Community Auto Join Club 🎵\n\n你想做什么？")
   })
 
   test("community bot start rejects a join payload for another community", async () => {

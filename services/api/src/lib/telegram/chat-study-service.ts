@@ -137,8 +137,19 @@ function localizationCheckData(sessionId: string): string {
   return `${LOCALIZATION_CHECK_PREFIX}:${sessionId}`
 }
 
-function languagePickerMarkup(token: string) {
-  return { inline_keyboard: STUDY_LANGUAGE_BUTTONS.map(({ label }, index) => [{ callback_data: callbackData(token, index), text: label }]) }
+function orderedLanguageButtons(suggested: StudyHelperLanguage | null) {
+  return suggested
+    ? [...STUDY_LANGUAGE_BUTTONS].sort((left, right) => Number(right.code === suggested) - Number(left.code === suggested))
+    : STUDY_LANGUAGE_BUTTONS
+}
+
+function languagePickerMarkup(token: string, buttons: typeof STUDY_LANGUAGE_BUTTONS, suggested: StudyHelperLanguage | null) {
+  return {
+    inline_keyboard: buttons.map(({ code, label }, index) => [{
+      callback_data: callbackData(token, index),
+      text: code === suggested ? `${label} · Suggested` : label,
+    }]),
+  }
 }
 
 function deliveryPickerMarkup(token: string, language: StudyHelperLanguage) {
@@ -478,7 +489,13 @@ async function sendSongPicker(input: {
     env: input.env, status: "selecting", targetLanguage: input.preference.helperLanguage,
     telegramUserId: input.telegramUserId, userId: input.accountUserId,
   })
-  await sendTelegramMessage(input.bot, { chat_id: input.chatId, text: copy.chooseSong, reply_markup: songPickerMarkup(songs, session.actionToken, 0) })
+  const sent = await sendTelegramMessage(input.bot, { chat_id: input.chatId, text: copy.chooseSong, reply_markup: songPickerMarkup(songs, session.actionToken, 0) })
+  await recordSessionPromptDelivery({
+    actionToken: session.actionToken,
+    env: input.env,
+    messageId: sent.message_id,
+    sessionId: session.id,
+  })
 }
 
 async function runTelegramChatStudyStart(input: {
@@ -514,18 +531,50 @@ async function runTelegramChatStudyStart(input: {
   }
   const preference = await getUserStudyPreference(input.env, account.userId)
   if (!preference || input.forcePreferences) {
-    const initialLanguage = preference?.helperLanguage ?? resolveRuntimeUiLocale(input.targetLanguage) ?? "en"
+    const suggestedLanguage = resolveRuntimeUiLocale(input.targetLanguage)
+    const initialLanguage = preference?.helperLanguage ?? suggestedLanguage ?? "en"
+    const buttons = orderedLanguageButtons(suggestedLanguage)
     const copy = getTelegramStudyCopy(initialLanguage)
     const session = await replaceActiveSession({
-      actionKind: "select_song", actionPayload: { currentDeliveryMode: preference?.deliveryMode ?? "text", preferenceStep: "language" }, bot: input.bot,
+      actionKind: "select_song", actionPayload: {
+        currentDeliveryMode: preference?.deliveryMode ?? "both",
+        languageOptions: buttons.map(({ code }) => code),
+        preferenceFlow: input.forcePreferences ? "preferences" : "first_run",
+        preferenceStep: "language",
+      }, bot: input.bot,
       env: input.env, status: "selecting", targetLanguage: initialLanguage,
       telegramUserId: input.telegramUserId, userId: account.userId,
     })
-    await sendTelegramMessage(input.bot, { chat_id: input.chatId, text: copy.chooseLanguage, reply_markup: languagePickerMarkup(session.actionToken) })
+    const sent = await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: copy.chooseLanguage,
+      reply_markup: languagePickerMarkup(session.actionToken, buttons, suggestedLanguage),
+    })
+    await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
     return true
   }
   await sendSongPicker({ accountUserId: account.userId, bot: input.bot, chatId: input.chatId, env: input.env, preference, telegramUserId: input.telegramUserId })
   return true
+}
+
+async function recordSessionPromptDelivery(input: {
+  actionToken: string
+  env: Env
+  messageId: number
+  sessionId: string
+}): Promise<void> {
+  const deliveredAt = nowIso()
+  const expiresAt = new Date(Date.parse(deliveredAt) + CHAT_STUDY_TTL_MS).toISOString()
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_chat_study_sessions
+      SET prompt_message_id = ?3, expires_at = ?4, updated_at = ?5
+      WHERE chat_study_session_id = ?1
+        AND action_token = ?2
+        AND status IN ('selecting', 'active', 'processing')
+    `,
+    args: [input.sessionId, input.actionToken, input.messageId, expiresAt, deliveredAt],
+  })
 }
 
 async function claimStudyMessageDelivery(input: {
@@ -669,6 +718,7 @@ async function updateSessionAction(input: {
 }): Promise<string> {
   const token = actionToken()
   const updatedAt = nowIso()
+  const expiresAt = new Date(Date.parse(updatedAt) + CHAT_STUDY_TTL_MS).toISOString()
   const updated = await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_chat_study_sessions
@@ -680,6 +730,7 @@ async function updateSessionAction(input: {
           current_exercise_id = ?7,
           prompt_message_id = ?8,
           completed_at = CASE WHEN ?2 = 'completed' THEN ?9 ELSE completed_at END,
+          expires_at = CASE WHEN ?2 IN ('active', 'processing') THEN ?10 ELSE expires_at END,
           updated_at = ?9
       WHERE chat_study_session_id = ?1
         AND status IN ('processing', 'active')
@@ -694,6 +745,7 @@ async function updateSessionAction(input: {
       input.exerciseId ?? null,
       input.promptMessageId ?? null,
       updatedAt,
+      expiresAt,
     ],
   })
   if ((updated.rowsAffected ?? 0) !== 1) {
@@ -837,14 +889,7 @@ async function presentNextExercise(input: {
         }]),
       },
     })
-    await getControlPlaneClient(input.env).execute({
-      sql: `
-        UPDATE telegram_chat_study_sessions
-        SET prompt_message_id = ?2, updated_at = ?3
-        WHERE chat_study_session_id = ?1
-      `,
-      args: [input.session.id, sent.message_id, nowIso()],
-    })
+    await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: input.session.id })
     return
   }
   const nextToken = actionToken()
@@ -969,7 +1014,7 @@ async function claimSessionAction(input: {
   const claimed = await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_chat_study_sessions
-      SET status = 'processing', updated_at = ?3
+      SET status = 'processing', expires_at = ?5, updated_at = ?3
       WHERE chat_study_session_id = ?1
         AND action_token = ?2
         AND (
@@ -977,7 +1022,7 @@ async function claimSessionAction(input: {
           OR (status = 'processing' AND updated_at <= ?4)
         )
     `,
-    args: [input.session.id, input.session.actionToken, now, staleProcessingBefore],
+    args: [input.session.id, input.session.actionToken, now, staleProcessingBefore, new Date(Date.parse(now) + CHAT_STUDY_TTL_MS).toISOString()],
   })
   return (claimed.rowsAffected ?? 0) === 1
 }
@@ -1008,6 +1053,52 @@ export async function handleTelegramChatStudyCallback(input: {
   callback: TelegramWebhookCallbackQuery
   env: Env
 }): Promise<boolean> {
+  const restartMatch = typeof input.callback.data === "string"
+    ? input.callback.data.match(/^study-restart:(tcs_[A-Za-z0-9_-]+)$/u)
+    : null
+  if (restartMatch) {
+    const callbackQueryId = stringOrNull(input.callback.id)
+    const telegramUserId = telegramIdentifier(input.callback.from?.id)
+    const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+    if (!callbackQueryId || !telegramUserId || !chatId) return true
+    const result = await getControlPlaneClient(input.env).execute({
+      sql: `
+        SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
+               post_id, target_language, status, action_token, action_kind,
+               action_payload_json
+        FROM telegram_chat_study_sessions
+        WHERE chat_study_session_id = ?1
+          AND telegram_community_bot_id = ?2
+          AND telegram_user_id = ?3
+        LIMIT 1
+      `,
+      args: [restartMatch[1], input.bot.id, telegramUserId],
+    })
+    const session = parseSession(result.rows[0])
+    if (!session || session.communityId !== input.bot.communityId) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    if (!await claimCallback({ bot: input.bot, callbackQueryId, env: input.env, sessionId: session.id })) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+    try {
+      await runTelegramChatStudyStart({
+        bot: input.bot,
+        chatId,
+        env: input.env,
+        targetLanguage: session.targetLanguage,
+        telegramUserId,
+      })
+      await finishCallback({ callbackQueryId, env: input.env })
+    } catch (error) {
+      await finishCallback({ callbackQueryId, env: input.env, error }).catch(() => undefined)
+      throw error
+    }
+    return true
+  }
   const checkMatch = typeof input.callback.data === "string"
     ? input.callback.data.match(/^study-check:(tcs_[A-Za-z0-9_-]+)$/u)
     : null
@@ -1111,8 +1202,22 @@ export async function handleTelegramChatStudyCallback(input: {
   }).catch(() => undefined)
   try {
     if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "language") {
-      const language = STUDY_LANGUAGE_BUTTONS[parsed.index]?.code
+      const languageOptions = Array.isArray(session.actionPayload.languageOptions)
+        ? session.actionPayload.languageOptions.filter(isStudyHelperLanguage)
+        : STUDY_LANGUAGE_BUTTONS.map(({ code }) => code)
+      const language = languageOptions[parsed.index]
       if (!language) throw new Error("Study language choice is no longer available")
+      if (session.actionPayload.preferenceFlow === "first_run") {
+        const preference = await upsertUserStudyPreference({
+          deliveryMode: "both",
+          env: input.env,
+          helperLanguage: language,
+          userId: session.userId,
+        })
+        await sendSongPicker({ accountUserId: session.userId, bot: input.bot, chatId, env: input.env, preference, telegramUserId })
+        await finishCallback({ callbackQueryId, env: input.env })
+        return true
+      }
       const token = await updateSessionAction({
         actionKind: "select_song",
         actionPayload: { helperLanguage: language, preferenceStep: "delivery" },
@@ -1121,11 +1226,12 @@ export async function handleTelegramChatStudyCallback(input: {
         status: "active",
       })
       session.targetLanguage = language
-      await sendTelegramMessage(input.bot, {
+      const sent = await sendTelegramMessage(input.bot, {
         chat_id: chatId,
         text: getTelegramStudyCopy(language).chooseDelivery,
         reply_markup: deliveryPickerMarkup(token, language),
       })
+      await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: session.id })
     } else if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "delivery") {
       const helperLanguage = session.actionPayload.helperLanguage
       const deliveryMode = STUDY_DELIVERY_MODES[parsed.index]
@@ -1302,9 +1408,10 @@ export async function continueTelegramChatStudyAfterVoice(input: {
       WHERE chat_study_session_id = ?1
         AND telegram_community_bot_id = ?2
         AND status = 'active'
+        AND expires_at > ?3
       LIMIT 1
     `,
-    args: [input.chatStudySessionId, input.bot.id],
+    args: [input.chatStudySessionId, input.bot.id, nowIso()],
   })
   const session = parseSession(query.rows[0])
   if (!session || session.actionKind !== "await_voice") return
