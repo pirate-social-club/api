@@ -84,14 +84,22 @@ anything:
 
 ## Current holds
 
-- **2026-07-27 20:13Z — Lit rewards E2E rehearsal.** Codex holds
-  `pirate-api-staging` on API `ef87f6069c06aff402f9df2cc7ab08bd67b80db4`
-  while collecting the paused, hash-pinned rehearsal preflight and handing off
-  Session B. Do not redeploy until this entry is released.
+None.
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
+
+- **2026-08-02** — D1 allocation-fencing staging smoke passed on API
+  `0c50c6dd7`. Real community provisioning reached `active`, its job succeeded,
+  and the community was archived. An authenticated read serialized `created` as
+  finite Unix seconds (`2026-08-02T16:13:30.000Z`), with no timestamp-decoder
+  error. Staging was left on `0c50c6dd7` (Worker `fb01442d`).
+
+- **2026-08-02** — The unreleased 2026-07-27 Lit rewards E2E rehearsal hold on
+  API `ef87f6069` was invalidated by later shared-staging deploys; the Worker was
+  observed on pinned API `42ecbe977` (build `2026-08-02T15:43:19Z`) before the
+  stale entry was retired.
 
 - **2026-07-27** — Feed fanout benchmark completed on API `5d9f4f67` (Worker
   `b606e79f`). Five valid 25-item samples spanning nine communities and 15
