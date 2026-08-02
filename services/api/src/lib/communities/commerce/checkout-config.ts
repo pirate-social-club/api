@@ -15,10 +15,18 @@ function readPositiveInt(raw: string | undefined, fallback: number): number {
 }
 
 export function resolvePirateCheckoutSourceChainId(env: Env): number {
-  return readPositiveInt(
+  const chainId = readPositiveInt(
     env.PIRATE_CHECKOUT_SOURCE_CHAIN_ID,
     BASE_SEPOLIA_CHAIN_ID,
   )
+
+  // Production checkout moves real value. Never allow an injected secret to
+  // silently override the checked-in mainnet configuration back to testnet.
+  if (String(env.ENVIRONMENT || "").trim().toLowerCase() === "production" && chainId !== BASE_MAINNET_CHAIN_ID) {
+    throw badRequestError("production Pirate checkout must use Base mainnet")
+  }
+
+  return chainId
 }
 
 export function resolvePirateCheckoutSourceChainName(chainId: number): string {
@@ -28,12 +36,23 @@ export function resolvePirateCheckoutSourceChainName(chainId: number): string {
 }
 
 export function resolvePirateCheckoutUsdcTokenAddress(env: Env): string {
-  const explicit = parseExpectedEvmAddress(env.PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS)
-  if (explicit) return getAddress(explicit)
-
   const chainId = resolvePirateCheckoutSourceChainId(env)
-  if (chainId === BASE_MAINNET_CHAIN_ID) return getAddress(BASE_MAINNET_USDC)
-  if (chainId === BASE_SEPOLIA_CHAIN_ID) return getAddress(BASE_SEPOLIA_USDC)
+  const explicit = parseExpectedEvmAddress(env.PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS)
+  const canonical = chainId === BASE_MAINNET_CHAIN_ID
+    ? getAddress(BASE_MAINNET_USDC)
+    : chainId === BASE_SEPOLIA_CHAIN_ID
+      ? getAddress(BASE_SEPOLIA_USDC)
+      : null
+
+  if (explicit) {
+    const address = getAddress(explicit)
+    if (canonical && address !== canonical) {
+      throw badRequestError("PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS does not match canonical USDC for the source chain")
+    }
+    return address
+  }
+
+  if (canonical) return canonical
 
   throw badRequestError("PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS is required for this source chain")
 }

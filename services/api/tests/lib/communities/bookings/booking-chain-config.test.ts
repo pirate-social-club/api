@@ -18,6 +18,25 @@ import {
 const KEY = "0x6000000000000000000000000000000000000000000000000000000000000006"
 
 describe("booking settlement chain config", () => {
+  test("production checkout fails closed when a secret overrides it to testnet", () => {
+    expect(() => resolvePirateCheckoutSourceChainId({
+      ENVIRONMENT: "production",
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "84532",
+    } as Env)).toThrow(/production Pirate checkout must use Base mainnet/)
+
+    expect(resolvePirateCheckoutSourceChainId({
+      ENVIRONMENT: "production",
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
+    } as Env)).toBe(8453)
+  })
+
+  test("checkout rejects a token override from the wrong Base network", () => {
+    expect(() => resolvePirateCheckoutUsdcTokenAddress({
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
+      PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    } as Env)).toThrow(/does not match canonical USDC/)
+  })
+
   test("fails closed when booking chain config is absent, even if global checkout is mainnet", () => {
     const env = {
       PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
