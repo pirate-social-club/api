@@ -15354,6 +15354,18 @@ const spec = {
           "note": {
             "type": "string",
             "nullable": true
+          },
+          "content_safety_state": {
+            "type": "string",
+            "enum": [
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -21788,6 +21800,45 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "previous_content_safety_state": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "pending",
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "next_content_safety_state": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "previous_age_gate_policy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "none",
+              "18_plus"
+            ]
+          },
+          "next_age_gate_policy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "none",
+              "18_plus"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "nullable": true
+          },
           "created": {
             "type": "integer",
             "format": "int64"
@@ -21801,7 +21852,8 @@ const spec = {
           "hide",
           "remove",
           "restore",
-          "age_gate"
+          "age_gate",
+          "set_content_rating"
         ]
       },
       "RightsReviewCaseListItem": {
