@@ -51,7 +51,6 @@ import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 import {
   parseTelegramStudyPlaybackCallback,
   sendTelegramStudySongPlayback,
-  telegramStudyPlaybackButton,
 } from "./chat-study-playback-service"
 import {
   telegramIdentifier,
@@ -167,6 +166,16 @@ function deliveryPickerMarkup(token: string, language: StudyHelperLanguage) {
   const copy = getTelegramStudyCopy(language)
   const labels = [copy.deliveryAudio, copy.deliveryText, copy.deliveryBoth]
   return { inline_keyboard: labels.map((text, index) => [{ callback_data: callbackData(token, index), text }]) }
+}
+
+function settingsMenuMarkup(token: string, language: StudyHelperLanguage) {
+  const copy = getTelegramStudyCopy(language)
+  return {
+    inline_keyboard: [
+      [{ callback_data: callbackData(token, 0), text: copy.settingsLanguage }],
+      [{ callback_data: callbackData(token, 1), text: copy.settingsPromptFormat }],
+    ],
+  }
 }
 
 export function telegramStudySongSelectionIndex(page: number, pageIndex: number): number {
@@ -542,16 +551,36 @@ async function runTelegramChatStudyStart(input: {
     return true
   }
   const preference = await getUserStudyPreference(input.env, account.userId)
-  if (!preference || input.forcePreferences) {
+  if (preference && input.forcePreferences) {
+    const copy = getTelegramStudyCopy(preference.helperLanguage)
+    const session = await replaceActiveSession({
+      actionKind: "select_song",
+      actionPayload: { preferenceStep: "settings_menu" },
+      bot: input.bot,
+      env: input.env,
+      status: "selecting",
+      targetLanguage: preference.helperLanguage,
+      telegramUserId: input.telegramUserId,
+      userId: account.userId,
+    })
+    const sent = await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: copy.settingsTitle,
+      reply_markup: settingsMenuMarkup(session.actionToken, preference.helperLanguage),
+    })
+    await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
+    return true
+  }
+  if (!preference) {
     const suggestedLanguage = resolveRuntimeUiLocale(input.targetLanguage)
-    const initialLanguage = preference?.helperLanguage ?? suggestedLanguage ?? "en"
+    const initialLanguage = suggestedLanguage ?? "en"
     const buttons = orderedLanguageButtons(suggestedLanguage)
     const copy = getTelegramStudyCopy(initialLanguage)
     const session = await replaceActiveSession({
       actionKind: "select_song", actionPayload: {
-        currentDeliveryMode: preference?.deliveryMode ?? "both",
+        currentDeliveryMode: "both",
         languageOptions: buttons.map(({ code }) => code),
-        preferenceFlow: input.forcePreferences ? "preferences" : "first_run",
+        preferenceFlow: "first_run",
         preferenceStep: "language",
       }, bot: input.bot,
       env: input.env, status: "selecting", targetLanguage: initialLanguage,
@@ -900,10 +929,6 @@ async function presentNextExercise(input: {
             callback_data: callbackData(token, index),
             text: option.text.slice(0, 60),
           }]),
-          [telegramStudyPlaybackButton(
-            input.session.id,
-            isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en",
-          )],
         ],
       },
     })
@@ -1272,7 +1297,47 @@ export async function handleTelegramChatStudyCallback(input: {
     callback_query_id: callbackQueryId,
   }).catch(() => undefined)
   try {
-    if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "language") {
+    if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "settings_menu") {
+      const preference = await getUserStudyPreference(input.env, session.userId)
+      if (!preference) throw new Error("Study preferences are no longer available")
+      if (parsed.index === 0) {
+        const buttons = orderedLanguageButtons(null)
+        const token = await updateSessionAction({
+          actionKind: "select_song",
+          actionPayload: {
+            currentDeliveryMode: preference.deliveryMode,
+            languageOptions: buttons.map(({ code }) => code),
+            preferenceFlow: "preferences",
+            preferenceStep: "language",
+          },
+          env: input.env,
+          session,
+          status: "active",
+        })
+        const sent = await sendTelegramMessage(input.bot, {
+          chat_id: chatId,
+          text: getTelegramStudyCopy(preference.helperLanguage).chooseLanguage,
+          reply_markup: languagePickerMarkup(token, buttons, null, preference.helperLanguage),
+        })
+        await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: session.id })
+      } else if (parsed.index === 1) {
+        const token = await updateSessionAction({
+          actionKind: "select_song",
+          actionPayload: { helperLanguage: preference.helperLanguage, preferenceStep: "delivery" },
+          env: input.env,
+          session,
+          status: "active",
+        })
+        const sent = await sendTelegramMessage(input.bot, {
+          chat_id: chatId,
+          text: getTelegramStudyCopy(preference.helperLanguage).chooseDelivery,
+          reply_markup: deliveryPickerMarkup(token, preference.helperLanguage),
+        })
+        await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: session.id })
+      } else {
+        throw new Error("Study settings choice is no longer available")
+      }
+    } else if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "language") {
       const languageOptions = Array.isArray(session.actionPayload.languageOptions)
         ? session.actionPayload.languageOptions.filter(isStudyHelperLanguage)
         : STUDY_LANGUAGE_BUTTONS.map(({ code }) => code)
@@ -1289,20 +1354,16 @@ export async function handleTelegramChatStudyCallback(input: {
         await finishCallback({ callbackQueryId, env: input.env })
         return true
       }
-      const token = await updateSessionAction({
-        actionKind: "select_song",
-        actionPayload: { helperLanguage: language, preferenceStep: "delivery" },
+      const deliveryMode = isStudyDeliveryMode(session.actionPayload.currentDeliveryMode)
+        ? session.actionPayload.currentDeliveryMode
+        : "both"
+      const preference = await upsertUserStudyPreference({
+        deliveryMode,
         env: input.env,
-        session,
-        status: "active",
+        helperLanguage: language,
+        userId: session.userId,
       })
-      session.targetLanguage = language
-      const sent = await sendTelegramMessage(input.bot, {
-        chat_id: chatId,
-        text: getTelegramStudyCopy(language).chooseDelivery,
-        reply_markup: deliveryPickerMarkup(token, language),
-      })
-      await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: session.id })
+      await sendSongPicker({ accountUserId: session.userId, bot: input.bot, chatId, env: input.env, preference, telegramUserId })
     } else if (session.actionKind === "select_song" && session.actionPayload.preferenceStep === "delivery") {
       const helperLanguage = session.actionPayload.helperLanguage
       const deliveryMode = STUDY_DELIVERY_MODES[parsed.index]

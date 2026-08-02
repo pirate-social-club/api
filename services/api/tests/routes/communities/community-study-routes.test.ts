@@ -933,12 +933,13 @@ describe("community study routes", () => {
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
       const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
-      expect(replayButton?.callback_data).toBe(`study-play:${String(selectingSession.rows[0]?.chat_study_session_id)}`)
+      expect(replayButton).toBeUndefined()
+      const historicalReplayData = `study-play:${String(selectingSession.rows[0]?.chat_study_session_id)}`
       await webhook({
         update_id: 5013,
         callback_query: {
           id: "callback-play-song",
-          data: replayButton!.callback_data,
+          data: historicalReplayData,
           from: { id: 454545, is_bot: false },
           message: { chat: { id: 454545, type: "private" }, message_id: 707 },
         },
@@ -958,7 +959,7 @@ describe("community study routes", () => {
         update_id: 5014,
         callback_query: {
           id: "callback-play-locked-song",
-          data: replayButton!.callback_data,
+          data: historicalReplayData,
           from: { id: 454545, is_bot: false },
           message: { chat: { id: 454545, type: "private" }, message_id: 707 },
         },
@@ -1124,34 +1125,71 @@ describe("community study routes", () => {
         },
       })
       expect(preferences.status).toBe(200)
+      const settingsMenu = telegramBodies.find((body) => body.text === "学习设置：")
+      const settingsButtons = (settingsMenu?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }).inline_keyboard?.flat() ?? []
+      expect(settingsButtons.map((button) => button.text)).toEqual(["⚙️ 语言", "🔊 提示格式"])
+      await webhook({
+        update_id: 5007,
+        callback_query: {
+          id: "callback-preference-language-menu", data: settingsButtons[0]!.callback_data,
+          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 704 },
+        },
+      })
       const languagePicker = telegramBodies.find((body) => body.text === "选择辅助语言：")
       const languageButtons = (languagePicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(languageButtons.map((button) => button.text)).toEqual(["English · 推荐", "中文", "العربية", "ქართული"])
-      await webhook({
-        update_id: 5007,
-        callback_query: {
-          id: "callback-preference-language", data: languageButtons[1]!.callback_data,
-          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 704 },
-        },
-      })
-      const deliveryPicker = telegramBodies.find((body) => body.text === "你希望如何接收练习提示？")
-      const deliveryButtons = (deliveryPicker?.reply_markup as {
-        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
-      }).inline_keyboard?.flat() ?? []
-      expect(deliveryButtons.map((button) => button.text)).toEqual(["音频", "文字", "音频和文字"])
+      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "ქართული"])
       await webhook({
         update_id: 5008,
         callback_query: {
-          id: "callback-preference-delivery", data: deliveryButtons[1]!.callback_data,
+          id: "callback-preference-language", data: languageButtons[0]!.callback_data,
           from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 705 },
+        },
+      })
+      expect(telegramBodies.some((body) => body.text === "How should prompts be delivered?")).toBe(false)
+      expect((await ctx.client.execute({
+        sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
+        args: [session.userId],
+      })).rows[0]).toMatchObject({ helper_language: "en", delivery_mode: "text" })
+
+      await webhook({
+        update_id: 5009,
+        message: {
+          chat: { id: 454545, type: "private" }, date: 1785499300,
+          from: { id: 454545, is_bot: false, language_code: "zh" },
+          message_id: 622, text: "/preferences",
+        },
+      })
+      const englishSettings = [...telegramBodies].reverse().find((body) => body.text === "Study settings:")
+      const englishSettingsButtons = (englishSettings?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }).inline_keyboard?.flat() ?? []
+      await webhook({
+        update_id: 5010,
+        callback_query: {
+          id: "callback-preference-delivery-menu", data: englishSettingsButtons[1]!.callback_data,
+          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 706 },
+        },
+      })
+      const deliveryPicker = [...telegramBodies].reverse().find((body) => body.text === "How should prompts be delivered?")
+      const deliveryButtons = (deliveryPicker?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }).inline_keyboard?.flat() ?? []
+      expect(deliveryButtons.map((button) => button.text)).toEqual(["Audio", "Text", "Audio + text"])
+      await webhook({
+        update_id: 5011,
+        callback_query: {
+          id: "callback-preference-delivery", data: deliveryButtons[2]!.callback_data,
+          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 707 },
         },
       })
       expect((await ctx.client.execute({
         sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
         args: [session.userId],
-      })).rows[0]).toMatchObject({ helper_language: "zh", delivery_mode: "text" })
+      })).rows[0]).toMatchObject({ helper_language: "en", delivery_mode: "both" })
 
       await ctx.client.execute({
         sql: "DELETE FROM user_study_preferences WHERE user_id = ?1",
@@ -1268,6 +1306,23 @@ describe("community study routes", () => {
       TELEGRAM_STUDY_VOICE_COMMUNITY_IDS: "cmt_study_route_telegram_voice",
       TELEGRAM_STUDY_VOICE_ENABLED: "true",
     })
+    const durableAudio = new Map<string, ArrayBuffer>()
+    ctx.env.TELEGRAM_STUDY_TTS_CACHE = {
+      get: async (key: string) => {
+        const audio = durableAudio.get(key)
+        return audio ? { arrayBuffer: async () => audio.slice(0) } : null
+      },
+      put: async (key: string, value: ArrayBuffer | ArrayBufferView | Blob | ReadableStream | string) => {
+        const audio = value instanceof ArrayBuffer
+          ? value.slice(0)
+          : ArrayBuffer.isView(value)
+            ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength).slice().buffer
+          : value instanceof Blob
+            ? await value.arrayBuffer()
+            : await new Response(value as string | ReadableStream).arrayBuffer()
+        durableAudio.set(key, audio)
+      },
+    } as unknown as R2Bucket
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "study-route-telegram-voice")
     const communityId = "cmt_study_route_telegram_voice"
@@ -1594,13 +1649,23 @@ describe("community study routes", () => {
       expect(String(audioForm.get("caption"))).toBe("Say this:")
 
       cachedAudio.clear()
+      await createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId }, chatStudySessionId: "tcs_audio",
+        communityId, deliveryMode: "audio", env: ctx.env, exerciseId: exercise!.id,
+        nextActionToken: "audio-r2-hit", postId: "pst_study_route_song",
+        previousActionToken: "audio-next-two", targetLanguage: "es", telegramUserId: "787878",
+      })
+      expect(synthesisRequests).toBe(1)
+
+      cachedAudio.clear()
+      durableAudio.clear()
       forceSynthesisFailure = true
       const requestsBeforeFallback = telegramRequests.length
       await createTelegramChatStudyVoiceIntent({
         actor: { authType: "user", userId: session.userId }, chatStudySessionId: "tcs_audio",
         communityId, deliveryMode: "audio", env: ctx.env, exerciseId: exercise!.id,
         nextActionToken: "audio-fallback", postId: "pst_study_route_song",
-        previousActionToken: "audio-next-two", targetLanguage: "es", telegramUserId: "787878",
+        previousActionToken: "audio-r2-hit", targetLanguage: "es", telegramUserId: "787878",
       })
       expect(telegramRequests.slice(requestsBeforeFallback).some((request) => request.url.endsWith("/sendMessage"))).toBe(true)
       expect((await ctx.client.execute({
@@ -1634,6 +1699,25 @@ describe("community study routes", () => {
       })
       forceSynthesisFailure = false
 
+      cachedAudio.clear()
+      durableAudio.clear()
+      ctx.env.TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET = "1"
+      const synthesisBeforeBudgetFallback = synthesisRequests
+      await createTelegramChatStudyVoiceIntent({
+        actor: { authType: "user", userId: session.userId }, chatStudySessionId: "tcs_audio",
+        communityId, deliveryMode: "audio", env: ctx.env, exerciseId: exercise!.id,
+        nextActionToken: "budget-fallback", postId: "pst_study_route_song",
+        previousActionToken: "both-fallback", targetLanguage: "es", telegramUserId: "787878",
+      })
+      expect(synthesisRequests).toBe(synthesisBeforeBudgetFallback)
+      expect((await ctx.client.execute({
+        sql: "SELECT prompt_delivery_status, last_error_code FROM telegram_study_voice_intents WHERE chat_study_session_id = 'tcs_audio' AND status = 'pending'",
+      })).rows[0]).toMatchObject({
+        last_error_code: "telegram_study_tts_daily_budget_exceeded",
+        prompt_delivery_status: "sent",
+      })
+      ctx.env.TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET = "50000"
+
       forcePromptFailure = true
       await expect(createTelegramChatStudyVoiceIntent({
         actor: { authType: "user", userId: session.userId },
@@ -1643,7 +1727,7 @@ describe("community study routes", () => {
         exerciseId: exercise!.id,
         nextActionToken: "final-action-token",
         postId: "pst_study_route_song",
-        previousActionToken: "both-fallback",
+        previousActionToken: "budget-fallback",
         targetLanguage: "es",
         telegramUserId: "787878",
       })).rejects.toThrow("delivery is uncertain")

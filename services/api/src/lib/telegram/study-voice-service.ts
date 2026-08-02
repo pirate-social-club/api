@@ -22,8 +22,8 @@ import {
   synthesizeCommunityStudySpeechForCommunity,
   TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
 } from "../communities/assistant-policy/speech-service"
+import { getCommunityAssistantVoicePolicyForCommunity } from "../communities/assistant-policy/service"
 import { getTelegramStudyCopy } from "./study-copy"
-import { telegramStudyPlaybackButton } from "./chat-study-playback-service"
 import { isStudyHelperLanguage, type StudyDeliveryMode } from "./study-preference-service"
 import {
   decryptActiveCommunityTelegramBotOrNull,
@@ -37,6 +37,7 @@ import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 const VOICE_INTENT_TTL_MS = 30 * 60 * 1000
 const VOICE_PROCESSING_LEASE_MS = 2 * 60 * 1000
 const VOICE_PROCESSING_MAX_ATTEMPTS = 3
+const DEFAULT_TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET = 50_000
 
 type VoiceIntentRow = {
   attemptNumber: number
@@ -324,20 +325,17 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const copy = getTelegramStudyCopy(language)
   const text = [copy.sayThis, input.intent.referenceText]
   const disclosure = copy.disclosure
-  const playbackMarkup = input.intent.chatStudySessionId
-    ? { inline_keyboard: [[telegramStudyPlaybackButton(input.intent.chatStudySessionId, language)]] }
-    : undefined
   if (input.includeDisclosure) {
     text.push(disclosure)
   }
   let promptMessageId: number | null = null
   let deliveryWarning: string | null = null
+  let deliveryWarningCode: string | null = null
   try {
     if (input.intent.deliveryMode !== "audio") {
       const sent = await sendTelegramMessage(input.intent.bot, {
         chat_id: input.intent.telegramUserId,
         text: text.join("\n\n"),
-        reply_markup: playbackMarkup,
       })
       promptMessageId = sent.message_id
     }
@@ -348,16 +346,19 @@ async function deliverTelegramStudyVoicePrompt(input: {
           chat_id: input.intent.telegramUserId,
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
           ...(input.intent.deliveryMode === "audio" ? { caption: input.includeDisclosure ? `${copy.sayThis}\n\n${disclosure}` : copy.sayThis } : {}),
-          reply_markup: playbackMarkup,
         })
         promptMessageId ??= sent.message_id
       } catch (error) {
         deliveryWarning = error instanceof Error ? error.message : String(error)
+        deliveryWarningCode = deliveryWarning.includes("telegram_study_tts_daily_budget_exceeded")
+          ? "telegram_study_tts_daily_budget_exceeded"
+          : deliveryWarning.includes("telegram_study_tts_cache_read_failed")
+            ? "telegram_study_tts_cache_read_failed"
+            : "telegram_prompt_audio_fell_back_to_text"
         if (promptMessageId === null) {
           const fallback = await sendTelegramMessage(input.intent.bot, {
             chat_id: input.intent.telegramUserId,
             text: text.join("\n\n"),
-            reply_markup: playbackMarkup,
           })
           promptMessageId = fallback.message_id
         }
@@ -396,7 +397,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
           WHERE intent_id = ?1
         `,
         args: [input.intent.intentId, promptMessageId, deliveredAt,
-          deliveryWarning ? "telegram_prompt_audio_fell_back_to_text" : null,
+          deliveryWarningCode,
           deliveryWarning, extendIntent ? 1 : 0, expiresAt],
       })
       await tx.commit()
@@ -429,8 +430,15 @@ async function cachedStudyPromptAudio(input: {
   env: Env
   intent: PreparedTelegramStudyVoiceIntent
 }): Promise<ArrayBuffer> {
+  const communityRepository = getCommunityRepository(input.env)
+  const policy = await getCommunityAssistantVoicePolicyForCommunity({
+    env: input.env,
+    communityRepository,
+    communityId: input.intent.communityId,
+  })
+  const voiceId = policy.ttsVoice.trim()
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
-    `${input.intent.communityId}\n${input.intent.referenceText}`,
+    `${voiceId}\n${input.intent.referenceText}`,
   ))
   const key = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
   const request = new Request(`https://telegram-study-audio.invalid/${key}.ogg`)
@@ -439,19 +447,91 @@ async function cachedStudyPromptAudio(input: {
     : await caches.open("telegram-study-audio").catch(() => null)
   const cached = cache ? await cache.match(request).catch(() => undefined) : undefined
   if (cached) return cached.arrayBuffer()
+  const durableKey = `v1/${key}.ogg`
+  const durable = input.env.TELEGRAM_STUDY_TTS_CACHE
+  const durableCached = durable
+    ? await durable.get(durableKey).catch((error) => {
+        throw providerUnavailable("telegram_study_tts_cache_read_failed", {
+          cause: error instanceof Error ? error.message : String(error),
+        }, false)
+      })
+    : null
+  if (durableCached) {
+    const audio = await durableCached.arrayBuffer()
+    if (cache) {
+      await cache.put(request, new Response(audio, {
+        headers: { "cache-control": "public, max-age=2592000", "content-type": "audio/ogg" },
+      })).catch(() => undefined)
+    }
+    return audio
+  }
+  await consumeTelegramStudyTtsBudget({
+    characterCount: input.intent.referenceText.length,
+    communityId: input.intent.communityId,
+    env: input.env,
+  })
   const speech = await synthesizeCommunityStudySpeechForCommunity({
     env: input.env,
-    communityRepository: getCommunityRepository(input.env),
+    communityRepository,
     communityId: input.intent.communityId,
     outputFormat: TELEGRAM_ELEVENLABS_TTS_OUTPUT_FORMAT,
     text: input.intent.referenceText,
   })
+  if (durable) {
+    await durable.put(durableKey, speech.audio, {
+      httpMetadata: { contentType: "audio/ogg" },
+      customMetadata: { voiceId },
+    }).catch((error) => {
+      console.warn("[telegram-study] durable TTS cache write failed", {
+        communityId: input.intent.communityId,
+        error: error instanceof Error ? error.message : String(error),
+        key: durableKey,
+      })
+    })
+  }
   if (cache) {
     await cache.put(request, new Response(speech.audio, {
       headers: { "cache-control": "public, max-age=2592000", "content-type": "audio/ogg" },
     })).catch(() => undefined)
   }
   return speech.audio
+}
+
+function telegramStudyTtsDailyCharBudget(env: Env): number {
+  const configured = Number.parseInt(env.TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET?.trim() ?? "", 10)
+  return Number.isSafeInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET
+}
+
+async function consumeTelegramStudyTtsBudget(input: {
+  characterCount: number
+  communityId: string
+  env: Env
+}): Promise<void> {
+  const now = nowIso()
+  const usageDay = now.slice(0, 10)
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO telegram_study_tts_daily_usage (
+        community_id, usage_day, character_count, created_at, updated_at
+      )
+      SELECT ?1, ?2, ?3, ?4, ?4
+      WHERE ?3 <= ?5
+      ON CONFLICT(community_id, usage_day) DO UPDATE SET
+        character_count = telegram_study_tts_daily_usage.character_count + excluded.character_count,
+        updated_at = excluded.updated_at
+      WHERE telegram_study_tts_daily_usage.character_count + excluded.character_count <= ?5
+      RETURNING character_count
+    `,
+    args: [input.communityId, usageDay, input.characterCount, now, telegramStudyTtsDailyCharBudget(input.env)],
+  })
+  if (result.rows.length === 0) {
+    throw providerUnavailable("telegram_study_tts_daily_budget_exceeded", {
+      communityId: input.communityId,
+      usageDay,
+    }, false)
+  }
 }
 
 function intentResource(intent: PreparedTelegramStudyVoiceIntent): TelegramStudyVoiceIntentResource {
