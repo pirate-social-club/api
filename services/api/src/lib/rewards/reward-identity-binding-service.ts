@@ -175,17 +175,18 @@ export async function selectRewardIdentityBinding(input: {
     throw codedConflictError(PROVIDER_UNSUPPORTED, "Reward document selection requires the Self identity provider")
   }
   const now = input.now ?? new Date().toISOString()
+
+  // A retry of an already-applied selection is a true no-op even after the
+  // evidence used to seed it expires. Expired evidence cannot create or change
+  // a selection, but it does not invalidate the existing binding.
+  const current = await getRewardIdentityBinding({ ...input, now })
+  if (current.active_binding?.identity_nullifier_id === input.identityNullifierId) return current
+
   const documents = (await listBoundDocuments(input.client, input.userId))
     .filter((document) => isEvidenceCurrent(document, now))
   if (!documents.some((document) => document.identity_nullifier_id === input.identityNullifierId)) {
     throw codedConflictError(DOCUMENT_INELIGIBLE, "The selected identity document has no active bound nationality evidence")
   }
-
-  // Retrying the same user intent must preserve the binding id and selected_at;
-  // Slice 3 snapshots those values as decision evidence. Only a genuine change
-  // of document enters the supersede-and-insert transaction below.
-  const current = await getRewardIdentityBinding({ ...input, now })
-  if (current.active_binding?.identity_nullifier_id === input.identityNullifierId) return current
 
   const tx = await input.client.transaction("write")
   try {
