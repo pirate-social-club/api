@@ -23,6 +23,8 @@ import {
   createTelegramChatStudyVoiceIntent,
   createTelegramStudyVoiceIntent,
 } from "../../../src/lib/telegram/study-voice-service"
+import { telegramStudyPlaybackButton } from "../../../src/lib/telegram/chat-study-playback-service"
+import { getTelegramStudyCopy } from "../../../src/lib/telegram/study-copy"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -202,6 +204,20 @@ async function seedReadyTranslationExercises(input: {
 }
 
 describe("community study routes", () => {
+  test("localizes the Telegram song playback button in every study locale", () => {
+    const expected = {
+      en: "🎵 Play song",
+      zh: "🎵 播放歌曲",
+      ar: "🎵 تشغيل الأغنية",
+      ka: "🎵 სიმღერის დაკვრა",
+    } as const
+    for (const [language, label] of Object.entries(expected)) {
+      const locale = language as keyof typeof expected
+      expect(getTelegramStudyCopy(locale).playSong).toBe(label)
+      expect(telegramStudyPlaybackButton("tcs_localized", locale).text).toBe(getTelegramStudyCopy(locale).playSong)
+    }
+  })
+
   test("maps page-relative Telegram song callbacks beyond the two-digit absolute index boundary", () => {
     expect(telegramStudySongSelectionIndex(12, 3)).toBe(99)
   })
@@ -532,13 +548,78 @@ describe("community study routes", () => {
       `,
       args: [session.userId, now],
     })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO profiles (user_id, display_name, created_at, updated_at)
+        VALUES ('route_author', 'Route Artist', ?1, ?1)
+        ON CONFLICT(user_id) DO UPDATE SET display_name = excluded.display_name, updated_at = excluded.updated_at
+      `,
+      args: [now],
+    })
+    const audioContentHash = "a".repeat(64)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO song_artifact_uploads (
+          song_artifact_upload_id, community_id, uploader_user_id, artifact_kind,
+          status, storage_ref, mime_type, filename, size_bytes, content_hash,
+          created_at, updated_at
+        ) VALUES (
+          'sau_chat_study_audio', ?1, 'route_author', 'primary_audio',
+          'uploaded', 'https://audio.test/route-song.mp3', 'audio/mpeg',
+          'route-song.mp3', 4, ?2, ?3, ?3
+        )
+      `,
+      args: [communityId, `0x${audioContentHash}`, now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO song_artifact_bundles (
+          song_artifact_bundle_id, community_id, creator_user_id, status,
+          primary_audio_json, title, lyrics_text, lyrics_sha256,
+          preview_status, translation_status, alignment_status,
+          moderation_status, created_at, updated_at
+        ) VALUES (
+          'chat_study_audio', ?1, 'route_author', 'consumed', ?2,
+          'Route Song', 'Line one for route study', ?3, 'completed',
+          'completed', 'completed', 'completed', ?4, ?4
+        )
+      `,
+      args: [
+        communityId,
+        JSON.stringify({
+          content_hash: `0x${audioContentHash}`,
+          mime_type: "audio/mpeg",
+          song_artifact_upload: "sau_chat_study_audio",
+          storage_ref: "https://audio.test/route-song.mp3",
+        }),
+        `0x${"b".repeat(64)}`,
+        now,
+      ],
+    })
     const originalFetch = globalThis.fetch
     const telegramBodies: Array<Record<string, unknown>> = []
+    let telegramAudioUploads = 0
     let messageId = 700
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(input, init)
+      if (request.url === "https://audio.test/route-song.mp3") {
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          headers: { "content-type": "audio/mpeg" },
+        })
+      }
       if (request.url.startsWith(`https://api.telegram.org/bot${botToken}/`)) {
-        telegramBodies.push(await request.json() as Record<string, unknown>)
+        const contentType = request.headers.get("content-type") ?? ""
+        const body = contentType.startsWith("multipart/form-data")
+          ? Object.fromEntries(await request.formData())
+          : await request.json() as Record<string, unknown>
+        telegramBodies.push(body)
+        if (request.url.endsWith("/sendAudio")) {
+          if (body.audio instanceof File) telegramAudioUploads += 1
+          return Response.json({
+            ok: true,
+            result: { audio: { file_id: "telegram-route-audio", file_unique_id: "route-audio-unique" }, message_id: messageId++ },
+          })
+        }
         return Response.json({ ok: true, result: request.url.endsWith("/answerCallbackQuery") ? true : { message_id: messageId++ } })
       }
       return originalFetch(input, init)
@@ -646,7 +727,7 @@ describe("community study routes", () => {
         url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
       })
       await publicSongClient.execute(
-        "UPDATE posts SET visibility = 'public' WHERE post_id = 'pst_study_route_song'",
+        "UPDATE posts SET visibility = 'public', song_artifact_bundle_id = 'chat_study_audio' WHERE post_id = 'pst_study_route_song'",
       )
       await publicSongClient.execute({
         sql: `
@@ -812,6 +893,17 @@ describe("community study routes", () => {
         args: [selectingSession.rows[0]?.chat_study_session_id],
       })
       expect(JSON.parse(String(selectedSession.rows[0]?.action_payload_json))).toMatchObject({ deliveryMode: "text" })
+      expect(telegramAudioUploads).toBe(1)
+      expect(telegramBodies.some((body) =>
+        body.title === "Route Song"
+        && body.performer === "Route Artist"
+      )).toBe(true)
+      const cachedAudio = await ctx.client.execute({
+        sql: `SELECT telegram_file_id FROM telegram_audio_file_cache
+              WHERE telegram_community_bot_id = 'tcb_chat_study' AND content_hash = ?1`,
+        args: [audioContentHash],
+      })
+      expect(cachedAudio.rows[0]?.telegram_file_id).toBe("telegram-route-audio")
       const checkData = `study-check:${String(selectingSession.rows[0]?.chat_study_session_id)}`
       const messagesBeforeCheck = telegramBodies.length
       const checkUpdate = {
@@ -840,6 +932,45 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
+      const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
+      expect(replayButton?.callback_data).toBe(`study-play:${String(selectingSession.rows[0]?.chat_study_session_id)}`)
+      await webhook({
+        update_id: 5013,
+        callback_query: {
+          id: "callback-play-song",
+          data: replayButton!.callback_data,
+          from: { id: 454545, is_bot: false },
+          message: { chat: { id: 454545, type: "private" }, message_id: 707 },
+        },
+      })
+      expect(telegramAudioUploads).toBe(1)
+      expect(telegramBodies.some((body) => body.audio === "telegram-route-audio")).toBe(true)
+
+      const lockedSongClient = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      await lockedSongClient.execute(
+        "UPDATE posts SET access_mode = 'locked', asset_id = 'ast_chat_study_locked' WHERE post_id = 'pst_study_route_song'",
+      )
+      lockedSongClient.close()
+      const sendsBeforeLockedReplay = telegramBodies.filter((body) => "audio" in body).length
+      await webhook({
+        update_id: 5014,
+        callback_query: {
+          id: "callback-play-locked-song",
+          data: replayButton!.callback_data,
+          from: { id: 454545, is_bot: false },
+          message: { chat: { id: 454545, type: "private" }, message_id: 707 },
+        },
+      })
+      expect(telegramBodies.filter((body) => "audio" in body)).toHaveLength(sendsBeforeLockedReplay)
+      const unlockSongClient = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      await unlockSongClient.execute(
+        "UPDATE posts SET access_mode = 'public', asset_id = NULL WHERE post_id = 'pst_study_route_song'",
+      )
+      unlockSongClient.close()
       const correctButton = answerButtons.find((button) => button.text === "正确翻译 1")
       expect(correctButton?.callback_data).toMatch(/^study:[a-f0-9]{18}:[0-9]{1,2}$/)
       expect(correctButton?.callback_data).not.toContain("opt_chat")

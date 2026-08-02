@@ -22,6 +22,7 @@ type StudyCopy = {
   nothingDetected: string
   processingError: string
   pendingLocalization: string
+  playSong: string
   translationsReady: string
   sayThis: string
   startAgain: string
@@ -40,7 +41,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     deliveryText: "Text", disclosure: "The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading.",
     exerciseExpired: "This study exercise expired.", extra: "Extra", lineWas: "The line was", labelSeparator: ":", missing: "Missing",
     noSongs: "No songs are ready to study in this community yet.", notQuite: "Not quite", nothingDetected: "(nothing detected)",
-    pendingLocalization: "Translations are being prepared. Voice practice is ready now.", processingError: "I couldn't process that answer. Send /study to restart.", sayThis: "Say this:",
+    pendingLocalization: "Translations are being prepared. Voice practice is ready now.", playSong: "🎵 Play song", processingError: "I couldn't process that answer. Send /study to restart.", sayThis: "Say this:",
     startAgain: "Start again", studyUnavailable: "Study is not available here yet.", suggested: "Suggested", translationsReady: "Translations are ready.", youSaid: "You said",
   },
   zh: {
@@ -50,7 +51,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     deliveryText: "文字", disclosure: "社区机器人所有者可以访问并收听你在此发送的语音消息。Pirate 也会接收录音，用于转写和评分。",
     exerciseExpired: "此学习练习已过期。", extra: "多说", lineWas: "原句是", labelSeparator: "：", missing: "漏说",
     noSongs: "这个社区还没有可学习的歌曲。", notQuite: "还不完全正确", nothingDetected: "（未检测到语音）",
-    pendingLocalization: "翻译正在准备中。现在可以先进行语音练习。", processingError: "无法处理这个答案。请发送 /study 重新开始。", sayThis: "请说：",
+    pendingLocalization: "翻译正在准备中。现在可以先进行语音练习。", playSong: "🎵 播放歌曲", processingError: "无法处理这个答案。请发送 /study 重新开始。", sayThis: "请说：",
     startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", suggested: "推荐", translationsReady: "翻译已准备好。", youSaid: "你说的是",
   },
   ar: {
@@ -60,7 +61,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     deliveryText: "نص", disclosure: "يمكن لمالك روبوت المجتمع الوصول إلى الرسائل الصوتية المرسلة هنا والاستماع إليها. يتلقى Pirate التسجيل أيضًا للنسخ والتقييم.",
     exerciseExpired: "انتهت صلاحية هذا التمرين.", extra: "إضافي", lineWas: "كان السطر", labelSeparator: ":", missing: "ناقص",
     noSongs: "لا توجد أغانٍ جاهزة للدراسة في هذا المجتمع بعد.", notQuite: "ليس تمامًا", nothingDetected: "(لم يتم اكتشاف شيء)",
-    pendingLocalization: "يجري إعداد الترجمات. التدريب الصوتي متاح الآن.", processingError: "تعذر معالجة الإجابة. أرسل /study للبدء مجددًا.", sayThis: "قل هذا:",
+    pendingLocalization: "يجري إعداد الترجمات. التدريب الصوتي متاح الآن.", playSong: "🎵 تشغيل الأغنية", processingError: "تعذر معالجة الإجابة. أرسل /study للبدء مجددًا.", sayThis: "قل هذا:",
     startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", suggested: "مقترح", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
   },
   ka: {
@@ -70,7 +71,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     deliveryText: "ტექსტი", disclosure: "თემის ბოტის მფლობელს აქ გაგზავნილი ხმოვანი შეტყობინებების მოსმენა შეუძლია. Pirate-იც იღებს ჩანაწერს ტრანსკრიფციისა და შეფასებისთვის.",
     exerciseExpired: "ამ სავარჯიშოს ვადა გაუვიდა.", extra: "ზედმეტი", lineWas: "სტრიქონი იყო", labelSeparator: ":", missing: "აკლია",
     noSongs: "ამ თემში სასწავლად მზად სიმღერები ჯერ არ არის.", notQuite: "მთლად არა", nothingDetected: "(ვერაფერი დაფიქსირდა)",
-    pendingLocalization: "თარგმანები მზადდება. ხმოვანი ვარჯიში უკვე შეგიძლიათ.", processingError: "პასუხი ვერ დამუშავდა. თავიდან დასაწყებად გაგზავნეთ /study.", sayThis: "თქვით:",
+    pendingLocalization: "თარგმანები მზადდება. ხმოვანი ვარჯიში უკვე შეგიძლიათ.", playSong: "🎵 სიმღერის დაკვრა", processingError: "პასუხი ვერ დამუშავდა. თავიდან დასაწყებად გაგზავნეთ /study.", sayThis: "თქვით:",
     startAgain: "თავიდან დაწყება", studyUnavailable: "სწავლა აქ ჯერ ხელმისაწვდომი არ არის.", suggested: "რეკომენდებული", translationsReady: "თარგმანები მზადაა.", youSaid: "თქვენ თქვით",
   },
 }

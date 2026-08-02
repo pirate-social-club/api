@@ -49,6 +49,11 @@ import {
 } from "./study-preference-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
 import {
+  parseTelegramStudyPlaybackCallback,
+  sendTelegramStudySongPlayback,
+  telegramStudyPlaybackButton,
+} from "./chat-study-playback-service"
+import {
   telegramIdentifier,
   type TelegramWebhookCallbackQuery,
 } from "./webhook-parsing"
@@ -215,6 +220,7 @@ function studyPostFromRow(row: unknown): StudyPost | null {
     post_id: postId,
     post_type: stringOrNull(rowValue(row, "post_type")) ?? "",
     song_cover_art_ref: stringOrNull(rowValue(row, "song_cover_art_ref")),
+    song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     song_title: stringOrNull(rowValue(row, "song_title")),
     source_language: stringOrNull(rowValue(row, "source_language")),
     status: stringOrNull(rowValue(row, "status")) ?? "",
@@ -350,7 +356,7 @@ async function listReadySongs(input: {
       const rows = await db.client.execute({
         sql: `
           SELECT post_id, community_id, author_user_id, post_type, status, visibility,
-                 lyrics, title, song_title, song_cover_art_ref, source_language,
+                 lyrics, title, song_title, song_cover_art_ref, song_artifact_bundle_id, source_language,
                  access_mode, age_gate_policy, asset_id, created_at
           FROM posts
           WHERE community_id = ?1
@@ -889,10 +895,16 @@ async function presentNextExercise(input: {
       chat_id: input.chatId,
       text: `${exercise.question}\n\n${exercise.prompt_text}`,
       reply_markup: {
-        inline_keyboard: exercise.options.map((option, index) => [{
-          callback_data: callbackData(token, index),
-          text: option.text.slice(0, 60),
-        }]),
+        inline_keyboard: [
+          ...exercise.options.map((option, index) => [{
+            callback_data: callbackData(token, index),
+            text: option.text.slice(0, 60),
+          }]),
+          [telegramStudyPlaybackButton(
+            input.session.id,
+            isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en",
+          )],
+        ],
       },
     })
     await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: input.session.id })
@@ -1059,6 +1071,52 @@ export async function handleTelegramChatStudyCallback(input: {
   callback: TelegramWebhookCallbackQuery
   env: Env
 }): Promise<boolean> {
+  const playbackSessionId = parseTelegramStudyPlaybackCallback(input.callback.data)
+  if (playbackSessionId) {
+    const callbackQueryId = stringOrNull(input.callback.id)
+    const telegramUserId = telegramIdentifier(input.callback.from?.id)
+    const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+    if (!callbackQueryId || !telegramUserId || !chatId) return true
+    const result = await getControlPlaneClient(input.env).execute({
+      sql: `
+        SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
+               post_id, target_language, status, action_token, action_kind,
+               action_payload_json
+        FROM telegram_chat_study_sessions
+        WHERE chat_study_session_id = ?1
+          AND telegram_community_bot_id = ?2
+          AND telegram_user_id = ?3
+          AND status IN ('active', 'processing')
+          AND expires_at > ?4
+        LIMIT 1
+      `,
+      args: [playbackSessionId, input.bot.id, telegramUserId, nowIso()],
+    })
+    const session = parseSession(result.rows[0])
+    if (!session?.postId || session.communityId !== input.bot.communityId) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    if (!await claimCallback({ bot: input.bot, callbackQueryId, env: input.env, sessionId: session.id })) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+    try {
+      await sendTelegramStudySongPlayback({
+        actor: { authType: "user", userId: session.userId },
+        bot: input.bot,
+        chatId,
+        env: input.env,
+        postId: session.postId,
+      })
+      await finishCallback({ callbackQueryId, env: input.env })
+    } catch (error) {
+      await finishCallback({ callbackQueryId, env: input.env, error }).catch(() => undefined)
+      throw error
+    }
+    return true
+  }
   const restartMatch = typeof input.callback.data === "string"
     ? input.callback.data.match(/^study-restart:(tcs_[A-Za-z0-9_-]+)$/u)
     : null
@@ -1327,6 +1385,19 @@ export async function handleTelegramChatStudyCallback(input: {
       if ((selected.rowsAffected ?? 0) !== 1) {
         throw new Error("Song choice is no longer active")
       }
+      await sendTelegramStudySongPlayback({
+        actor: { authType: "user", userId: session.userId },
+        bot: input.bot,
+        chatId,
+        env: input.env,
+        postId,
+      }).catch((error) => {
+        console.warn("[telegram-study] song playback omitted", {
+          communityId: session.communityId,
+          error: error instanceof Error ? error.message : String(error),
+          postId,
+        })
+      })
       await presentNextExercise({
         bot: input.bot,
         chatId,

@@ -41,6 +41,14 @@ export type TelegramFile = {
   file_path?: string
 }
 
+export type TelegramAudio = TelegramFile & {
+  duration?: number
+  file_name?: string
+  mime_type?: string
+  performer?: string
+  title?: string
+}
+
 function isTelegramBotCredential(input: Env | TelegramBotCredential): input is TelegramBotCredential {
   return typeof (input as TelegramBotCredential).token === "string"
 }
@@ -134,11 +142,12 @@ async function callTelegramBotApiMultipart<T>(
   bot: Env | TelegramBotCredential,
   method: string,
   body: FormData,
+  timeoutMs = TELEGRAM_API_TIMEOUT_MS,
 ): Promise<T> {
   const token = telegramBotToken(bot)
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), TELEGRAM_API_TIMEOUT_MS)
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
   let response: Response
   try {
     response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -225,6 +234,28 @@ export function sendTelegramVideo(
   return callTelegramBotApi(bot, "sendVideo", body)
 }
 
+export function sendTelegramAudio(
+  bot: Env | TelegramBotCredential,
+  body: {
+    audio: File | string
+    chat_id: number | string
+    performer?: string
+    reply_markup?: TelegramInlineReplyMarkup
+    title?: string
+  },
+): Promise<{ audio?: TelegramAudio; message_id: number }> {
+  if (typeof body.audio === "string") {
+    return callTelegramBotApi(bot, "sendAudio", body)
+  }
+  const form = new FormData()
+  form.set("chat_id", String(body.chat_id))
+  form.set("audio", body.audio)
+  if (body.title?.trim()) form.set("title", body.title.trim())
+  if (body.performer?.trim()) form.set("performer", body.performer.trim())
+  if (body.reply_markup) form.set("reply_markup", JSON.stringify(body.reply_markup))
+  return callTelegramBotApiMultipart(bot, "sendAudio", form, TELEGRAM_FILE_TIMEOUT_MS)
+}
+
 export function editTelegramMessageText(
   bot: Env | TelegramBotCredential,
   body: {
@@ -292,6 +323,7 @@ export function sendTelegramVoice(
     reply_parameters?: {
       message_id: number
     }
+    reply_markup?: TelegramInlineReplyMarkup
   },
 ): Promise<{ message_id: number }> {
   const form = new FormData()
@@ -305,6 +337,9 @@ export function sendTelegramVoice(
   }
   if (body.reply_parameters) {
     form.set("reply_parameters", JSON.stringify(body.reply_parameters))
+  }
+  if (body.reply_markup) {
+    form.set("reply_markup", JSON.stringify(body.reply_markup))
   }
   return callTelegramBotApiMultipart(bot, "sendVoice", form)
 }
