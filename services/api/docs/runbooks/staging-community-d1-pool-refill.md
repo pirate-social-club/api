@@ -5,9 +5,12 @@ pool watchdog reports low free capacity. This procedure is for staging only.
 Production refill should follow the same bind-before-insert invariant, but must
 use production names, production bindings, and the production deploy protocol.
 
-The pool is intentionally monotonic: creating a smoke community consumes a
-binding, and archiving the community does not reclaim it. Do not build or use a
-loaded-community reset as smoke cleanup.
+Archiving a community does not reclaim its binding. Loaded databases must never
+be passed to the provisioning reset path. Reviewed cleanup of recognized,
+archived staging smoke communities uses the separately fenced decommission path
+in [staging-community-d1-reclamation.md](./staging-community-d1-reclamation.md).
+Do not use reclamation as a shortcut around this refill procedure when safe
+candidate evidence is unavailable.
 
 ## Detection And Release Gate
 
