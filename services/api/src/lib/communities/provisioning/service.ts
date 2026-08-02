@@ -39,6 +39,7 @@ import {
   type CreateCommunityAuth,
   type CreateCommunityRequestBody,
   resolveCreateCommunityAuth,
+  withPersistedCommunityCreatedAt,
 } from "../create/validation"
 import { assertGatePolicyContractsValid } from "../membership/gate-policy-contract-validation"
 import type { GatePolicy } from "../membership/gate-types"
@@ -330,7 +331,10 @@ async function provisionNamespacedCommunity(input: {
     const provisioned = await backend.provision({
       env,
       body,
-      auth,
+      // A retry is a new HTTP request, but the target snapshot must remain
+      // byte-identical to the first attempt. Reuse the persisted community
+      // creation timestamp instead of the request-local nowIso().
+      auth: withPersistedCommunityCreatedAt(auth, existingCommunity?.created_at),
       communityId,
       namespaceVerificationId,
       routeSlug,

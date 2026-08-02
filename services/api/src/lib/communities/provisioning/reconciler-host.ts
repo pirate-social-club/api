@@ -77,7 +77,13 @@ export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): R
     },
     shardGetPoolRow: (bindingName) => shard.communityD1GetPoolRow({ adminToken, bindingName }),
     shardReset: (bindingName) => shard.communityD1Reset({ adminToken, bindingName }),
-    shardRelease: (bindingName) => shard.communityD1Release({ adminToken, bindingName, now: nowIso }),
+    shardRelease: (bindingName, expectedCommunityId, expectedPoolVersion) => shard.communityD1Release({
+      adminToken,
+      bindingName,
+      expectedCommunityId,
+      expectedPoolVersion,
+      now: nowIso,
+    }),
     advanceRoutingToReady: async (binding: StuckBinding) => {
       await upsertD1CommunityRoutingRow(client, {
         communityId: binding.communityId,

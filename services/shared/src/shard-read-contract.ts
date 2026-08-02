@@ -16,6 +16,15 @@ export type ShardSqlStatement = {
   args?: unknown[]
 }
 
+/** Stable content digest used by target bootstrap markers and retry verification. */
+export async function shardSnapshotDigest(statements: ShardSqlStatement[]): Promise<string> {
+  const encoded = new TextEncoder().encode(
+    JSON.stringify(statements.map((statement) => [statement.sql, statement.args ?? []])),
+  )
+  const digest = await crypto.subtle.digest("SHA-256", encoded)
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
+}
+
 export type ShardQueryResultRow = Record<string, unknown>
 
 export type ShardQueryResult = {
@@ -223,6 +232,8 @@ export type ShardAdminDecommissionRequest = {
   adminToken: string
   bindingName: string
   communityId: string
+  /** Allocation generation observed before the destructive operation began. */
+  expectedPoolVersion: number
   /** ISO timestamp recorded as `released_at` after the database is emptied. */
   now: string
 }
@@ -235,12 +246,16 @@ export type ShardAdminDecommissionResponse = {
 export type ShardAdminReleaseRequest = {
   adminToken: string
   bindingName: string
+  /** Tenant observed on the pool row before reset/release began. */
+  expectedCommunityId: string
+  /** Allocation generation observed before reset/release began. */
+  expectedPoolVersion: number
   /** ISO timestamp recorded as `released_at` (starts the §5 quarantine window). */
   now: string
 }
 
 export type ShardAdminReleaseResponse = {
-  /** True if a row was freed; false if the binding had no allocated row. */
+  /** True when the exact expected allocation generation was freed. */
   released: boolean
 }
 
@@ -288,6 +303,7 @@ export type ShardErrorCode =
   | "shard_pool_write_conflict"
   | "shard_binding_not_initialized"
   | "shard_binding_not_allocated"
+  | "shard_snapshot_mismatch"
   | "shard_admin_unauthorized"
   | "shard_binding_loaded"
   | "shard_binding_not_empty"
@@ -329,6 +345,10 @@ export function mapShardErrorToHttp(code: ShardErrorCode): { status: number; ret
     case "shard_binding_loaded":
       // Precondition failed: the binding became loaded. Not retryable — the
       // reconciler should re-evaluate (advance to ready), not retry the reset.
+      return { status: 409, retryable: false }
+    case "shard_snapshot_mismatch":
+      // A target bootstrap committed under a different statement digest.
+      // Replaying cannot repair it safely; operator reconciliation is needed.
       return { status: 409, retryable: false }
     case "shard_pool_exhausted":
     case "shard_pool_write_conflict":
@@ -376,6 +396,8 @@ export const SHARD_READ_ERROR = {
    * it.
    */
   BINDING_NOT_ALLOCATED: "shard_binding_not_allocated",
+  /** A committed target bootstrap marker belongs to this tenant but a different snapshot revision. */
+  SNAPSHOT_MISMATCH: "shard_snapshot_mismatch",
   /**
    * An admin RPC (communityD1GetPoolRow/Reset/Release) was called with a missing
    * or incorrect `adminToken`, or the shard has no SHARD_ADMIN_TOKEN configured

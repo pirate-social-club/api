@@ -4,6 +4,7 @@ import {
   isBootstrapAllowedStatement,
   readOnlyVerb,
   SHARD_READ_ERROR,
+  shardSnapshotDigest,
   type ShardBatchReadRequest,
   type ShardBindRequest,
   type ShardLoadSnapshotRequest,
@@ -375,6 +376,9 @@ const MAX_BIND_ATTEMPTS = 5
  */
 const MAX_ATTRIBUTION_LENGTH = 200
 
+/** Target-D1 proof that the bootstrap batch committed before the pool CAS. */
+const BOOTSTRAP_STATE_TABLE = "_pirate_bootstrap_state"
+
 /**
  * Attribution is DIAGNOSTIC and must never be able to fail an allocation, so this
  * never throws: anything missing, blank, or non-string becomes NULL, and anything
@@ -662,7 +666,7 @@ export async function runShardLoadSnapshot(
   //    still allocated to this community at write time.
   const row = await pool
     .prepare(
-      "SELECT community_id, last_loaded_at FROM d1_pool WHERE binding_name = ?1",
+      "SELECT community_id, last_loaded_at, version FROM d1_pool WHERE binding_name = ?1",
     )
     .bind(input.bindingName)
     .first()
@@ -672,7 +676,7 @@ export async function runShardLoadSnapshot(
       `binding ${input.bindingName} has no d1_pool row — cannot load snapshot`,
     )
   }
-  const r = row as { community_id: string | null; last_loaded_at: string | null }
+  const r = row as { community_id: string | null; last_loaded_at: string | null; version: number }
   if (r.community_id !== input.communityId) {
     return err(
       SHARD_READ_ERROR.BINDING_NOT_ALLOCATED,
@@ -686,43 +690,107 @@ export async function runShardLoadSnapshot(
     return { ok: true, value: { rowsAffected: 0, loaded: false } }
   }
 
-  // 3. Bootstrap guard: DDL + INSERTs only, run as one atomic batch.
-  const dbOrError = resolveD1(env, input.bindingName)
-  if (!("prepare" in dbOrError)) return dbOrError
+  // The migration-provisioned path has no target statements to recover. Keep
+  // its historical behavior: fence only the pool row and do not create target
+  // metadata merely to prove an empty batch.
   if (input.statements.length === 0) {
-    // Empty statements + no prior load: still mark loaded (the schema is
-    // expected to already be in place via migration; this is a no-op seed).
-    await pool
+    const marked = await pool
       .prepare(
         "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
-          "WHERE binding_name = ?1 AND last_loaded_at IS NULL",
+          "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 AND last_loaded_at IS NULL",
       )
-      .bind(input.bindingName, new Date().toISOString())
+      .bind(input.bindingName, new Date().toISOString(), input.communityId, r.version)
       .run()
+    if ((marked.meta?.changes ?? 0) !== 1) {
+      return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while marking snapshot loaded")
+    }
     return { ok: true, value: { rowsAffected: 0, loaded: true } }
   }
+
+  // 3. A prior attempt may have committed the target batch and then lost the
+  //    pool CAS. Its target-side marker is in that same atomic batch, so a
+  //    retry can safely repair only last_loaded_at without replaying schema
+  //    statements that are not necessarily idempotent.
+  const dbOrError = resolveD1(env, input.bindingName)
+  if (!("prepare" in dbOrError)) return dbOrError
+  const expectedSnapshotDigest = await shardSnapshotDigest(input.statements)
+  const markerTable = await dbOrError
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1")
+    .bind(BOOTSTRAP_STATE_TABLE)
+    .first()
+  if (markerTable) {
+    const marker = await dbOrError
+      .prepare(
+        `SELECT community_id, snapshot_digest FROM ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} LIMIT 1`,
+      )
+      .first()
+    const markerCommunityId = marker == null ? null : String((marker as { community_id?: unknown }).community_id ?? "")
+    const markerSnapshotDigest = marker == null ? null : String((marker as { snapshot_digest?: unknown }).snapshot_digest ?? "")
+    if (markerCommunityId === input.communityId && markerSnapshotDigest === expectedSnapshotDigest) {
+      const marked = await pool
+        .prepare(
+          "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
+            "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 AND last_loaded_at IS NULL",
+        )
+        .bind(input.bindingName, new Date().toISOString(), input.communityId, r.version)
+        .run()
+      if ((marked.meta?.changes ?? 0) !== 1) {
+        return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while repairing snapshot load")
+      }
+      return { ok: true, value: { rowsAffected: 0, loaded: false } }
+    }
+    if (markerCommunityId === input.communityId) {
+      return err(
+        SHARD_READ_ERROR.SNAPSHOT_MISMATCH,
+        `binding ${input.bindingName} contains a committed bootstrap for a different snapshot revision`,
+      )
+    }
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOCATED,
+      `binding ${input.bindingName} contains a bootstrap marker for a different community`,
+    )
+  }
+
+  // 4. Bootstrap guard: DDL + INSERTs plus the completion marker, run as one
+  //    atomic target-D1 batch.
   const prepared: D1PreparedStatement[] = []
   for (const statement of input.statements) {
     const p = prepareBootstrap(dbOrError, statement)
     if (!("all" in p)) return p
     prepared.push(p)
   }
-  const results = await dbOrError.batch(prepared)
-  const rowsAffected = results.reduce(
+  const completedAt = new Date().toISOString()
+  const markerStatements = [
+    dbOrError.prepare(
+      `CREATE TABLE IF NOT EXISTS ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} (` +
+        "community_id TEXT PRIMARY KEY, snapshot_digest TEXT NOT NULL, completed_at TEXT NOT NULL)",
+    ),
+    dbOrError
+      .prepare(
+        `INSERT INTO ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} ` +
+          "(community_id, snapshot_digest, completed_at) VALUES (?1, ?2, ?3)",
+      )
+      .bind(input.communityId, expectedSnapshotDigest, completedAt),
+  ]
+  const results = await dbOrError.batch([...prepared, ...markerStatements])
+  const rowsAffected = results.slice(0, prepared.length).reduce(
     (sum, r) => sum + (r.meta?.changes ?? 0),
     0,
   )
 
-  // 4. Mark loaded on the pool row. Only set last_loaded_at if the batch
+  // 5. Mark loaded on the pool row. Only set last_loaded_at if the batch
   //    succeeded — a partial batch is an atomic D1 failure (all-or-nothing),
   //    so if we reach this point, everything committed.
-  await pool
+  const marked = await pool
     .prepare(
       "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
-        "WHERE binding_name = ?1",
+        "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 AND last_loaded_at IS NULL",
     )
-    .bind(input.bindingName, new Date().toISOString())
+    .bind(input.bindingName, completedAt, input.communityId, r.version)
     .run()
+  if ((marked.meta?.changes ?? 0) !== 1) {
+    return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while marking snapshot loaded")
+  }
 
   return { ok: true, value: { rowsAffected, loaded: true } }
 }
@@ -761,11 +829,14 @@ function requirePoolDb(env: ShardEnv): D1Database | ShardError {
 }
 
 function isResettableUserTable(name: string): boolean {
-  return !name.startsWith("sqlite_") && !name.startsWith("_cf_") && name !== "schema_migrations"
+  return !name.startsWith("sqlite_")
+    && !name.startsWith("_cf_")
+    && name !== "schema_migrations"
+    && name !== BOOTSTRAP_STATE_TABLE
 }
 
 function isResettableMetadataTable(name: string): boolean {
-  return name === "schema_migrations"
+  return name === "schema_migrations" || name === BOOTSTRAP_STATE_TABLE
 }
 
 function quoteSqlIdentifier(name: string): string {
@@ -869,6 +940,7 @@ export async function runShardListStaleUnloadedPoolRows(
         "AND allocated_at IS NOT NULL " +
         "AND allocated_at < ?1 " +
         "AND last_loaded_at IS NULL " +
+        "AND (last_error IS NULL OR last_error != 'decommissioning') " +
         "ORDER BY allocated_at ASC, binding_name ASC " +
         "LIMIT ?2",
     )
@@ -982,15 +1054,44 @@ export async function runShardDecommission(
   const pool = requirePoolDb(env)
   if ("ok" in pool) return pool
   const poolRow = await pool
-    .prepare("SELECT community_id FROM d1_pool WHERE binding_name = ?1")
+    .prepare("SELECT community_id, version, last_error FROM d1_pool WHERE binding_name = ?1")
     .bind(input.bindingName)
     .first()
   const mappedCommunityId = String((poolRow as { community_id?: unknown } | null)?.community_id ?? "")
+  const poolVersion = Number((poolRow as { version?: unknown } | null)?.version)
+  const poolLastError = (poolRow as { last_error?: unknown } | null)?.last_error
   if (!poolRow || (mappedCommunityId !== input.communityId && mappedCommunityId !== "")) {
     return err(
       SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
       `refusing to decommission ${input.bindingName}: community mapping does not match`,
     )
+  }
+  const decommissionMarker = "decommissioning"
+  const isClaimedRetry = mappedCommunityId === input.communityId
+    && poolVersion === input.expectedPoolVersion + 1
+    && poolLastError === decommissionMarker
+  const isReleasedRetry = mappedCommunityId === "" && poolVersion === input.expectedPoolVersion + 2
+  if ((!isClaimedRetry && !isReleasedRetry && poolVersion !== input.expectedPoolVersion) || (mappedCommunityId === "" && !isReleasedRetry)) {
+    return err(
+      SHARD_READ_ERROR.POOL_WRITE_CONFLICT,
+      `refusing to decommission ${input.bindingName}: allocation generation changed`,
+    )
+  }
+
+  // Fence the allocation in D1_POOL before touching the target database. A
+  // crash leaves an allocated row marked decommissioning; a retry with the
+  // original generation may resume, while release refuses the marker.
+  if (!isClaimedRetry && !isReleasedRetry) {
+    const claimed = await pool
+      .prepare(
+        "UPDATE d1_pool SET last_error = ?4, version = version + 1 " +
+          "WHERE binding_name = ?1 AND community_id = ?2 AND version = ?3",
+      )
+      .bind(input.bindingName, input.communityId, input.expectedPoolVersion, decommissionMarker)
+      .run()
+    if ((claimed.meta?.changes ?? 0) !== 1) {
+      return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed before decommissioning")
+    }
   }
 
   const db = resolveD1(env, input.bindingName)
@@ -1008,7 +1109,7 @@ export async function runShardDecommission(
   // only when the pool row has no current tenant and the target is demonstrably
   // empty. This branch performs no shard mutation; any non-empty target still
   // fails closed, while a row mapped to another community was rejected above.
-  if (mappedCommunityId === "") {
+  if (isReleasedRetry) {
     if (tableNames.length > 0) {
       return err(
         SHARD_READ_ERROR.BINDING_NOT_EMPTY,
@@ -1028,13 +1129,16 @@ export async function runShardDecommission(
     .prepare(
       "UPDATE d1_pool SET community_id = NULL, allocated_at = NULL, last_loaded_at = NULL, " +
         "last_error = NULL, released_at = ?3, version = version + 1 " +
-        "WHERE binding_name = ?1 AND community_id = ?2",
+        "WHERE binding_name = ?1 AND community_id = ?2 AND version = ?4 AND last_error = 'decommissioning'",
     )
-    .bind(input.bindingName, input.communityId, input.now)
+    .bind(input.bindingName, input.communityId, input.now, input.expectedPoolVersion + 1)
     .run()
+  if ((released.meta?.changes ?? 0) !== 1) {
+    return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while decommissioning")
+  }
   return {
     ok: true,
-    value: { tablesDropped: tableNames.length, released: (released.meta?.changes ?? 0) > 0 },
+    value: { tablesDropped: tableNames.length, released: true },
   }
 }
 
@@ -1058,12 +1162,16 @@ export async function runShardRelease(
     .prepare(
       "UPDATE d1_pool SET community_id = NULL, allocated_at = NULL, last_loaded_at = NULL, " +
         "last_error = NULL, released_at = ?2, version = version + 1 " +
-        "WHERE binding_name = ?1 AND community_id IS NOT NULL",
+        "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 " +
+          "AND (last_error IS NULL OR last_error != 'decommissioning')",
     )
-    .bind(input.bindingName, input.now)
+    .bind(input.bindingName, input.now, input.expectedCommunityId, input.expectedPoolVersion)
     .run()
+  if ((result.meta?.changes ?? 0) !== 1) {
+    return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while releasing")
+  }
 
-  return { ok: true, value: { released: (result.meta?.changes ?? 0) > 0 } }
+  return { ok: true, value: { released: true } }
 }
 
 /** Admin: aggregate pool capacity using the allocator's exact free/quarantine predicate. */

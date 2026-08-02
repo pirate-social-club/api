@@ -208,4 +208,41 @@ describe("d1NativeProvisioningBackend", () => {
       retryable: true,
     })
   })
+
+  test("surfaces a committed bootstrap digest mismatch distinctly", async () => {
+    const fakeShard = {
+      async communityD1Bind() {
+        return {
+          ok: true as const,
+          value: { bindingName: "DB_CMTY_MISMATCH", shardWorkerId: "community-d1-shard-staging", allocated: true },
+        }
+      },
+      async communityD1LoadSnapshot() {
+        return {
+          ok: false as const,
+          code: "shard_snapshot_mismatch" as const,
+          message: "different snapshot revision",
+        }
+      },
+    } as unknown as ShardRpc
+    const envWithShard = buildEnv({
+      COMMUNITY_D1_SHARD: fakeShard,
+      COMMUNITY_D1_SHARD_REGION: "weur",
+    })
+    const backend = resolveCommunityProvisioningBackend(envWithShard, { hasNamespace: true })
+
+    await expect(backend.provision({
+      env: envWithShard,
+      communityRepository: {} as CommunityProvisioningRepository,
+      body: { display_name: "Retry" } as never,
+      auth: { userId: "usr_test", communityDisplayName: "Retry", createdAt: "t0" } as never,
+      communityId: "cmt_retry",
+      namespaceVerificationId: "nsv_test",
+      routeSlug: "retry",
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "d1_snapshot_mismatch",
+      retryable: false,
+    })
+  })
 })
