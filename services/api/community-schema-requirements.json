@@ -111,6 +111,7 @@
   "ledger_only": {
     "1145_dance_attempts.sql": "The migration creates the immutable dance-attempt evidence tables plus bounded validation triggers. The fleet gate cannot derive trigger bodies, so require the exact pinned Core ledger checksum; the generated snapshot and Core migration tests separately verify the resulting schema and trigger behavior.",
     "1146_dance_attempt_reason_contract.sql": "SQLite widens the immutable reason contract through a full table rebuild and recreates its validation triggers. Those DROP/INSERT/ALTER/TRIGGER statements are intentionally checksum-attested against pinned Core because the fleet artifact deriver cannot model rebuild equivalence.",
-    "1147_dance_attempt_upload_invalid_reason.sql": "SQLite adds upload_invalid through a full table rebuild and recreates its validation triggers. Require the exact pinned Core ledger checksum; Core's migration test verifies populated-row preservation and the new reason while the API snapshot verifies the final schema."
+    "1147_dance_attempt_upload_invalid_reason.sql": "SQLite adds upload_invalid through a full table rebuild and recreates its validation triggers. Require the exact pinned Core ledger checksum; Core's migration test verifies populated-row preservation and the new reason while the API snapshot verifies the final schema.",
+    "1149_song_streak_owner_timezone.sql": "The migration backfills timezone and active_until_at with UPDATE statements that the fleet artifact deriver cannot model. Require the exact pinned Core ledger checksum; the generated community schema snapshot and streak migration/service tests separately verify the final columns, index, UTC backfill, and owner-timezone runtime behavior."
   }
 }
