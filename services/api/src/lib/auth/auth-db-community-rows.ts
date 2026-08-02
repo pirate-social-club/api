@@ -5,7 +5,7 @@ import {
   stringOrNull,
 } from "../sql-row"
 import type { Job, Post } from "../../types"
-import { isoUtcFromRow } from "../bookings/codecs"
+import { isoUtcFromRow, isoUtcFromRowNullable } from "../bookings/codecs"
 
 export type CommunityRow = {
   community_id: string
@@ -150,9 +150,9 @@ export function toJobRow(row: unknown): JobRow {
     result_ref: stringOrNull(rowValue(row, "result_ref")),
     error_code: stringOrNull(rowValue(row, "error_code")),
     attempt_count: requiredNumber(row, "attempt_count"),
-    available_at: stringOrNull(rowValue(row, "available_at")),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
+    available_at: isoUtcFromRowNullable(rowValue(row, "available_at")),
+    created_at: isoUtcFromRow(rowValue(row, "created_at")),
+    updated_at: isoUtcFromRow(rowValue(row, "updated_at")),
   }
 }
 
@@ -166,15 +166,15 @@ export function toCommunityPostProjectionRow(row: unknown): CommunityPostProject
     post_type: requiredString(row, "post_type") as CommunityPostProjectionRow["post_type"],
     status: requiredString(row, "status") as CommunityPostProjectionRow["status"],
     visibility: requiredString(row, "visibility") as CommunityPostProjectionRow["visibility"],
-    source_created_at: requiredString(row, "source_created_at"),
+    source_created_at: isoUtcFromRow(rowValue(row, "source_created_at")),
     projected_payload_json: requiredString(row, "projected_payload_json"),
     upvote_count: requiredNumber(row, "upvote_count"),
     downvote_count: requiredNumber(row, "downvote_count"),
     comment_count: requiredNumber(row, "comment_count"),
     like_count: requiredNumber(row, "like_count"),
     projection_version: requiredNumber(row, "projection_version"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
+    created_at: isoUtcFromRow(rowValue(row, "created_at")),
+    updated_at: isoUtcFromRow(rowValue(row, "updated_at")),
   }
 }
 
@@ -185,9 +185,9 @@ export function toCommunityMembershipProjectionRow(row: unknown): CommunityMembe
     user_id: requiredString(row, "user_id"),
     membership_state: requiredString(row, "membership_state") as CommunityMembershipProjectionRow["membership_state"],
     role_summary_json: stringOrNull(rowValue(row, "role_summary_json")),
-    source_updated_at: requiredString(row, "source_updated_at"),
-    created_at: requiredString(row, "created_at"),
-    updated_at: requiredString(row, "updated_at"),
+    source_updated_at: isoUtcFromRow(rowValue(row, "source_updated_at")),
+    created_at: isoUtcFromRow(rowValue(row, "created_at")),
+    updated_at: isoUtcFromRow(rowValue(row, "updated_at")),
   }
 }
 
