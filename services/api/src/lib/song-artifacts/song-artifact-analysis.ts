@@ -135,15 +135,10 @@ function resolveProviderLyricsOutcome(result: Record<string, unknown>): {
     ? result.age_gate_rating
     : null
 
-  if (rating === "adult") {
-    return {
-      analysisState: "allow",
-      contentSafetyState: "adult",
-      ageGatePolicy: "18_plus",
-    }
-  }
-
-  if (rating === "sensitive") {
+  // Policy (2026-08-02): lyrics alone never hard-gate. Explicit lyrics land in
+  // the sensitive tier (explicit-content notice), like a record-label E sticker;
+  // 18_plus is reserved for adult visual media (posts/openai-moderation.ts).
+  if (rating === "adult" || rating === "sensitive") {
     return {
       analysisState: "allow",
       contentSafetyState: "sensitive",

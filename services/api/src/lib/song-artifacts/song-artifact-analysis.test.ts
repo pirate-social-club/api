@@ -172,6 +172,24 @@ describe("song lyrics moderation provider failure semantics", () => {
     expect(result.ageGatePolicy).toBe("none")
   })
 
+  test("caps an adult lyrics rating at the sensitive tier with no age gate", async () => {
+    // Policy 2026-08-02: explicit lyrics get the E-notice tier, never 18_plus.
+    // Hard age gating is reserved for adult visual media.
+    globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({ age_gate_rating: "adult", reason: "Directly depicted sexual act." }) } }],
+    }), { headers: { "content-type": "application/json" } }))
+
+    const result = await evaluateLyricsModeration({
+      env: { OPENROUTER_API_KEY: "test-key" },
+      lyrics: "explicit lyrics",
+    })
+
+    expect(result.moderationStatus).toBe("completed")
+    expect(result.analysisState).toBe("allow")
+    expect(result.contentSafetyState).toBe("sensitive")
+    expect(result.ageGatePolicy).toBe("none")
+  })
+
   test("treats a truncated classifier response as retryable provider unavailability", async () => {
     globalThis.fetch = mockFetch(async () => new Response(JSON.stringify({
       choices: [{ message: { content: '{"age_gate_rating":"adult"' } }],
