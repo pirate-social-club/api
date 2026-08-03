@@ -2260,7 +2260,9 @@ describe("community study routes", () => {
       expect(backgroundTasks).toHaveLength(1)
       await Promise.all(backgroundTasks)
       let recoveredIntents = await ctx.client.execute({ sql: "SELECT 1 WHERE 0" })
-      for (let index = 0; index < 30; index += 1) {
+      // The webhook schedules recovery work after the first waitUntil task.
+      // Blacksmith can take longer than 300ms to observe that nested write.
+      for (let index = 0; index < 200; index += 1) {
         recoveredIntents = await ctx.client.execute({
           sql: `
             SELECT intent_id, status, telegram_voice_message_id,
