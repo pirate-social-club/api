@@ -1,6 +1,6 @@
 # Reward identity parity: Self and ZKPassport
 
-Status: proposed; design review required before implementation
+Status: approved for implementation on 2026-08-03
 
 ## Question
 
@@ -25,8 +25,12 @@ ZKPassport in the resolver would create a second independent claim namespace.
 ## Option A: one provider per campaign
 
 Add an immutable `reward_identity_provider` campaign term. A campaign accepts
-exactly one of `self` or `zkpassport`; its qualification resolver, nationality
-evidence resolver, claim key, and audit snapshot all use that provider.
+exactly one provider from the explicit set `self | zkpassport | very`; its
+qualification resolver, claim key, and audit snapshot all use that provider.
+Nationality-tiered campaigns accept only `self | zkpassport`, because `very`
+does not produce nationality evidence. Uniform campaigns may select any of the
+three providers, including `very`. An unrecognized provider or a `very`
+nationality-tiered campaign is invalid before quote or funding.
 
 Properties:
 
@@ -39,8 +43,18 @@ Properties:
   versioned campaign terms.
 - A provider outage affects campaigns assigned to that provider. Creators and
   users are split across provider-specific campaigns.
-- The same human may still participate in different campaigns through
-  different providers. That is not a duplicate claim within one campaign.
+- The same human may still participate in campaigns for different songs
+  through different providers. This fragments their per-human daily cap across
+  two provider-derived reward identities. The vault epoch cap still bounds the
+  aggregate exposure, so this is an accepted residual rather than a claim of
+  cross-provider human uniqueness.
+- Sequential campaigns for the same song require an additional boundary. If a
+  new campaign selects a different provider than the previous campaign for
+  that song, it cannot start until the next UTC reward-period boundary after
+  the previous campaign ended or exhausted. Creation and quote validation must
+  enforce this alongside the existing one-live-campaign slot check. This keeps
+  `reward_song_period_claims` effective: switching providers cannot create a
+  second claim namespace for the same human, song, and UTC period.
 
 This is the only evaluated option that closes the cross-provider duplicate
 path without pretending the providers expose a shared human identifier.
@@ -105,14 +119,25 @@ in a versioned campaign-terms migration.
 ## Required implementation invariants after approval
 
 1. Provider is mandatory and immutable before campaign funding.
-2. Qualification resolves only the campaign's provider; no fallback provider.
-3. Nationality evidence must be bound to the same provider/nullifier used for
+2. The provider term is exactly `self | zkpassport | very`; nationality-tiered
+   campaigns reject `very`, while uniform campaigns may use it.
+3. Qualification resolves only the campaign's provider; no fallback provider.
+4. A same-song campaign that changes provider cannot start before the next UTC
+   reward-period boundary after the previous campaign ended or exhausted. The
+   create and quote paths both enforce this rule, including races with the
+   existing live-slot constraint.
+5. Nationality evidence must be bound to the same provider/nullifier used for
    the reward identity.
-4. Claim, cap, reservation, payout-allocation, and reconciliation records keep
+6. Claim, cap, reservation, payout-allocation, and reconciliation records keep
    the provider-derived `reward_identity_id` and campaign terms version.
-5. Creator and participant disclosures name the selected passport-proof
-   provider before funding or participation.
-6. Tests prove that presenting the non-selected provider cannot create a
+7. Creator and participant disclosures name the selected identity provider
+   before funding or participation.
+8. Tests prove that presenting the non-selected provider cannot create a
    qualification, reservation, reward event, or payout.
-7. A future multi-provider mode remains invalid until a cryptographically
+9. Tests prove the same-song provider-switch boundary across ended and
+   exhausted campaigns, including the UTC rollover and create/quote races.
+10. Per-human daily caps remain provider-local. Cross-provider cap
+    fragmentation on different songs is an explicitly accepted residual,
+    bounded by the vault epoch cap and monitored as such.
+11. A future multi-provider mode remains invalid until a cryptographically
    linked common subject and migration plan are reviewed.
