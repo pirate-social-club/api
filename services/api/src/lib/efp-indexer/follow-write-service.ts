@@ -24,7 +24,6 @@ import {
   eligibilityFailed,
   rateLimited,
   retryableConflictError,
-  verificationRequired,
 } from "../errors"
 import type { Client, QueryResultRow } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
@@ -178,16 +177,15 @@ function resumableWrite(input: {
   }
 }
 
-async function requireActorStanding(input: {
+async function isActorSponsorshipEligible(input: {
   client: Client
   userId: string
   wallet: Address
 }): Promise<boolean> {
   const result = await input.client.execute({
     sql: `
-      SELECT wa.attachment_kind, wa.source_provider, u.verification_state
+      SELECT wa.attachment_kind, wa.source_provider
       FROM wallet_attachments wa
-      JOIN users u ON u.user_id = wa.user_id
       WHERE wa.user_id = ?1
         AND wa.wallet_address_normalized = ?2
         AND wa.status = 'active'
@@ -198,12 +196,8 @@ async function requireActorStanding(input: {
   })
   const row = result.rows[0]
   if (!row) throw eligibilityFailed("A current primary wallet is required to follow profiles")
-  const isEmbeddedPrivyWallet = row.attachment_kind === "embedded"
+  return row.attachment_kind === "embedded"
     && row.source_provider === "privy"
-  if (isEmbeddedPrivyWallet && row.verification_state !== "verified") {
-    throw verificationRequired("Verify your account before following profiles")
-  }
-  return isEmbeddedPrivyWallet
 }
 
 async function enforceAccountRateLimit(input: {
@@ -273,7 +267,7 @@ export async function prepareProfileFollowWrite(input: {
   if (!actorWallet) throw eligibilityFailed("Your profile has no canonical follow wallet")
   if (!targetWallet) throw eligibilityFailed("This profile has no canonical follow wallet")
 
-  const sponsorshipEligible = await requireActorStanding({
+  const sponsorshipEligible = await isActorSponsorshipEligible({
     client: input.client,
     userId: input.actorUserId,
     wallet: actorWallet,

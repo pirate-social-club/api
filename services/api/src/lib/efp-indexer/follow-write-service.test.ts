@@ -73,8 +73,8 @@ const ENV = {
 } as Env
 
 describe("prepareProfileFollowWrite", () => {
-  test("refuses an unverified embedded Privy wallet before preparing an unpayable fallback", async () => {
-    const write = prepareProfileFollowWrite({
+  test("allows sponsorship for an unverified embedded Privy wallet", async () => {
+    const result = await prepareProfileFollowWrite({
       actorUserId: "viewer",
       client: client({
         standing: {
@@ -89,16 +89,11 @@ describe("prepareProfileFollowWrite", () => {
       targetPublicUserId: "usr_target",
       targetUserId: "target",
       users: users(),
-      resolvePrimaryList: async () => {
-        throw new Error("resolver must not run")
-      },
+      resolvePrimaryList: async () => ({ kind: "none" }),
     })
 
-    await expect(write).rejects.toThrow("Verify your account before following profiles")
-    await write.catch((error) => {
-      expect(error).toBeInstanceOf(HttpError)
-      expect((error as HttpError).code).toBe("verification_required")
-    })
+    expect(result.sponsorship.eligible).toBe(true)
+    expect(result.transactions).toHaveLength(2)
   })
 
   test("returns idempotent success without preparing a transaction when already reflected", async () => {
