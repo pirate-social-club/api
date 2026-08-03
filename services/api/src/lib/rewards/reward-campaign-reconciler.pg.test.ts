@@ -1224,66 +1224,81 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     }
   })
 
-  test("canonical 0189 checks and composite foreign keys reject invalid tier state", async () => {
+  test("canonical 0189 rejects a resolved decision without an amount", async () => {
     const db = connect(TEST_DB, 1)
-    await db.unsafe(`INSERT INTO reward_qualification_events (
-      reward_qualification_event_id, user_id, community_id, post_id,
-      activity, qualified_at, reward_period_key, source_event_id, status,
-      created_at, updated_at
-    ) VALUES ('rqe_invalid_0189', 'usr_reward_pg', 'cmt_reward_pg',
-      'pst_reward_pg', 'study', $1, '2026-07-10',
-      'rqe_invalid_0189', 'pending', $1, $1)`, [NOW])
-    const invalidDecision = await postgresErrorMessage(() => db.unsafe(`
-      INSERT INTO reward_nationality_decisions (
-        reward_nationality_decision_id, reward_qualification_event_id,
-        reward_campaign_id, user_id, result_key, resolved_amount_cents,
-        outcome, retryability, campaign_terms_version, evaluator_version,
-        evaluated_at, expires_at, created_at
-      ) VALUES (
-        'rnd_invalid_0189', 'rqe_invalid_0189', 'rcp_reward_pg', 'usr_reward_pg',
-        'default', NULL, 'resolved_default', 'resolved', 1, 'test-v1',
-        $1, '2027-01-01T00:00:00.000Z', $1
-      )
-    `, [NOW]))
-    expect(invalidDecision).toContain("reward_nationality_decisions_amount_shape_check")
+    try {
+      await db.unsafe(`INSERT INTO reward_qualification_events (
+        reward_qualification_event_id, user_id, community_id, post_id,
+        activity, qualified_at, reward_period_key, source_event_id, status,
+        created_at, updated_at
+      ) VALUES ('rqe_invalid_0189', 'usr_reward_pg', 'cmt_reward_pg',
+        'pst_reward_pg', 'study', $1, '2026-07-10',
+        'rqe_invalid_0189', 'pending', $1, $1)`, [NOW])
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        INSERT INTO reward_nationality_decisions (
+          reward_nationality_decision_id, reward_qualification_event_id,
+          reward_campaign_id, user_id, result_key, resolved_amount_cents,
+          outcome, retryability, campaign_terms_version, evaluator_version,
+          evaluated_at, expires_at, created_at
+        ) VALUES (
+          'rnd_invalid_0189', 'rqe_invalid_0189', 'rcp_reward_pg', 'usr_reward_pg',
+          'default', NULL, 'resolved_default', 'resolved', 1, 'test-v1',
+          $1, '2027-01-01T00:00:00.000Z', $1
+        )
+      `, [NOW]))
+      expect(message).toContain("reward_nationality_decisions_amount_shape_check")
+    } finally {
+      await db.end()
+    }
+  })
 
-    await db.unsafe(`INSERT INTO reward_pending_qualifications (
-      reward_pending_qualification_id, reward_qualification_event_id,
-      reward_campaign_id, user_id, community_id, post_id, reward_period_key,
-      reward_kind, qualification_basis, conditional_amount_cents,
-      exposure_amount_cents, status, expires_at, created_at, updated_at
-    ) VALUES (
-      'rpq_cross_pool_0189', 'rqe_cross_pool_0189', 'rcp_reward_pg',
-      'usr_reward_pg', 'cmt_reward_pg', 'pst_reward_pg', '2026-07-10',
-      'campaign_practice_day', 'study', 40, 40, 'pending_verification',
-      '2026-07-17T12:00:00.000Z', $1, $1
-    )`, [NOW])
-    const crossPool = await postgresErrorMessage(() => db.unsafe(`
-      INSERT INTO reward_pending_qualification_funding_exposures (
-        reward_pending_qualification_id, reward_campaign_id,
-        reward_campaign_funding_effect_id, amount_cents, exposed_at
+  test("canonical 0189 composite FK rejects cross-pool exposure", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`INSERT INTO reward_pending_qualifications (
+        reward_pending_qualification_id, reward_qualification_event_id,
+        reward_campaign_id, user_id, community_id, post_id, reward_period_key,
+        reward_kind, qualification_basis, conditional_amount_cents,
+        exposure_amount_cents, status, expires_at, created_at, updated_at
       ) VALUES (
-        'rpq_cross_pool_0189', 'rcp_other_pool_0189',
-        'rcf_other_pool_0189', 40, $1
-      )
-    `, [NOW]))
-    expect(crossPool).toContain("reward_pending_qualification_funding_exposures")
+        'rpq_cross_pool_0189', 'rqe_cross_pool_0189', 'rcp_reward_pg',
+        'usr_reward_pg', 'cmt_reward_pg', 'pst_reward_pg', '2026-07-10',
+        'campaign_practice_day', 'study', 40, 40, 'pending_verification',
+        '2026-07-17T12:00:00.000Z', $1, $1
+      )`, [NOW])
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        INSERT INTO reward_pending_qualification_funding_exposures (
+          reward_pending_qualification_id, reward_campaign_id,
+          reward_campaign_funding_effect_id, amount_cents, exposed_at
+        ) VALUES (
+          'rpq_cross_pool_0189', 'rcp_other_pool_0189',
+          'rcf_other_pool_0189', 40, $1
+        )
+      `, [NOW]))
+      expect(message).toContain("reward_pending_qualification_funding_exposures")
+    } finally {
+      await db.end()
+    }
+  })
 
-    const invalidEnforcement = await postgresErrorMessage(() => db.unsafe(`
-      INSERT INTO reward_identity_binding_enforcements (
-        reward_identity_binding_enforcement_id, user_id, reward_campaign_id,
-        status, reason, first_detected_at, last_detected_at, cleared_at,
-        expires_at, created_at, updated_at
-      ) VALUES (
-        'rbe_invalid_0189', 'usr_reward_pg', 'rcp_reward_pg', 'open',
-        'identity_binding_mismatch', $1, $1, $1,
-        '2027-01-01T00:00:00.000Z', $1, $1
-      )
-    `, [NOW]))
-    expect(invalidEnforcement).toContain("reward_binding_enforcement_lifecycle_check")
-    await db.unsafe(`DELETE FROM reward_pending_qualifications
-      WHERE reward_pending_qualification_id = 'rpq_cross_pool_0189'`)
-    await db.end()
+  test("canonical 0189 rejects an open enforcement with a cleared timestamp", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        INSERT INTO reward_identity_binding_enforcements (
+          reward_identity_binding_enforcement_id, user_id, reward_campaign_id,
+          status, reason, first_detected_at, last_detected_at, cleared_at,
+          expires_at, created_at, updated_at
+        ) VALUES (
+          'rbe_invalid_0189', 'usr_reward_pg', 'rcp_reward_pg', 'open',
+          'identity_binding_mismatch', $1, $1, $1,
+          '2027-01-01T00:00:00.000Z', $1, $1
+        )
+      `, [NOW]))
+      expect(message).toContain("reward_binding_enforcement_lifecycle_check")
+    } finally {
+      await db.end()
+    }
   })
 
   test("canonical 0136 check rejects nonzero milestone campaigns", async () => {
