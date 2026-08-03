@@ -12,6 +12,7 @@ import {
 } from "../../../../src/lib/communities/bookings/booking-chain-config"
 import {
   buildDefaultPirateCheckoutMoneyPolicy,
+  resolvePirateCheckoutRpcUrl,
   resolvePirateCheckoutSourceChainId,
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../../../../src/lib/communities/commerce/checkout-config"
@@ -54,6 +55,31 @@ describe("booking settlement chain config", () => {
     expect(usable.accepted_source_chains).toEqual([
       { chain_namespace: "eip155", chain_id: 8453, display_name: "Base" },
     ])
+  })
+
+  test("checkout rejects a testnet RPC secret once the source chain is mainnet", () => {
+    expect(() => resolvePirateCheckoutRpcUrl({
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
+      PIRATE_CHECKOUT_RPC_URL: "https://sepolia.base.org",
+    } as Env)).toThrow(/points at a testnet/)
+
+    expect(resolvePirateCheckoutRpcUrl({
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
+      PIRATE_CHECKOUT_RPC_URL: "https://mainnet.base.org",
+    } as Env)).toBe("https://mainnet.base.org")
+
+    // Sepolia deployments keep using their sepolia RPC.
+    expect(resolvePirateCheckoutRpcUrl({
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "84532",
+      PIRATE_CHECKOUT_RPC_URL: "https://sepolia.base.org",
+    } as Env)).toBe("https://sepolia.base.org")
+  })
+
+  test("production checkout config resolves canonical Base mainnet USDC", () => {
+    expect(resolvePirateCheckoutUsdcTokenAddress({
+      ENVIRONMENT: "production",
+      PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
+    } as Env)).toBe("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
   })
 
   test("checkout rejects a token override from the wrong Base network", () => {
