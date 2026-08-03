@@ -240,6 +240,8 @@ export type Env = {
   LIT_REWARDS_API_URL?: string
   LIT_REWARDS_USAGE_API_KEY?: string
   LIT_REWARDS_ACTION_IPFS_ID?: string
+  /** Reviewed policy version embedded in the registered action CID. */
+  LIT_REWARDS_ACTION_POLICY_VERSION?: string
   LIT_REWARDS_REQUEST_TIMEOUT_MS?: string
   LIT_REWARDS_REQUEST_MAX_ATTEMPTS?: string
   LIT_REWARDS_SIGNING_DEADLINE_SECONDS?: string

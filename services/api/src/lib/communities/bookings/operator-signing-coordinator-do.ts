@@ -9,6 +9,7 @@ const SIGNING_CLAIM_TTL_MS = 60_000
 const BROADCAST_RECONCILE_DELAY_MS = 15_000
 const RETRY_BASE_DELAY_MS = 5_000
 const RETRY_MAX_DELAY_MS = 5 * 60_000
+const MAX_UNSENT_PREPARATION_ATTEMPTS = 6
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
@@ -56,6 +57,7 @@ export type OperatorSettleState =
   | "broadcast"
   | "confirmed"
   | "failed_preparation"
+  | "preparation_parked"
   | "capacity_deferred"
   | "reconciliation_required"
   | "replaced"
@@ -346,6 +348,53 @@ function boundedPreparationDiagnostic(error: unknown, classifiedAt: number): Pre
     classifiedAt,
   }
 }
+
+const DETERMINISTIC_LIT_PREPARATION_TOKENS = new Set<PreparationLitErrorToken>([
+  "unauthorized_action",
+  "invalid_params",
+  "request_invalid",
+  "vault_address_invalid",
+  "vault_address_mismatch",
+  "signer_address_invalid",
+  "signer_address_mismatch",
+  "chain_id_mismatch",
+  "policy_version_mismatch",
+  "method_not_permitted",
+  "operation_id_invalid",
+  "amount_invalid",
+  "deadline_invalid",
+  "deadline_out_of_policy",
+  "nonce_invalid",
+  "gas_policy_missing",
+  "max_fee_per_gas_invalid",
+  "max_priority_fee_per_gas_invalid",
+  "gas_limit_invalid",
+  "gas_policy_exceeded",
+  "pkp_signer_mismatch",
+])
+
+function shouldParkUnsentPreparation(
+  row: Pick<EffectRow, "signed_tx" | "tx_hash">,
+  diagnostic: PreparationFailureDiagnostic,
+  attemptCount: number,
+): boolean {
+  if (row.signed_tx != null || row.tx_hash != null) return false
+  if (attemptCount >= MAX_UNSENT_PREPARATION_ATTEMPTS) return true
+  if (diagnostic.stage === "config_resolution" || diagnostic.stage === "transaction_verification") {
+    return true
+  }
+  if (diagnostic.httpStatus === 402) return true
+  if (
+    diagnostic.httpStatus != null
+    && diagnostic.httpStatus >= 400
+    && diagnostic.httpStatus < 500
+    && ![408, 409, 425, 429].includes(diagnostic.httpStatus)
+  ) {
+    return true
+  }
+  return diagnostic.litErrorToken != null
+    && DETERMINISTIC_LIT_PREPARATION_TOKENS.has(diagnostic.litErrorToken)
+}
 function requestOperatorKind(req: OperatorSettleRequest): OperatorKind {
   return req.operatorKind ?? (req.effectKind === "reward_cashout" || req.effectKind === "reward_funding_refund" ? "rewards" : "booking")
 }
@@ -537,6 +586,36 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     return this.result(current)
   }
 
+  /** Explicit operator recovery only; ordinary settle/reconcile polling never unparks an effect. */
+  async retryParkedPreparation(req: OperatorSettleRequest): Promise<OperatorSettleResult> {
+    this.assertRehearsalRequest(req)
+    const key = this.deriveKey(req)
+    const row = this.read(key)
+    if (!row) throw conflictError("Operator settlement effect not found")
+    this.assertImmutable(row, req, normalizeRecipient(req.recipientAddress))
+    if (row.state !== "preparation_parked" || row.signed_tx != null || row.tx_hash != null) {
+      throw conflictError("Operator settlement effect is not parked before signing")
+    }
+    const reset = this.cas(row.idempotency_key, row.version, {
+      state: "reserving",
+      nonce: null,
+      claim_token: null,
+      claim_expires_at: null,
+      attempt_count: 0,
+      next_attempt_at: Date.now(),
+      last_error: null,
+      preparation_stage: null,
+      preparation_transport_category: null,
+      preparation_http_status: null,
+      preparation_lit_error_token: null,
+      preparation_latency_ms: null,
+      preparation_classified_at: null,
+    })
+    if (!reset) throw conflictError("Operator settlement effect changed during preparation retry")
+    await this.ensureAlarm(Date.now())
+    return this.result(reset)
+  }
+
   async alarm(): Promise<void> {
     const row = this.nextActive()
     if (!row) {
@@ -553,7 +632,29 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       await this.advance(row)
     } catch (error) {
       const current = this.read(row.idempotency_key)
-      if (current && !this.isTerminal(current)) this.recordRetry(current, error)
+      const updated = current && !this.isTerminal(current) ? this.recordRetry(current, error) : current
+      if (updated?.state === "preparation_parked") {
+        await captureScheduledWarning(
+          this.env,
+          "Operator settlement preparation parked",
+          `operator_settlement_preparation_parked:${updated.idempotency_key}`,
+          {
+            effect: updated.idempotency_key,
+            effect_kind: updated.effect_kind,
+            attempt_count: updated.attempt_count,
+            preparation_stage: updated.preparation_stage,
+            preparation_http_status: updated.preparation_http_status,
+            preparation_lit_error_token: updated.preparation_lit_error_token,
+          },
+          { urgency: "high" },
+        ).catch((alertError) => {
+          console.error(JSON.stringify({
+            message: "parked operator preparation alert failed",
+            effect: updated.idempotency_key,
+            error: errMsg(alertError),
+          }))
+        })
+      }
       console.error(JSON.stringify({
         message: "operator chain executor alarm failed",
         effect: row.idempotency_key,
@@ -951,7 +1052,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const now = Date.now()
     const raw = this.ctx.storage.sql.exec<Record<string, string | number | null>>(
       `SELECT * FROM effects
-       WHERE state NOT IN ('confirmed', 'replaced', 'failed_onchain')
+       WHERE state NOT IN ('confirmed', 'replaced', 'failed_onchain', 'preparation_parked')
        ORDER BY
          CASE
            WHEN (next_attempt_at IS NULL OR next_attempt_at <= ?1)
@@ -969,7 +1070,8 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private isTerminal(row: EffectRow): boolean {
-    return row.state === "confirmed" || row.state === "replaced" || row.state === "failed_onchain"
+    return row.state === "confirmed" || row.state === "replaced"
+      || row.state === "failed_onchain" || row.state === "preparation_parked"
   }
 
   private retryDelay(attemptCount: number): number {
@@ -998,9 +1100,19 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const attemptCount = row.attempt_count + 1
     const diagnostic = boundedPreparationDiagnostic(error, Date.now())
     const releaseUnsentNonce = row.signed_tx == null && row.tx_hash == null
+    const configuredRewardsBackend = String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim()
+    const isLitRewardsPreparation = this.operatorKind(row) === "rewards" && (
+      configuredRewardsBackend === "lit_vault"
+      || diagnostic.stage === "lit_request_dispatch"
+      || diagnostic.stage === "lit_response"
+      || diagnostic.litErrorToken != null
+    )
+    const park = isLitRewardsPreparation
+      && shouldParkUnsentPreparation(row, diagnostic, attemptCount)
     return this.cas(row.idempotency_key, row.version, {
       attempt_count: attemptCount,
-      next_attempt_at: Date.now() + this.retryDelay(attemptCount),
+      state: park ? "preparation_parked" : row.state,
+      next_attempt_at: park ? null : Date.now() + this.retryDelay(attemptCount),
       last_error: errMsg(error).slice(0, 1_000),
       nonce: releaseUnsentNonce ? null : row.nonce,
       claim_token: releaseUnsentNonce ? null : row.claim_token,

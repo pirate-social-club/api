@@ -223,7 +223,10 @@ export const realChain: ChainPrimitives = {
               timeoutMs: lit.requestTimeoutMs,
               maxAttempts: lit.requestMaxAttempts,
             })
-            return createProductionLitRewardVaultExecutor(client, lit.actionIpfsId)
+            return createProductionLitRewardVaultExecutor(client, lit.actionIpfsId, {
+              policyVersion: lit.actionPolicyVersion,
+              maxDeadlineSeconds: lit.signingDeadlineSeconds,
+            })
           })()
         : (async (request) => {
             if (!c.privateKey) throw badRequestError("EOA vault settlement signer is not configured")

@@ -26,6 +26,7 @@ const REQUEST: RewardVaultActionRequest = {
 }
 
 describe("createLitRewardVaultExecutor", () => {
+  const PINNED_POLICY = { policyVersion: 7n, maxDeadlineSeconds: 300 }
   test.each([
     ["object", { signedTx: "0x1234" }],
     ["JSON string", JSON.stringify({ signedTx: "0xabcd" })],
@@ -80,15 +81,44 @@ describe("createLitRewardVaultExecutor", () => {
         return { signedTx: "0x1234" }
       },
     }
-    expect(() => createProductionLitRewardVaultExecutor(client, "")).toThrow(
+    expect(() => createProductionLitRewardVaultExecutor(client, "", PINNED_POLICY)).toThrow(
       "Pinned Lit rewards vault action CID is required",
     )
-    expect(() => createProductionLitRewardVaultExecutor(client, " QmPinned ")).toThrow(
+    expect(() => createProductionLitRewardVaultExecutor(client, " QmPinned ", PINNED_POLICY)).toThrow(
       "Pinned Lit rewards vault action CID is required",
     )
 
-    await createProductionLitRewardVaultExecutor(client, "QmPinned")(REQUEST)
+    const originalNow = Date.now
+    Date.now = () => 1_999_999_800_000
+    try {
+      await createProductionLitRewardVaultExecutor(client, "QmPinned", PINNED_POLICY)(REQUEST)
+    } finally {
+      Date.now = originalNow
+    }
     expect(executions[0]).toMatchObject({ ipfsId: "QmPinned" })
     expect(executions[0]).not.toHaveProperty("code")
+  })
+
+  test("rejects stale policy and deadline before calling Lit", async () => {
+    let executions = 0
+    const executor = createProductionLitRewardVaultExecutor({
+      execute: async () => {
+        executions += 1
+        return { signedTx: "0x1234" }
+      },
+    }, "QmPinned", PINNED_POLICY)
+    const originalNow = Date.now
+    Date.now = () => 2_000_000_100_000
+    try {
+      await expect(executor({ ...REQUEST, policyVersion: "8", deadline: "2000000200" }))
+        .rejects.toMatchObject({ litErrorToken: "policy_version_mismatch" })
+      await expect(executor({ ...REQUEST, deadline: "2000000099" }))
+        .rejects.toMatchObject({ litErrorToken: "deadline_out_of_policy" })
+      await expect(executor({ ...REQUEST, deadline: "2000000401" }))
+        .rejects.toMatchObject({ litErrorToken: "deadline_out_of_policy" })
+    } finally {
+      Date.now = originalNow
+    }
+    expect(executions).toBe(0)
   })
 })

@@ -263,7 +263,7 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
 
     const [row] = await effects(stub)
     expect(row).toMatchObject({
-      state: "failed_preparation",
+      state: "preparation_parked",
       attempt_count: 1,
       preparation_stage: "lit_response",
       preparation_transport_category: "dns",
@@ -298,13 +298,57 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     })
     await stub.settle(first)
     await runDurableObjectAlarm(stub)
-    expect(await stub.lookup(first)).toMatchObject({ state: "failed_preparation", nonce: null })
+    expect(await stub.lookup(first)).toMatchObject({ state: "preparation_parked", nonce: null })
 
     await injectChain(stub, { pending: 7, latest: 7, liveness: {} })
     await stub.settle(second)
     await runDurableObjectAlarm(stub)
 
     expect(await stub.lookup(second)).toMatchObject({ state: "broadcast", nonce: 7 })
+  })
+
+  it("bounds transient unsent preparation retries and requires explicit recovery", async () => {
+    const stub = freshStub()
+    const request = rewardsReq({ payoutEffectId: "rpe_retry_cap", idempotencyKey: "reward:retry-cap" })
+    await injectChain(stub, {
+      pending: 18,
+      latest: 18,
+      liveness: {},
+      signFailure: {
+        stage: "lit_response",
+        cause: { status: 500, transportCategory: "timeout", litErrorToken: "timeout" },
+        latencyMs: 20_000,
+      },
+    })
+    await stub.settle(request)
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      if (attempt > 1) await stub.reconcile(request)
+      await runDurableObjectAlarm(stub)
+      expect((await effects(stub))[0].attempt_count).toBe(attempt)
+    }
+
+    expect(await stub.lookup(request)).toMatchObject({
+      state: "preparation_parked",
+      nonce: null,
+    })
+    await stub.settle(request)
+    await stub.reconcile(request)
+    expect((await effects(stub))[0]).toMatchObject({
+      state: "preparation_parked",
+      attempt_count: 6,
+      next_attempt_at: null,
+    })
+
+    await injectChain(stub, { pending: 18, latest: 18, liveness: {} })
+    expect(await stub.retryParkedPreparation(request)).toMatchObject({
+      state: "reserving",
+    })
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(request)).toMatchObject({
+      state: "broadcast",
+      nonce: 18,
+    })
   })
 
   it("persists and returns bounded settlement revert evidence", async () => {
