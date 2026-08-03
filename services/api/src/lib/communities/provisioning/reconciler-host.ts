@@ -9,6 +9,10 @@ import {
 import { getPrimaryCommunityDatabaseBinding } from "../community-read-repository"
 import { persistProvisionedD1Binding } from "./repository"
 import { runReconciliationSweep, type ReconcilerDeps, type ReconcilerResult, type StuckBinding } from "./reconciler"
+import {
+  type ConfiguredCommunityShard,
+  listConfiguredCommunityShards,
+} from "../community-shard-registry"
 
 /** Grace window: a 'provisioning' routing row is only reconciled after this long. */
 const RECONCILER_GRACE_MS = 15 * 60 * 1000
@@ -21,18 +25,24 @@ function shardDatabaseUrl(bindingName: string): string {
   return `d1://shard/${bindingName}`
 }
 
-async function findActivelyClaimedBindingNames(client: Client, bindingNames: string[]): Promise<Set<string>> {
+async function findActivelyClaimedBindingNames(
+  client: Client,
+  bindingNames: string[],
+  shardWorkerId?: string,
+): Promise<Set<string>> {
   if (bindingNames.length === 0) return new Set()
   const placeholders = bindingNames.map((_, i) => `?${i + 1}`).join(", ")
+  const shardPredicate = shardWorkerId ? `AND shard_worker_id = ?${bindingNames.length + 1}` : ""
   const result = await client.execute({
     sql: `
       SELECT binding_name
       FROM community_database_routing
       WHERE binding_name IN (${placeholders})
+        ${shardPredicate}
         AND provisioning_state IN ('provisioning', 'ready')
         AND decommissioned_at IS NULL
     `,
-    args: bindingNames,
+    args: shardWorkerId ? [...bindingNames, shardWorkerId] : bindingNames,
   })
   return new Set((result.rows ?? []).map((row) => String((row as { binding_name?: unknown }).binding_name || "")))
 }
@@ -48,14 +58,23 @@ async function findActivelyClaimedBindingNames(client: Client, bindingNames: str
  *      its real URL). The pool row's `last_error` is already NULL here — the
  *      loadSnapshot success path clears it atomically with `last_loaded_at`.
  */
-export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): ReconcilerDeps {
+export function buildReconcilerDeps(
+  env: Env,
+  client: Client,
+  nowIso: string,
+  target?: ConfiguredCommunityShard,
+): ReconcilerDeps {
   const adminToken = String(env.SHARD_ADMIN_TOKEN ?? "")
-  const shard = env.COMMUNITY_D1_SHARD!
+  const shard = target?.shard ?? env.COMMUNITY_D1_SHARD!
+  const shardWorkerId = target?.shardWorkerId
   const cutoffIso = new Date(Date.parse(nowIso) - RECONCILER_GRACE_MS).toISOString()
 
   return {
     now: nowIso,
-    findStuckProvisioningBindings: () => findStuckD1ProvisioningBindings(client, cutoffIso),
+    findStuckProvisioningBindings: async () => {
+      const rows = await findStuckD1ProvisioningBindings(client, cutoffIso)
+      return shardWorkerId ? rows.filter((row) => row.shardWorkerId === shardWorkerId) : rows
+    },
     findUnclaimedStaleUnloadedPoolBindings: async () => {
       const listed = await shard.communityD1ListStaleUnloadedPoolRows({
         adminToken,
@@ -67,6 +86,7 @@ export function buildReconcilerDeps(env: Env, client: Client, nowIso: string): R
       const claimed = await findActivelyClaimedBindingNames(
         client,
         listed.value.rows.map((row) => row.bindingName),
+        shardWorkerId,
       )
       return {
         ok: true,
@@ -151,21 +171,45 @@ export async function reportD1ReconcilerSweepHealth(
 /**
  * Scheduled-task entry for the D1-native reconciler sweep. Mounted in the API's
  * scheduled batch (which holds a DO lease — so this inherits single-flight, no
- * separate guard needed). Gated to a no-op unless BOTH the admin token and the
- * shard binding are present, so it is inert on every worker except the D1
- * staging worker (and, later, a dedicated prod reconciler).
+ * separate guard needed). Gated to a no-op unless the admin token and at least
+ * one registered shard binding are present, so it is inert on workers that do
+ * not host D1 reconciliation.
  *
  * Runs inside `withRequestControlPlaneClients` (the caller wraps it), so
  * `getControlPlaneClient(env)` is valid here.
  */
 export async function reconcileScheduledD1Provisioning(env: Env): Promise<void> {
-  if (!env.SHARD_ADMIN_TOKEN || !env.COMMUNITY_D1_SHARD) {
+  if (!env.SHARD_ADMIN_TOKEN) {
     return // inert: this worker is not a D1 reconciler host
   }
 
+  const configured = listConfiguredCommunityShards(env)
+  const targets: Array<ConfiguredCommunityShard | undefined> = configured.length > 0
+    ? configured
+    : env.COMMUNITY_D1_SHARD
+      ? [undefined]
+      : []
+  if (targets.length === 0) return
+
   const client = getControlPlaneClient(env)
   const nowIso = new Date().toISOString()
-  const deps = buildReconcilerDeps(env, client, nowIso)
-  const result = await runReconciliationSweep(deps)
-  await reportD1ReconcilerSweepHealth(env, result)
+  const combined: ReconcilerResult = {
+    scanned: 0,
+    advanced: 0,
+    released: 0,
+    orphanReleased: 0,
+    errors: [],
+  }
+  for (const target of targets) {
+    const result = await runReconciliationSweep(buildReconcilerDeps(env, client, nowIso, target))
+    combined.scanned += result.scanned
+    combined.advanced += result.advanced
+    combined.released += result.released
+    combined.orphanReleased += result.orphanReleased
+    combined.errors.push(...result.errors.map((error) => ({
+      ...error,
+      reason: target ? `[${target.shardWorkerId}] ${error.reason}` : error.reason,
+    })))
+  }
+  await reportD1ReconcilerSweepHealth(env, combined)
 }

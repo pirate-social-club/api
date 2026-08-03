@@ -11,6 +11,7 @@ import {
   resolveBookingSettlementUsdcTokenAddress,
 } from "../../../../src/lib/communities/bookings/booking-chain-config"
 import {
+  buildDefaultPirateCheckoutMoneyPolicy,
   resolvePirateCheckoutSourceChainId,
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../../../../src/lib/communities/commerce/checkout-config"
@@ -28,6 +29,31 @@ describe("booking settlement chain config", () => {
       ENVIRONMENT: "production",
       PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
     } as Env)).toBe(8453)
+  })
+
+  test("the default money policy degrades instead of throwing on unusable production config", () => {
+    // Every serialized community embeds this policy, so throwing here takes
+    // down reads that have nothing to do with money.
+    const degraded = buildDefaultPirateCheckoutMoneyPolicy({
+      env: {
+        ENVIRONMENT: "production",
+        PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "84532",
+      } as Env,
+      communityId: "cmt_test",
+    })
+    expect(degraded.accepted_funding_assets).toEqual([])
+    expect(degraded.accepted_source_chains).toEqual([])
+
+    const usable = buildDefaultPirateCheckoutMoneyPolicy({
+      env: {
+        ENVIRONMENT: "production",
+        PIRATE_CHECKOUT_SOURCE_CHAIN_ID: "8453",
+      } as Env,
+      communityId: "cmt_test",
+    })
+    expect(usable.accepted_source_chains).toEqual([
+      { chain_namespace: "eip155", chain_id: 8453, display_name: "Base" },
+    ])
   })
 
   test("checkout rejects a token override from the wrong Base network", () => {

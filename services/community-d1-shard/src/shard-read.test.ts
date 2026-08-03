@@ -13,6 +13,7 @@ import {
   runShardGetPoolRow,
   runShardListStaleUnloadedPoolRows,
   runShardLoadSnapshot,
+  runShardLookupBinding,
   runShardPoolStats,
   runShardRead,
   runShardRelease,
@@ -605,6 +606,20 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
   function envForAllocator(pool: FakePoolD1, extraBindings: Record<string, unknown> = {}): ShardEnv {
     return { ...envWith(fakeD1(), { pool }), ...extraBindings } as ShardEnv
   }
+
+  test("looks up an existing community allocation without claiming capacity", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_EXISTING", community_id: "cmt_existing", allocated_at: NOW, last_error: null, released_at: null, last_loaded_at: null, version: 3 },
+    ])
+    expect(await runShardLookupBinding(envForAllocator(pool), { communityId: "cmt_existing" })).toEqual({
+      ok: true,
+      value: { bindingName: "DB_CMTY_EXISTING", shardWorkerId: SHARD_ID },
+    })
+    expect(await runShardLookupBinding(envForAllocator(pool), { communityId: "cmt_missing" })).toEqual({
+      ok: true,
+      value: { bindingName: null, shardWorkerId: SHARD_ID },
+    })
+  })
 
   test("§8.3 — allocates a free binding for an unknown community", async () => {
     const pool = fakePoolD1([

@@ -35,6 +35,7 @@ import {
   isMachineGeneratedStagingSmokeName,
   isRecognizedStagingSmoke,
 } from "../lib/communities/staging-smoke-signatures"
+import { resolveCommunityShardRpc } from "../lib/communities/community-shard-registry"
 
 const debugPipeline = new Hono<AuthenticatedEnv>()
 
@@ -186,7 +187,7 @@ debugPipeline.post("/staging-d1/archive-smoke", async (c) => {
 debugPipeline.post("/staging-d1/reclaim", async (c) => {
   if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
-  if (!c.env.COMMUNITY_D1_SHARD || !c.env.SHARD_ADMIN_TOKEN) {
+  if (!c.env.SHARD_ADMIN_TOKEN) {
     return c.json({ error: "staging_reclaim_not_configured" }, 503)
   }
 
@@ -213,7 +214,7 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
     const selected = await client.execute({
       sql: `
         SELECT c.community_id, c.display_name, c.description, c.status,
-               r.binding_name, r.provisioning_state, r.decommissioned_at
+               r.binding_name, r.shard_worker_id, r.provisioning_state, r.decommissioned_at
         FROM communities c
         INNER JOIN community_database_routing r ON r.community_id = c.community_id
         WHERE c.community_id = ?1
@@ -231,12 +232,13 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
       continue
     }
     const bindingName = String(row.binding_name ?? "")
+    const shard = resolveCommunityShardRpc(c.env, String(row.shard_worker_id ?? "") || null)
     if (!apply) {
       results.push({ community_id: communityId, binding_name: bindingName, ok: true, would_reclaim: true })
       continue
     }
     const now = new Date().toISOString()
-    const poolRow = await c.env.COMMUNITY_D1_SHARD.communityD1GetPoolRow({
+    const poolRow = await shard.communityD1GetPoolRow({
       adminToken: c.env.SHARD_ADMIN_TOKEN,
       bindingName,
     })
@@ -259,7 +261,7 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
       `,
       args: [communityId, now, bindingName],
     })
-    const reclaimed = await c.env.COMMUNITY_D1_SHARD.communityD1Decommission({
+    const reclaimed = await shard.communityD1Decommission({
       adminToken: c.env.SHARD_ADMIN_TOKEN,
       communityId,
       bindingName,

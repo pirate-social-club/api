@@ -136,7 +136,18 @@ export type ShardBindResponse = {
   allocated: boolean
 }
 
+export type ShardLookupBindingRequest = {
+  communityId: string
+}
+
+export type ShardLookupBindingResponse = {
+  bindingName: string | null
+  shardWorkerId: string
+}
+
 export interface ShardPoolRpc {
+  /** Read-only cross-pool idempotency probe used before allocating. */
+  communityD1LookupBinding(input: ShardLookupBindingRequest): Promise<ShardResult<ShardLookupBindingResponse>>
   communityD1Bind(input: ShardBindRequest): Promise<ShardResult<ShardBindResponse>>
 }
 

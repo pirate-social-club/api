@@ -5,6 +5,7 @@ import {
   classifyD1PoolCapacity,
   parseExhaustionAlertHours,
   parseFreeAlertThreshold,
+  readD1PoolStats,
 } from "./pool-capacity-watchdog"
 
 type PoolStats = {
@@ -140,6 +141,64 @@ describe("checkScheduledD1PoolCapacity", () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe("readD1PoolStats", () => {
+  test("aggregates every configured pool without losing per-pool identity", async () => {
+    const primaryStats = {
+      total: 10,
+      allocated: 7,
+      free: 2,
+      quarantined: 1,
+      allocatedLast24Hours: 2,
+      allocatedLast7Days: 4,
+    }
+    const secondaryStats = {
+      total: 20,
+      allocated: 12,
+      free: 8,
+      quarantined: 0,
+      allocatedLast24Hours: 3,
+      allocatedLast7Days: 5,
+    }
+    const primary = {
+      communityD1PoolStats: async () => ({
+        ok: true as const,
+        value: primaryStats,
+      }),
+    }
+    const secondary = {
+      communityD1PoolStats: async () => ({
+        ok: true as const,
+        value: secondaryStats,
+      }),
+    }
+    const observed = await readD1PoolStats({
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: primary,
+      COMMUNITY_D1_SHARD_SECONDARY: secondary,
+      COMMUNITY_D1_SHARD_ROUTES: JSON.stringify({
+        "shard-primary": "COMMUNITY_D1_SHARD",
+        "shard-secondary": "COMMUNITY_D1_SHARD_SECONDARY",
+      }),
+    } as unknown as Env)
+
+    expect(observed).toEqual({
+      pools: [
+        { shardWorkerId: "shard-primary", stats: primaryStats },
+        { shardWorkerId: "shard-secondary", stats: secondaryStats },
+      ],
+      aggregate: {
+        total: 30,
+        allocated: 19,
+        free: 10,
+        quarantined: 1,
+        allocatedLast24Hours: 5,
+        allocatedLast7Days: 9,
+      },
+    })
+    expect(observed.pools.map((pool) => pool.shardWorkerId)).toEqual(["shard-primary", "shard-secondary"])
   })
 })
 

@@ -77,7 +77,12 @@ import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning
 import {
   checkScheduledD1PoolCapacity,
   classifyD1PoolCapacity,
+  readD1PoolStats,
 } from "./lib/communities/provisioning/pool-capacity-watchdog"
+import {
+  listConfiguredCommunityShards,
+  resolveCommunityAllocationShard,
+} from "./lib/communities/community-shard-registry"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
@@ -331,7 +336,31 @@ app.use("*", async (_c, next) => {
 
 app.get("/health", (c) => c.json({ ok: true }))
 app.get("/health/provisioning", async (c) => {
-  const shardConfigured = Boolean(c.env.COMMUNITY_D1_SHARD)
+  let configuredShards: ReturnType<typeof listConfiguredCommunityShards>
+  try {
+    configuredShards = listConfiguredCommunityShards(c.env)
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "community_d1_shard_registry_invalid",
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        environment: c.env.ENVIRONMENT ?? null,
+        error_code: "d1_shard_registry_invalid",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+  const healthShards = configuredShards.length > 0
+    ? configuredShards
+    : c.env.COMMUNITY_D1_SHARD
+      ? [{ shardWorkerId: null, bindingName: "COMMUNITY_D1_SHARD", shard: c.env.COMMUNITY_D1_SHARD }]
+      : []
+  const shardConfigured = healthShards.length > 0
   const regionConfigured = Boolean(String(c.env.COMMUNITY_D1_SHARD_REGION ?? "").trim())
   const adminConfigured = Boolean(c.env.SHARD_ADMIN_TOKEN)
   if (!shardConfigured || !regionConfigured || !adminConfigured) {
@@ -350,35 +379,13 @@ app.get("/health/provisioning", async (c) => {
     )
   }
 
-  const expectedShardSourceVersion = expectedCommunityD1ShardSourceVersion(c.env)
-  let shardVersion: ShardVersionInfo | null = null
-  let shardAttestationStatus:
-    | "verified"
-    | "rpc_unavailable"
-    | "expected_missing"
-    | "actual_missing" = "verified"
+  let allocationShard: ReturnType<typeof resolveCommunityAllocationShard>
   try {
-    shardVersion = await c.env.COMMUNITY_D1_SHARD!.communityD1Version()
+    allocationShard = resolveCommunityAllocationShard(c.env)
   } catch (error) {
-    shardAttestationStatus = "rpc_unavailable"
     console.error(JSON.stringify({
-      event: "community_d1_shard_version_unavailable",
+      event: "community_d1_allocation_shard_invalid",
       error: error instanceof Error ? error.message : String(error),
-      expectedShardSourceVersion,
-    }))
-  }
-
-  const actualShardSourceVersion = shardVersion?.build.sourceVersion ?? null
-  if (
-    expectedShardSourceVersion
-    && actualShardSourceVersion
-    && actualShardSourceVersion !== expectedShardSourceVersion
-  ) {
-    console.error(JSON.stringify({
-      event: "community_d1_shard_version_mismatch",
-      expectedShardSourceVersion,
-      actualShardSourceVersion,
-      shardVersion,
     }))
     return c.json(
       {
@@ -388,7 +395,58 @@ app.get("/health/provisioning", async (c) => {
         region_configured: true,
         admin_configured: true,
         environment: c.env.ENVIRONMENT ?? null,
-        shard_version: shardVersion,
+        error_code: "d1_shard_registry_invalid",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+
+  const expectedShardSourceVersion = expectedCommunityD1ShardSourceVersion(c.env)
+  const shardVersions = await Promise.all(healthShards.map(async (target): Promise<{
+    shardWorkerId: string | null
+    version: ShardVersionInfo | null
+  }> => {
+    try {
+      return { shardWorkerId: target.shardWorkerId, version: await target.shard.communityD1Version() }
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "community_d1_shard_version_unavailable",
+        shardWorkerId: target.shardWorkerId,
+        error: error instanceof Error ? error.message : String(error),
+        expectedShardSourceVersion,
+      }))
+      return { shardWorkerId: target.shardWorkerId, version: null }
+    }
+  }))
+  let shardAttestationStatus: "verified" | "rpc_unavailable" | "expected_missing" | "actual_missing" =
+    shardVersions.some((entry) => !entry.version) ? "rpc_unavailable" : "verified"
+
+  const allocationShardVersion = shardVersions.find((entry) =>
+    entry.shardWorkerId === allocationShard.shardWorkerId
+  )?.version ?? null
+  const mismatchedShard = shardVersions.find((entry) => {
+    const actual = entry.version?.build.sourceVersion ?? null
+    return expectedShardSourceVersion && actual && actual !== expectedShardSourceVersion
+  })
+  if (mismatchedShard) {
+    console.error(JSON.stringify({
+      event: "community_d1_shard_version_mismatch",
+      expectedShardSourceVersion,
+      shardWorkerId: mismatchedShard.shardWorkerId,
+      actualShardSourceVersion: mismatchedShard.version?.build.sourceVersion ?? null,
+      shardVersion: mismatchedShard.version,
+    }))
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        shard_configured: true,
+        region_configured: true,
+        admin_configured: true,
+        environment: c.env.ENVIRONMENT ?? null,
+        shard_version: allocationShardVersion,
+        shard_versions: shardVersions,
         expected_shard_source_version: expectedShardSourceVersion,
         error_code: "d1_shard_version_mismatch",
       },
@@ -396,26 +454,31 @@ app.get("/health/provisioning", async (c) => {
       { "cache-control": "no-store" },
     )
   }
+  const actualShardSourceVersions = shardVersions.map((entry) => entry.version?.build.sourceVersion ?? null)
   if (shardAttestationStatus === "verified" && !expectedShardSourceVersion) {
     shardAttestationStatus = "expected_missing"
     console.error(JSON.stringify({
       event: "community_d1_shard_expected_version_missing",
-      actualShardSourceVersion,
-      shardVersion,
+      actualShardSourceVersions,
+      shardVersions,
     }))
-  } else if (shardAttestationStatus === "verified" && !actualShardSourceVersion) {
+  } else if (shardAttestationStatus === "verified" && actualShardSourceVersions.some((version) => !version)) {
     shardAttestationStatus = "actual_missing"
     console.error(JSON.stringify({
       event: "community_d1_shard_actual_version_missing",
       expectedShardSourceVersion,
-      shardVersion,
+      shardVersions,
     }))
   }
 
-  const result = await c.env.COMMUNITY_D1_SHARD!.communityD1PoolStats({
-    adminToken: c.env.SHARD_ADMIN_TOKEN!,
-  })
-  if (!result.ok) {
+  let observedPools: Awaited<ReturnType<typeof readD1PoolStats>>
+  try {
+    observedPools = await readD1PoolStats(c.env)
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "community_d1_pool_stats_unavailable",
+      error: error instanceof Error ? error.message : String(error),
+    }))
     return c.json(
       {
         ok: false,
@@ -441,13 +504,33 @@ app.get("/health/provisioning", async (c) => {
   // Allocation itself still fails loudly on its own path (`d1_pool_exhausted`
   // from the provisioning backend), so nothing is masked by reporting 200 here.
   const capacity = classifyD1PoolCapacity(
-    result.value,
+    observedPools.aggregate,
     c.env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD,
     c.env.COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS,
   )
-  const exhausted = capacity.free <= 0
+  const allocationPool = observedPools.pools.find((pool) =>
+    pool.shardWorkerId === allocationShard.shardWorkerId
+  )
+  if (!allocationPool) {
+    return c.json(
+      {
+        ok: false,
+        backend: "d1_native",
+        environment: c.env.ENVIRONMENT ?? null,
+        error_code: "d1_allocation_pool_stats_missing",
+      },
+      503,
+      { "cache-control": "no-store" },
+    )
+  }
+  const allocationCapacity = classifyD1PoolCapacity(
+    allocationPool.stats,
+    c.env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD,
+    c.env.COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS,
+  )
+  const exhausted = allocationCapacity.free <= 0
   const degradedReasons = [
-    ...(!capacity.healthy && !exhausted ? ["d1_pool_low_capacity"] : []),
+    ...(!allocationCapacity.healthy && !exhausted ? ["d1_pool_low_capacity"] : []),
     ...(shardAttestationStatus !== "verified"
       ? [`d1_shard_attestation_${shardAttestationStatus}`]
       : []),
@@ -461,13 +544,17 @@ app.get("/health/provisioning", async (c) => {
       region_configured: true,
       admin_configured: true,
       environment: c.env.ENVIRONMENT ?? null,
-      shard_version: shardVersion,
+      shard_version: allocationShardVersion,
+      shard_versions: shardVersions,
       expected_shard_source_version: expectedShardSourceVersion,
       shard_attestation: {
         healthy: shardAttestationStatus === "verified",
         status: shardAttestationStatus,
       },
       pool_capacity: capacity,
+      pool_capacities: observedPools.pools,
+      allocation_shard_worker_id: allocationShard.shardWorkerId,
+      allocation_pool_capacity: allocationCapacity,
       ...(degraded
         ? {
           degraded: true,
@@ -1671,7 +1758,9 @@ const handler: ExportedHandler<Env> = {
     // lane reuse its connection; the two concurrent lanes remain isolated.
     // The deadline bounds when new jobs start (it does NOT cancel in-flight
     // jobs — see runner docs / overlap caveat).
-    const canRunD1Reconciler = Boolean(env.SHARD_ADMIN_TOKEN && env.COMMUNITY_D1_SHARD)
+    const canRunD1Reconciler = Boolean(
+      env.SHARD_ADMIN_TOKEN && (env.COMMUNITY_D1_SHARD || env.COMMUNITY_D1_SHARD_ROUTES),
+    )
     const reconcilerOnly = String(env.COMMUNITY_D1_RECONCILER_ONLY ?? "").trim().toLowerCase() === "true"
     // Recovery and money-path verification must not sit behind the rotating best-effort
     // maintenance tail. Live ticks have shown the deadline deferring settlement, D1
