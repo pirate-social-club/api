@@ -14,7 +14,7 @@ export type RewardCampaignCapabilities = {
   max_duration_seconds: number
   default_duration_seconds: number
   eligible_activities: Array<"study" | "karaoke" | "either">
-  nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview"
+  nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview" | "enabled"
   chain_id: number
   token_address: string
 }
@@ -75,10 +75,8 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
       config.maxDurationSeconds,
     ),
     eligible_activities: ELIGIBLE_ACTIVITIES,
-    // Tier terms are persistable but deliberately cannot be funded until
-    // claim-time nationality resolution and lot exposure accounting ship.
-    nationality_payout_tiers: identityProvider === "self"
-      ? "binding_preview"
+    nationality_payout_tiers: identityProvider === "self" || identityProvider === "zkpassport"
+      ? "enabled"
       : identityProvider === "very"
         ? "draft_only"
         : "unavailable",

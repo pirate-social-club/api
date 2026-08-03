@@ -826,9 +826,6 @@ export async function createRewardCampaignFundingQuote(input: {
     if (assertedProvider !== null && assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
       throw conflictError("Funding provider assertion does not match the permanent song pool")
     }
-    if (payoutTiers(rowValue(campaign, "payout_tiers_json")).length > 0) {
-      throw conflictError("Tiered reward campaigns cannot accept contributions until nationality payout resolution is enabled")
-    }
     await requireThirdPartyRewardsAllowed(
       tx,
       requiredString(campaign, "community_id"),
@@ -1041,9 +1038,6 @@ export async function confirmRewardCampaignFunding(input: {
     }
     const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
     if (!campaign) throw notFoundError("Reward campaign not found")
-    if (payoutTiers(rowValue(campaign, "payout_tiers_json")).length > 0) {
-      throw conflictError("Tiered reward campaigns cannot be funded until nationality payout resolution is enabled")
-    }
     const status = requiredString(effect, "status")
     const existingTx = stringOrNull(rowValue(effect, "tx_hash"))
     if (status === "confirmed") {

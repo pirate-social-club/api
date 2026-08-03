@@ -2976,7 +2976,7 @@ export type RewardCampaignCapabilities = {
   max_duration_seconds: number;
   default_duration_seconds: number;
   eligible_activities: Array<RewardCampaignEligibleActivity>;
-  nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview";
+  nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview" | "enabled";
   chain_id: number;
   token_address: string;
 };

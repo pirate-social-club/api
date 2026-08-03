@@ -38,7 +38,7 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.max_reward_cents).toBe(100)
     expect(capabilities.chain_id).toBe(84_532)
     expect(capabilities.eligible_activities).toEqual(["study", "karaoke", "either"])
-    expect(capabilities.nationality_payout_tiers).toBe("binding_preview")
+    expect(capabilities.nationality_payout_tiers).toBe("enabled")
   })
 
   test("keeps draft tier terms available when the configured provider cannot preview binding", () => {
@@ -50,6 +50,10 @@ describe("getRewardCampaignCapabilities", () => {
       ...enabledEnv,
       REWARDS_IDENTITY_PROVIDER: "unknown",
     } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("unavailable")
+    expect(getRewardCampaignCapabilities({
+      ...enabledEnv,
+      REWARDS_IDENTITY_PROVIDER: "zkpassport",
+    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("enabled")
   })
 
   test("never exposes the campaign RPC URL or the treasury address", () => {
