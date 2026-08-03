@@ -122,6 +122,7 @@ async function setup() {
       donation_partner_status TEXT NOT NULL,
       governance_mode TEXT NOT NULL,
       settings_json TEXT,
+      study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1)),
       created_by_user_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

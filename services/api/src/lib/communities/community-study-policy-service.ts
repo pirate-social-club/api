@@ -28,13 +28,6 @@ export type CommunityStudyPolicyPatch = {
   study_enabled?: boolean
 }
 
-type CommunityColumnClient = Pick<Client, "execute">
-
-async function hasCommunityColumn(client: CommunityColumnClient | DbExecutor, columnName: string): Promise<boolean> {
-  const result = await client.execute("PRAGMA table_info(communities)")
-  return result.rows.some((row) => String(row.name) === columnName)
-}
-
 function defaultCommunityStudyPolicy(input: {
   communityId: string
   updatedAt?: string | null
@@ -62,47 +55,27 @@ function toCommunityStudyPolicy(input: {
   }
 }
 
-async function ensureCommunityStudyPolicyColumn(client: CommunityColumnClient): Promise<void> {
-  if (!await hasCommunityColumn(client, "study_enabled")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1))")
-  }
-}
-
-function isMissingStudyEnabledColumnError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /(?:no such column|unknown column|column .*study_enabled.* does not exist|no column named study_enabled)/iu.test(message)
-}
-
 export async function updateStudyPolicyRow(input: {
   client: Client
   communityId: string
   studyEnabled: boolean
   updatedAt: string
 }): Promise<void> {
-  const update = () =>
-    input.client.execute({
-      sql: `
-        UPDATE communities
-        SET study_enabled = ?2,
-            updated_at = ?3
-        WHERE community_id = ?1
-      `,
-      args: [
-        input.communityId,
-        input.studyEnabled ? 1 : 0,
-        input.updatedAt,
-      ],
-    })
-
-  try {
-    await update()
-  } catch (error) {
-    if (!isMissingStudyEnabledColumnError(error)) {
-      throw error
-    }
-    await ensureCommunityStudyPolicyColumn(input.client)
-    await update()
-  }
+  // study_enabled is guaranteed by community-template migration 1115 on every
+  // community database; writes fail loud instead of widening schema at runtime.
+  await input.client.execute({
+    sql: `
+      UPDATE communities
+      SET study_enabled = ?2,
+          updated_at = ?3
+      WHERE community_id = ?1
+    `,
+    args: [
+      input.communityId,
+      input.studyEnabled ? 1 : 0,
+      input.updatedAt,
+    ],
+  })
 }
 
 async function ensureCommunityStudyPolicyRow(input: {
@@ -139,9 +112,6 @@ export async function isCommunityStudyEnabled(input: {
   executor: DbExecutor
   communityId: string
 }): Promise<boolean> {
-  if (!await hasCommunityColumn(input.executor, "study_enabled")) {
-    return false
-  }
   const result = await input.executor.execute({
     sql: `
       SELECT study_enabled
@@ -174,22 +144,6 @@ async function readCommunityStudyPolicy(input: {
 }): Promise<CommunityStudyPolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    if (!await hasCommunityColumn(db.client, "study_enabled")) {
-      const legacy = await db.client.execute({
-        sql: `
-          SELECT updated_at
-          FROM communities
-          WHERE community_id = ?1
-          LIMIT 1
-        `,
-        args: [input.communityId],
-      })
-      return defaultCommunityStudyPolicy({
-        communityId: input.communityId,
-        updatedAt: typeof legacy.rows[0]?.updated_at === "string" ? legacy.rows[0].updated_at : null,
-      })
-    }
-
     const result = await db.client.execute({
       sql: `
         SELECT study_enabled, updated_at
