@@ -1,9 +1,4 @@
-const SMOKE_DESCRIPTIONS = new Set([
-  "Ephemeral staging smoke community for the create/provisioning path.",
-  "Ephemeral staging smoke community for the song-submit path.",
-  "Manual staging smoke community for the D1 provisioning seam.",
-])
-const SMOKE_NAME = /^(?:Community Create CI Smoke|D1 Provisioning Smoke|Song Submit CI Smoke)\b/u
+import { isRecognizedStagingSmoke } from "../../src/lib/communities/staging-smoke-signatures"
 const RESERVED_BINDINGS = new Set(["DB_CMTY_FIXTURE", "DB_CMTY_PILOT"])
 
 export type ReclamationInventoryRow = {
@@ -29,7 +24,7 @@ export type CandidateDecision = ReclamationInventoryRow & {
 }
 
 export function classifyReclamationCandidate(row: ReclamationInventoryRow): CandidateDecision {
-  const recognized = SMOKE_DESCRIPTIONS.has(row.description ?? "") || SMOKE_NAME.test(row.display_name)
+  const recognized = isRecognizedStagingSmoke(row)
   const exclusions: string[] = []
   if (!recognized) exclusions.push("unrecognized_smoke_signature")
   if (!["archived", "deleted"].includes(row.community_status)) exclusions.push("community_not_archived_or_deleted")

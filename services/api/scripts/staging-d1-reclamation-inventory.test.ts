@@ -30,6 +30,21 @@ describe("staging D1 reclamation inventory", () => {
     expect(classifyReclamationCandidate(row())).toMatchObject({ eligible: true, exclusions: [] })
   })
 
+  test("recognizes exact historical gate-builder and Georgia machine signatures", () => {
+    expect(classifyReclamationCandidate(row({
+      display_name: "Gate builder staging 1785740000000-abc123",
+      description: null,
+    })).eligible).toBe(true)
+    expect(classifyReclamationCandidate(row({
+      display_name: "Georgia Place Smoke 1785740000000-def456",
+      description: null,
+    })).eligible).toBe(true)
+    expect(classifyReclamationCandidate(row({
+      display_name: "Gate builder staging customer community",
+      description: null,
+    })).exclusions).toContain("unrecognized_smoke_signature")
+  })
+
   test("fails closed on every destructive-boundary ambiguity", () => {
     const decision = classifyReclamationCandidate(row({
       display_name: "Real Community",
