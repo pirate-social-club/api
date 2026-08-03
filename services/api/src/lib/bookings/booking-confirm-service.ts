@@ -16,10 +16,10 @@ import {
 } from "./payment-intent-repository";
 import type { Booking, BookingHold, PaymentIntent } from "./types";
 import {
-  resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorAddress,
   resolveBookingSettlementRpcUrl,
   resolveBookingSettlementUsdcTokenAddress,
+  resolveNewBookingIntentChainId,
 } from "./booking-settlement-config";
 
 export interface BookingConfirmSqlExecutor {
@@ -189,7 +189,7 @@ async function createOrGetIntent(input: {
   const snapshot = feeSnapshot(settlement.platformFeeBps, input.hold.priceCents);
   const result = await createPaymentIntentWriteRepository(input.executor).createOrGetPaymentIntent({
     holdId: input.hold.holdId,
-    chainId: resolveBookingSettlementChainId(input.env),
+    chainId: resolveNewBookingIntentChainId(input.env),
     tokenAddress: resolveBookingSettlementUsdcTokenAddress(input.env),
     tokenDecimals: USDC_DECIMALS,
     tokenSymbol: USDC_SYMBOL,

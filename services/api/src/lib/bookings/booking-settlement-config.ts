@@ -46,6 +46,26 @@ export function resolveBookingSettlementChainId(env: Env): number {
   return chainId;
 }
 
+// Chain for a NEW paid booking intent. Production must never quote a buyer on a
+// testnet: Sepolia USDC is free from a faucet, so a testnet-denominated intent
+// can be "paid" for nothing and still reconcile as funded, leaving the host owed
+// a real payout. Base Sepolia stays allowlisted for settlement generally — the
+// production checkout guard has an equivalent rule, and prod checkout+bookings
+// were deliberately moved to Sepolia on 2026-07-14 (api#426).
+//
+// Deliberately NOT folded into resolveBookingSettlementChainId. Everything that
+// reads, settles, reconciles, cancels or reviews an EXISTING booking keeps using
+// that resolver, so records minted under a different chain — including the Base
+// mainnet intents created before api#426 — stay serviceable from their persisted
+// snapshots. This guard only refuses to mint new ones.
+export function resolveNewBookingIntentChainId(env: Env): number {
+  const chainId = resolveBookingSettlementChainId(env);
+  if (String(env.ENVIRONMENT || "").trim().toLowerCase() === "production" && chainId !== BASE_MAINNET_CHAIN_ID) {
+    throw badRequestError("production paid bookings require Base mainnet settlement");
+  }
+  return chainId;
+}
+
 export function resolveBookingSettlementUsdcTokenAddress(env: Env): string {
   const chainId = resolveBookingSettlementChainId(env);
   const canonical = CANONICAL_USDC_BY_CHAIN.get(chainId) ?? null;
