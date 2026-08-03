@@ -633,6 +633,14 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
       )
     `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_song_pools (
+        community_id, post_id, reward_campaign_id, created_at, updated_at
+      ) VALUES (
+        'cmt_reward_pg', 'pst_provider_mismatch_pg',
+        'rcp_provider_mismatch_pg', $1, $1
+      )
+    `, [NOW])
     await seed.end()
     try {
       await withProductionPostgresClient(async (client) => {
