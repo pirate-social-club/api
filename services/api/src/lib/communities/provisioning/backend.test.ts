@@ -209,6 +209,41 @@ describe("d1NativeProvisioningBackend", () => {
     })
   })
 
+  test("provision rejects allocated=false from a direct single-pool bind", async () => {
+    let snapshotLoads = 0
+    const fakeShard = {
+      async communityD1Bind() {
+        return {
+          ok: true as const,
+          value: {
+            bindingName: "DB_CMTY_ALREADY_BOUND",
+            shardWorkerId: "community-d1-shard-staging",
+            allocated: false,
+          },
+        }
+      },
+      async communityD1LoadSnapshot() {
+        snapshotLoads += 1
+        throw new Error("snapshot load must not run")
+      },
+    } as unknown as ShardRpc
+    const envWithShard = buildEnv({
+      COMMUNITY_D1_SHARD: fakeShard,
+      COMMUNITY_D1_SHARD_REGION: "weur",
+    })
+
+    await expect(resolveCommunityProvisioningBackend(envWithShard, { hasNamespace: false }).provision({
+      env: envWithShard,
+      communityRepository: {} as CommunityProvisioningRepository,
+      body: {} as never,
+      auth: {} as never,
+      communityId: "cmt_duplicate_create",
+      namespaceVerificationId: null,
+      routeSlug: null,
+    })).rejects.toThrow("shard bind returned allocated=false for fresh communityId cmt_duplicate_create")
+    expect(snapshotLoads).toBe(0)
+  })
+
   test("provision allocates only from the explicitly selected pool", async () => {
     const primary = {
       async communityD1LookupBinding() {

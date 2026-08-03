@@ -231,7 +231,16 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
         `d1_native provisioning failed: shard communityD1Bind returned ${bindResult.code}: ${bindResult.message}`,
       )
     }
-    const { bindingName, shardWorkerId } = bindResult.value
+    const { bindingName, shardWorkerId, allocated } = bindResult.value
+    if (!existingAllocation && !allocated) {
+      // A cross-pool retry synthesizes allocated=false only after proving the
+      // community already belongs to exactly one configured pool. A direct
+      // bind returning false has no such proof and means the create
+      // orchestrator was invoked twice without recording success.
+      throw internalError(
+        `d1_native provisioning: shard bind returned allocated=false for fresh communityId ${communityId}`,
+      )
+    }
     const expectedShardWorkerId = existingAllocation?.candidate.shardWorkerId ?? allocationShard.shardWorkerId
     if (expectedShardWorkerId && shardWorkerId !== expectedShardWorkerId) {
       throw internalError(
