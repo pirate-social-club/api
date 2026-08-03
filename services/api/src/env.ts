@@ -437,6 +437,8 @@ export type Env = {
    * evaluation without affecting rewards.
    */
   REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED?: string
+  /** Identity provider evaluated by the shadow path; independent of money-path eligibility. */
+  REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER?: string
   REWARDS_DAILY_STREAK_CENTS?: string
   REWARDS_DAILY_USER_CAP_CENTS?: string
   REWARDS_STREAK_MILESTONE_7_CENTS?: string
