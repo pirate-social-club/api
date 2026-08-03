@@ -15,8 +15,8 @@ active row.
 
 ## Shadow claim evaluation
 
-`reward_claim_identity_evidence` is the only nationality input intended for a
-future tier decision. Its resolver follows this chain exactly:
+The shadow evaluator reads nationality transiently from the canonical identity
+records. It follows this chain exactly:
 
 `active binding -> active Self nullifier for the same user -> accepted,
 unrevoked nationality attestation whose source_identity_nullifier_id is that
@@ -26,17 +26,22 @@ The resolver never reads `verification_capabilities_json.nationality`. That
 account projection is shared by providers and can be overwritten by a proof
 from a document other than the one selected for rewards.
 
+Rewards persists only the resulting `reward_nationality_decisions` row: a
+versioned tier/default result or coarse failure outcome, retryability, campaign
+terms version, evaluator version, and lifecycle timestamps. It does not copy
+nationality, nullifiers, attestations, verification sessions, bindings, or
+provider provenance into the rewards domain.
+
 Outcome and retryability are separate fields. Missing selection and missing
 evidence are retryable; a binding/nullifier mismatch and conflicting bound
 evidence are terminal for that qualification. Retryable rows may advance when
 the user supplies evidence. Resolved and terminal rows are immutable decision
 snapshots.
 
-Every row carries an `evaluator_version`. The original resolver and all rows
-backfilled before its first logic change are `nationality_binding_v1`. A future
-resolver version may advance a retryable row and replace that version, but the
-database conflict predicate keeps resolved and terminal decisions frozen with
-the evaluator version that produced them.
+Every row carries an `evaluator_version`. A future resolver version may advance
+a retryable row and replace that version, but the database conflict predicate
+keeps resolved and terminal decisions frozen with the evaluator version that
+produced them.
 
 Evidence expiry is intentionally not a shadow-evaluation filter. Expiry means
 the user must re-prove before making a new document selection; it does not

@@ -4,6 +4,7 @@ import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
 import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
 import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
+import { resolveRewardsSettlementBackend } from "../../rewards/reward-vault-lit-config"
 
 const BASE_MAINNET_CHAIN_ID = 8453
 const BASE_SEPOLIA_CHAIN_ID = 84532
@@ -161,7 +162,7 @@ export function resolveRewardsSettlementOperatorPrivateKey(env: Env): string {
 function resolveSettlementOperatorAddress(env: Env, kind: SettlementOperatorKind): string {
   const names = envNames(kind)
   const explicit = parseExpectedEvmAddress(env[names.operatorAddress] as string | undefined)
-  const rewardsBackend = String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim()
+  const rewardsBackend = kind === "rewards" ? resolveRewardsSettlementBackend(env) : "local"
   const usesExternalSigner = kind === "rewards" && rewardsBackend === "lit_vault"
   const privateKey = usesExternalSigner
     ? null
@@ -198,9 +199,7 @@ export function resolveRewardsSettlementOperatorAddress(env: Env): string {
 export function assertRewardsCampaignTreasuryMatchesSettlementOperator(env: Env): void {
   const treasury = parseExpectedEvmAddress(env.REWARDS_CAMPAIGN_TREASURY_ADDRESS)
   if (!treasury) throw badRequestError("REWARDS_CAMPAIGN_TREASURY_ADDRESS is invalid")
-  if (["lit_vault", "eoa_vault"].includes(
-    String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim(),
-  )) {
+  if (["lit_vault", "eoa_vault"].includes(resolveRewardsSettlementBackend(env))) {
     const vault = parseExpectedEvmAddress(env.REWARDS_TREASURY_VAULT_ADDRESS)
     if (!vault) throw badRequestError("REWARDS_TREASURY_VAULT_ADDRESS is invalid")
     if (getAddress(treasury) !== getAddress(vault)) {

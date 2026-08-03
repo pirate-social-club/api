@@ -429,8 +429,10 @@ export type Env = {
   // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
   REWARDS_IDENTITY_PROVIDER?: string
   /**
-   * Explicit opt-in for nationality shadow evidence reads and writes. Unset or
-   * any value other than "true" pauses collection without affecting rewards.
+   * Explicit opt-in for nationality shadow evaluation and minimal decision
+   * writes. Canonical nationality evidence is only read transiently and is not
+   * copied into rewards storage. Unset or any value other than "true" pauses
+   * evaluation without affecting rewards.
    */
   REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED?: string
   REWARDS_DAILY_STREAK_CENTS?: string

@@ -47,6 +47,56 @@ type CandidateDecision = Omit<
   "capability" | "persisted" | "persistence" | "evaluatorVersion"
 >
 
+type PersistedDecision = {
+  outcome: "resolved_tier" | "resolved_default" | Exclude<RewardNationalityShadowOutcome, "resolved">
+  resultKey: string | null
+}
+
+function payoutTiers(value: unknown): Array<{ nationalities: string[] }> {
+  let parsed = value
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed)
+    } catch {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+  }
+  if (!Array.isArray(parsed)) throw new Error("reward campaign payout tiers are corrupt")
+  return parsed.map((value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    const nationalities = (value as Record<string, unknown>).nationalities
+    if (!Array.isArray(nationalities) || nationalities.some((country) => typeof country !== "string")) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    return { nationalities: nationalities.map((country) => country.toUpperCase()) }
+  })
+}
+
+function persistedDecision(
+  decision: RewardNationalityShadowDecision,
+  payoutTiersValue: unknown,
+): PersistedDecision {
+  if (decision.outcome !== "resolved" || !decision.nationality) {
+    return {
+      outcome: decision.outcome as Exclude<RewardNationalityShadowOutcome, "resolved">,
+      resultKey: null,
+    }
+  }
+  const tierIndex = payoutTiers(payoutTiersValue)
+    .findIndex((tier) => tier.nationalities.includes(decision.nationality!))
+  return tierIndex >= 0
+    ? { outcome: "resolved_tier", resultKey: `tier:${tierIndex}` }
+    : { outcome: "resolved_default", resultKey: "default" }
+}
+
+function plusDays(value: string, days: number): string {
+  const parsed = Date.parse(value)
+  if (!Number.isFinite(parsed)) throw new Error("reward nationality decision timestamp is invalid")
+  return new Date(parsed + days * 24 * 60 * 60 * 1_000).toISOString()
+}
+
 function parseNationality(value: unknown): string | null {
   let parsed = value
   if (typeof parsed === "string") {
@@ -237,43 +287,54 @@ export async function persistRewardNationalityBindingShadow(input: {
     return input.decision
   }
   const decision = input.decision
+  const campaign = await input.client.execute({
+    sql: `
+      SELECT payout_tiers_json, terms_version, ends_at
+      FROM reward_campaigns
+      WHERE reward_campaign_id = ?1
+      LIMIT 1
+    `,
+    args: [input.rewardCampaignId],
+  })
+  const campaignRow = campaign.rows[0]
+  if (!campaignRow) return { ...decision, persisted: false, persistence: "not_recorded" }
+  const termsVersion = Number(rowValue(campaignRow, "terms_version"))
+  const campaignEndsAt = stringOrNull(rowValue(campaignRow, "ends_at"))
+  if (!Number.isSafeInteger(termsVersion) || termsVersion <= 0 || !campaignEndsAt) {
+    throw new Error("reward campaign nationality decision metadata is invalid")
+  }
+  const minimal = persistedDecision(decision, rowValue(campaignRow, "payout_tiers_json"))
+  const expiryBase = decision.retryability === "resolved"
+    ? new Date(Math.max(Date.parse(input.now), Date.parse(campaignEndsAt))).toISOString()
+    : input.now
+  const expiresAt = plusDays(expiryBase, decision.retryability === "retryable" ? 30 : 180)
   const inserted = await input.client.execute({
     sql: `
-      INSERT INTO reward_claim_identity_evidence (
-        reward_claim_identity_evidence_id, reward_qualification_event_id,
-        reward_campaign_id, user_id, reward_identity_binding_id,
-        identity_nullifier_id, user_attestation_id, provider, outcome,
-        retryability, nationality, reward_identity_id, binding_selected_at,
-        evidence_verification_session_id, evidence_verified_at,
-        evaluator_version, evaluated_at, created_at
+      INSERT INTO reward_nationality_decisions (
+        reward_nationality_decision_id, reward_qualification_event_id,
+        reward_campaign_id, user_id, result_key, outcome, retryability,
+        campaign_terms_version, evaluator_version, evaluated_at, expires_at,
+        created_at
       ) SELECT
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'self', ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?10
       WHERE EXISTS (
         SELECT 1 FROM reward_qualification_events
         WHERE reward_qualification_event_id = ?2
       )
       ON CONFLICT (reward_qualification_event_id) DO UPDATE SET
-        reward_identity_binding_id = excluded.reward_identity_binding_id,
-        identity_nullifier_id = excluded.identity_nullifier_id,
-        user_attestation_id = excluded.user_attestation_id,
+        result_key = excluded.result_key,
         outcome = excluded.outcome,
         retryability = excluded.retryability,
-        nationality = excluded.nationality,
-        reward_identity_id = excluded.reward_identity_id,
-        binding_selected_at = excluded.binding_selected_at,
-        evidence_verification_session_id = excluded.evidence_verification_session_id,
-        evidence_verified_at = excluded.evidence_verified_at,
+        campaign_terms_version = excluded.campaign_terms_version,
         evaluator_version = excluded.evaluator_version,
-        evaluated_at = excluded.evaluated_at
-      WHERE reward_claim_identity_evidence.retryability = 'retryable'
+        evaluated_at = excluded.evaluated_at,
+        expires_at = excluded.expires_at
+      WHERE reward_nationality_decisions.retryability = 'retryable'
     `,
     args: [
-      makeId("rcie"), input.rewardQualificationEventId, input.rewardCampaignId,
-      input.userId, decision.rewardIdentityBindingId, decision.identityNullifierId,
-      decision.userAttestationId, decision.outcome, decision.retryability,
-      decision.nationality, decision.rewardIdentityId, decision.bindingSelectedAt,
-      decision.evidenceVerificationSessionId, decision.evidenceVerifiedAt,
-      decision.evaluatorVersion, input.now,
+      makeId("rnd"), input.rewardQualificationEventId, input.rewardCampaignId,
+      input.userId, minimal.resultKey, minimal.outcome, decision.retryability,
+      termsVersion, decision.evaluatorVersion, input.now, expiresAt,
     ],
   })
   if ((inserted.rowsAffected ?? inserted.rows.length) > 0) {
@@ -281,8 +342,8 @@ export async function persistRewardNationalityBindingShadow(input: {
   }
   const existing = await input.client.execute({
     sql: `
-      SELECT reward_claim_identity_evidence_id
-      FROM reward_claim_identity_evidence
+      SELECT reward_nationality_decision_id
+      FROM reward_nationality_decisions
       WHERE reward_qualification_event_id = ?1
       LIMIT 1
     `,

@@ -51,9 +51,9 @@ function required(raw: string | undefined, field: string): string {
 }
 
 export function resolveRewardsSettlementBackend(env: Env): RewardsSettlementBackend {
-  const value = String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim()
+  const value = String(env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "").trim()
   if (value === "local" || value === "lit_vault" || value === "eoa_vault") return value
-  throw badRequestError("PIRATE_REWARDS_SETTLEMENT_BACKEND must be local, lit_vault, or eoa_vault")
+  throw badRequestError("PIRATE_REWARDS_SETTLEMENT_BACKEND is required and must be local, lit_vault, or eoa_vault")
 }
 
 export function resolveRewardVaultConfig(env: Env): RewardVaultConfig {

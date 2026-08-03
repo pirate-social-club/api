@@ -4,6 +4,7 @@ import type { Env } from "../../env"
 import { getRewardCampaignCapabilities } from "./reward-campaign-capabilities"
 
 const enabledEnv = {
+  PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
   REWARDS_CAMPAIGNS_ENABLED: "true",
   REWARDS_ACCRUAL_ENABLED: "true",
   REWARDS_PAYOUTS_ENABLED: "true",

@@ -26,8 +26,10 @@ function env(overrides: Partial<Env> = {}): Env {
 }
 
 describe("reward vault Lit config", () => {
-  test("keeps local as the compatibility default", () => {
-    expect(resolveRewardsSettlementBackend({} as Env)).toBe("local")
+  test("requires an explicit settlement backend", () => {
+    expect(() => resolveRewardsSettlementBackend({} as Env)).toThrow(
+      "PIRATE_REWARDS_SETTLEMENT_BACKEND is required",
+    )
     expect(resolveRewardsSettlementBackend(env())).toBe("lit_vault")
     expect(resolveRewardsSettlementBackend(env({
       PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
