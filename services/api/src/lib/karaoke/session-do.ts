@@ -1,4 +1,5 @@
 import {
+  KARAOKE_SCORING_VERSION,
   createKaraokeSessionState,
   decodeKaraokeBinaryFrame,
   deserializeKaraokeSessionSnapshot,
@@ -798,6 +799,7 @@ export class KaraokeSessionRuntimeDO {
       attempt_id: state.attemptId,
       completed_at: new Date(now).toISOString(),
       completion_reason: "completed",
+      scoring_version: KARAOKE_SCORING_VERSION,
       session_id: state.sessionId,
       session_started_at: new Date(this.meta.sessionStartedAtMs).toISOString(),
       summary: state.summary,
