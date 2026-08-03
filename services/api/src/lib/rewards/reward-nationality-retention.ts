@@ -53,17 +53,32 @@ export async function enforceRewardNationalityDecisionRetention(input: {
     `,
     args: [input.now, limit],
   })
+  const deletedEnforcements = await input.client.execute({
+    sql: `
+      DELETE FROM reward_identity_binding_enforcements
+      WHERE reward_identity_binding_enforcement_id IN (
+        SELECT reward_identity_binding_enforcement_id
+        FROM reward_identity_binding_enforcements
+        WHERE expires_at <= ?1
+        ORDER BY expires_at ASC, reward_identity_binding_enforcement_id ASC
+        LIMIT ?2
+      )
+      RETURNING reward_identity_binding_enforcement_id
+    `,
+    args: [input.now, limit],
+  })
   const verification = await input.client.execute({
     sql: `
-      SELECT COUNT(*) AS count
-      FROM reward_nationality_decisions
-      WHERE expires_at <= ?1
+      SELECT
+        (SELECT COUNT(*) FROM reward_nationality_decisions WHERE expires_at <= ?1)
+        + (SELECT COUNT(*) FROM reward_identity_binding_enforcements WHERE expires_at <= ?1)
+        AS count
     `,
     args: [input.now],
   })
   return {
     owner: REWARD_NATIONALITY_RETENTION_OWNER,
-    deleted: deleted.rows.length,
+    deleted: deleted.rows.length + deletedEnforcements.rows.length,
     overdue: count(verification),
     checkedAt: input.now,
   }

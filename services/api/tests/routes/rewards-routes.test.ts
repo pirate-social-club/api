@@ -358,7 +358,7 @@ describe("rewards routes", () => {
     expect(missing.status).toBe(400)
   })
 
-  test("persists canonical tier terms but blocks funding until nationality resolution is enabled", async () => {
+  test("persists canonical tier terms and admits funding after tier accounting activation", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-campaign-tier-owner")
@@ -427,55 +427,12 @@ describe("rewards routes", () => {
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
       body: JSON.stringify({ amount_cents: 100000, idempotency_key: "tier-funding-blocked" }),
     }, ctx.env)
-    expect(quote.status).toBe(409)
+    expect(quote.status).toBe(201)
     expect(await json(quote)).toMatchObject({
-      message: "Tiered reward campaigns cannot accept contributions until nationality payout resolution is enabled",
+      campaign: campaign.id,
+      amount_cents: 100000,
+      status: "quoted",
     })
-
-    const syntheticFundingId = "rcf_tier_activation_guard"
-    const now = new Date().toISOString()
-    await ctx.client.execute({
-      sql: `
-        INSERT INTO reward_campaign_funding_effects (
-          reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
-          idempotency_key, chain_id, token_address, expected_amount_cents,
-          expected_amount_atomic, sender_address, treasury_address, status,
-          expires_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, 84532, ?5, 100, '1000000', ?6, ?7, 'quoted', ?8, ?9, ?9)
-      `,
-      args: [
-        syntheticFundingId,
-        campaign.id,
-        session.userId,
-        "tier-activation-guard",
-        "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        "0x1000000000000000000000000000000000000001",
-        "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
-        new Date(Date.now() + 60_000).toISOString(),
-        now,
-      ],
-    })
-    let verificationCalls = 0
-    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => {
-      verificationCalls += 1
-      return { kind: "verified", senderAddress: expected.senderAddress, txRef: fundingTxRef }
-    })
-    const confirm = await app.request(
-      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${syntheticFundingId}/confirm`,
-      {
-        method: "POST",
-        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-        body: JSON.stringify({ tx_hash: `0x${"ab".repeat(32)}` }),
-      },
-      ctx.env,
-    )
-    expect(confirm.status).toBe(409)
-    expect(verificationCalls).toBe(0)
-    const guardedFunding = await ctx.client.execute({
-      sql: "SELECT status, tx_hash FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
-      args: [syntheticFundingId],
-    })
-    expect(guardedFunding.rows[0]).toMatchObject({ status: "quoted", tx_hash: null })
   })
 
   test("rejects ambiguous or insolvent nationality tier terms", async () => {

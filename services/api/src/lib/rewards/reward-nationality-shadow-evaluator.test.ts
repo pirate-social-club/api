@@ -6,6 +6,7 @@ import { deriveRewardIdentityId } from "../verification/unique-human-eligibility
 import {
   evaluateRewardNationalityBindingShadow,
   REWARD_NATIONALITY_EVALUATOR_VERSION,
+  resolveRewardNationalityBinding,
   resolveRewardNationalityBindingShadow,
 } from "./reward-nationality-shadow-evaluator"
 import { enforceRewardNationalityDecisionRetention } from "./reward-nationality-retention"
@@ -97,15 +98,17 @@ async function seedNullifier(client: Client, input: {
   status?: "active" | "revoked"
   nationality?: string
   secondNationality?: string
+  provider?: "self" | "zkpassport"
 }): Promise<void> {
+  const provider = input.provider ?? "self"
   await client.execute({
     sql: `
       INSERT INTO identity_nullifiers (
         identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
         status, first_seen_at, created_at, updated_at
-      ) VALUES (?1, 'usr_shadow', 'self', 'zk-nullifier', ?2, ?3, ?4, ?4, ?4)
+      ) VALUES (?1, 'usr_shadow', ?2, 'zk-nullifier', ?3, ?4, ?5, ?5, ?5)
     `,
-    args: [input.id, input.hash, input.status ?? "active", NOW],
+    args: [input.id, provider, input.hash, input.status ?? "active", NOW],
   })
   if (input.nationality || input.secondNationality) {
     await client.execute({
@@ -114,10 +117,10 @@ async function seedNullifier(client: Client, input: {
           verification_session_id, user_id, provider, session_kind,
           requested_capabilities_json, status, started_at, completed_at,
           created_at, updated_at
-        ) VALUES (?1, 'usr_shadow', 'self', 'identity', '["nationality"]',
-          'verified', ?2, ?2, ?2, ?2)
+        ) VALUES (?1, 'usr_shadow', ?2, 'identity', '["nationality"]',
+          'verified', ?3, ?3, ?3, ?3)
       `,
-      args: [`vss_${input.id}`, NOW],
+      args: [`vss_${input.id}`, provider, NOW],
     })
   }
   for (const [index, nationality] of [input.nationality, input.secondNationality].entries()) {
@@ -128,10 +131,11 @@ async function seedNullifier(client: Client, input: {
           user_attestation_id, user_id, source_verification_session_id, provider,
           attestation_type, capability_key, status, value_json, verified_at,
           revoked_at, created_at, updated_at, source_identity_nullifier_id
-        ) VALUES (?1, 'usr_shadow', ?2, 'self', 'nationality', 'nationality',
-          'accepted', ?3, ?4, NULL, ?4, ?4, ?5)
+        ) VALUES (?1, 'usr_shadow', ?2, ?3, 'nationality', 'nationality',
+          'accepted', ?4, ?5, NULL, ?5, ?5, ?6)
       `,
-      args: [`att_${input.id}_${index}`, `vss_${input.id}`, JSON.stringify({ nationality }), NOW, input.id],
+      args: [`att_${input.id}_${index}`, `vss_${input.id}`, provider,
+        JSON.stringify({ nationality }), NOW, input.id],
     })
   }
 }
@@ -235,6 +239,31 @@ describe("reward nationality shadow evaluation", () => {
       evaluated_at: NOW,
       expires_at: "2027-02-27T23:59:59.999Z",
     }])
+  })
+
+  test("resolves ZKPassport nationality from its provider-local nullifier without a Self document binding", async () => {
+    const client = await setup()
+    await seedNullifier(client, {
+      id: "nul_zkpassport",
+      hash: "hash_zkpassport",
+      nationality: "VNM",
+      provider: "zkpassport",
+    })
+
+    expect(await resolveRewardNationalityBinding({
+      client,
+      userId: "usr_shadow",
+      requiredProvider: "zkpassport",
+    })).toMatchObject({
+      outcome: "resolved",
+      retryability: "resolved",
+      identityNullifierId: "nul_zkpassport",
+      nationality: "VNM",
+      rewardIdentityId: await deriveRewardIdentityId(
+        "zkpassport", "zk-nullifier", "hash_zkpassport",
+      ),
+      rewardIdentityBindingId: null,
+    })
   })
 
   test("records retryable document-not-selected and missing-evidence reasons distinctly", async () => {

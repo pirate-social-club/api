@@ -17487,7 +17487,8 @@ const spec = {
             "enum": [
               "unavailable",
               "draft_only",
-              "binding_preview"
+              "binding_preview",
+              "enabled"
             ]
           },
           "chain_id": {

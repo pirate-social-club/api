@@ -22,9 +22,10 @@ Existing claim and cap keys use `reward_identity_id`, including
 `reward_song_period_claims` and `reward_campaign_reservations`. Merely allowing
 ZKPassport in the resolver would create a second independent claim namespace.
 
-## Option A: one provider per campaign
+## Option A: one provider per permanent song pool
 
-Add an immutable `reward_identity_provider` campaign term. A campaign accepts
+Add an immutable `reward_identity_provider` campaign term. A permanent song
+pool accepts
 exactly one provider from the explicit set `self | zkpassport | very`; its
 qualification resolver, claim key, and audit snapshot all use that provider.
 Nationality-tiered campaigns accept only `self | zkpassport`, because `very`
@@ -48,13 +49,11 @@ Properties:
   two provider-derived reward identities. The vault epoch cap still bounds the
   aggregate exposure, so this is an accepted residual rather than a claim of
   cross-provider human uniqueness.
-- Sequential campaigns for the same song require an additional boundary. If a
-  new campaign selects a different provider than the previous campaign for
-  that song, it cannot start until the next UTC reward-period boundary after
-  the previous campaign ended or exhausted. Creation and quote validation must
-  enforce this alongside the existing one-live-campaign slot check. This keeps
-  `reward_song_period_claims` effective: switching providers cannot create a
-  second claim namespace for the same human, song, and UTC period.
+- The provider is permanent for the song. An exhausted pool is topped up under
+  its original provider; it is not replaced by a new campaign, and no provider
+  rotation exists. A conflicting provider assertion on a contribution is
+  rejected. This is stronger than a period-boundary switch guard because the
+  second provider namespace can never be opened for that song.
 
 This is the only evaluated option that closes the cross-provider duplicate
 path without pretending the providers expose a shared human identifier.
@@ -122,10 +121,9 @@ in a versioned campaign-terms migration.
 2. The provider term is exactly `self | zkpassport | very`; nationality-tiered
    campaigns reject `very`, while uniform campaigns may use it.
 3. Qualification resolves only the campaign's provider; no fallback provider.
-4. A same-song campaign that changes provider cannot start before the next UTC
-   reward-period boundary after the previous campaign ended or exhausted. The
-   create and quote paths both enforce this rule, including races with the
-   existing live-slot constraint.
+4. The first provider choice is permanent for the song pool. A second campaign
+   for the song is rejected, top-ups inherit the persisted provider, and a
+   conflicting provider assertion is rejected.
 5. Nationality evidence must be bound to the same provider/nullifier used for
    the reward identity.
 6. Claim, cap, reservation, payout-allocation, and reconciliation records keep

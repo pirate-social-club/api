@@ -10,7 +10,8 @@ import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import {
-  persistRewardNationalityBindingShadow,
+  persistRewardNationalityDecision,
+  resolveRewardNationalityBinding,
   resolveRewardNationalityBindingShadow,
   type RewardNationalityShadowDecision,
 } from "./reward-nationality-shadow-evaluator"
@@ -34,7 +35,12 @@ async function allocateReservationAcrossContributionLots(input: {
       SELECT
         f.reward_campaign_funding_effect_id,
         f.expected_amount_cents
-          - COALESCE(SUM(a.amount_cents), 0) AS remaining_cents
+          - COALESCE(SUM(a.amount_cents), 0)
+          - COALESCE((
+            SELECT SUM(e.amount_cents)
+            FROM reward_pending_qualification_funding_exposures e
+            WHERE e.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+          ), 0) AS remaining_cents
       FROM reward_campaign_funding_effects f
       LEFT JOIN reward_campaign_reservation_funding_allocations a
         ON a.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
@@ -44,7 +50,12 @@ async function allocateReservationAcrossContributionLots(input: {
         f.reward_campaign_funding_effect_id,
         f.expected_amount_cents,
         f.confirmed_at
-      HAVING f.expected_amount_cents - COALESCE(SUM(a.amount_cents), 0) > 0
+      HAVING f.expected_amount_cents - COALESCE(SUM(a.amount_cents), 0)
+        - COALESCE((
+          SELECT SUM(e.amount_cents)
+          FROM reward_pending_qualification_funding_exposures e
+          WHERE e.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+        ), 0) > 0
       ORDER BY f.confirmed_at ASC, f.reward_campaign_funding_effect_id ASC
     `,
     args: [input.campaignId],
@@ -82,6 +93,64 @@ async function allocateReservationAcrossContributionLots(input: {
   }
 }
 
+async function allocatePendingExposureAcrossContributionLots(input: {
+  client: Pick<Client, "execute">
+  campaignId: string
+  pendingQualificationId: string
+  amountCents: number
+  exposedAt: string
+}): Promise<boolean> {
+  const existing = await input.client.execute({
+    sql: `SELECT 1 FROM reward_pending_qualification_funding_exposures
+      WHERE reward_pending_qualification_id = ?1 LIMIT 1`,
+    args: [input.pendingQualificationId],
+  })
+  if (existing.rows.length > 0) return true
+  const lots = await input.client.execute({
+    sql: `
+      SELECT f.reward_campaign_funding_effect_id,
+        f.expected_amount_cents
+          - COALESCE(r.reserved_cents, 0)
+          - COALESCE(e.exposed_cents, 0) AS remaining_cents
+      FROM reward_campaign_funding_effects f
+      LEFT JOIN (
+        SELECT reward_campaign_funding_effect_id, SUM(amount_cents) AS reserved_cents
+        FROM reward_campaign_reservation_funding_allocations GROUP BY reward_campaign_funding_effect_id
+      ) r ON r.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+      LEFT JOIN (
+        SELECT reward_campaign_funding_effect_id, SUM(amount_cents) AS exposed_cents
+        FROM reward_pending_qualification_funding_exposures GROUP BY reward_campaign_funding_effect_id
+      ) e ON e.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+      WHERE f.reward_campaign_id = ?1 AND f.status = 'confirmed'
+        AND f.expected_amount_cents - COALESCE(r.reserved_cents, 0) - COALESCE(e.exposed_cents, 0) > 0
+      ORDER BY f.confirmed_at ASC, f.reward_campaign_funding_effect_id ASC
+    `,
+    args: [input.campaignId],
+  })
+  let remaining = input.amountCents
+  for (const lot of lots.rows) {
+    if (remaining === 0) break
+    const available = Number(rowValue(lot, "remaining_cents"))
+    if (!Number.isSafeInteger(available) || available <= 0) continue
+    const exposed = Math.min(remaining, available)
+    await input.client.execute({
+      sql: `INSERT INTO reward_pending_qualification_funding_exposures (
+        reward_pending_qualification_id, reward_campaign_id,
+        reward_campaign_funding_effect_id, amount_cents, exposed_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5)`,
+      args: [input.pendingQualificationId, input.campaignId,
+        String(rowValue(lot, "reward_campaign_funding_effect_id")), exposed, input.exposedAt],
+    })
+    remaining -= exposed
+  }
+  if (remaining === 0) return true
+  await input.client.execute({
+    sql: "DELETE FROM reward_pending_qualification_funding_exposures WHERE reward_pending_qualification_id = ?1",
+    args: [input.pendingQualificationId],
+  })
+  return false
+}
+
 export type RewardQualificationCandidate = {
   eventId: string
   userId: string
@@ -117,6 +186,31 @@ export type RewardCampaignReconciliationSummary = {
   skipped_score: number
   failed_communities: number
   errors: number
+}
+
+export async function expirePendingRewardQualifications(input: {
+  client: Client
+  now: string
+}): Promise<number> {
+  return withTransaction(input.client, "write", async (tx) => {
+    const expired = await tx.execute({
+      sql: `
+        UPDATE reward_pending_qualifications
+        SET status = 'expired', terminal_reason = 'verification_window_expired', updated_at = ?1
+        WHERE status IN ('pending_verification', 'reconciling') AND expires_at <= ?1
+      `,
+      args: [input.now],
+    })
+    await tx.execute(`
+      DELETE FROM reward_pending_qualification_funding_exposures
+      WHERE reward_pending_qualification_id IN (
+        SELECT reward_pending_qualification_id
+        FROM reward_pending_qualifications
+        WHERE status IN ('expired', 'ineligible', 'credited')
+      )
+    `)
+    return expired.rowsAffected ?? expired.rows.length
+  })
 }
 
 function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
@@ -338,6 +432,14 @@ async function markPendingQualificationTerminal(input: {
     `,
     args: [input.eventId, input.status, input.reason, input.now],
   })
+  await input.client.execute({
+    sql: `DELETE FROM reward_pending_qualification_funding_exposures
+      WHERE reward_pending_qualification_id IN (
+        SELECT reward_pending_qualification_id FROM reward_pending_qualifications
+        WHERE reward_qualification_event_id = ?1
+      )`,
+    args: [input.eventId],
+  })
 }
 
 async function ensureQualificationProjection(input: {
@@ -346,18 +448,21 @@ async function ensureQualificationProjection(input: {
   campaignId: string
   campaignEndsAt: string
   amountCents: number
+  exposureAmountCents?: number | null
   now: string
-}): Promise<void> {
+}): Promise<string | null> {
+  const pendingId = makeId("rpq")
   await input.client.execute({
     sql: `
       INSERT INTO reward_pending_qualifications (
         reward_pending_qualification_id, reward_qualification_event_id,
         reward_campaign_id, user_id, community_id, post_id, reward_period_key,
-        reward_kind, qualification_basis, conditional_amount_cents, status,
+        reward_kind, qualification_basis, conditional_amount_cents,
+        exposure_amount_cents, status,
         expires_at, created_at, updated_at
       ) SELECT
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'campaign_practice_day', ?8, ?9,
-        'reconciling', ?10, ?11, ?11
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'campaign_practice_day', ?8, ?9, ?10,
+        'reconciling', ?11, ?12, ?12
       WHERE EXISTS (
         SELECT 1 FROM reward_qualification_events
         WHERE reward_qualification_event_id = ?2
@@ -365,13 +470,20 @@ async function ensureQualificationProjection(input: {
       ON CONFLICT DO NOTHING
     `,
     args: [
-      makeId("rpq"), input.candidate.eventId, input.campaignId,
+      pendingId, input.candidate.eventId, input.campaignId,
       input.candidate.userId, input.candidate.communityId, input.candidate.postId,
       input.candidate.periodKey, input.candidate.activity, input.amountCents,
+      input.exposureAmountCents ?? null,
       pendingQualificationExpiresAt(input.candidate.qualifiedAt, input.campaignEndsAt),
       input.now,
     ],
   })
+  const row = await input.client.execute({
+    sql: "SELECT reward_pending_qualification_id FROM reward_pending_qualifications WHERE reward_qualification_event_id = ?1",
+    args: [input.candidate.eventId],
+  })
+  const id = stringOrNull(rowValue(row.rows[0], "reward_pending_qualification_id"))
+  return id
 }
 
 async function markQualificationPendingVerification(input: {
@@ -427,7 +539,7 @@ export async function creditRewardCampaignQualification(input: {
     const campaign = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_id, eligible_activity, min_score_bps, daily_reward_cents,
-          reward_identity_provider,
+          default_amount_cents, max_claim_cents, payout_tiers_json, reward_identity_provider,
           reward_period_cap_cents, funded_cents, reserved_cents, credited_cents,
           refunded_cents, terms_version, ends_at,
           CASE WHEN EXISTS (
@@ -461,7 +573,45 @@ export async function creditRewardCampaignQualification(input: {
       stringOrNull(rowValue(campaignRow, "reward_identity_provider")) ?? undefined,
     )
     const identity = await resolveActiveRewardIdentity(tx, input.candidate.userId, campaignProvider)
-    const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
+    let parsedTiers: unknown = rowValue(campaignRow, "payout_tiers_json")
+    if (typeof parsedTiers === "string") parsedTiers = JSON.parse(parsedTiers)
+    if (!Array.isArray(parsedTiers)) throw new Error("reward campaign payout tiers are corrupt")
+    const tiered = parsedTiers.length > 0
+    const maxClaim = Number(rowValue(campaignRow, "max_claim_cents") ?? 0)
+    let amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
+    let tierDecision: RewardNationalityShadowDecision | null = null
+    if (tiered) {
+      if (campaignProvider !== "self" && campaignProvider !== "zkpassport") {
+        throw new Error("tiered reward campaign identity provider is invalid")
+      }
+      tierDecision = await resolveRewardNationalityBinding({
+        client: tx,
+        userId: input.candidate.userId,
+        requiredProvider: campaignProvider,
+      })
+      tierDecision = await persistRewardNationalityDecision({
+        client: tx,
+        rewardQualificationEventId: input.candidate.eventId,
+        rewardCampaignId: campaignId,
+        userId: input.candidate.userId,
+        now: input.currentTime?.() ?? input.now,
+        decision: tierDecision,
+      })
+      if (tierDecision.retryability === "resolved") {
+        const snapshot = await executeFirst(tx, {
+          sql: `SELECT resolved_amount_cents FROM reward_nationality_decisions
+            WHERE reward_qualification_event_id = ?1 LIMIT 1`,
+          args: [input.candidate.eventId],
+        })
+        amount = Number(rowValue(snapshot, "resolved_amount_cents") ?? 0)
+        await tx.execute({
+          sql: `UPDATE reward_identity_binding_enforcements
+            SET status = 'cleared', cleared_at = ?3, updated_at = ?3
+            WHERE user_id = ?1 AND reward_campaign_id = ?2 AND status = 'open'`,
+          args: [input.candidate.userId, campaignId, input.currentTime?.() ?? input.now],
+        })
+      }
+    }
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
@@ -470,15 +620,76 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "budget", amountCents: 0 }
     }
     const projectionNow = input.currentTime?.() ?? input.now
-    await ensureQualificationProjection({
+    const unresolvedTier = tiered && tierDecision?.retryability !== "resolved"
+    const holdsExposure = unresolvedTier
+      && tierDecision?.retryability === "retryable"
+      && identity !== null
+    const pendingQualificationId = await ensureQualificationProjection({
       client: tx,
       candidate: input.candidate,
       campaignId,
       campaignEndsAt: text(campaignRow, "ends_at"),
-      amountCents: amount,
+      amountCents: unresolvedTier ? maxClaim : amount,
+      exposureAmountCents: holdsExposure ? maxClaim : null,
       now: projectionNow,
     })
     shadowContext.value = { campaignId, evaluatedAt: projectionNow }
+    if (tiered && tierDecision?.retryability !== "resolved") {
+      if (!pendingQualificationId) {
+        throw new Error("tiered reward pending qualification projection is missing")
+      }
+      if (!Number.isSafeInteger(maxClaim) || maxClaim <= 0) {
+        throw new Error("reward campaign maximum claim is invalid")
+      }
+      if (tierDecision?.outcome === "identity_binding_mismatch") {
+        await tx.execute({
+          sql: `INSERT INTO reward_identity_binding_enforcements (
+            reward_identity_binding_enforcement_id, user_id, reward_campaign_id,
+            status, reason, first_detected_at, last_detected_at, expires_at,
+            created_at, updated_at
+          ) VALUES (?1, ?2, ?3, 'open', 'identity_binding_mismatch', ?4, ?4, ?5, ?4, ?4)
+          ON CONFLICT (user_id, reward_campaign_id) DO UPDATE SET
+            status = 'open', last_detected_at = excluded.last_detected_at,
+            cleared_at = NULL, expires_at = excluded.expires_at, updated_at = excluded.updated_at`,
+          args: [makeId("rbe"), input.candidate.userId, campaignId, projectionNow,
+            new Date(Date.parse(projectionNow) + 180 * 86_400_000).toISOString()],
+        })
+      }
+      if (tierDecision?.retryability === "terminal") {
+        await tx.execute({
+          sql: `UPDATE reward_pending_qualifications
+            SET status = 'ineligible', exposure_amount_cents = NULL,
+              terminal_reason = NULL, updated_at = ?2
+            WHERE reward_qualification_event_id = ?1 AND status = 'reconciling'`,
+          args: [input.candidate.eventId, projectionNow],
+        })
+        return { result: "identity", amountCents: 0 }
+      }
+      // A retryable nationality outcome may remain pending without consuming
+      // campaign capacity. Lot exposure is reserved only after the campaign's
+      // immutable provider has produced a verified unique-human identity.
+      if (!identity) {
+        await markQualificationPendingVerification({
+          client: tx, eventId: input.candidate.eventId, now: projectionNow,
+        })
+        return { result: "identity", amountCents: 0 }
+      }
+      const exposed = await allocatePendingExposureAcrossContributionLots({
+        client: tx, campaignId, pendingQualificationId,
+        amountCents: maxClaim, exposedAt: projectionNow,
+      })
+      if (!exposed) {
+        await tx.execute({
+          sql: `UPDATE reward_pending_qualifications
+            SET exposure_amount_cents = NULL, updated_at = ?2
+            WHERE reward_qualification_event_id = ?1`,
+          args: [input.candidate.eventId, projectionNow],
+        })
+        return { result: "funding_deferred", amountCents: 0 }
+      }
+      await markQualificationPendingVerification({ client: tx, eventId: input.candidate.eventId, now: projectionNow })
+      return { result: "identity", amountCents: 0 }
+    }
     if (Number(rowValue(campaignRow, "owner_blocked") ?? 0) === 1) {
       await markPendingQualificationTerminal({
         client: tx, eventId: input.candidate.eventId, status: "ineligible",
@@ -509,7 +720,14 @@ export async function creditRewardCampaignQualification(input: {
     const reserved = Number(rowValue(campaignRow, "reserved_cents") ?? 0)
     const credited = Number(rowValue(campaignRow, "credited_cents") ?? 0)
     const refunded = Number(rowValue(campaignRow, "refunded_cents") ?? 0)
-    if (funded - reserved - credited - refunded < amount) {
+    const exposedResult = await executeFirst(tx, {
+      sql: `SELECT COALESCE(SUM(e.amount_cents), 0) AS exposed_cents
+        FROM reward_pending_qualification_funding_exposures e
+        WHERE e.reward_campaign_id = ?1 AND e.reward_pending_qualification_id <> ?2`,
+      args: [campaignId, pendingQualificationId ?? ""],
+    })
+    const exposed = Number(rowValue(exposedResult, "exposed_cents") ?? 0)
+    if (funded - reserved - credited - refunded - exposed < amount) {
       // Exhaustion is a pool state, not a terminal qualification outcome.
       // Leave the projection reconciling so a later contribution can fund it.
       return { result: "funding_deferred", amountCents: 0 }
@@ -601,6 +819,10 @@ export async function creditRewardCampaignQualification(input: {
         input.candidate.periodKey, input.candidate.activity, amount, creditNow,
       ],
     })
+    await tx.execute({
+      sql: "DELETE FROM reward_pending_qualification_funding_exposures WHERE reward_pending_qualification_id = ?1",
+      args: [pendingQualificationId ?? ""],
+    })
     await allocateReservationAcrossContributionLots({
       client: tx,
       campaignId,
@@ -630,6 +852,7 @@ export async function creditRewardCampaignQualification(input: {
         input.candidate.activity, Number(rowValue(campaignRow, "terms_version") ?? 1),
         JSON.stringify({
           daily_reward_cents: amount,
+          resolved_amount_cents: amount,
           min_score_bps: Number(rowValue(campaignRow, "min_score_bps")),
           qualification_event_id: input.candidate.eventId,
           qualification_policy_version: input.candidate.policyVersion,
@@ -678,11 +901,12 @@ export async function creditRewardCampaignQualification(input: {
       sql: `
         UPDATE reward_pending_qualifications
         SET status = 'credited', credited_reward_event_id = ?2,
+          conditional_amount_cents = ?4, exposure_amount_cents = NULL,
           terminal_reason = NULL, updated_at = ?3
         WHERE reward_qualification_event_id = ?1
           AND status IN ('pending_verification', 'reconciling')
       `,
-      args: [input.candidate.eventId, rewardEventId, creditNow],
+      args: [input.candidate.eventId, rewardEventId, creditNow, amount],
     })
     return { result: "credited", amountCents: amount }
   })
@@ -693,7 +917,7 @@ export async function creditRewardCampaignQualification(input: {
   // preventing tier amounts from reaching this path.
   if (shadowContext.value && shadowDecision) {
     try {
-      await persistRewardNationalityBindingShadow({
+      await persistRewardNationalityDecision({
         client: input.client,
         rewardQualificationEventId: input.candidate.eventId,
         rewardCampaignId: shadowContext.value.campaignId,
@@ -727,15 +951,10 @@ export async function reconcileRewardCampaigns(input: {
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
-  const expiredPending = await input.controlPlaneClient.execute({
-    sql: `
-      UPDATE reward_pending_qualifications
-      SET status = 'expired', terminal_reason = 'verification_window_expired', updated_at = ?1
-      WHERE status IN ('pending_verification', 'reconciling') AND expires_at <= ?1
-    `,
-    args: [now],
+  summary.expired_pending = await expirePendingRewardQualifications({
+    client: input.controlPlaneClient,
+    now,
   })
-  summary.expired_pending = expiredPending.rowsAffected ?? expiredPending.rows.length
   const lifecycle = await advanceRewardCampaignLifecycle({ client: input.controlPlaneClient, now })
   summary.activated_campaigns = lifecycle.activated_campaigns
   summary.ended_campaigns = lifecycle.ended_campaigns

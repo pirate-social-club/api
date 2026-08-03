@@ -18,7 +18,12 @@ export async function getRewardPoolRefundPolicyReadiness(input: {
     SELECT COALESCE(MAX(remaining_cents), 0) AS largest_remainder_cents
     FROM (
       SELECT
-        f.expected_amount_cents - COALESCE(SUM(a.amount_cents), 0) AS remaining_cents
+        f.expected_amount_cents - COALESCE(SUM(a.amount_cents), 0)
+          - COALESCE((
+            SELECT SUM(e.amount_cents)
+            FROM reward_pending_qualification_funding_exposures e
+            WHERE e.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
+          ), 0) AS remaining_cents
       FROM reward_campaign_funding_effects f
       LEFT JOIN reward_campaign_reservation_funding_allocations a
         ON a.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
