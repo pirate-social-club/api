@@ -35,6 +35,24 @@ export type StagingRewardIdentitySnapshot = {
   }
 }
 
+export type StagingRewardNationalityShadowSnapshot = {
+  version: typeof SNAPSHOT_VERSION
+  purpose: "staging_reward_nationality_shadow"
+  user_id: string
+  seeded_at: string
+  seed: {
+    identity_nullifier_id: string
+    provider: "self"
+    mechanism: "zk-nullifier"
+    nullifier_hash: string
+    reward_identity_binding_id: string
+    verification_session_id: string | null
+    user_attestation_id: string | null
+    nationality: string | null
+  }
+  original_user: StagingRewardIdentitySnapshot["original_user"]
+}
+
 function requiredString(row: QueryResultRow, key: string): string {
   const value = stringOrNull(rowValue(row, key))
   if (!value) throw new Error(`staging_reward_identity_missing_${key}`)
@@ -301,6 +319,241 @@ export async function cleanupStagingRewardIdentity(input: {
       ],
     })
     if ((restored.rowsAffected ?? 0) !== 1) throw new Error("staging_reward_identity_user_changed_during_cleanup")
+    return "cleaned"
+  })
+}
+
+function assertNationalityShadowSnapshot(snapshot: StagingRewardNationalityShadowSnapshot): void {
+  const seed = snapshot.seed
+  if (
+    snapshot.version !== SNAPSHOT_VERSION
+    || snapshot.purpose !== "staging_reward_nationality_shadow"
+    || !snapshot.user_id
+    || seed.provider !== "self"
+    || seed.mechanism !== "zk-nullifier"
+    || !/^nul_staging_reward_[0-9a-f]{32}$/u.test(seed.identity_nullifier_id)
+    || !/^[0-9a-f]{64}$/u.test(seed.nullifier_hash)
+    || !/^rib_staging_reward_[0-9a-f]{32}$/u.test(seed.reward_identity_binding_id)
+    || (seed.nationality !== null && !/^[A-Z]{3}$/u.test(seed.nationality))
+    || ((seed.nationality === null) !== (seed.verification_session_id === null))
+    || ((seed.nationality === null) !== (seed.user_attestation_id === null))
+    || (seed.verification_session_id !== null
+      && !/^vss_staging_reward_[0-9a-f]{32}$/u.test(seed.verification_session_id))
+    || (seed.user_attestation_id !== null
+      && !/^att_staging_reward_[0-9a-f]{32}$/u.test(seed.user_attestation_id))
+  ) {
+    throw new Error("staging_reward_nationality_shadow_invalid_snapshot")
+  }
+}
+
+export async function seedStagingRewardNationalityShadowIdentity(input: {
+  client: Client
+  userId: string
+  nationality: string | null
+  now?: string
+  rowLocks?: boolean
+  writeSnapshot: (snapshot: StagingRewardNationalityShadowSnapshot) => void
+}): Promise<StagingRewardNationalityShadowSnapshot> {
+  const now = input.now ?? new Date().toISOString()
+  if (!Number.isFinite(Date.parse(now))) throw new Error("staging_reward_identity_invalid_now")
+  const nationality = input.nationality?.trim().toUpperCase() ?? null
+  if (nationality !== null && !/^[A-Z]{3}$/u.test(nationality)) {
+    throw new Error("nationality_must_be_iso_3166_alpha_3")
+  }
+  const identityNullifierId = makeId("nul_staging_reward")
+  const nullifierHash = randomBytes(32).toString("hex")
+  const bindingId = makeId("rib_staging_reward")
+  const verificationSessionId = nationality ? makeId("vss_staging_reward") : null
+  const userAttestationId = nationality ? makeId("att_staging_reward") : null
+
+  return withTransaction(input.client, "write", async (tx) => {
+    const user = await executeFirst(tx, {
+      sql: `
+        SELECT verification_state, capability_provider, verification_capabilities_json,
+          verified_at, current_verification_session_id, updated_at
+        FROM users
+        WHERE user_id = ?1
+        LIMIT 1${input.rowLocks ? " FOR UPDATE" : ""}
+      `,
+      args: [input.userId],
+    })
+    if (!user) throw new Error("staging_reward_identity_user_not_found")
+    const original = originalUser(user as QueryResultRow)
+
+    const activeNullifier = await executeFirst(tx, {
+      sql: "SELECT identity_nullifier_id FROM identity_nullifiers WHERE user_id = ?1 AND provider = 'self' AND status = 'active' LIMIT 1",
+      args: [input.userId],
+    })
+    if (activeNullifier) throw new Error("staging_reward_identity_active_self_nullifier_exists")
+    const activeBinding = await executeFirst(tx, {
+      sql: "SELECT reward_identity_binding_id FROM reward_identity_bindings WHERE user_id = ?1 AND status = 'active' LIMIT 1",
+      args: [input.userId],
+    })
+    if (activeBinding) throw new Error("staging_reward_identity_active_binding_exists")
+    const snapshot: StagingRewardNationalityShadowSnapshot = {
+      version: SNAPSHOT_VERSION,
+      purpose: "staging_reward_nationality_shadow",
+      user_id: input.userId,
+      seeded_at: now,
+      seed: {
+        identity_nullifier_id: identityNullifierId,
+        provider: "self",
+        mechanism: "zk-nullifier",
+        nullifier_hash: nullifierHash,
+        reward_identity_binding_id: bindingId,
+        verification_session_id: verificationSessionId,
+        user_attestation_id: userAttestationId,
+        nationality,
+      },
+      original_user: original,
+    }
+    input.writeSnapshot(snapshot)
+
+    await tx.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+          source_verification_session_id, source_user_attestation_id, status,
+          first_seen_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, NULL, NULL, 'active', ?4, NULL, ?4, ?4)
+      `,
+      args: [identityNullifierId, input.userId, nullifierHash, now],
+    })
+    if (nationality && verificationSessionId && userAttestationId) {
+      await tx.execute({
+        sql: `
+          INSERT INTO verification_sessions (
+            verification_session_id, user_id, provider, session_kind,
+            requested_capabilities_json, status, started_at, completed_at,
+            created_at, updated_at
+          ) VALUES (?1, ?2, 'self', 'identity', '["nationality"]',
+            'verified', ?3, ?3, ?3, ?3)
+        `,
+        args: [verificationSessionId, input.userId, now],
+      })
+      await tx.execute({
+        sql: `
+          INSERT INTO user_attestations (
+            user_attestation_id, user_id, source_verification_session_id, provider,
+            attestation_type, capability_key, status, value_json, verified_at,
+            revoked_at, created_at, updated_at, source_identity_nullifier_id
+          ) VALUES (?1, ?2, ?3, 'self', 'nationality', 'nationality',
+            'accepted', ?4, ?5, NULL, ?5, ?5, ?6)
+        `,
+        args: [
+          userAttestationId, input.userId, verificationSessionId,
+          JSON.stringify({ nationality }), now, identityNullifierId,
+        ],
+      })
+    }
+    await tx.execute({
+      sql: `
+        INSERT INTO reward_identity_bindings (
+          reward_identity_binding_id, user_id, identity_nullifier_id, status,
+          selected_at, superseded_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, 'active', ?4, NULL, ?4, ?4)
+      `,
+      args: [bindingId, input.userId, identityNullifierId, now],
+    })
+    return snapshot
+  })
+}
+
+export async function cleanupStagingRewardNationalityShadowIdentity(input: {
+  client: Client
+  snapshot: StagingRewardNationalityShadowSnapshot
+  rowLocks?: boolean
+}): Promise<"cleaned" | "already_clean"> {
+  assertNationalityShadowSnapshot(input.snapshot)
+  return withTransaction(input.client, "write", async (tx) => {
+    const user = await executeFirst(tx, {
+      sql: `
+        SELECT verification_state, capability_provider, verification_capabilities_json,
+          verified_at, current_verification_session_id, updated_at
+        FROM users WHERE user_id = ?1
+        LIMIT 1${input.rowLocks ? " FOR UPDATE" : ""}
+      `,
+      args: [input.snapshot.user_id],
+    })
+    if (!user) throw new Error("staging_reward_identity_user_not_found")
+    if (!isDeepStrictEqual(originalUser(user as QueryResultRow), input.snapshot.original_user)) {
+      throw new Error("staging_reward_nationality_shadow_user_changed")
+    }
+
+    const nullifier = await executeFirst(tx, {
+      sql: "SELECT user_id, provider, mechanism, nullifier_hash, status FROM identity_nullifiers WHERE identity_nullifier_id = ?1",
+      args: [input.snapshot.seed.identity_nullifier_id],
+    })
+    const binding = await executeFirst(tx, {
+      sql: "SELECT user_id, identity_nullifier_id, status FROM reward_identity_bindings WHERE reward_identity_binding_id = ?1",
+      args: [input.snapshot.seed.reward_identity_binding_id],
+    })
+    const attestation = input.snapshot.seed.user_attestation_id
+      ? await executeFirst(tx, {
+        sql: "SELECT user_id, provider, capability_key, status, value_json, source_verification_session_id, source_identity_nullifier_id FROM user_attestations WHERE user_attestation_id = ?1",
+        args: [input.snapshot.seed.user_attestation_id],
+      })
+      : null
+    const session = input.snapshot.seed.verification_session_id
+      ? await executeFirst(tx, {
+        sql: "SELECT user_id, provider, session_kind, status FROM verification_sessions WHERE verification_session_id = ?1",
+        args: [input.snapshot.seed.verification_session_id],
+      })
+      : null
+    if (!nullifier && !binding && !attestation && !session) return "already_clean"
+    if (!nullifier || !binding) throw new Error("staging_reward_nationality_shadow_fixture_incomplete")
+    if (
+      requiredString(nullifier as QueryResultRow, "user_id") !== input.snapshot.user_id
+      || requiredString(nullifier as QueryResultRow, "provider") !== "self"
+      || requiredString(nullifier as QueryResultRow, "mechanism") !== "zk-nullifier"
+      || requiredString(nullifier as QueryResultRow, "nullifier_hash") !== input.snapshot.seed.nullifier_hash
+      || requiredString(nullifier as QueryResultRow, "status") !== "active"
+      || requiredString(binding as QueryResultRow, "user_id") !== input.snapshot.user_id
+      || requiredString(binding as QueryResultRow, "identity_nullifier_id") !== input.snapshot.seed.identity_nullifier_id
+      || requiredString(binding as QueryResultRow, "status") !== "active"
+    ) {
+      throw new Error("staging_reward_nationality_shadow_fixture_changed")
+    }
+    if (input.snapshot.seed.nationality) {
+      if (!attestation || !session) throw new Error("staging_reward_nationality_shadow_evidence_missing")
+      const value = parseJsonObject(jsonText(rowValue(attestation as QueryResultRow, "value_json")))
+      if (
+        requiredString(attestation as QueryResultRow, "user_id") !== input.snapshot.user_id
+        || requiredString(attestation as QueryResultRow, "provider") !== "self"
+        || requiredString(attestation as QueryResultRow, "capability_key") !== "nationality"
+        || requiredString(attestation as QueryResultRow, "status") !== "accepted"
+        || requiredString(attestation as QueryResultRow, "source_verification_session_id") !== input.snapshot.seed.verification_session_id
+        || requiredString(attestation as QueryResultRow, "source_identity_nullifier_id") !== input.snapshot.seed.identity_nullifier_id
+        || value.nationality !== input.snapshot.seed.nationality
+        || requiredString(session as QueryResultRow, "user_id") !== input.snapshot.user_id
+        || requiredString(session as QueryResultRow, "provider") !== "self"
+        || requiredString(session as QueryResultRow, "session_kind") !== "identity"
+        || requiredString(session as QueryResultRow, "status") !== "verified"
+      ) {
+        throw new Error("staging_reward_nationality_shadow_evidence_changed")
+      }
+    }
+
+    await tx.execute({
+      sql: "DELETE FROM reward_identity_bindings WHERE reward_identity_binding_id = ?1",
+      args: [input.snapshot.seed.reward_identity_binding_id],
+    })
+    if (input.snapshot.seed.user_attestation_id) {
+      await tx.execute({
+        sql: "DELETE FROM user_attestations WHERE user_attestation_id = ?1",
+        args: [input.snapshot.seed.user_attestation_id],
+      })
+    }
+    if (input.snapshot.seed.verification_session_id) {
+      await tx.execute({
+        sql: "DELETE FROM verification_sessions WHERE verification_session_id = ?1",
+        args: [input.snapshot.seed.verification_session_id],
+      })
+    }
+    await tx.execute({
+      sql: "DELETE FROM identity_nullifiers WHERE identity_nullifier_id = ?1",
+      args: [input.snapshot.seed.identity_nullifier_id],
+    })
     return "cleaned"
   })
 }

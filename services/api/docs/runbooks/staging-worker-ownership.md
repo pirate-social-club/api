@@ -84,16 +84,20 @@ anything:
 
 ## Current holds
 
-- **Owner:** Codex `/root`, reward-nationality staging validation
-  **SHA:** `6241fb92c15d26a1c895937ccc47a0e25272617b` (current Web-pinned API)
-  **Window:** 2026-08-03 10:46Z–13:00Z
-  **Measurement:** isolated nationality-shadow qualification cases and aggregate-only
-  reward-accounting invariants. No pinned gate fixture IDs, production flags, Lit,
-  or mainnet money paths.
+None.
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
+
+- **2026-08-03** — Nationality shadow validation completed on Web-pinned API
+  `6241fb92c`. Two genuine historical staging qualification events produced
+  `resolved_default`/resolved and `nationality_evidence_missing`/retryable
+  decisions at evaluator `nationality_binding_v1`; lifecycle deltas were exactly
+  180 and 30 days. Reward events/reservations/payout effects stayed at
+  4/4/7 rows and 400/400/450 cents. Reversible Self fixtures were exactly
+  cleaned, the pre-existing Very identity remained active, and staging was left
+  on `6241fb92c` with no manual Worker deploy.
 
 - **2026-08-02** — D1 allocation-fencing staging smoke passed on API
   `0c50c6dd7`. Real community provisioning reached `active`, its job succeeded,
