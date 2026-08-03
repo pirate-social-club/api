@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import type { Address, Hex } from "viem"
 
 import { createControlPlaneTestClient } from "../../../tests/helpers"
+import type { Client } from "../sql-client"
 import { decodeEfpListOp } from "./list-op"
 import {
   deriveAuthoritativeFollowerEdges,
@@ -10,6 +11,8 @@ import {
   reconcileEfpFollowCounts,
   refreshEfpProjectionAvailability,
   replaceFollowerEffectiveEdges,
+  replaceFollowersEffectiveEdgesInTransaction,
+  type EfpProjectionRebuildStats,
 } from "./materializer"
 import { replaceEfpIndexerRange } from "./repository"
 import { withTransaction } from "../transactions"
@@ -17,9 +20,13 @@ import { withTransaction } from "../transactions"
 const FOLLOWER = "0x1111111111111111111111111111111111111111" as Address
 const OLD_TARGET = "0x2222222222222222222222222222222222222222" as Address
 const NEW_TARGET = "0x3333333333333333333333333333333333333333" as Address
+const SECOND_TARGET = "0x4444444444444444444444444444444444444444" as Address
+const SECOND_FOLLOWER = "0x5555555555555555555555555555555555555555" as Address
+const UNRELATED = "0x6666666666666666666666666666666666666666" as Address
 const CONTRACT = "0x41aa48ef3c0446b46a5b1cc6337ff3d3716e2a33" as Address
 const HASH = `0x${"44".repeat(32)}` as Hex
 const NOW = "2026-07-26T00:00:00.000Z"
+const LATER = "2026-07-26T01:00:00.000Z"
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => Promise.all(cleanups.splice(0).map((cleanup) => cleanup())))
@@ -86,6 +93,35 @@ function edge(target: Address, slot: bigint) {
     sourceTransactionHash: HASH,
     sourceTransactionIndex: 0,
     sourceLogIndex: 0,
+  }
+}
+
+const GRAPH_WRITE_PATTERN = /^\s*(?:INSERT INTO efp_effective_follows|DELETE FROM efp_effective_follows|UPDATE efp_effective_follows|INSERT INTO efp_follow_counts)/u
+
+function spyGraphWrites(client: Client): { client: Client; statements: string[] } {
+  const statements: string[] = []
+  const wrap = (execute: Client["execute"]): Client["execute"] =>
+    async (statement) => {
+      const sql = typeof statement === "string" ? statement : statement.sql
+      if (GRAPH_WRITE_PATTERN.test(sql)) statements.push(sql)
+      return await execute(statement)
+    }
+  return {
+    statements,
+    client: {
+      execute: wrap(client.execute.bind(client)),
+      batch: client.batch.bind(client),
+      transaction: async (mode) => {
+        const tx = await client.transaction(mode)
+        return {
+          execute: wrap(tx.execute.bind(tx)),
+          batch: tx.batch.bind(tx),
+          commit: tx.commit.bind(tx),
+          rollback: tx.rollback.bind(tx),
+          close: tx.close.bind(tx),
+        }
+      },
+    },
   }
 }
 
@@ -473,5 +509,430 @@ describe("EFP follow materializer", () => {
       args: [CONTRACT],
     })
     expect(repaired.rows[0]?.follower_count).toBe(1)
+  })
+
+  test("identical re-derivation performs no graph or count writes", async () => {
+    const client = await setup()
+    const edges = [edge(OLD_TARGET, 1n), edge(NEW_TARGET, 1n)]
+    await replaceFollowerEffectiveEdges({
+      client, followerAddress: FOLLOWER, edges, projectionRevision: 1n, now: NOW,
+    })
+    const spy = spyGraphWrites(client)
+
+    const stats = await replaceFollowerEffectiveEdges({
+      client: spy.client,
+      followerAddress: FOLLOWER,
+      edges,
+      projectionRevision: 2n,
+      now: LATER,
+    })
+
+    expect(stats).toEqual({
+      derived: 2,
+      unchanged: 2,
+      inserted: 0,
+      deleted: 0,
+      metadataUpdated: 0,
+      countsRecomputed: 0,
+    })
+    expect(spy.statements).toEqual([])
+    const stored = await client.execute({
+      sql: `SELECT updated_at FROM efp_effective_follows
+            WHERE follower_address = ?1 ORDER BY followed_address`,
+      args: [FOLLOWER],
+    })
+    expect(stored.rows).toEqual([{ updated_at: NOW }, { updated_at: NOW }])
+    const counts = await client.execute(
+      "SELECT projection_revision, updated_at FROM efp_follow_counts ORDER BY wallet_address",
+    )
+    expect(counts.rows).toEqual([
+      { projection_revision: 1, updated_at: NOW },
+      { projection_revision: 1, updated_at: NOW },
+      { projection_revision: 1, updated_at: NOW },
+    ])
+  })
+
+  test("source metadata change updates the edge row without touching counts", async () => {
+    const client = await setup()
+    await replaceFollowerEffectiveEdges({
+      client, followerAddress: FOLLOWER, edges: [edge(OLD_TARGET, 1n)],
+      projectionRevision: 1n, now: NOW,
+    })
+    const spy = spyGraphWrites(client)
+
+    const stats = await replaceFollowerEffectiveEdges({
+      client: spy.client,
+      followerAddress: FOLLOWER,
+      edges: [{ ...edge(OLD_TARGET, 1n), sourceBlockNumber: 101n }],
+      projectionRevision: 2n,
+      now: LATER,
+    })
+
+    expect(stats).toEqual({
+      derived: 1,
+      unchanged: 0,
+      inserted: 0,
+      deleted: 0,
+      metadataUpdated: 1,
+      countsRecomputed: 0,
+    })
+    expect(spy.statements).toEqual([
+      expect.stringContaining("UPDATE efp_effective_follows"),
+    ])
+    const stored = await client.execute({
+      sql: `SELECT source_block_number, updated_at FROM efp_effective_follows
+            WHERE follower_address = ?1`,
+      args: [FOLLOWER],
+    })
+    expect(stored.rows).toEqual([{ source_block_number: 101, updated_at: LATER }])
+    const counts = await client.execute({
+      sql: `SELECT projection_revision, updated_at FROM efp_follow_counts
+            WHERE wallet_address = ?1`,
+      args: [OLD_TARGET],
+    })
+    expect(counts.rows).toEqual([{ projection_revision: 1, updated_at: NOW }])
+  })
+
+  test("edge add and remove recompute counts only for membership-affected wallets", async () => {
+    const client = await setup()
+    await replaceFollowerEffectiveEdges({
+      client, followerAddress: FOLLOWER, edges: [edge(OLD_TARGET, 1n)],
+      projectionRevision: 1n, now: NOW,
+    })
+    await client.execute({
+      sql: "INSERT INTO efp_follow_counts VALUES (?1, 5, 5, 1, ?2)",
+      args: [UNRELATED, NOW],
+    })
+
+    const stats = await replaceFollowerEffectiveEdges({
+      client, followerAddress: FOLLOWER, edges: [edge(NEW_TARGET, 1n)],
+      projectionRevision: 2n, now: LATER,
+    })
+
+    expect(stats).toEqual({
+      derived: 1,
+      unchanged: 0,
+      inserted: 1,
+      deleted: 1,
+      metadataUpdated: 0,
+      countsRecomputed: 3,
+    })
+    const counts = await client.execute(
+      `SELECT wallet_address, follower_count, following_count, projection_revision, updated_at
+       FROM efp_follow_counts ORDER BY wallet_address`,
+    )
+    expect(counts.rows).toEqual([
+      {
+        wallet_address: FOLLOWER, follower_count: 0, following_count: 1,
+        projection_revision: 2, updated_at: LATER,
+      },
+      {
+        wallet_address: OLD_TARGET, follower_count: 0, following_count: 0,
+        projection_revision: 2, updated_at: LATER,
+      },
+      {
+        wallet_address: NEW_TARGET, follower_count: 1, following_count: 0,
+        projection_revision: 2, updated_at: LATER,
+      },
+      {
+        wallet_address: UNRELATED, follower_count: 5, following_count: 5,
+        projection_revision: 1, updated_at: NOW,
+      },
+    ])
+  })
+
+  test("empty old and new edge sets perform no DML at all", async () => {
+    const client = await setup()
+    const spy = spyGraphWrites(client)
+
+    const stats = await replaceFollowerEffectiveEdges({
+      client: spy.client, followerAddress: FOLLOWER, edges: [],
+      projectionRevision: 1n, now: NOW,
+    })
+
+    expect(stats).toEqual({
+      derived: 0,
+      unchanged: 0,
+      inserted: 0,
+      deleted: 0,
+      metadataUpdated: 0,
+      countsRecomputed: 0,
+    })
+    expect(spy.statements).toEqual([])
+    const edges = await client.execute(
+      "SELECT COUNT(*) AS edge_count FROM efp_effective_follows",
+    )
+    expect(Number(edges.rows[0]?.edge_count)).toBe(0)
+    const counts = await client.execute(
+      "SELECT COUNT(*) AS count_rows FROM efp_follow_counts",
+    )
+    expect(Number(counts.rows[0]?.count_rows)).toBe(0)
+  })
+
+  test("batched replacement diffs each follower and gates count recomputation", async () => {
+    const client = await setup()
+    await replaceFollowerEffectiveEdges({
+      client, followerAddress: FOLLOWER, edges: [edge(OLD_TARGET, 1n)],
+      projectionRevision: 1n, now: NOW,
+    })
+
+    const stats = await withTransaction(client, "write", async (tx) => {
+      return await replaceFollowersEffectiveEdgesInTransaction({
+        tx,
+        edgesByFollower: new Map([
+          [FOLLOWER, [edge(OLD_TARGET, 1n)]],
+          [SECOND_FOLLOWER, [edge(NEW_TARGET, 1n)]],
+        ]),
+        projectionRevision: 2n,
+        now: LATER,
+      })
+    })
+
+    expect(stats).toEqual({
+      derived: 2,
+      unchanged: 1,
+      inserted: 1,
+      deleted: 0,
+      metadataUpdated: 0,
+      countsRecomputed: 2,
+    })
+    const stored = await client.execute({
+      sql: `SELECT updated_at FROM efp_effective_follows
+            WHERE follower_address = ?1 AND followed_address = ?2`,
+      args: [FOLLOWER, OLD_TARGET],
+    })
+    expect(stored.rows).toEqual([{ updated_at: NOW }])
+    const counts = await client.execute(
+      `SELECT wallet_address, projection_revision, updated_at
+       FROM efp_follow_counts ORDER BY wallet_address`,
+    )
+    expect(counts.rows).toEqual([
+      { wallet_address: FOLLOWER, projection_revision: 1, updated_at: NOW },
+      { wallet_address: OLD_TARGET, projection_revision: 1, updated_at: NOW },
+      { wallet_address: NEW_TARGET, projection_revision: 2, updated_at: LATER },
+      { wallet_address: SECOND_FOLLOWER, projection_revision: 2, updated_at: LATER },
+    ])
+  })
+
+  test("all-unchanged rebuild advances the watermark with zeroed write stats", async () => {
+    const client = await setup()
+    const rawAdd = `0x01010101${NEW_TARGET.slice(2)}`.toLowerCase() as Hex
+    await client.batch([
+      {
+        sql: `INSERT INTO efp_primary_list_events (
+          chain_id, contract_address, account_address, metadata_key, raw_value,
+          list_id, block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?2, ?1, 'primary-list', '0x08', '8', 20, ?3, ?3, 0, 0, ?4)`,
+        args: [FOLLOWER, CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_storage_location_events (
+          chain_id, registry_address, list_id, raw_storage_location,
+          storage_chain_id, storage_contract_address, storage_slot,
+          block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?1, '8', '0x', 8453, ?1, '77', 21, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_ops (
+          chain_id, contract_address, slot, block_number, block_hash,
+          transaction_hash, transaction_index, log_index, raw_op
+        ) VALUES (8453, ?1, '77', 110, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, rawAdd],
+      },
+    ], "write")
+    await replaceFollowerEffectiveEdges({
+      client,
+      followerAddress: FOLLOWER,
+      edges: [{ ...edge(NEW_TARGET, 77n), sourceBlockNumber: 110n }],
+      projectionRevision: 1n,
+      now: NOW,
+    })
+
+    let stats: EfpProjectionRebuildStats | undefined
+    await replaceEfpIndexerRange({
+      client,
+      chainId: 8453,
+      fromBlock: 100n,
+      throughBlock: 120n,
+      throughBlockHash: HASH,
+      safeHeadBlock: 120n,
+      listOps: [{
+        chainId: 8453,
+        contractAddress: CONTRACT,
+        slot: 77n,
+        blockNumber: 110n,
+        blockHash: HASH,
+        transactionHash: HASH,
+        transactionIndex: 0,
+        logIndex: 0,
+        rawOp: rawAdd,
+        decoded: decodeEfpListOp(rawAdd),
+      }],
+      primaryListEvents: [],
+      storageLocationEvents: [],
+      scanStartedAt: NOW,
+      scanCompletedAt: NOW,
+      onRangeReplaced: async (affected) => {
+        stats = await rebuildEfpProjectionAfterRangeReplacement({
+          ...affected,
+          chainId: 8453,
+          appliedThroughBlock: 120n,
+          appliedThroughBlockHash: HASH,
+          projectionRevision: 2n,
+          now: NOW,
+        })
+      },
+    })
+
+    expect(stats).toEqual({
+      followers: 1,
+      derived: 1,
+      unchanged: 1,
+      inserted: 0,
+      deleted: 0,
+      metadataUpdated: 0,
+      countsRecomputed: 0,
+    })
+    const watermark = await client.execute(
+      `SELECT applied_through_block, projection_revision
+       FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453`,
+    )
+    expect(watermark.rows).toEqual([{ applied_through_block: 120, projection_revision: 2 }])
+    const storedEdge = await client.execute({
+      sql: `SELECT updated_at FROM efp_effective_follows
+            WHERE follower_address = ?1`,
+      args: [FOLLOWER],
+    })
+    expect(storedEdge.rows).toEqual([{ updated_at: NOW }])
+    const counts = await client.execute({
+      sql: `SELECT projection_revision, updated_at FROM efp_follow_counts
+            WHERE wallet_address = ?1`,
+      args: [NEW_TARGET],
+    })
+    expect(counts.rows).toEqual([{ projection_revision: 1, updated_at: NOW }])
+  })
+
+  test("changed rebuild reports insert, delete, and metadata-update counts", async () => {
+    const client = await setup()
+    const rawAdd = `0x01010101${NEW_TARGET.slice(2)}`.toLowerCase() as Hex
+    const rawAddSecond = `0x01010101${SECOND_TARGET.slice(2)}`.toLowerCase() as Hex
+    await client.batch([
+      {
+        sql: `INSERT INTO efp_primary_list_events (
+          chain_id, contract_address, account_address, metadata_key, raw_value,
+          list_id, block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?2, ?1, 'primary-list', '0x08', '8', 20, ?3, ?3, 0, 0, ?4)`,
+        args: [FOLLOWER, CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_storage_location_events (
+          chain_id, registry_address, list_id, raw_storage_location,
+          storage_chain_id, storage_contract_address, storage_slot,
+          block_number, block_hash, transaction_hash, transaction_index,
+          log_index, created_at
+        ) VALUES (8453, ?1, '8', '0x', 8453, ?1, '77', 21, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, NOW],
+      },
+      {
+        sql: `INSERT INTO efp_list_ops (
+          chain_id, contract_address, slot, block_number, block_hash,
+          transaction_hash, transaction_index, log_index, raw_op
+        ) VALUES (8453, ?1, '77', 110, ?2, ?2, 0, 0, ?3)`,
+        args: [CONTRACT, HASH, rawAdd],
+      },
+    ], "write")
+    await replaceFollowerEffectiveEdges({
+      client,
+      followerAddress: FOLLOWER,
+      edges: [
+        { ...edge(NEW_TARGET, 77n), sourceBlockNumber: 95n },
+        edge(OLD_TARGET, 77n),
+      ],
+      projectionRevision: 1n,
+      now: NOW,
+    })
+
+    let stats: EfpProjectionRebuildStats | undefined
+    await replaceEfpIndexerRange({
+      client,
+      chainId: 8453,
+      fromBlock: 100n,
+      throughBlock: 120n,
+      throughBlockHash: HASH,
+      safeHeadBlock: 120n,
+      listOps: [
+        {
+          chainId: 8453,
+          contractAddress: CONTRACT,
+          slot: 77n,
+          blockNumber: 110n,
+          blockHash: HASH,
+          transactionHash: HASH,
+          transactionIndex: 0,
+          logIndex: 0,
+          rawOp: rawAdd,
+          decoded: decodeEfpListOp(rawAdd),
+        },
+        {
+          chainId: 8453,
+          contractAddress: CONTRACT,
+          slot: 77n,
+          blockNumber: 112n,
+          blockHash: HASH,
+          transactionHash: HASH,
+          transactionIndex: 0,
+          logIndex: 0,
+          rawOp: rawAddSecond,
+          decoded: decodeEfpListOp(rawAddSecond),
+        },
+      ],
+      primaryListEvents: [],
+      storageLocationEvents: [],
+      scanStartedAt: NOW,
+      scanCompletedAt: NOW,
+      onRangeReplaced: async (affected) => {
+        stats = await rebuildEfpProjectionAfterRangeReplacement({
+          ...affected,
+          chainId: 8453,
+          appliedThroughBlock: 120n,
+          appliedThroughBlockHash: HASH,
+          projectionRevision: 2n,
+          now: NOW,
+        })
+      },
+    })
+
+    expect(stats).toEqual({
+      followers: 1,
+      derived: 2,
+      unchanged: 0,
+      inserted: 1,
+      deleted: 1,
+      metadataUpdated: 1,
+      countsRecomputed: 3,
+    })
+    const edges = await client.execute({
+      sql: `SELECT followed_address, source_block_number FROM efp_effective_follows
+            WHERE follower_address = ?1 ORDER BY followed_address`,
+      args: [FOLLOWER],
+    })
+    expect(edges.rows).toEqual([
+      { followed_address: NEW_TARGET, source_block_number: 110 },
+      { followed_address: SECOND_TARGET, source_block_number: 112 },
+    ])
+    const metadataOnlyTarget = await client.execute({
+      sql: "SELECT projection_revision FROM efp_follow_counts WHERE wallet_address = ?1",
+      args: [NEW_TARGET],
+    })
+    expect(metadataOnlyTarget.rows).toEqual([{ projection_revision: 1 }])
+    const watermark = await client.execute(
+      `SELECT applied_through_block, projection_revision
+       FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453`,
+    )
+    expect(watermark.rows).toEqual([{ applied_through_block: 120, projection_revision: 2 }])
   })
 })

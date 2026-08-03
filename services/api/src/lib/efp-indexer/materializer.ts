@@ -366,145 +366,196 @@ async function recomputeWalletCounts(
   }
 }
 
-/**
- * Atomically replaces every effective edge for one follower. This is the only
- * primary-list repoint path: old-list edges are deleted before new-list edges
- * and affected counters are recomputed from the edge table in the same tx.
- */
-export async function replaceFollowerEffectiveEdges(input: {
-  client: Client
-  followerAddress: Address
-  edges: readonly MaterializedFollowEdge[]
-  projectionRevision: bigint
-  now: string
-}): Promise<void> {
-  const follower = input.followerAddress.toLowerCase() as Address
-  await withTransaction(input.client, "write", async (tx) => {
-    await replaceFollowerEffectiveEdgesInTransaction({
-      tx,
-      followerAddress: follower,
-      edges: input.edges,
-      projectionRevision: input.projectionRevision,
-      now: input.now,
-    })
-  })
+export type FollowerEdgeReplacementStats = {
+  derived: number
+  unchanged: number
+  inserted: number
+  deleted: number
+  metadataUpdated: number
+  countsRecomputed: number
 }
 
-export async function replaceFollowerEffectiveEdgesInTransaction(input: {
-  tx: Transaction
-  followerAddress: Address
-  edges: readonly MaterializedFollowEdge[]
-  projectionRevision: bigint
-  now: string
-}): Promise<void> {
-    const follower = input.followerAddress.toLowerCase() as Address
-    const tx = input.tx
-    const old = await tx.execute({
-      sql: "SELECT followed_address FROM efp_effective_follows WHERE follower_address = ?1",
-      args: [follower],
-    })
-    const affected = new Set<Address>([follower])
-    for (const row of old.rows) {
-      const target = address(row, "followed_address")
-      if (target) affected.add(target)
-    }
-
-    await tx.execute({
-      sql: "DELETE FROM efp_effective_follows WHERE follower_address = ?1",
-      args: [follower],
-    })
-    const normalizedEdges = input.edges.map((edge) => {
-      const followedAddress = edge.followedAddress.toLowerCase() as Address
-      affected.add(followedAddress)
-      return { ...edge, followedAddress }
-    })
-    for (const batch of chunks(normalizedEdges)) {
-      const args: (string | number)[] = []
-      const values = batch.map((edge) => {
-        const offset = args.length
-        args.push(
-          follower,
-          edge.followedAddress,
-          edge.listChainId,
-          edge.listContractAddress.toLowerCase(),
-          edge.listSlot.toString(),
-          edge.sourceBlockNumber.toString(),
-          edge.sourceTransactionHash.toLowerCase(),
-          edge.sourceTransactionIndex,
-          edge.sourceLogIndex,
-          input.now,
-        )
-        return `(${Array.from({ length: 10 }, (_, index) => `?${offset + index + 1}`).join(", ")})`
-      }).join(", ")
-      await tx.execute({
-        sql: `
-          INSERT INTO efp_effective_follows (
-            follower_address, followed_address, list_chain_id,
-            list_contract_address, list_slot, source_block_number,
-            source_transaction_hash, source_transaction_index,
-            source_log_index, updated_at
-          ) VALUES ${values}
-        `,
-        args,
-      })
-    }
-
-    await recomputeWalletCounts(
-      tx,
-      [...affected],
-      input.projectionRevision,
-      input.now,
-    )
+export type EfpProjectionRebuildStats = FollowerEdgeReplacementStats & {
+  followers: number
 }
 
-export async function replaceFollowersEffectiveEdgesInTransaction(input: {
-  tx: Transaction
-  edgesByFollower: ReadonlyMap<Address, readonly MaterializedFollowEdge[]>
-  projectionRevision: bigint
-  now: string
-}): Promise<void> {
-  const followers = [...input.edgesByFollower.keys()].map(
-    (item) => item.toLowerCase() as Address,
-  )
-  if (followers.length === 0) return
-  const followerPlaceholders = followers.map((_, index) => `?${index + 1}`).join(", ")
-  const old = await input.tx.execute({
-    sql: `
-      SELECT follower_address, followed_address
-      FROM efp_effective_follows
-      WHERE follower_address IN (${followerPlaceholders})
-    `,
-    args: followers,
-  })
-  const affected = new Set<Address>(followers)
-  for (const row of old.rows) {
-    const target = address(row, "followed_address")
-    if (target) affected.add(target)
+function zeroFollowerEdgeReplacementStats(): FollowerEdgeReplacementStats {
+  return {
+    derived: 0,
+    unchanged: 0,
+    inserted: 0,
+    deleted: 0,
+    metadataUpdated: 0,
+    countsRecomputed: 0,
   }
-  await input.tx.execute({
-    sql: `DELETE FROM efp_effective_follows
-          WHERE follower_address IN (${followerPlaceholders})`,
-    args: followers,
-  })
+}
 
-  const rows = followers.flatMap((follower) =>
-    (input.edgesByFollower.get(follower) ?? []).map((edge) => {
-      const followedAddress = edge.followedAddress.toLowerCase() as Address
-      affected.add(followedAddress)
-      return { follower, followedAddress, edge }
-    }))
-  for (const batch of chunks(rows)) {
+/**
+ * Driver-agnostic comparison shape for one effective edge. Stored rows mix
+ * Postgres BIGINT-as-string with SQLite/TS numbers, so bigints stringify and
+ * hex lowercases exactly the way the insert path persists them.
+ */
+type CanonicalFollowEdge = {
+  followedAddress: Address
+  listChainId: number
+  listContractAddress: Address
+  listSlot: string
+  sourceBlockNumber: string
+  sourceTransactionHash: Hex
+  sourceTransactionIndex: number
+  sourceLogIndex: number
+}
+
+function canonicalStoredFollowEdge(row: QueryResultRow): CanonicalFollowEdge | null {
+  const followedAddress = address(row, "followed_address")
+  const listContractAddress = address(row, "list_contract_address")
+  const sourceTransactionHash = typeof row.source_transaction_hash === "string"
+    ? row.source_transaction_hash.toLowerCase() as Hex
+    : null
+  if (
+    !followedAddress
+    || row.list_chain_id == null
+    || !listContractAddress
+    || row.list_slot == null
+    || row.source_block_number == null
+    || !sourceTransactionHash
+    || row.source_transaction_index == null
+    || row.source_log_index == null
+  ) return null
+  return {
+    followedAddress,
+    listChainId: Number(row.list_chain_id),
+    listContractAddress,
+    listSlot: String(row.list_slot),
+    sourceBlockNumber: String(row.source_block_number),
+    sourceTransactionHash,
+    sourceTransactionIndex: Number(row.source_transaction_index),
+    sourceLogIndex: Number(row.source_log_index),
+  }
+}
+
+function canonicalDerivedFollowEdge(edge: MaterializedFollowEdge): CanonicalFollowEdge {
+  return {
+    followedAddress: edge.followedAddress.toLowerCase() as Address,
+    listChainId: Number(edge.listChainId),
+    listContractAddress: edge.listContractAddress.toLowerCase() as Address,
+    listSlot: edge.listSlot.toString(),
+    sourceBlockNumber: edge.sourceBlockNumber.toString(),
+    sourceTransactionHash: edge.sourceTransactionHash.toLowerCase() as Hex,
+    sourceTransactionIndex: Number(edge.sourceTransactionIndex),
+    sourceLogIndex: Number(edge.sourceLogIndex),
+  }
+}
+
+function hasSameSourceMetadata(a: CanonicalFollowEdge, b: CanonicalFollowEdge): boolean {
+  return a.listChainId === b.listChainId
+    && a.listContractAddress === b.listContractAddress
+    && a.listSlot === b.listSlot
+    && a.sourceBlockNumber === b.sourceBlockNumber
+    && a.sourceTransactionHash === b.sourceTransactionHash
+    && a.sourceTransactionIndex === b.sourceTransactionIndex
+    && a.sourceLogIndex === b.sourceLogIndex
+}
+
+/**
+ * Applies the diff between a follower's stored and newly derived edges:
+ * unchanged rows keep their updated_at, same-key rows with changed source
+ * metadata are updated by PK, removed rows are deleted by PK, and added rows
+ * are inserted. Returns the per-follower stats plus the wallets whose edge
+ * membership changed and therefore need a follow-count recomputation.
+ */
+async function applyFollowerEdgeDiff(input: {
+  tx: Transaction
+  followerAddress: Address
+  storedRows: readonly QueryResultRow[]
+  edges: readonly MaterializedFollowEdge[]
+  now: string
+}): Promise<{ stats: FollowerEdgeReplacementStats; countWallets: Set<Address> }> {
+  const follower = input.followerAddress
+  const derived = new Map<Address, CanonicalFollowEdge>()
+  for (const edge of input.edges) {
+    const canonical = canonicalDerivedFollowEdge(edge)
+    derived.set(canonical.followedAddress, canonical)
+  }
+  const stats = zeroFollowerEdgeReplacementStats()
+  stats.derived = derived.size
+  const stored = new Map<Address, CanonicalFollowEdge | null>()
+  for (const row of input.storedRows) {
+    if (typeof row.followed_address !== "string") continue
+    stored.set(row.followed_address.toLowerCase() as Address, canonicalStoredFollowEdge(row))
+  }
+
+  const metadataUpdates: CanonicalFollowEdge[] = []
+  const removed: Address[] = []
+  for (const [followedAddress, storedEdge] of stored) {
+    const derivedEdge = derived.get(followedAddress)
+    if (!derivedEdge) {
+      removed.push(followedAddress)
+      continue
+    }
+    derived.delete(followedAddress)
+    if (storedEdge && hasSameSourceMetadata(storedEdge, derivedEdge)) {
+      stats.unchanged += 1
+    } else {
+      metadataUpdates.push(derivedEdge)
+    }
+  }
+  const added = [...derived.values()]
+
+  for (const edge of metadataUpdates) {
+    await input.tx.execute({
+      sql: `
+        UPDATE efp_effective_follows
+        SET list_chain_id = ?3,
+            list_contract_address = ?4,
+            list_slot = ?5,
+            source_block_number = ?6,
+            source_transaction_hash = ?7,
+            source_transaction_index = ?8,
+            source_log_index = ?9,
+            updated_at = ?10
+        WHERE follower_address = ?1 AND followed_address = ?2
+      `,
+      args: [
+        follower,
+        edge.followedAddress,
+        edge.listChainId,
+        edge.listContractAddress,
+        edge.listSlot,
+        edge.sourceBlockNumber,
+        edge.sourceTransactionHash,
+        edge.sourceTransactionIndex,
+        edge.sourceLogIndex,
+        input.now,
+      ],
+    })
+  }
+  stats.metadataUpdated = metadataUpdates.length
+
+  for (const batch of chunks(removed)) {
+    const placeholders = batch.map((_, index) => `?${index + 2}`).join(", ")
+    await input.tx.execute({
+      sql: `
+        DELETE FROM efp_effective_follows
+        WHERE follower_address = ?1 AND followed_address IN (${placeholders})
+      `,
+      args: [follower, ...batch],
+    })
+  }
+  stats.deleted = removed.length
+
+  for (const batch of chunks(added)) {
     const args: (string | number)[] = []
-    const values = batch.map(({ follower, followedAddress, edge }) => {
+    const values = batch.map((edge) => {
       const offset = args.length
       args.push(
         follower,
-        followedAddress,
+        edge.followedAddress,
         edge.listChainId,
-        edge.listContractAddress.toLowerCase(),
-        edge.listSlot.toString(),
-        edge.sourceBlockNumber.toString(),
-        edge.sourceTransactionHash.toLowerCase(),
+        edge.listContractAddress,
+        edge.listSlot,
+        edge.sourceBlockNumber,
+        edge.sourceTransactionHash,
         edge.sourceTransactionIndex,
         edge.sourceLogIndex,
         input.now,
@@ -523,18 +574,146 @@ export async function replaceFollowersEffectiveEdgesInTransaction(input: {
       args,
     })
   }
-  await recomputeWalletCounts(
-    input.tx,
-    [...affected],
-    input.projectionRevision,
-    input.now,
-  )
+  stats.inserted = added.length
+
+  const countWallets = new Set<Address>()
+  if (removed.length > 0 || added.length > 0) countWallets.add(follower)
+  for (const target of removed) countWallets.add(target)
+  for (const edge of added) countWallets.add(edge.followedAddress)
+  return { stats, countWallets }
+}
+
+/**
+ * Atomically applies newly derived effective edges for one follower as a diff
+ * against the stored rows. This is the only primary-list repoint path:
+ * removals and inserts commit in the same tx, and follow counts are
+ * recomputed only for the follower (iff its edge set changed) plus the
+ * removed/added targets, so unchanged and metadata-only replays skip
+ * efp_follow_counts writes entirely.
+ */
+export async function replaceFollowerEffectiveEdges(input: {
+  client: Client
+  followerAddress: Address
+  edges: readonly MaterializedFollowEdge[]
+  projectionRevision: bigint
+  now: string
+}): Promise<FollowerEdgeReplacementStats> {
+  const follower = input.followerAddress.toLowerCase() as Address
+  return await withTransaction(input.client, "write", async (tx) => {
+    return await replaceFollowerEffectiveEdgesInTransaction({
+      tx,
+      followerAddress: follower,
+      edges: input.edges,
+      projectionRevision: input.projectionRevision,
+      now: input.now,
+    })
+  })
+}
+
+export async function replaceFollowerEffectiveEdgesInTransaction(input: {
+  tx: Transaction
+  followerAddress: Address
+  edges: readonly MaterializedFollowEdge[]
+  projectionRevision: bigint
+  now: string
+}): Promise<FollowerEdgeReplacementStats> {
+  const follower = input.followerAddress.toLowerCase() as Address
+  const old = await input.tx.execute({
+    sql: `
+      SELECT followed_address, list_chain_id, list_contract_address, list_slot,
+             source_block_number, source_transaction_hash,
+             source_transaction_index, source_log_index
+      FROM efp_effective_follows
+      WHERE follower_address = ?1
+    `,
+    args: [follower],
+  })
+  const { stats, countWallets } = await applyFollowerEdgeDiff({
+    tx: input.tx,
+    followerAddress: follower,
+    storedRows: old.rows,
+    edges: input.edges,
+    now: input.now,
+  })
+  if (countWallets.size > 0) {
+    await recomputeWalletCounts(
+      input.tx,
+      [...countWallets],
+      input.projectionRevision,
+      input.now,
+    )
+    stats.countsRecomputed = countWallets.size
+  }
+  return stats
+}
+
+export async function replaceFollowersEffectiveEdgesInTransaction(input: {
+  tx: Transaction
+  edgesByFollower: ReadonlyMap<Address, readonly MaterializedFollowEdge[]>
+  projectionRevision: bigint
+  now: string
+}): Promise<FollowerEdgeReplacementStats> {
+  const edgesByFollower = new Map<Address, readonly MaterializedFollowEdge[]>()
+  for (const [follower, edges] of input.edgesByFollower) {
+    edgesByFollower.set(follower.toLowerCase() as Address, edges)
+  }
+  const aggregate = zeroFollowerEdgeReplacementStats()
+  const followers = [...edgesByFollower.keys()]
+  if (followers.length === 0) return aggregate
+  const followerPlaceholders = followers.map((_, index) => `?${index + 1}`).join(", ")
+  const old = await input.tx.execute({
+    sql: `
+      SELECT follower_address, followed_address, list_chain_id,
+             list_contract_address, list_slot, source_block_number,
+             source_transaction_hash, source_transaction_index, source_log_index
+      FROM efp_effective_follows
+      WHERE follower_address IN (${followerPlaceholders})
+    `,
+    args: followers,
+  })
+  const storedRowsByFollower = new Map<Address, QueryResultRow[]>()
+  for (const row of old.rows) {
+    if (typeof row.follower_address !== "string") continue
+    const follower = row.follower_address.toLowerCase() as Address
+    const rows = storedRowsByFollower.get(follower) ?? []
+    rows.push(row)
+    storedRowsByFollower.set(follower, rows)
+  }
+
+  const countWallets = new Set<Address>()
+  for (const [follower, edges] of edgesByFollower) {
+    const { stats, countWallets: followerWallets } = await applyFollowerEdgeDiff({
+      tx: input.tx,
+      followerAddress: follower,
+      storedRows: storedRowsByFollower.get(follower) ?? [],
+      edges,
+      now: input.now,
+    })
+    aggregate.derived += stats.derived
+    aggregate.unchanged += stats.unchanged
+    aggregate.inserted += stats.inserted
+    aggregate.deleted += stats.deleted
+    aggregate.metadataUpdated += stats.metadataUpdated
+    for (const wallet of followerWallets) countWallets.add(wallet)
+  }
+  if (countWallets.size > 0) {
+    await recomputeWalletCounts(
+      input.tx,
+      [...countWallets],
+      input.projectionRevision,
+      input.now,
+    )
+    aggregate.countsRecomputed = countWallets.size
+  }
+  return aggregate
 }
 
 /**
  * Projection half of an indexer replay transaction. Call this through
  * replaceEfpIndexerRange.onRangeReplaced so old raw rows, replacement rows,
  * cursor movement, and full affected-follower replay commit atomically.
+ * Returns the aggregate of the per-follower differential replacement stats;
+ * watermark and state updates run even when every follower is unchanged.
  */
 export async function rebuildEfpProjectionAfterRangeReplacement(input: {
   tx: Transaction
@@ -546,7 +725,7 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
   appliedThroughBlockHash: Hex
   projectionRevision?: bigint
   now: string
-}): Promise<void> {
+}): Promise<EfpProjectionRebuildStats> {
   const state = await input.tx.execute(
     "SELECT projection_revision FROM efp_follow_projection_state WHERE projection_key = 'effective-graph'",
   )
@@ -635,17 +814,33 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
     }
   }
 
+  const aggregate: EfpProjectionRebuildStats = {
+    followers: 0,
+    derived: 0,
+    unchanged: 0,
+    inserted: 0,
+    deleted: 0,
+    metadataUpdated: 0,
+    countsRecomputed: 0,
+  }
   let blockedReason: string | null = null
   for (const follower of followers) {
     try {
       const edges = await deriveAuthoritativeFollowerEdges(input.tx, follower)
-      await replaceFollowerEffectiveEdgesInTransaction({
+      const stats = await replaceFollowerEffectiveEdgesInTransaction({
         tx: input.tx,
         followerAddress: follower,
         edges,
         projectionRevision,
         now: input.now,
       })
+      aggregate.followers += 1
+      aggregate.derived += stats.derived
+      aggregate.unchanged += stats.unchanged
+      aggregate.inserted += stats.inserted
+      aggregate.deleted += stats.deleted
+      aggregate.metadataUpdated += stats.metadataUpdated
+      aggregate.countsRecomputed += stats.countsRecomputed
     } catch (error) {
       blockedReason = error instanceof Error ? error.message : String(error)
     }
@@ -662,7 +857,7 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
       `,
       args: [blockedReason, input.now],
     })
-    return
+    return aggregate
   }
   await input.tx.execute({
     sql: `
@@ -693,6 +888,7 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
     `,
     args: [input.now],
   })
+  return aggregate
 }
 
 export async function findEfpFollowersAffectedByChain(input: {
