@@ -18,6 +18,7 @@ function relayClient(input?: {
   budgetDate?: string | null
   reservedCount?: number
   sponsoredCount?: number
+  verificationState?: string
 }): Client & { statements: InStatement[] } {
   const statements: InStatement[] = []
   let transactionNumber = 0
@@ -37,7 +38,7 @@ function relayClient(input?: {
               actor_wallet_address: VIEWER,
               attachment_kind: "embedded",
               source_provider: "privy",
-              verification_state: "verified",
+              verification_state: input?.verificationState ?? "verified",
               expires_at: "2026-07-29T00:00:00.000Z",
               status: "prepared",
               sponsored_transaction_count: input?.sponsoredCount ?? 0,
@@ -92,6 +93,33 @@ function relayClient(input?: {
 }
 
 describe("relaySponsoredFollowTransaction", () => {
+  test("sponsors an active embedded Privy wallet without human verification", async () => {
+    const client = relayClient({ verificationState: "unverified" })
+    const result = await relaySponsoredFollowTransaction({
+      actorUserId: "viewer",
+      client,
+      env: {
+        PRIVY_APP_ID: "app",
+        PRIVY_APP_SECRET: "secret",
+        EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT: "100",
+        EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION: "800",
+      } as Env,
+      now: new Date("2026-07-28T12:00:00.000Z"),
+      request: {
+        authorizationSignature: "signature",
+        requestExpiry: String(new Date("2026-07-28T12:15:00.000Z").getTime()),
+        intentId: `efw_${"b".repeat(32)}`,
+        transactionIndex: 0,
+        privyWalletId: "wallet-id",
+        walletAddress: VIEWER,
+        transaction: { data: DATA_ONE, to: RECORDS },
+      },
+      fetcher: async () => Response.json({ data: { hash: HASH } }),
+    })
+
+    expect(result.txHash).toBe(HASH)
+  })
+
   test("sponsors without an alert webhook and reserves both bootstrap transactions first", async () => {
     const client = relayClient()
     const result = await relaySponsoredFollowTransaction({
