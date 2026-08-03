@@ -19,6 +19,17 @@ Before collection can be enabled, reviewers must approve:
 4. the retention periods below; and
 5. the roles allowed to retrieve decision records.
 
+## Proposed targeting semantics
+
+Tiers select on passport nationality, not residence. Self and ZKPassport prove
+nationality; neither currently proves where a person lives. A holder of a
+United States passport living in Hanoi is therefore evaluated as United States
+nationality. This is expected behavior, not an edge case.
+
+Campaign creation and participant disclosure should say "by passport
+nationality" rather than "by country." Residence-based targeting is out of
+scope until an independently reviewed residence proof exists.
+
 ## Purpose limitation
 
 Nationality data may be used by rewards only to:
@@ -58,7 +69,11 @@ The proposed reward decision record is limited to:
   that it is necessary to enforce the borrowed-document threat model.
 
 The tier result must be sufficient to reproduce reward accounting without
-retaining the underlying nationality. Detailed provenance remains in the
+persisting a separate nationality field. That does not make a tier result
+non-sensitive: when a tier contains one country, or a small country set, the
+tier code is itself a nationality assertion or a close proxy. Tier decisions
+therefore inherit nationality-level handling, retention, access, and
+small-cohort protections. Detailed provenance remains in the
 identity-verification store under that domain's lifecycle and access policy.
 
 ## Proposed retention
@@ -68,7 +83,7 @@ These periods are defaults for approval, not active policy:
 | Record | Proposed retention | Deletion rule |
 | --- | --- | --- |
 | Retryable/no-tier evaluation | 30 days | Delete after 30 days or immediately when superseded by a final evaluation. |
-| Resolved tier decision | 180 days after campaign close | Delete the reward decision provenance; retain only ordinary financial/accounting records that do not reveal nationality. |
+| Resolved tier decision | 180 days after campaign close | Delete the reward decision provenance; retain only required financial/accounting records without copying nationality or identity provenance. |
 | Terminal binding-mismatch outcome | 180 days | Delete unless a documented abuse investigation places the record on a time-bounded legal/security hold. |
 | Aggregate product metrics | Indefinite only when non-identifying | Minimum cohort-size controls must prevent nationality or user reconstruction. |
 
@@ -82,6 +97,11 @@ because deletion automation failed.
   creators.
 - Users must receive a concise disclosure before nationality affects reward
   eligibility or amount.
+- The disclosure must explain that tier-dependent payout amounts are public on
+  the settlement chain. Anyone who correlates campaign terms, recipients, and
+  payout amounts may permanently infer a recipient's nationality class. The
+  database retention periods bound Pirate's decision-record exposure; they
+  cannot erase or prevent inference from an immutable public transfer.
 - Support may see the tier/outcome needed to answer a dispute, but not identity
   nullifiers, attestation payloads, or verification-session provenance.
 - Raw identity evidence remains restricted to the existing identity/privacy
@@ -98,18 +118,23 @@ identifier, named approver, and expiry.
 
 The privacy request workflow must be able to locate reward decision records by
 user identifier. Deleting eligible reward-decision provenance must not delete
-immutable on-chain transfers or ordinary accounting records, and those records
-must not retain nationality indirectly. Any legal or security hold must record
-its purpose, owner, scope, and expiry.
+immutable on-chain transfers or required accounting records. Those retained
+records must not copy nationality or identity provenance, although public
+tier-dependent transfer amounts may continue to support nationality-class
+inference. Any legal or security hold must record its purpose, owner, scope,
+and expiry.
 
 ## Activation checklist
 
 Collection stays paused until all items are complete:
 
-- [ ] Product approves nationality-versus-residence semantics.
+- [ ] Product approves passport-nationality semantics and the campaign UI uses
+      "by passport nationality" rather than ambiguous country/residence copy.
 - [ ] Compliance approves sanctions and restricted-jurisdiction behavior.
 - [ ] Privacy/legal approves purpose, disclosure, lawful basis, retention, and
       user-rights handling.
+- [ ] Participant disclosure explicitly covers permanent on-chain inference
+      from tier-dependent payout amounts.
 - [ ] Security approves the minimum binding-mismatch fields and access roles.
 - [ ] The schema is changed so rewards do not duplicate nationality or raw
       identity provenance.
