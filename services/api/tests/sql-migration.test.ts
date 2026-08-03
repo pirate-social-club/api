@@ -48,6 +48,26 @@ describe("sql migration helpers", () => {
     ])
   })
 
+  test("translates EFP recovery state and review deadlines for sqlite", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE efp_follow_write_intents
+        ADD COLUMN semantic_attempt_key TEXT,
+        ADD COLUMN sponsorship_budget_date DATE,
+        ADD COLUMN sponsorship_review_after TIMESTAMPTZ;
+    `)).toEqual([
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN semantic_attempt_key TEXT;",
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN sponsorship_budget_date TEXT;",
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN sponsorship_review_after TEXT;",
+    ])
+
+    expect(toSqliteCompatibleStatement(`
+      UPDATE efp_follow_write_intents
+      SET sponsorship_budget_date = CAST(updated_at AS DATE),
+          sponsorship_review_after = updated_at + INTERVAL '24 hours'
+      WHERE sponsorship_reserved_transaction_count > 0;
+    `)).toContain("sponsorship_review_after = datetime(updated_at, '+24 hours')")
+  })
+
   test("keeps dollar-quoted DO blocks intact so they can be skipped later", () => {
     const sql = `
       CREATE TABLE example (id TEXT PRIMARY KEY);
