@@ -10,7 +10,7 @@ import type { CommunityJobRepository } from "../communities/jobs/runner-types"
 import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import {
-  persistRewardNationalityBindingShadow,
+  persistRewardNationalityDecision,
   resolveRewardNationalityBinding,
   resolveRewardNationalityBindingShadow,
   type RewardNationalityShadowDecision,
@@ -564,7 +564,7 @@ export async function creditRewardCampaignQualification(input: {
         userId: input.candidate.userId,
         requiredProvider: campaignProvider,
       })
-      tierDecision = await persistRewardNationalityBindingShadow({
+      tierDecision = await persistRewardNationalityDecision({
         client: tx,
         rewardQualificationEventId: input.candidate.eventId,
         rewardCampaignId: campaignId,
@@ -595,13 +595,17 @@ export async function creditRewardCampaignQualification(input: {
       return { result: "budget", amountCents: 0 }
     }
     const projectionNow = input.currentTime?.() ?? input.now
+    const unresolvedTier = tiered && tierDecision?.retryability !== "resolved"
+    const holdsExposure = unresolvedTier
+      && tierDecision?.retryability === "retryable"
+      && identity !== null
     const pendingQualificationId = await ensureQualificationProjection({
       client: tx,
       candidate: input.candidate,
       campaignId,
       campaignEndsAt: text(campaignRow, "ends_at"),
-      amountCents: tiered && tierDecision?.retryability !== "resolved" ? maxClaim : amount,
-      exposureAmountCents: tiered && tierDecision?.retryability !== "resolved" ? maxClaim : null,
+      amountCents: unresolvedTier ? maxClaim : amount,
+      exposureAmountCents: holdsExposure ? maxClaim : null,
       now: projectionNow,
     })
     shadowContext.value = { campaignId, evaluatedAt: projectionNow }
@@ -636,11 +640,28 @@ export async function creditRewardCampaignQualification(input: {
         })
         return { result: "identity", amountCents: 0 }
       }
+      // A retryable nationality outcome may remain pending without consuming
+      // campaign capacity. Lot exposure is reserved only after the campaign's
+      // immutable provider has produced a verified unique-human identity.
+      if (!identity) {
+        await markQualificationPendingVerification({
+          client: tx, eventId: input.candidate.eventId, now: projectionNow,
+        })
+        return { result: "identity", amountCents: 0 }
+      }
       const exposed = await allocatePendingExposureAcrossContributionLots({
         client: tx, campaignId, pendingQualificationId,
         amountCents: maxClaim, exposedAt: projectionNow,
       })
-      if (!exposed) return { result: "funding_deferred", amountCents: 0 }
+      if (!exposed) {
+        await tx.execute({
+          sql: `UPDATE reward_pending_qualifications
+            SET exposure_amount_cents = NULL, updated_at = ?2
+            WHERE reward_qualification_event_id = ?1`,
+          args: [input.candidate.eventId, projectionNow],
+        })
+        return { result: "funding_deferred", amountCents: 0 }
+      }
       await markQualificationPendingVerification({ client: tx, eventId: input.candidate.eventId, now: projectionNow })
       return { result: "identity", amountCents: 0 }
     }
@@ -871,7 +892,7 @@ export async function creditRewardCampaignQualification(input: {
   // preventing tier amounts from reaching this path.
   if (shadowContext.value && shadowDecision) {
     try {
-      await persistRewardNationalityBindingShadow({
+      await persistRewardNationalityDecision({
         client: input.client,
         rewardQualificationEventId: input.candidate.eventId,
         rewardCampaignId: shadowContext.value.campaignId,

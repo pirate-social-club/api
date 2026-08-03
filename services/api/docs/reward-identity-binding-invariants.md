@@ -57,7 +57,11 @@ revoke an existing selection or its accepted evidence. Revocation, nullifier
 status, provider/user mismatch, and conflicting bound nationalities still fail
 closed.
 
-For tiered pools, evaluation is part of claim resolution: unresolved claims
-hold `max_claim_cents` against contribution lots belonging to that pool;
+For tiered pools, evaluation is part of claim resolution and is independent of
+`REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED`. A live tiered claim persists the
+approved minimal `reward_nationality_decisions` record even while optional
+uniform-pool shadow collection remains paused. A retryable unresolved claim
+holds `max_claim_cents` against contribution lots belonging to that pool only
+after the campaign provider resolves a verified unique-human identity;
 resolved claims release that exposure and reserve the immutable resolved
-amount. Uniform pools retain the non-blocking shadow path.
+amount. Uniform pools retain the flag-gated, non-blocking shadow path.

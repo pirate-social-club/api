@@ -28,6 +28,12 @@ evidence resolution and persistence without changing uniform reward accounting,
 qualification, or settlement. Staging and production are explicitly configured
 `false`.
 
+This flag pauses only diagnostic shadow writes for uniform pools. Once tiered
+pool funding is enabled, claim resolution necessarily writes the policy's
+minimal, versioned `reward_nationality_decisions` record; it does not persist
+nationality or identity provenance, and it does not mean shadow collection was
+re-enabled.
+
 Re-enabling collection requires an approved data policy and a reviewed config
 change. Retain-versus-delete remains explicitly undecided.
 

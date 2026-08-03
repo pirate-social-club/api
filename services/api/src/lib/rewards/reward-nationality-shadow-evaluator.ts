@@ -347,7 +347,7 @@ export async function resolveRewardNationalityBindingShadow(input: {
   })
 }
 
-export async function persistRewardNationalityBindingShadow(input: {
+export async function persistRewardNationalityDecision(input: {
   client: Executor
   rewardQualificationEventId: string
   rewardCampaignId: string
@@ -446,5 +446,5 @@ export async function evaluateRewardNationalityBindingShadow(input: {
   now: string
 }): Promise<RewardNationalityShadowDecision> {
   const decision = await resolveRewardNationalityBindingShadow(input)
-  return persistRewardNationalityBindingShadow({ ...input, decision })
+  return persistRewardNationalityDecision({ ...input, decision })
 }
