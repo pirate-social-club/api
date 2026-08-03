@@ -1263,8 +1263,8 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         reward_pending_qualification_id, reward_campaign_id,
         reward_campaign_funding_effect_id, amount_cents, exposed_at
       ) VALUES (
-        'rpq_cross_pool_0189', 'rcp_sequential_study_pg',
-        'rcf_seed_rcp_sequential_study_pg', 40, $1
+        'rpq_cross_pool_0189', 'rcp_other_pool_0189',
+        'rcf_other_pool_0189', 40, $1
       )
     `, [NOW]))
     expect(crossPool).toContain("reward_pending_qualification_funding_exposures")
