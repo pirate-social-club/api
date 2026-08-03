@@ -28,6 +28,11 @@ function users(): UserRepository {
 function client(input?: {
   reflected?: boolean
   resumableRow?: Record<string, unknown>
+  standing?: {
+    attachment_kind: string
+    source_provider: string
+    verification_state: string
+  }
 }): Client & { inserts: InStatement[] } {
   const inserts: InStatement[] = []
   return {
@@ -35,7 +40,13 @@ function client(input?: {
     async execute(statement): Promise<QueryResult> {
       const query = typeof statement === "string" ? statement : statement.sql
       if (query.includes("FROM wallet_attachments")) {
-        return { rows: [{ attachment_kind: "embedded", source_provider: "privy", verification_state: "verified" }] }
+        return {
+          rows: [input?.standing ?? {
+            attachment_kind: "embedded",
+            source_provider: "privy",
+            verification_state: "verified",
+          }],
+        }
       }
       if (query.includes("COUNT(*) AS write_count")) return { rows: [{ write_count: 0 }] }
       if (query.includes("WHERE actor_user_id = ?1 AND idempotency_key")) return { rows: [] }
@@ -62,6 +73,34 @@ const ENV = {
 } as Env
 
 describe("prepareProfileFollowWrite", () => {
+  test("refuses an unverified embedded Privy wallet before preparing an unpayable fallback", async () => {
+    const write = prepareProfileFollowWrite({
+      actorUserId: "viewer",
+      client: client({
+        standing: {
+          attachment_kind: "embedded",
+          source_provider: "privy",
+          verification_state: "unverified",
+        },
+      }),
+      desiredFollowing: true,
+      env: ENV,
+      idempotencyKey: "idem-unverified",
+      targetPublicUserId: "usr_target",
+      targetUserId: "target",
+      users: users(),
+      resolvePrimaryList: async () => {
+        throw new Error("resolver must not run")
+      },
+    })
+
+    await expect(write).rejects.toThrow("Verify your account before following profiles")
+    await write.catch((error) => {
+      expect(error).toBeInstanceOf(HttpError)
+      expect((error as HttpError).code).toBe("verification_required")
+    })
+  })
+
   test("returns idempotent success without preparing a transaction when already reflected", async () => {
     const result = await prepareProfileFollowWrite({
       actorUserId: "viewer",

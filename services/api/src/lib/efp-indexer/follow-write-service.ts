@@ -24,6 +24,7 @@ import {
   eligibilityFailed,
   rateLimited,
   retryableConflictError,
+  verificationRequired,
 } from "../errors"
 import type { Client, QueryResultRow } from "../sql-client"
 import type { UserRepository } from "../auth/repositories"
@@ -197,9 +198,12 @@ async function requireActorStanding(input: {
   })
   const row = result.rows[0]
   if (!row) throw eligibilityFailed("A current primary wallet is required to follow profiles")
-  return row.attachment_kind === "embedded"
+  const isEmbeddedPrivyWallet = row.attachment_kind === "embedded"
     && row.source_provider === "privy"
-    && row.verification_state === "verified"
+  if (isEmbeddedPrivyWallet && row.verification_state !== "verified") {
+    throw verificationRequired("Verify your account before following profiles")
+  }
+  return isEmbeddedPrivyWallet
 }
 
 async function enforceAccountRateLimit(input: {
