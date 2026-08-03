@@ -152,6 +152,9 @@ export async function executeBookingOperatorEffect(ctx: BookingOperatorEffectCon
     // mirror records the terminal reason. Never create another transaction.
     throw settlementError(`Booking settlement terminal at coordinator (${s.state}); reconciliation required`, "terminal")
   }
+  if (s.state === "preparation_parked") {
+    throw settlementError("Booking settlement preparation parked; operator recovery required", "terminal")
+  }
   if (s.state === "reserving" || s.state === "failed_preparation") {
     // Nothing broadcast; retryable. Leave records submitted for a later reconcile.
     throw settlementError("Booking settlement is not yet broadcast (retryable)", "pending")

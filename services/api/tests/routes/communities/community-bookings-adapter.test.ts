@@ -147,4 +147,15 @@ describe("booking custody adapter → coordinator (D5 F2)", () => {
     expect(row?.coordinator_state).toBe(state)
     expect(calls.settle).toBe(1) // never re-attempted within the call
   })
+
+  test("preparation_parked requires operator recovery and remains submitted", async () => {
+    const { ctx, communityId, root } = await setup()
+    const calls = mockCoordinator({ settle: () => res("preparation_parked", null, null) })
+    await expect(executeBookingOperatorEffect(adapterCtx(ctx, communityId), EFFECT))
+      .rejects.toThrow(/parked|operator recovery/i)
+    const row = await ledgerRow(root, communityId)
+    expect(row?.status).toBe("submitted")
+    expect(row?.coordinator_state).toBe("preparation_parked")
+    expect(calls.settle).toBe(1)
+  })
 })

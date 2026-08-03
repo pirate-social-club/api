@@ -128,6 +128,9 @@ export async function executeGlobalBookingOperatorEffect(
   if (settled.state === "replaced" || settled.state === "failed_onchain") {
     throw settlementError(`Booking settlement terminal at coordinator (${settled.state}); reconciliation required`, "terminal");
   }
+  if (settled.state === "preparation_parked") {
+    throw settlementError("Booking settlement preparation parked; operator recovery required", "terminal");
+  }
   if (settled.state === "reserving" || settled.state === "failed_preparation") {
     throw settlementError("Booking settlement is not yet broadcast (retryable)", "pending");
   }
@@ -203,6 +206,9 @@ export async function executeGlobalBookingOrphanPaymentRefund(
   }
   if (settled.state === "replaced" || settled.state === "failed_onchain") {
     throw settlementError(`Booking orphan payment refund terminal at coordinator (${settled.state}); reconciliation required`, "terminal");
+  }
+  if (settled.state === "preparation_parked") {
+    throw settlementError("Booking settlement preparation parked; operator recovery required", "terminal");
   }
   if (settled.state === "reserving" || settled.state === "failed_preparation") {
     throw settlementError("Booking orphan payment refund is not yet broadcast (retryable)", "pending");

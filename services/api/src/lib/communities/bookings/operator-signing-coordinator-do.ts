@@ -1100,7 +1100,15 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const attemptCount = row.attempt_count + 1
     const diagnostic = boundedPreparationDiagnostic(error, Date.now())
     const releaseUnsentNonce = row.signed_tx == null && row.tx_hash == null
-    const park = shouldParkUnsentPreparation(row, diagnostic, attemptCount)
+    const configuredRewardsBackend = String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim()
+    const isLitRewardsPreparation = this.operatorKind(row) === "rewards" && (
+      configuredRewardsBackend === "lit_vault"
+      || diagnostic.stage === "lit_request_dispatch"
+      || diagnostic.stage === "lit_response"
+      || diagnostic.litErrorToken != null
+    )
+    const park = isLitRewardsPreparation
+      && shouldParkUnsentPreparation(row, diagnostic, attemptCount)
     return this.cas(row.idempotency_key, row.version, {
       attempt_count: attemptCount,
       state: park ? "preparation_parked" : row.state,
