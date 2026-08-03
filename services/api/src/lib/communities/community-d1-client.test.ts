@@ -29,6 +29,10 @@ function fakeShard() {
         value: { bindingName: "DB_CMTY_NEW", shardWorkerId: "shard-1", allocated: true },
       }
     },
+    communityD1LookupBinding: async (input: any) => {
+      calls.push({ m: "communityD1LookupBinding", input })
+      return { ok: true as const, value: { bindingName: null, shardWorkerId: "shard-1" } }
+    },
     communityD1LoadSnapshot: async (input: any) => {
       calls.push({ m: "communityD1LoadSnapshot", input })
       return { ok: true as const, value: { rowsAffected: input.statements.length, loaded: true } }

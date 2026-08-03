@@ -17,6 +17,8 @@ import type {
   ShardBindResponse,
   ShardLoadSnapshotRequest,
   ShardLoadSnapshotResponse,
+  ShardLookupBindingRequest,
+  ShardLookupBindingResponse,
   ShardQueryResult,
   ShardReadRequest,
   ShardResult,
@@ -30,6 +32,7 @@ import {
   runShardGetPoolRow,
   runShardDecommission,
   runShardListStaleUnloadedPoolRows,
+  runShardLookupBinding,
   runShardLoadSnapshot,
   runShardPoolStats,
   runShardRead,
@@ -92,6 +95,12 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
    */
   communityD1Bind(input: ShardBindRequest): Promise<ShardResult<ShardBindResponse>> {
     return runShardBind(this.env, input)
+  }
+
+  communityD1LookupBinding(
+    input: ShardLookupBindingRequest,
+  ): Promise<ShardResult<ShardLookupBindingResponse>> {
+    return runShardLookupBinding(this.env, input)
   }
 
   /**

@@ -80,6 +80,47 @@ describe("buildReconcilerDeps", () => {
     })
     expect(executeCalls[0]?.args).toEqual(["DB_CMTY_ACTIVE", "DB_CMTY_ORPHAN"])
   })
+
+  test("scopes routing claims and stuck rows to the target pool", async () => {
+    const client = {
+      execute: async (statement: { sql: string; args?: unknown[] }) => {
+        if (statement.sql.includes("provisioning_state = 'provisioning'")) {
+          return { rows: [
+            {
+              community_id: "cmt_primary",
+              binding_name: "DB_CMTY_0001",
+              shard_worker_id: "shard-primary",
+              region: "eeur",
+            },
+            {
+              community_id: "cmt_secondary",
+              binding_name: "DB_CMTY_0001",
+              shard_worker_id: "shard-secondary",
+              region: "eeur",
+            },
+          ] }
+        }
+        if (statement.sql.includes("binding_name IN")) return { rows: [] }
+        return { rows: [] }
+      },
+    } as unknown as Client
+    const shard = {
+      communityD1ListStaleUnloadedPoolRows: async () => ({ ok: true as const, value: { rows: [] } }),
+    } as unknown as NonNullable<Env["COMMUNITY_D1_SHARD"]>
+    const deps = buildReconcilerDeps(
+      { SHARD_ADMIN_TOKEN: "adm_test" } as Env,
+      client,
+      "2026-06-20T00:15:00.000Z",
+      { shardWorkerId: "shard-secondary", bindingName: "SECONDARY", shard },
+    )
+
+    expect(await deps.findStuckProvisioningBindings()).toEqual([{
+      communityId: "cmt_secondary",
+      bindingName: "DB_CMTY_0001",
+      shardWorkerId: "shard-secondary",
+      region: "eeur",
+    }])
+  })
 })
 
 describe("reportD1ReconcilerSweepHealth", () => {

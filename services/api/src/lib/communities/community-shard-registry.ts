@@ -1,7 +1,21 @@
+import type { ShardRpc } from "@pirate/api-shared"
 import type { Env } from "../../env"
 import { HttpError } from "../errors"
 
-type ShardRegistryEnv = Pick<Env, "COMMUNITY_D1_SHARD" | "COMMUNITY_D1_SHARD_ROUTES">
+type ShardRegistryEnv = Pick<
+  Env,
+  "COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID" | "COMMUNITY_D1_SHARD" | "COMMUNITY_D1_SHARD_ROUTES"
+>
+
+export type ConfiguredCommunityShard = {
+  shardWorkerId: string
+  bindingName: string
+  shard: ShardRpc
+}
+
+export type AllocationCommunityShard = Omit<ConfiguredCommunityShard, "shardWorkerId"> & {
+  shardWorkerId: string | null
+}
 
 const routeCache = new WeakMap<object, { raw: string; routes: Record<string, string> }>()
 
@@ -59,4 +73,62 @@ export function resolveCommunityShardRpc(env: ShardRegistryEnv, shardWorkerId: s
     )
   }
   return shard as NonNullable<Env["COMMUNITY_D1_SHARD"]>
+}
+
+/** Enumerate every configured shard Worker, validating every named binding. */
+export function listConfiguredCommunityShards(env: ShardRegistryEnv): ConfiguredCommunityShard[] {
+  return Object.entries(configuredRoutes(env))
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([shardWorkerId, bindingName]) => ({
+      shardWorkerId,
+      bindingName,
+      shard: resolveCommunityShardRpc(env, shardWorkerId),
+    }))
+}
+
+/**
+ * Resolve the sole pool allowed to allocate new communities.
+ *
+ * A single configured route is unambiguous and remains backwards-compatible.
+ * Once multiple pools exist, an explicit selector is mandatory. This is
+ * intentionally not a capacity-based fallback: changing capacity between two
+ * retries must never move an in-flight community to another pool.
+ */
+export function resolveCommunityAllocationShard(env: ShardRegistryEnv): AllocationCommunityShard {
+  const shards = listConfiguredCommunityShards(env)
+  const selectedWorkerId = String(env.COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID ?? "").trim()
+  if (selectedWorkerId) {
+    const selected = shards.find((entry) => entry.shardWorkerId === selectedWorkerId)
+    if (!selected) {
+      throw new HttpError(
+        503,
+        "d1_allocation_shard_not_configured",
+        `Allocation shard Worker ${selectedWorkerId} is not configured in COMMUNITY_D1_SHARD_ROUTES`,
+        false,
+      )
+    }
+    return selected
+  }
+  if (shards.length === 1) return shards[0]!
+  if (shards.length > 1) {
+    throw new HttpError(
+      503,
+      "d1_allocation_shard_ambiguous",
+      "COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID is required when multiple D1 shard routes are configured",
+      false,
+    )
+  }
+  if (env.COMMUNITY_D1_SHARD) {
+    return {
+      shardWorkerId: null,
+      bindingName: "COMMUNITY_D1_SHARD",
+      shard: env.COMMUNITY_D1_SHARD,
+    }
+  }
+  throw new HttpError(
+    503,
+    "d1_allocation_shard_not_configured",
+    "No D1 shard route is configured for allocation",
+    false,
+  )
 }

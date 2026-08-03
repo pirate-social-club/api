@@ -209,6 +209,93 @@ describe("d1NativeProvisioningBackend", () => {
     })
   })
 
+  test("provision allocates only from the explicitly selected pool", async () => {
+    const primary = {
+      async communityD1LookupBinding() {
+        return { ok: true as const, value: { bindingName: null, shardWorkerId: "community-d1-shard-primary" } }
+      },
+      async communityD1Bind() {
+        throw new Error("primary pool must not be called")
+      },
+    } as unknown as ShardRpc
+    const secondary = {
+      async communityD1LookupBinding() {
+        return { ok: true as const, value: { bindingName: null, shardWorkerId: "community-d1-shard-secondary" } }
+      },
+      async communityD1Bind() {
+        return { ok: false as const, code: "shard_pool_exhausted" as const, message: "secondary empty" }
+      },
+    } as unknown as ShardRpc
+    const envWithPools = {
+      ...buildEnv({ COMMUNITY_D1_SHARD_REGION: "weur" }),
+      COMMUNITY_D1_SHARD: primary,
+      COMMUNITY_D1_SHARD_SECONDARY: secondary,
+      COMMUNITY_D1_SHARD_ROUTES: JSON.stringify({
+        "community-d1-shard-primary": "COMMUNITY_D1_SHARD",
+        "community-d1-shard-secondary": "COMMUNITY_D1_SHARD_SECONDARY",
+      }),
+      COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID: "community-d1-shard-secondary",
+    } as unknown as Env
+    await expect(resolveCommunityProvisioningBackend(envWithPools, { hasNamespace: false }).provision({
+      env: envWithPools,
+      communityRepository: {} as CommunityProvisioningRepository,
+      body: {} as never,
+      auth: {} as never,
+      communityId: "cmt_secondary",
+      namespaceVerificationId: null,
+      routeSlug: null,
+    })).rejects.toMatchObject({ code: "d1_pool_exhausted", status: 503 })
+  })
+
+  test("provision resumes an existing allocation from a non-selected pool", async () => {
+    let primaryLoads = 0
+    const primary = {
+      async communityD1LookupBinding() {
+        return {
+          ok: true as const,
+          value: { bindingName: "DB_CMTY_EXISTING", shardWorkerId: "community-d1-shard-primary" },
+        }
+      },
+      async communityD1LoadSnapshot() {
+        primaryLoads += 1
+        return {
+          ok: false as const,
+          code: "shard_snapshot_mismatch" as const,
+          message: "existing allocation reached",
+        }
+      },
+    } as unknown as ShardRpc
+    const secondary = {
+      async communityD1LookupBinding() {
+        return { ok: true as const, value: { bindingName: null, shardWorkerId: "community-d1-shard-secondary" } }
+      },
+      async communityD1Bind() {
+        throw new Error("selected pool must not allocate a second binding")
+      },
+    } as unknown as ShardRpc
+    const envWithPools = {
+      ...buildEnv({ COMMUNITY_D1_SHARD_REGION: "weur" }),
+      COMMUNITY_D1_SHARD: primary,
+      COMMUNITY_D1_SHARD_SECONDARY: secondary,
+      COMMUNITY_D1_SHARD_ROUTES: JSON.stringify({
+        "community-d1-shard-primary": "COMMUNITY_D1_SHARD",
+        "community-d1-shard-secondary": "COMMUNITY_D1_SHARD_SECONDARY",
+      }),
+      COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID: "community-d1-shard-secondary",
+    } as unknown as Env
+
+    await expect(resolveCommunityProvisioningBackend(envWithPools, { hasNamespace: false }).provision({
+      env: envWithPools,
+      communityRepository: {} as CommunityProvisioningRepository,
+      body: {} as never,
+      auth: {} as never,
+      communityId: "cmt_existing_primary",
+      namespaceVerificationId: null,
+      routeSlug: null,
+    })).rejects.toMatchObject({ code: "d1_snapshot_mismatch", status: 409 })
+    expect(primaryLoads).toBe(1)
+  })
+
   test("surfaces a committed bootstrap digest mismatch distinctly", async () => {
     const fakeShard = {
       async communityD1Bind() {

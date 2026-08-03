@@ -53,6 +53,53 @@ describe("health route", () => {
     expect(response.headers.get("cache-control")).toBe("no-store")
   })
 
+  test("GET /health/provisioning reports every pool and gates on the selected allocation pool", async () => {
+    const primary = {
+      communityD1Version: async () => shardVersion,
+      communityD1PoolStats: async () => ({
+        ok: true as const,
+        value: { total: 20, allocated: 12, free: 8, quarantined: 0 },
+      }),
+    }
+    const secondary = {
+      communityD1Version: async () => shardVersion,
+      communityD1PoolStats: async () => ({
+        ok: true as const,
+        value: { total: 10, allocated: 3, free: 7, quarantined: 0 },
+      }),
+    }
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "2",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: primary,
+      COMMUNITY_D1_SHARD_SECONDARY: secondary,
+      COMMUNITY_D1_SHARD_ROUTES: JSON.stringify({
+        "shard-primary": "COMMUNITY_D1_SHARD",
+        "shard-secondary": "COMMUNITY_D1_SHARD_SECONDARY",
+      }),
+      COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID: "shard-secondary",
+    } as never)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      allocation_shard_worker_id: "shard-secondary",
+      pool_capacity: { total: 30, allocated: 15, free: 15, quarantined: 0 },
+      allocation_pool_capacity: { total: 10, allocated: 3, free: 7, quarantined: 0 },
+      pool_capacities: [
+        { shardWorkerId: "shard-primary", stats: { free: 8 } },
+        { shardWorkerId: "shard-secondary", stats: { free: 7 } },
+      ],
+      shard_versions: [
+        { shardWorkerId: "shard-primary", version: shardVersion },
+        { shardWorkerId: "shard-secondary", version: shardVersion },
+      ],
+    })
+  })
+
   // Low-but-nonzero capacity is a WARNING. It must NOT fail this probe: deploy
   // smokes gate on it, and a warning that blocks every deploy is what kept web
   // off production for a full day on 2026-07-13. `healthy` stays false so the

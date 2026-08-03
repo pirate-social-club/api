@@ -9,6 +9,8 @@ import {
   type ShardBindRequest,
   type ShardLoadSnapshotRequest,
   type ShardLoadSnapshotResponse,
+  type ShardLookupBindingRequest,
+  type ShardLookupBindingResponse,
   type ShardBindResponse,
   type ShardError,
   type ShardQueryResult,
@@ -615,6 +617,31 @@ export async function runShardBind(
     SHARD_READ_ERROR.POOL_WRITE_CONFLICT,
     "d1_pool allocator exhausted retries on optimistic-lock conflict",
   )
+}
+
+/** Read-only idempotency probe used by a multi-pool allocator before claiming capacity. */
+export async function runShardLookupBinding(
+  env: ShardEnv,
+  input: ShardLookupBindingRequest,
+): Promise<ShardResult<ShardLookupBindingResponse>> {
+  const pool = env.D1_POOL
+  if (!pool) {
+    return err(
+      SHARD_READ_ERROR.UNKNOWN_BINDING,
+      "D1_POOL binding is not configured on this shard",
+    )
+  }
+  const existing = await pool
+    .prepare("SELECT binding_name FROM d1_pool WHERE community_id = ?1")
+    .bind(input.communityId)
+    .first()
+  return {
+    ok: true,
+    value: {
+      bindingName: existing ? String((existing as { binding_name: string }).binding_name) : null,
+      shardWorkerId: String(env.COMMUNITY_D1_SHARD_WORKER_ID ?? "community-d1-shard-staging"),
+    },
+  }
 }
 
 /**
