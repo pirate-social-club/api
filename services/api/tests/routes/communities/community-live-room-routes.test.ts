@@ -3046,6 +3046,12 @@ describe("community live-room routes", () => {
     try {
       const owner = await exchangeJwt(ctx.env, "live-room-included-replay-owner")
       await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      await insertTestWalletAttachment({
+        client: ctx.client,
+        userId: owner.userId,
+        walletAttachmentId: "wal_live_room_included_replay_owner",
+        walletAddress: "0x7100000000000000000000000000000000000070",
+      })
       const buyer = await exchangeJwt(ctx.env, "live-room-included-replay-buyer")
       await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
       const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
@@ -3566,6 +3572,12 @@ describe("community live-room routes", () => {
     try {
       const owner = await exchangeJwt(ctx.env, "live-room-paid-replay-owner")
       await completeUniqueHumanVerification(ctx.env, owner.accessToken)
+      await insertTestWalletAttachment({
+        client: ctx.client,
+        userId: owner.userId,
+        walletAttachmentId: "wal_live_room_paid_replay_owner",
+        walletAddress: "0x7200000000000000000000000000000000000070",
+      })
       const buyer = await exchangeJwt(ctx.env, "live-room-paid-replay-buyer")
       await completeUniqueHumanVerification(ctx.env, buyer.accessToken)
       const communityId = await createTestCommunity({ env: ctx.env, accessToken: owner.accessToken })
