@@ -4,6 +4,7 @@ import type { Env } from "../../../env"
 import type { RewardVaultReceiptDecision } from "../../rewards/reward-vault-receipt-decision"
 import { badRequestError, conflictError } from "../../errors"
 import { captureScheduledWarning } from "../../ops-alerts/scheduled"
+import { resolveRewardsSettlementBackend } from "../../rewards/reward-vault-lit-config"
 
 const SIGNING_CLAIM_TTL_MS = 60_000
 const BROADCAST_RECONCILE_DELAY_MS = 15_000
@@ -1004,9 +1005,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private usesRewardVault(): boolean {
-    return ["lit_vault", "eoa_vault"].includes(
-      String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim(),
-    )
+    return ["lit_vault", "eoa_vault"].includes(resolveRewardsSettlementBackend(this.env))
   }
 
   /**
@@ -1100,7 +1099,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const attemptCount = row.attempt_count + 1
     const diagnostic = boundedPreparationDiagnostic(error, Date.now())
     const releaseUnsentNonce = row.signed_tx == null && row.tx_hash == null
-    const configuredRewardsBackend = String(this.env.PIRATE_REWARDS_SETTLEMENT_BACKEND ?? "local").trim()
+    const configuredRewardsBackend = resolveRewardsSettlementBackend(this.env)
     const isLitRewardsPreparation = this.operatorKind(row) === "rewards" && (
       configuredRewardsBackend === "lit_vault"
       || diagnostic.stage === "lit_request_dispatch"

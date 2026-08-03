@@ -119,6 +119,7 @@ import { runRewardCampaignMonitorCycle } from "./lib/rewards/reward-campaign-mon
 import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
 import { monitorRewardCampaignTreasurySolvency } from "./lib/rewards/reward-campaign-solvency-monitor"
+import { enforceRewardNationalityDecisionRetention } from "./lib/rewards/reward-nationality-retention"
 import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
 import {
   runPublicReadCacheCanary,
@@ -1192,6 +1193,31 @@ async function reconcileScheduledRewardPayouts(env: Env): Promise<void> {
   }
 }
 
+async function enforceScheduledRewardNationalityRetention(env: Env): Promise<void> {
+  const now = new Date().toISOString()
+  try {
+    const summary = await enforceRewardNationalityDecisionRetention({
+      client: getControlPlaneClient(env),
+      now,
+    })
+    if (summary.deleted > 0 || summary.overdue > 0) {
+      console.info("[reward-nationality] retention", JSON.stringify(summary))
+    }
+    if (summary.overdue > 0) {
+      await captureScheduledWarning(
+        env,
+        "Reward nationality decisions remain past their retention deadline",
+        "reward_nationality_retention_overdue",
+        summary,
+        { urgency: "high" },
+      )
+    }
+  } catch (error) {
+    console.error("[reward-nationality] retention failed", error)
+    await captureScheduledError(env, error, "reward_nationality_retention")
+  }
+}
+
 async function monitorScheduledRewardCampaignTreasurySolvency(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
@@ -1762,6 +1788,7 @@ const handler: ExportedHandler<Env> = {
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
       { name: "reconcile_membership_projections", run: () => reconcileScheduledCommunityMembershipProjections(env) },
       { name: "reconcile_song_practice_rewards", run: () => reconcileScheduledSongPracticeRewards(env) },
+      { name: "enforce_reward_nationality_retention", run: () => enforceScheduledRewardNationalityRetention(env) },
       { name: "refresh_materialized_public_feeds", run: () => refreshScheduledMaterializedPublicHomeFeeds(env) },
     ]
     const rotatedJobs: NamedTask[] = [

@@ -8,6 +8,7 @@ import {
   REWARD_NATIONALITY_EVALUATOR_VERSION,
   resolveRewardNationalityBindingShadow,
 } from "./reward-nationality-shadow-evaluator"
+import { enforceRewardNationalityDecisionRetention } from "./reward-nationality-retention"
 
 const NOW = "2026-08-02T10:00:00.000Z"
 const SELF_ENV = {
@@ -69,7 +70,7 @@ async function setup(): Promise<Client> {
         '2026-08-01T00:00:00.000Z', '2026-08-31T23:59:59.999Z', ?2
       )
     `,
-    args: [JSON.stringify([{ countries: ["CAN"], amount_cents: 500 }]), NOW],
+    args: [JSON.stringify([{ nationalities: ["CAN"], amount_cents: 500 }]), NOW],
   })
   return result.client
 }
@@ -170,7 +171,7 @@ describe("reward nationality shadow evaluation", () => {
       evaluatorVersion: null,
       outcome: null,
     })
-    expect((await client.execute("SELECT COUNT(*) AS count FROM reward_claim_identity_evidence")).rows[0]?.count).toBe(0)
+    expect((await client.execute("SELECT COUNT(*) AS count FROM reward_nationality_decisions")).rows[0]?.count).toBe(0)
   })
 
   test("resolves nationality and reward identity from the selected nullifier, never the account slot or oldest document", async () => {
@@ -218,6 +219,20 @@ describe("reward nationality shadow evaluation", () => {
     expect((await client.execute("SELECT COUNT(*) AS count FROM reward_events")).rows[0]?.count).toBe(0)
     expect((await client.execute("SELECT COUNT(*) AS count FROM reward_song_period_claims")).rows[0]?.count).toBe(0)
     expect((await client.execute("SELECT COUNT(*) AS count FROM reward_pending_qualifications")).rows[0]?.count).toBe(0)
+    expect((await client.execute(`
+      SELECT result_key, outcome, retryability, campaign_terms_version,
+        evaluator_version, evaluated_at, expires_at
+      FROM reward_nationality_decisions
+      WHERE reward_qualification_event_id = 'rqe_shadow_1'
+    `)).rows).toEqual([{
+      result_key: "tier:0",
+      outcome: "resolved_tier",
+      retryability: "resolved",
+      campaign_terms_version: 1,
+      evaluator_version: REWARD_NATIONALITY_EVALUATOR_VERSION,
+      evaluated_at: NOW,
+      expires_at: "2027-02-27T23:59:59.999Z",
+    }])
   })
 
   test("records retryable document-not-selected and missing-evidence reasons distinctly", async () => {
@@ -277,7 +292,7 @@ describe("reward nationality shadow evaluation", () => {
       evaluatorVersion: null,
       outcome: null,
     })
-    expect((await client.execute("SELECT COUNT(*) AS count FROM reward_claim_identity_evidence")).rows[0]?.count).toBe(0)
+    expect((await client.execute("SELECT COUNT(*) AS count FROM reward_nationality_decisions")).rows[0]?.count).toBe(0)
   })
 
   test("distinguishes a missing qualification from an immutable existing snapshot", async () => {
@@ -315,11 +330,29 @@ describe("reward nationality shadow evaluation", () => {
     expect(first.persistence).toBe("written")
     expect(retry.persisted).toBe(true)
     expect(retry.persistence).toBe("already_recorded")
-    const rows = await client.execute("SELECT evaluator_version, evaluated_at, COUNT(*) OVER () AS count FROM reward_claim_identity_evidence")
+    const rows = await client.execute("SELECT evaluator_version, evaluated_at, COUNT(*) OVER () AS count FROM reward_nationality_decisions")
     expect(rows.rows).toEqual([{
       evaluator_version: REWARD_NATIONALITY_EVALUATOR_VERSION,
       evaluated_at: NOW,
       count: 1,
     }])
+  })
+
+  test("deletes expired minimal decisions and verifies that no overdue rows remain", async () => {
+    const client = await setup()
+    await seedNullifier(client, { id: "nul_retention", hash: "hash_retention", nationality: "CAN" })
+    await bind(client, "nul_retention")
+    await evaluate(client, "rqe_shadow_8")
+
+    expect(await enforceRewardNationalityDecisionRetention({
+      client,
+      now: "2027-02-28T00:00:00.000Z",
+    })).toEqual({
+      owner: "rewards-operations",
+      deleted: 1,
+      overdue: 0,
+      checkedAt: "2027-02-28T00:00:00.000Z",
+    })
+    expect((await client.execute("SELECT COUNT(*) AS count FROM reward_nationality_decisions")).rows[0]?.count).toBe(0)
   })
 })
