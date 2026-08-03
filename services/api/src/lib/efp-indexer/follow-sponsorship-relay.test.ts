@@ -337,6 +337,9 @@ describe("relaySponsoredFollowTransaction", () => {
       statement.sql.includes("Superseded duplicate bootstrap")
     )
     expect(failedDuplicate?.args?.[0]).toBe(`efw_${"c".repeat(32)}`)
+    const expiry = statements.find((statement) => statement.sql.includes("status = 'expired'"))
+    expect(expiry?.sql).toContain("sponsored_transaction_count = 0")
+    expect(expiry?.sql).toContain("sponsorship_reserved_transaction_count = 0")
   })
 
   test("recovers indexed evidence after manual review and refunds only the unbroadcast suffix", async () => {
