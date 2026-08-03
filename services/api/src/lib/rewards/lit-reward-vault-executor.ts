@@ -87,6 +87,7 @@ export function createLitRewardVaultExecutor(
 export function createProductionLitRewardVaultExecutor(
   client: LitActionClient,
   pinnedIpfsId: string,
+  pinnedPolicy: { policyVersion: bigint; maxDeadlineSeconds: number },
 ): RewardVaultActionExecutor {
   if (typeof pinnedIpfsId !== "string" || pinnedIpfsId.trim() !== pinnedIpfsId || !pinnedIpfsId) {
     throw new LitChipotleError(
@@ -95,5 +96,50 @@ export function createProductionLitRewardVaultExecutor(
       false,
     )
   }
-  return createLitRewardVaultExecutor(client, { ipfsId: pinnedIpfsId })
+  if (pinnedPolicy.policyVersion <= 0n || !Number.isSafeInteger(pinnedPolicy.maxDeadlineSeconds)
+    || pinnedPolicy.maxDeadlineSeconds <= 0) {
+    throw new LitChipotleError(
+      "invalid_request",
+      "Pinned Lit rewards vault action policy is invalid",
+      false,
+    )
+  }
+  const execute = createLitRewardVaultExecutor(client, { ipfsId: pinnedIpfsId })
+  return async (request) => {
+    if (request.policyVersion !== pinnedPolicy.policyVersion.toString()) {
+      throw new LitChipotleError(
+        "invalid_request",
+        "Lit rewards policy version does not match the registered action CID",
+        false,
+        undefined,
+        undefined,
+        "policy_version_mismatch",
+      )
+    }
+    let deadline: bigint
+    try {
+      deadline = BigInt(request.deadline)
+    } catch {
+      throw new LitChipotleError(
+        "invalid_request",
+        "Lit rewards deadline is invalid",
+        false,
+        undefined,
+        undefined,
+        "deadline_invalid",
+      )
+    }
+    const now = BigInt(Math.floor(Date.now() / 1_000))
+    if (deadline < now || deadline > now + BigInt(pinnedPolicy.maxDeadlineSeconds)) {
+      throw new LitChipotleError(
+        "invalid_request",
+        "Lit rewards deadline is outside the registered action policy",
+        false,
+        undefined,
+        undefined,
+        "deadline_out_of_policy",
+      )
+    }
+    return execute(request)
+  }
 }

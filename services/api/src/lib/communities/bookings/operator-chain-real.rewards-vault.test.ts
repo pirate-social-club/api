@@ -36,6 +36,7 @@ function env(): Env {
     REWARDS_TREASURY_VAULT_POLICY_VERSION: "7",
     LIT_REWARDS_USAGE_API_KEY: "usage-secret",
     LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
+    LIT_REWARDS_ACTION_POLICY_VERSION: "7",
     // Mirror the ceilings pinned into the reviewed action source.
     LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
     LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
@@ -196,7 +197,14 @@ describe("real rewards Lit vault signer wiring", () => {
       })
     }) as typeof fetch
 
-    const clocks = [2_000_000_000_000, 2_000_100_000_000]
+    // Deadline construction and the local preflight independently sample the
+    // clock during each attempt; keep both reads inside the same second.
+    const clocks = [
+      2_000_000_000_000,
+      2_000_000_000_000,
+      2_000_100_000_000,
+      2_000_100_000_000,
+    ]
     Date.now = () => clocks.shift()!
     const input = {
       operatorKind: "rewards" as const,
@@ -221,7 +229,7 @@ describe("real rewards Lit vault signer wiring", () => {
     expect(second.operationId).toBe(operationIds[0])
   })
 
-  test("derives deadline and policy mutations only inside staging", async () => {
+  test("rejects staging deadline and policy rehearsals before calling Lit", async () => {
     const observed: Array<{ deadline: string; policyVersion: string }> = []
     globalThis.fetch = (async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as {
@@ -261,14 +269,11 @@ describe("real rewards Lit vault signer wiring", () => {
       rehearsalScenario: "stale_policy",
     })).rejects.toThrow("preparation failed")
 
-    expect(observed).toEqual([
-      { deadline: "1999999999", policyVersion: "7" },
-      { deadline: "2000000300", policyVersion: "8" },
-    ])
+    expect(observed).toEqual([])
     await expect(realChain.signVerifiedTransfer({ ...env(), ENVIRONMENT: "production" } as Env, {
       ...base,
       rehearsalScenario: "over_limit",
     })).rejects.toThrow("preparation failed")
-    expect(observed).toHaveLength(2)
+    expect(observed).toHaveLength(0)
   })
 })

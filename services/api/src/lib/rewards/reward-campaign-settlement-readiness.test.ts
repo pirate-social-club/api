@@ -63,9 +63,10 @@ describe("reward campaign settlement readiness", () => {
       REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
       LIT_REWARDS_USAGE_API_KEY: "usage-secret",
       LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
-    LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
-    LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
-    LIT_REWARDS_MAX_GAS_LIMIT: "300000",
+      LIT_REWARDS_ACTION_POLICY_VERSION: "1",
+      LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+      LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+      LIT_REWARDS_MAX_GAS_LIMIT: "300000",
     }))).toMatchObject({
       treasuryAddress: VAULT,
     })
@@ -96,9 +97,10 @@ describe("reward campaign settlement readiness", () => {
       REWARDS_TREASURY_VAULT_POLICY_VERSION: "1",
       LIT_REWARDS_USAGE_API_KEY: "usage-secret",
       LIT_REWARDS_ACTION_IPFS_ID: "QmPinned",
-    LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
-    LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
-    LIT_REWARDS_MAX_GAS_LIMIT: "300000",
+      LIT_REWARDS_ACTION_POLICY_VERSION: "1",
+      LIT_REWARDS_MAX_FEE_PER_GAS_WEI: "50000000000",
+      LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI: "25000000000",
+      LIT_REWARDS_MAX_GAS_LIMIT: "300000",
     } satisfies Partial<Env>
     expect(() => assertRewardCampaignSettlementReadiness(readyEnv({
       ...lit,

@@ -25,6 +25,7 @@ export type RewardVaultLitConfig = RewardVaultConfig & {
   apiUrl: string
   usageApiKey: string
   actionIpfsId: string
+  actionPolicyVersion: bigint
   requestTimeoutMs: number
   requestMaxAttempts: number
 }
@@ -92,11 +93,22 @@ export function resolveRewardVaultConfig(env: Env): RewardVaultConfig {
 }
 
 export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
+  const vault = resolveRewardVaultConfig(env)
+  const actionPolicyVersion = positiveBigInt(
+    env.LIT_REWARDS_ACTION_POLICY_VERSION,
+    "LIT_REWARDS_ACTION_POLICY_VERSION",
+  )
+  if (actionPolicyVersion !== vault.policyVersion) {
+    throw badRequestError(
+      "LIT_REWARDS_ACTION_POLICY_VERSION must match REWARDS_TREASURY_VAULT_POLICY_VERSION",
+    )
+  }
   return {
-    ...resolveRewardVaultConfig(env),
+    ...vault,
     apiUrl: String(env.LIT_REWARDS_API_URL ?? "https://api.chipotle.litprotocol.com").trim(),
     usageApiKey: required(env.LIT_REWARDS_USAGE_API_KEY, "LIT_REWARDS_USAGE_API_KEY"),
     actionIpfsId: required(env.LIT_REWARDS_ACTION_IPFS_ID, "LIT_REWARDS_ACTION_IPFS_ID"),
+    actionPolicyVersion,
     requestTimeoutMs: positiveInteger(
       env.LIT_REWARDS_REQUEST_TIMEOUT_MS,
       20_000,
@@ -104,7 +116,7 @@ export function resolveRewardVaultLitConfig(env: Env): RewardVaultLitConfig {
     ),
     requestMaxAttempts: positiveInteger(
       env.LIT_REWARDS_REQUEST_MAX_ATTEMPTS,
-      3,
+      1,
       "LIT_REWARDS_REQUEST_MAX_ATTEMPTS",
     ),
   }
