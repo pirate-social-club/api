@@ -84,7 +84,12 @@ anything:
 
 ## Current holds
 
-None.
+- **Owner:** Codex `/root`, reward-nationality staging validation
+  **SHA:** `6241fb92c15d26a1c895937ccc47a0e25272617b` (current Web-pinned API)
+  **Window:** 2026-08-03 10:46Z–13:00Z
+  **Measurement:** isolated nationality-shadow qualification cases and aggregate-only
+  reward-accounting invariants. No pinned gate fixture IDs, production flags, Lit,
+  or mainnet money paths.
 
 ## Hold history
 
