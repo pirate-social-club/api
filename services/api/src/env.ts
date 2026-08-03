@@ -86,6 +86,12 @@ export type Env = {
   /** JSON map from persisted shard_worker_id values to service-binding names. */
   COMMUNITY_D1_SHARD_ROUTES?: string
   /**
+   * shard_worker_id used for new allocations. Optional while exactly one route
+   * is configured; required before a second pool route is added so retries
+   * cannot silently allocate the same community from a different pool.
+   */
+  COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID?: string
+  /**
    * Step 5: shared secret for the shard's admin RPCs, consulted by the
    * D1-native reconciler scheduled task (reconciler-host.ts). Must equal the
    * shard's own SHARD_ADMIN_TOKEN secret.

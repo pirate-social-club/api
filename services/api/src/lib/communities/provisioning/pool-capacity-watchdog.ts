@@ -1,5 +1,9 @@
 import type { Env } from "../../../env"
 import { captureScheduledError, captureScheduledWarning } from "../../ops-alerts/scheduled"
+import {
+  listConfiguredCommunityShards,
+  resolveCommunityAllocationShard,
+} from "../community-shard-registry"
 
 const DEFAULT_FREE_ALERT_THRESHOLD = 2
 const DEFAULT_EXHAUSTION_ALERT_HOURS = 72
@@ -19,13 +23,59 @@ export function parseExhaustionAlertHours(value: string | undefined): number {
   return parseNonNegativeInteger(value, DEFAULT_EXHAUSTION_ALERT_HOURS)
 }
 
-type PoolStats = {
+export type PoolStats = {
   total: number
   allocated: number
   free: number
   quarantined: number
   allocatedLast24Hours?: number
   allocatedLast7Days?: number
+}
+
+export type D1PoolStatsObservation = {
+  shardWorkerId: string | null
+  stats: PoolStats
+}
+
+function aggregatePoolStats(pools: D1PoolStatsObservation[]): PoolStats {
+  const sum = (key: "total" | "allocated" | "free" | "quarantined") =>
+    pools.reduce((total, pool) => total + pool.stats[key], 0)
+  const allHaveRecentAllocationStats = pools.every((pool) =>
+    Number.isFinite(pool.stats.allocatedLast24Hours) && Number.isFinite(pool.stats.allocatedLast7Days)
+  )
+  return {
+    total: sum("total"),
+    allocated: sum("allocated"),
+    free: sum("free"),
+    quarantined: sum("quarantined"),
+    ...(allHaveRecentAllocationStats
+      ? {
+        allocatedLast24Hours: pools.reduce((total, pool) => total + (pool.stats.allocatedLast24Hours ?? 0), 0),
+        allocatedLast7Days: pools.reduce((total, pool) => total + (pool.stats.allocatedLast7Days ?? 0), 0),
+      }
+      : {}),
+  }
+}
+
+export async function readD1PoolStats(env: Env): Promise<{
+  pools: D1PoolStatsObservation[]
+  aggregate: PoolStats
+}> {
+  const adminToken = String(env.SHARD_ADMIN_TOKEN ?? "")
+  const configured = listConfiguredCommunityShards(env)
+  const targets = configured.length > 0
+    ? configured.map((entry) => ({ shardWorkerId: entry.shardWorkerId, shard: entry.shard }))
+    : env.COMMUNITY_D1_SHARD
+      ? [{ shardWorkerId: null, shard: env.COMMUNITY_D1_SHARD }]
+      : []
+  const pools = await Promise.all(targets.map(async (target): Promise<D1PoolStatsObservation> => {
+    const result = await target.shard.communityD1PoolStats({ adminToken })
+    if (!result.ok) {
+      throw new Error(`Community D1 pool stats unavailable for ${target.shardWorkerId ?? "legacy"}: ${result.code}`)
+    }
+    return { shardWorkerId: target.shardWorkerId, stats: result.value }
+  }))
+  return { pools, aggregate: aggregatePoolStats(pools) }
 }
 
 export function classifyD1PoolCapacity(
@@ -71,22 +121,38 @@ export function classifyD1PoolCapacity(
 }
 
 export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
-  if (!env.COMMUNITY_D1_SHARD) return
+  if (!env.COMMUNITY_D1_SHARD && !env.COMMUNITY_D1_SHARD_ROUTES) return
   if (!env.SHARD_ADMIN_TOKEN) {
     console.warn("[scheduled] pool watchdog misconfigured: shard bound, no admin token")
     return
   }
 
-  const result = await env.COMMUNITY_D1_SHARD.communityD1PoolStats({ adminToken: env.SHARD_ADMIN_TOKEN })
-  if (!result.ok) {
-    const error = new Error(`Community D1 pool stats unavailable: ${result.code}`)
-    console.error("[scheduled] community D1 pool capacity check failed", result)
+  let observed: Awaited<ReturnType<typeof readD1PoolStats>>
+  try {
+    observed = await readD1PoolStats(env)
+  } catch (error) {
+    console.error("[scheduled] community D1 pool capacity check failed", error)
     await captureScheduledError(env, error, TASK_NAME)
     return
   }
 
+  let allocationShard: ReturnType<typeof resolveCommunityAllocationShard>
+  try {
+    allocationShard = resolveCommunityAllocationShard(env)
+  } catch (error) {
+    console.error("[scheduled] community D1 allocation pool configuration failed", error)
+    await captureScheduledError(env, error, TASK_NAME)
+    return
+  }
+  const allocationStats = observed.pools.find((pool) => pool.shardWorkerId === allocationShard.shardWorkerId)?.stats
+  if (!allocationStats) {
+    const error = new Error("Community D1 allocation pool stats are missing")
+    console.error("[scheduled] community D1 allocation pool capacity check failed", error)
+    await captureScheduledError(env, error, TASK_NAME)
+    return
+  }
   const capacity = classifyD1PoolCapacity(
-    result.value,
+    allocationStats,
     env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD,
     env.COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS,
   )
@@ -99,7 +165,22 @@ export async function checkScheduledD1PoolCapacity(env: Env): Promise<void> {
       ? "normal"
       : "low"
   const { healthy: _healthy, exhaustionImminent: _exhaustionImminent, ...stats } = capacity
-  const extra = { ...stats, urgency }
+  const aggregate = classifyD1PoolCapacity(
+    observed.aggregate,
+    env.COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD,
+    env.COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS,
+  )
+  const extra = {
+    ...stats,
+    ...(observed.pools.length > 1
+      ? {
+        allocationShardWorkerId: allocationShard.shardWorkerId,
+        aggregate,
+        pools: observed.pools,
+      }
+      : {}),
+    urgency,
+  }
   const message = capacity.exhaustionImminent
     ? "Community D1 pool exhaustion is imminent"
     : "Community D1 pool free capacity is low"

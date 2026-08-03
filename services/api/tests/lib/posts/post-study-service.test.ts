@@ -117,7 +117,11 @@ function env(overrides: Partial<Env> = {}): Env {
 // transactions (mid-transaction reads see prior writes). The D1 shard path
 // buffers write txs and returns empty results for in-tx reads.
 function localEnv(overrides: Partial<Env> = {}): Env {
-  const { COMMUNITY_D1_SHARD: _shard, ...rest } = env(overrides)
+  const {
+    COMMUNITY_D1_SHARD: _shard,
+    COMMUNITY_D1_SHARD_ROUTES: _routes,
+    ...rest
+  } = env(overrides)
   return rest as Env
 }
 
