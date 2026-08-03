@@ -140,14 +140,13 @@ async function loadAndReserve(input: {
 }): Promise<void> {
   const intentResult = await input.tx.execute({
     sql: `
-      SELECT i.*, wa.attachment_kind, wa.source_provider, u.verification_state
+      SELECT i.*, wa.attachment_kind, wa.source_provider
       FROM efp_follow_write_intents i
       JOIN wallet_attachments wa
         ON wa.user_id = i.actor_user_id
        AND wa.wallet_address_normalized = i.actor_wallet_address
        AND wa.status = 'active'
        AND wa.is_primary = 1
-      JOIN users u ON u.user_id = i.actor_user_id
       WHERE i.follow_write_intent_id = ?1
         AND i.actor_user_id = ?2
       FOR UPDATE
@@ -159,7 +158,6 @@ async function loadAndReserve(input: {
   if (
     row.attachment_kind !== "embedded"
     || row.source_provider !== "privy"
-    || row.verification_state !== "verified"
   ) {
     throw eligibilityFailed("This wallet is not eligible for sponsorship")
   }
