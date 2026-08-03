@@ -10,10 +10,8 @@ import { enqueueCommunityJob } from "../src/lib/communities/jobs/store"
 import type { CommunityDatabaseBindingRepository } from "../src/lib/communities/db-community-repository"
 import { resolveCoreRepoPath } from "../shared/core-repo-paths"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../shared/sql-migration"
-import { ensureRemoteThreadCommentLockColumns } from "../src/lib/communities/ensure-remote-thread-comment-lock-columns"
-import { ensureRemoteCommentGuestAuthorship } from "../src/lib/communities/ensure-remote-comment-guest-authorship"
-import { ensureRemotePostSongTitleColumn } from "../src/lib/communities/ensure-remote-post-song-title-column"
-import { ensureRemoteCommerceVinylReleaseColumns } from "../src/lib/communities/ensure-remote-commerce-vinyl-release-columns"
+import { repairCommentGuestAuthorship } from "../src/lib/communities/repair-comment-guest-authorship"
+import { ensureCommentLockColumns } from "../src/lib/communities/ensure-comment-lock-columns"
 
 const cleanupPaths: string[] = []
 const COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS = 120_000
@@ -438,15 +436,17 @@ describe("openCommunityDb", () => {
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, "community-cmt_partial.db")
-    await applyPartialCommunitySchema(databasePath, 1063)
+    await applyPartialCommunitySchema(databasePath, 1064)
 
+    // Simulate a database that applied 1064 while its file carried the legacy
+    // checksum: schema is current, but the ledger row records the old value.
     const client = createClient({ url: `file:${databasePath}` })
     try {
-      await ensureRemoteThreadCommentLockColumns(client)
       await client.execute({
         sql: `
-          INSERT INTO schema_migrations (migration_name, migration_label, checksum)
-          VALUES ('1064_thread_comment_locks.sql', 'community-template', ?1)
+          UPDATE schema_migrations
+          SET checksum = ?1
+          WHERE migration_name = '1064_thread_comment_locks.sql'
         `,
         args: [LEGACY_1064_THREAD_COMMENT_LOCKS_CHECKSUM],
       })
@@ -477,15 +477,16 @@ describe("openCommunityDb", () => {
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, "community-cmt_partial.db")
-    await applyPartialCommunitySchema(databasePath, 1079)
+    await applyPartialCommunitySchema(databasePath, 1080)
 
+    // Same drift simulation as the 1064 case above, for the post lock migration.
     const client = createClient({ url: `file:${databasePath}` })
     try {
-      await ensureRemoteThreadCommentLockColumns(client)
       await client.execute({
         sql: `
-          INSERT INTO schema_migrations (migration_name, migration_label, checksum)
-          VALUES ('1080_post_comment_locks.sql', 'community-template', ?1)
+          UPDATE schema_migrations
+          SET checksum = ?1
+          WHERE migration_name = '1080_post_comment_locks.sql'
         `,
         args: [LEGACY_1080_POST_COMMENT_LOCKS_CHECKSUM],
       })
@@ -511,8 +512,8 @@ describe("openCommunityDb", () => {
     expect(repairedChecksum).toBe(currentChecksum)
   }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
 
-  testWithTimeout("ensures thread and comment lock columns on community database schema helper", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-lock-columns-"))
+  testWithTimeout("ensures comment lock columns on community database schema helper", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-lock-columns-"))
     cleanupPaths.push(rootDir)
 
     const databasePath = join(rootDir, `${randomUUID()}.db`)
@@ -538,7 +539,7 @@ describe("openCommunityDb", () => {
       expect(beforeCommentColumns).not.toContain("replies_locked")
       expect(beforeCommentColumns).not.toContain("replies_lock_reason")
 
-      await ensureRemoteThreadCommentLockColumns(client)
+      await ensureCommentLockColumns(client)
 
       const afterPostColumns = await getTableColumns(databasePath, "posts")
       expect(afterPostColumns).toContain("comments_locked")
@@ -552,7 +553,7 @@ describe("openCommunityDb", () => {
       expect(afterCommentColumns).toContain("replies_locked_by_user_id")
       expect(afterCommentColumns).toContain("replies_lock_reason")
 
-      await ensureRemoteThreadCommentLockColumns(client)
+      await ensureCommentLockColumns(client)
     } finally {
       client.close()
     }
@@ -630,7 +631,7 @@ describe("openCommunityDb", () => {
       const beforeSql = await getTableCreateSql(databasePath, "comments")
       expect(beforeSql).not.toContain("'guest'")
 
-      await ensureRemoteCommentGuestAuthorship(client)
+      await repairCommentGuestAuthorship(client)
 
       const afterSql = await getTableCreateSql(databasePath, "comments")
       expect(afterSql).toContain("'guest'")
@@ -645,76 +646,6 @@ describe("openCommunityDb", () => {
           '2026-01-01T00:00:01.000Z', 'guest'
         )
       `)
-    } finally {
-      client.close()
-    }
-  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
-
-  testWithTimeout("ensures post song presentation columns on community database schema helper", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-song-title-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
-    await applyPartialCommunitySchema(databasePath, 1068)
-
-    const client = createClient({ url: `file:${databasePath}` })
-    try {
-      const beforePostColumns = await getTableColumns(databasePath, "posts")
-      expect(beforePostColumns).not.toContain("song_title")
-      expect(beforePostColumns).not.toContain("song_cover_art_ref")
-      expect(beforePostColumns).not.toContain("song_duration_ms")
-      expect(beforePostColumns).not.toContain("song_annotations_url")
-
-      await ensureRemotePostSongTitleColumn(client)
-
-      const afterPostColumns = await getTableColumns(databasePath, "posts")
-      expect(afterPostColumns).toContain("song_title")
-      expect(afterPostColumns).toContain("song_cover_art_ref")
-      expect(afterPostColumns).toContain("song_duration_ms")
-      expect(afterPostColumns).toContain("song_annotations_url")
-
-      const checksum = await getMigrationChecksum(databasePath, "1069_post_song_title.sql")
-      expect(checksum).toBe("03a5f95f8fe4bec0492dd6d7a2c4c2d7d9e4df7e0af244dcd58cae869cb9e802")
-      const presentationChecksum = await getMigrationChecksum(databasePath, "1075_post_song_presentation.sql")
-      expect(presentationChecksum).toBe("46da9ddcae0b2c5328a943d36dbb819d476e84dc4a5b7ffc5cc1268835b06368")
-      const annotationsUrlChecksum = await getMigrationChecksum(databasePath, "1081_post_song_annotations_url.sql")
-      expect(annotationsUrlChecksum).toBe("4ffa5faa01551ecf40fdcdfdb8a4a892e359110b17d077c287fbc91584718b7b")
-
-      await ensureRemotePostSongTitleColumn(client)
-    } finally {
-      client.close()
-    }
-  }, COMMUNITY_DB_FACTORY_TEST_TIMEOUT_MS)
-
-  testWithTimeout("ensures commerce vinyl release columns on community database schema helper", async () => {
-    const rootDir = await mkdtemp(join(tmpdir(), "pirate-community-remote-vinyl-release-"))
-    cleanupPaths.push(rootDir)
-
-    const databasePath = join(rootDir, `${randomUUID()}.db`)
-    await applyPartialCommunitySchema(databasePath, 1093)
-
-    const client = createClient({ url: `file:${databasePath}` })
-    try {
-      const beforeListingColumns = await getTableColumns(databasePath, "listings")
-      expect(beforeListingColumns).not.toContain("vinyl_release_provider")
-      expect(beforeListingColumns).not.toContain("vinyl_release_url")
-      const beforePurchaseColumns = await getTableColumns(databasePath, "purchases")
-      expect(beforePurchaseColumns).not.toContain("vinyl_release_provider")
-      expect(beforePurchaseColumns).not.toContain("vinyl_release_url")
-
-      await ensureRemoteCommerceVinylReleaseColumns(client)
-
-      const afterListingColumns = await getTableColumns(databasePath, "listings")
-      expect(afterListingColumns).toContain("vinyl_release_provider")
-      expect(afterListingColumns).toContain("vinyl_release_url")
-      const afterPurchaseColumns = await getTableColumns(databasePath, "purchases")
-      expect(afterPurchaseColumns).toContain("vinyl_release_provider")
-      expect(afterPurchaseColumns).toContain("vinyl_release_url")
-
-      const checksum = await getMigrationChecksum(databasePath, "1094_vinyl_release_listings.sql")
-      expect(checksum).toBe("04680b4600a34ce5275e33294b2e8d91d2fd869d66d0d82583dc1fe03d60cf1b")
-
-      await ensureRemoteCommerceVinylReleaseColumns(client)
     } finally {
       client.close()
     }

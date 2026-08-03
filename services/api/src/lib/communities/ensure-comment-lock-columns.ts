@@ -1,5 +1,24 @@
 import type { Client } from "@libsql/client"
 
+// Schema source for the comment/post lock columns on file-backed (local dev
+// and test) community databases. This is deliberately NOT a pair of ordinary
+// template migrations: 1064_thread_comment_locks.sql and
+// 1080_post_comment_locks.sql are ledger-only stubs because production
+// communities already carried these columns without a schema_migrations entry,
+// and plain ALTER statements would fail fleet replay with duplicate-column
+// errors. SQLite has no ADD COLUMN IF NOT EXISTS, so the conditional checks
+// below are the compatibility path.
+//
+// D1-backed community databases never receive these columns at all: they are
+// absent from the provisioning schema snapshot, and this preflight only runs
+// on file: bindings. Reads on the D1 fleet are guarded by
+// resolvePostProjectionSchema (src/lib/posts/community-post-projection.ts),
+// which substitutes constants when the columns are missing.
+//
+// Removal condition: a fleet-safe table-rebuild migration lands that puts the
+// lock columns under normal template-migration control for every community
+// database backend, at which point this preflight can be deleted.
+
 async function getColumnNames(client: Client, tableName: "posts" | "comments"): Promise<Set<string>> {
   const result = await client.execute(`PRAGMA table_info(${tableName})`)
   return new Set(result.rows.map((row) => String(row.name)))
@@ -26,7 +45,7 @@ async function addColumnIfMissing(input: {
   }
 }
 
-export async function ensureRemoteThreadCommentLockColumns(client: Client): Promise<void> {
+export async function ensureCommentLockColumns(client: Client): Promise<void> {
   const postColumns = await getColumnNames(client, "posts")
   await addColumnIfMissing({
     client,

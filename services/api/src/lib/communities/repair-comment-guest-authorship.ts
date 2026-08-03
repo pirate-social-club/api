@@ -1,5 +1,11 @@
 import type { Client } from "@libsql/client"
 
+// Local repair for the 1036_comment_agent_authorship.sql checkpoint in
+// community-local-db.ts: databases that applied the original 1036 migration
+// created a comments.authorship_mode CHECK without 'guest'. This rebuilds the
+// comments table with the corrected constraint. It runs only from the
+// migration checksum-repair path, never on the general database open path.
+
 const COMMENT_COLUMNS = [
   "comment_id",
   "community_id",
@@ -53,7 +59,7 @@ async function commentsAuthorshipModeAllowsGuest(client: Client): Promise<boolea
   return /authorship_mode[\s\S]*'guest'/.test(createSql)
 }
 
-export async function ensureRemoteCommentGuestAuthorship(client: Client): Promise<void> {
+export async function repairCommentGuestAuthorship(client: Client): Promise<void> {
   if (await commentsAuthorshipModeAllowsGuest(client)) {
     return
   }
