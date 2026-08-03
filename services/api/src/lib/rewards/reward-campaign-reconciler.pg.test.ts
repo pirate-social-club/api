@@ -891,7 +891,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           WHERE e.reward_pending_qualification_id = p.reward_pending_qualification_id) AS exposure_rows
         FROM reward_pending_qualifications p
         WHERE p.status = 'expired' AND p.reward_campaign_id = 'rcp_pending_tier_pg'`)
-      expect(expired.rows[0]).toEqual({ status: "expired", exposure_rows: 0 })
+      expect(expired.rows[0]).toEqual({ status: "expired", exposure_rows: "0" })
       await client.execute({
         sql: `INSERT INTO reward_pending_qualification_funding_exposures (
           reward_pending_qualification_id, reward_campaign_id,
@@ -1263,7 +1263,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         reward_pending_qualification_id, reward_campaign_id,
         reward_campaign_funding_effect_id, amount_cents, exposed_at
       ) VALUES (
-        'rpq_cross_pool_0189', 'rcp_reward_pg',
+        'rpq_cross_pool_0189', 'rcp_sequential_study_pg',
         'rcf_seed_rcp_sequential_study_pg', 40, $1
       )
     `, [NOW]))
