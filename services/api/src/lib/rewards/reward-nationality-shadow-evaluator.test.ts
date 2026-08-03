@@ -12,12 +12,14 @@ import { enforceRewardNationalityDecisionRetention } from "./reward-nationality-
 
 const NOW = "2026-08-02T10:00:00.000Z"
 const SELF_ENV = {
-  REWARDS_IDENTITY_PROVIDER: "self",
-  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "true",
-} as Env
-const VERY_ENV = {
   REWARDS_IDENTITY_PROVIDER: "very",
   REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "true",
+  REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER: "self",
+} as Env
+const VERY_ENV = {
+  REWARDS_IDENTITY_PROVIDER: "self",
+  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "true",
+  REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER: "very",
 } as Env
 const PAUSED_ENV = { REWARDS_IDENTITY_PROVIDER: "self" } as Env
 let cleanup: (() => Promise<void>) | null = null
@@ -282,7 +284,7 @@ describe("reward nationality shadow evaluation", () => {
     })
   })
 
-  test("does not create a permanently pending per-claim row for an unsupported provider", async () => {
+  test("does not create a permanently pending per-claim row for an unsupported shadow provider", async () => {
     const client = await setup()
     const decision = await evaluate(client, "rqe_shadow_6", VERY_ENV)
     expect(decision).toMatchObject({

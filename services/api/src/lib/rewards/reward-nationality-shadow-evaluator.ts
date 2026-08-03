@@ -246,7 +246,7 @@ export async function resolveRewardNationalityBindingShadow(input: {
       evidenceVerifiedAt: null,
     }
   }
-  if (resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER) !== "self") {
+  if (resolveRewardIdentityProvider(input.env.REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER) !== "self") {
     return {
       capability: "unavailable",
       persisted: false,

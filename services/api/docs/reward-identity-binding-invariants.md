@@ -22,6 +22,10 @@ records. It follows this chain exactly:
 unrevoked nationality attestation whose source_identity_nullifier_id is that
 nullifier`.
 
+Its identity-provider setting is separate from the money-path eligibility
+provider. This permits a staging-only Self shadow evaluation without changing
+who can earn, claim, or settle a reward.
+
 The resolver never reads `verification_capabilities_json.nationality`. That
 account projection is shared by providers and can be overwritten by a proof
 from a document other than the one selected for rewards.
