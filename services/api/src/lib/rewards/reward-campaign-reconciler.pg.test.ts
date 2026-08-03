@@ -297,6 +297,12 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     const concurrentPoolsMigration = await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8")
     await db.unsafe(concurrentPoolsMigration.replaceAll("TIMESTAMPTZ", "TEXT"))
     await db.unsafe(await readFile(NATIONALITY_TIERS_MIGRATION_URL, "utf8"))
+    // Legacy campaign fixtures in this broad harness predate tier terms and
+    // intentionally omit them. Preserve the prior harness default without
+    // mirroring or modifying any 0189 constraint under test.
+    await db.unsafe(`ALTER TABLE reward_campaigns
+      ALTER COLUMN default_amount_cents SET DEFAULT 40,
+      ALTER COLUMN max_claim_cents SET DEFAULT 40`)
     await db.unsafe(await readFile(IDENTITY_PROVIDER_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       CREATE TABLE user_attestations (
