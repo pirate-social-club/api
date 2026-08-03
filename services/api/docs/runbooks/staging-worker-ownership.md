@@ -90,6 +90,15 @@ None.
 
 Keep entries short. Delete them once they are no longer useful context.
 
+- **2026-08-03** — Nationality shadow validation completed on Web-pinned API
+  `6241fb92c`. Two genuine historical staging qualification events produced
+  `resolved_default`/resolved and `nationality_evidence_missing`/retryable
+  decisions at evaluator `nationality_binding_v1`; lifecycle deltas were exactly
+  180 and 30 days. Reward events/reservations/payout effects stayed at
+  4/4/7 rows and 400/400/450 cents. Reversible Self fixtures were exactly
+  cleaned, the pre-existing Very identity remained active, and staging was left
+  on `6241fb92c` with no manual Worker deploy.
+
 - **2026-08-02** — D1 allocation-fencing staging smoke passed on API
   `0c50c6dd7`. Real community provisioning reached `active`, its job succeeded,
   and the community was archived. An authenticated read serialized `created` as
