@@ -1,17 +1,20 @@
 # Reward nationality data policy proposal
 
-Status: proposed for owner, product, privacy, and compliance approval. This
-document does not authorize collection. Nationality shadow evaluation remains
-paused through `REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED=false`.
+Status: owner-approved on 2026-08-03 for passport-nationality semantics and the
+30/180-day retention defaults. Privacy/legal, compliance, security, disclosure,
+implementation, and activation approvals remain open. This document does not
+authorize collection. Nationality shadow evaluation remains paused through
+`REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED=false`.
 
-## Decision requested
+## Decision record and remaining approvals
 
 Reward qualification may read an accepted nationality attestation from the
 canonical identity-verification store when evaluating a claim. The rewards
 domain must not create a second copy of nationality or identity-document
 provenance merely to preserve an evaluation snapshot.
 
-Before collection can be enabled, reviewers must approve:
+The owner has approved items 1 and 4 below. Before collection can be enabled,
+the remaining reviewers and implementation owners must complete:
 
 1. the product meaning of nationality versus residence;
 2. the sanctions and restricted-jurisdiction policy;
@@ -19,7 +22,7 @@ Before collection can be enabled, reviewers must approve:
 4. the retention periods below; and
 5. the roles allowed to retrieve decision records.
 
-## Proposed targeting semantics
+## Approved targeting semantics
 
 Tiers select on passport nationality, not residence. Self and ZKPassport prove
 nationality; neither currently proves where a person lives. A holder of a
@@ -76,11 +79,13 @@ therefore inherit nationality-level handling, retention, access, and
 small-cohort protections. Detailed provenance remains in the
 identity-verification store under that domain's lifecycle and access policy.
 
-## Proposed retention
+## Owner-approved retention defaults
 
-These periods are defaults for approval, not active policy:
+The owner approved these defaults on 2026-08-03. They are not active collection
+policy until privacy/legal approves the lifecycle and the deletion controls are
+implemented and verified:
 
-| Record | Proposed retention | Deletion rule |
+| Record | Owner-approved default | Deletion rule |
 | --- | --- | --- |
 | Retryable/no-tier evaluation | 30 days | Delete after 30 days or immediately when superseded by a final evaluation. |
 | Resolved tier decision | 180 days after campaign close | Delete the reward decision provenance; retain only required financial/accounting records without copying nationality or identity provenance. |
@@ -128,11 +133,14 @@ and expiry.
 
 Collection stays paused until all items are complete:
 
-- [ ] Product approves passport-nationality semantics and the campaign UI uses
-      "by passport nationality" rather than ambiguous country/residence copy.
+- [x] Owner/product approves passport-nationality semantics.
+- [ ] Campaign UI uses "by passport nationality" rather than ambiguous
+      country/residence copy.
 - [ ] Compliance approves sanctions and restricted-jurisdiction behavior.
 - [ ] Privacy/legal approves purpose, disclosure, lawful basis, retention, and
       user-rights handling.
+- [x] Owner approves the 30/180-day retention defaults, subject to the remaining
+      privacy/legal approval and implementation controls.
 - [ ] Participant disclosure explicitly covers permanent on-chain inference
       from tier-dependent payout amounts.
 - [ ] Security approves the minimum binding-mismatch fields and access roles.
