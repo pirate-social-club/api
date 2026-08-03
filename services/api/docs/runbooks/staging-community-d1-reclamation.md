@@ -63,6 +63,19 @@ The bundle must be read-only and must record its query time and environment.
 Raw remote output may contain identifiers, so keep it in the approved evidence
 location rather than committing it blindly.
 
+The checked-in inventory command performs these reads and has no apply mode:
+
+```bash
+rtk bun run admin:staging-d1-reclaim-inventory -- --output /tmp/staging-d1-reclamation-inventory.json
+```
+
+Run it through the staging Infisical environment. The evidence file is created
+with mode `0600` and fails if the target path already exists.
+The command prefers `CONTROL_PLANE_MIGRATOR_DATABASE_URL` and otherwise uses
+the staging `CONTROL_PLANE_DATABASE_URL`; either value must be PostgreSQL.
+For the pool read it prefers the dedicated D1 API token and otherwise uses the
+caller's authenticated Wrangler session. Both paths execute the same SELECT.
+
 Classify a row as a candidate only when all of these are true:
 
 - the pool and routing rows agree on community and binding;
