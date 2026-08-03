@@ -13,6 +13,7 @@ import {
   classifyReclamationCandidate,
   type CandidateDecision,
 } from "./_lib/staging-d1-reclamation-inventory"
+import { isMachineGeneratedStagingSmokeName } from "../src/lib/communities/staging-smoke-signatures"
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(name)
@@ -98,12 +99,23 @@ async function main(): Promise<void> {
     } as unknown as Env, async (client) => {
       const result = await client.execute({
         sql: `
-          SELECT c.community_id, c.display_name, c.description,
-                 c.status AS community_status, r.binding_name,
+          SELECT c.community_id, c.creator_user_id, c.display_name, c.description,
+                 c.status AS community_status, c.provisioning_state AS community_provisioning_state,
+                 c.created_at AS community_created_at, r.binding_name,
                  r.provisioning_state, r.decommissioned_at,
                  (SELECT COUNT(*) FROM jobs j
                    WHERE j.community_id = c.community_id
-                     AND j.status IN ('queued', 'running')) AS active_jobs
+                     AND j.status IN ('queued', 'running')) AS active_jobs,
+                 (SELECT COUNT(*) FROM community_post_projections p
+                   WHERE p.community_id = c.community_id) AS post_count,
+                 (SELECT COUNT(*) FROM comment_projections p
+                   WHERE p.community_id = c.community_id) AS comment_count,
+                 (SELECT COUNT(*) FROM community_membership_projections m
+                   WHERE m.community_id = c.community_id AND m.membership_state = 'member'
+                     AND m.user_id <> c.creator_user_id) AS non_owner_member_count,
+                 (SELECT STRING_AGG(a.provider || ':' || a.provider_subject, ',' ORDER BY a.provider, a.provider_subject)
+                   FROM auth_provider_links a
+                   WHERE a.user_id = c.creator_user_id AND a.status = 'active') AS creator_auth_subjects
           FROM communities c
           INNER JOIN community_database_routing r ON r.community_id = c.community_id
           ORDER BY c.community_id
@@ -138,6 +150,22 @@ async function main(): Promise<void> {
     })
   })
   const eligible = decisions.filter((row) => row.eligible)
+  const archiveInventory = controlRows
+    .filter((row) => isMachineGeneratedStagingSmokeName(String(row.display_name ?? "")))
+    .map((row) => ({
+      community_id: String(row.community_id ?? ""),
+      creator_user_id: String(row.creator_user_id ?? ""),
+      creator_auth_subjects: row.creator_auth_subjects === null ? null : String(row.creator_auth_subjects ?? ""),
+      display_name: String(row.display_name ?? ""),
+      community_status: String(row.community_status ?? ""),
+      community_provisioning_state: String(row.community_provisioning_state ?? ""),
+      community_created_at: String(row.community_created_at ?? ""),
+      binding_name: String(row.binding_name ?? ""),
+      active_jobs: Number(row.active_jobs ?? 0),
+      post_count: Number(row.post_count ?? 0),
+      comment_count: Number(row.comment_count ?? 0),
+      non_owner_member_count: Number(row.non_owner_member_count ?? 0),
+    }))
   const exclusionCounts: Record<string, number> = {}
   for (const row of decisions) {
     for (const reason of row.exclusions) exclusionCounts[reason] = (exclusionCounts[reason] ?? 0) + 1
@@ -153,7 +181,9 @@ async function main(): Promise<void> {
     pool: { total: poolRows.length, allocated: poolAllocated, free: poolFree, quarantined: poolQuarantined },
     control_plane_routes: controlRows.length,
     eligible_count: eligible.length,
+    archive_inventory_count: archiveInventory.length,
     exclusion_counts: Object.fromEntries(Object.entries(exclusionCounts).sort(([left], [right]) => left.localeCompare(right))),
+    archive_inventory: archiveInventory,
     candidates: eligible,
   }
   const output = option("--output")
@@ -161,7 +191,7 @@ async function main(): Promise<void> {
     const path = resolve(output)
     await writeFile(path, `${JSON.stringify(artifact, null, 2)}\n`, { flag: "wx", mode: 0o600 })
     await chmod(path, 0o600)
-    console.log(JSON.stringify({ ...artifact, candidates: undefined, evidence_path: path }, null, 2))
+    console.log(JSON.stringify({ ...artifact, archive_inventory: undefined, candidates: undefined, evidence_path: path }, null, 2))
   } else {
     console.log(JSON.stringify(artifact, null, 2))
   }
