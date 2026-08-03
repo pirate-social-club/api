@@ -2,10 +2,11 @@ import type { Address, Hex } from "viem"
 
 import type { Env } from "../../env"
 import { badRequestError, conflictError, eligibilityFailed, rateLimited } from "../errors"
-import type { Client, QueryResultRow, Transaction } from "../sql-client"
+import type { Client, QueryResult, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 
 type PreparedTransaction = { chain_id: number; data: Hex; to: Address }
+const SPONSORSHIP_REVIEW_WINDOW_MS = 24 * 60 * 60 * 1_000
 
 export type FollowRelayRequest = {
   authorizationSignature: string
@@ -185,10 +186,19 @@ async function loadAndReserve(input: {
   }
 
   const reservedCount = numberValue(row, "sponsorship_reserved_transaction_count")
+  const previousBudgetDate = row.sponsorship_budget_date == null
+    ? null
+    : String(row.sponsorship_budget_date).slice(0, 10)
   const reservationNeeded = reservedCount === 0
     ? numberValue(row, "prepared_transaction_count") - sponsoredCount
     : 0
   const budgetDate = input.now.slice(0, 10)
+  const reservationTransfer = reservedCount > 0 && previousBudgetDate !== budgetDate
+    ? reservedCount
+    : 0
+  if (reservedCount > 0 && !previousBudgetDate) {
+    throw conflictError("Follow sponsorship reservation has no budget date")
+  }
   await input.tx.execute({
     sql: `
       INSERT INTO efp_follow_sponsorship_daily_budgets (
@@ -217,20 +227,46 @@ async function loadAndReserve(input: {
   if (numberValue(budget, "transaction_limit") !== input.config.dailyLimit) {
     throw eligibilityFailed("Follow sponsorship budget configuration changed during the UTC day")
   }
+  if (reservationTransfer > 0) {
+    const previousBudget = await input.tx.execute({
+      sql: `
+        SELECT transaction_limit, reserved_transactions, consumed_transactions
+        FROM efp_follow_sponsorship_daily_budgets
+        WHERE budget_date = ?1
+        FOR UPDATE
+      `,
+      args: [previousBudgetDate],
+    })
+    if (!previousBudget.rows[0]
+      || numberValue(previousBudget.rows[0], "reserved_transactions") < reservationTransfer) {
+      throw conflictError("Follow sponsorship reservation ledger is invalid")
+    }
+  }
   const total = numberValue(budget, "reserved_transactions") + numberValue(budget, "consumed_transactions")
-  if (total + reservationNeeded > numberValue(budget, "transaction_limit")) {
+  if (total + reservationNeeded + reservationTransfer > numberValue(budget, "transaction_limit")) {
     throw rateLimited("Daily follow sponsorship ceiling reached", { scope: "global_day" })
   }
-  if (reservationNeeded > 0) {
+  if (reservationTransfer > 0) {
+    await input.tx.execute({
+      sql: `
+        UPDATE efp_follow_sponsorship_daily_budgets
+        SET reserved_transactions = reserved_transactions - ?2, updated_at = ?3
+        WHERE budget_date = ?1
+      `,
+      args: [previousBudgetDate, reservationTransfer, input.now],
+    })
+  }
+  if (reservationNeeded + reservationTransfer > 0) {
     await input.tx.execute({
       sql: `
         UPDATE efp_follow_sponsorship_daily_budgets
         SET reserved_transactions = reserved_transactions + ?2, updated_at = ?3
         WHERE budget_date = ?1
       `,
-      args: [budgetDate, reservationNeeded, input.now],
+      args: [budgetDate, reservationNeeded + reservationTransfer, input.now],
     })
   }
+  const reviewAfter = new Date(Date.parse(input.now) + SPONSORSHIP_REVIEW_WINDOW_MS).toISOString()
   await input.tx.execute({
     sql: `
       UPDATE efp_follow_write_intents
@@ -238,11 +274,13 @@ async function loadAndReserve(input: {
           sponsorship_reserved_transaction_count =
             CASE WHEN sponsorship_reserved_transaction_count = 0 THEN ?2
                  ELSE sponsorship_reserved_transaction_count END,
+          sponsorship_budget_date = ?4,
+          sponsorship_review_after = ?5,
           last_error = NULL,
           updated_at = ?3
       WHERE follow_write_intent_id = ?1
     `,
-    args: [input.request.intentId, reservationNeeded, input.now],
+    args: [input.request.intentId, reservationNeeded, input.now, budgetDate, reviewAfter],
   })
 }
 
@@ -255,7 +293,7 @@ async function releaseReservation(input: {
   await withTransaction(input.client, "write", async (tx) => {
     const result = await tx.execute({
       sql: `
-        SELECT sponsorship_reserved_transaction_count
+        SELECT sponsorship_reserved_transaction_count, sponsorship_budget_date
         FROM efp_follow_write_intents
         WHERE follow_write_intent_id = ?1
         FOR UPDATE
@@ -265,19 +303,27 @@ async function releaseReservation(input: {
     const reserved = result.rows[0]
       ? numberValue(result.rows[0], "sponsorship_reserved_transaction_count")
       : 0
+    const budgetDate = result.rows[0]?.sponsorship_budget_date == null
+      ? null
+      : String(result.rows[0].sponsorship_budget_date).slice(0, 10)
+    if (reserved > 0 && !budgetDate) {
+      throw conflictError("Follow sponsorship reservation has no budget date")
+    }
     await tx.execute({
       sql: `
         UPDATE efp_follow_sponsorship_daily_budgets
         SET reserved_transactions = GREATEST(0, reserved_transactions - ?1), updated_at = ?2
-        WHERE budget_date = CAST(?2 AS DATE)
+        WHERE budget_date = ?3
       `,
-      args: [reserved, input.now],
+      args: [reserved, input.now, budgetDate],
     })
     await tx.execute({
       sql: `
         UPDATE efp_follow_write_intents
         SET status = 'prepared',
             sponsorship_reserved_transaction_count = 0,
+            sponsorship_budget_date = NULL,
+            sponsorship_review_after = NULL,
             last_error = ?2,
             updated_at = ?3
         WHERE follow_write_intent_id = ?1 AND status = 'submitting'
@@ -319,7 +365,7 @@ async function finalizeSend(input: {
       sql: `
         SELECT prepared_transaction_count, sponsored_transaction_count,
                actor_wallet_address, target_wallet_address, transaction_hashes_json,
-               sponsorship_reserved_transaction_count
+               sponsorship_reserved_transaction_count, sponsorship_budget_date
         FROM efp_follow_write_intents
         WHERE follow_write_intent_id = ?1
           AND actor_user_id = ?2
@@ -333,21 +379,28 @@ async function finalizeSend(input: {
     const nextCount = numberValue(row, "sponsored_transaction_count") + 1
     const remainingReservation = numberValue(row, "sponsorship_reserved_transaction_count") - 1
     if (remainingReservation < 0) throw conflictError("Follow sponsorship reservation is invalid")
+    const budgetDate = row.sponsorship_budget_date == null
+      ? null
+      : String(row.sponsorship_budget_date).slice(0, 10)
+    if (!budgetDate) throw conflictError("Follow sponsorship reservation has no budget date")
     const complete = nextCount === numberValue(row, "prepared_transaction_count")
     const hashes = Array.isArray(row.transaction_hashes_json)
       ? row.transaction_hashes_json
       : JSON.parse(String(row.transaction_hashes_json))
     hashes.push(input.txHash)
-    await tx.execute({
+    const budgetUpdate = await tx.execute({
       sql: `
         UPDATE efp_follow_sponsorship_daily_budgets
         SET reserved_transactions = GREATEST(0, reserved_transactions - 1),
             consumed_transactions = consumed_transactions + 1,
             updated_at = ?2
-        WHERE budget_date = CAST(?2 AS DATE)
+        WHERE budget_date = ?1
       `,
-      args: [input.intentId, input.now],
+      args: [budgetDate, input.now],
     })
+    if (budgetUpdate.rowsAffected !== 1) {
+      throw conflictError("Follow sponsorship budget ledger row was not found")
+    }
     await tx.execute({
       sql: `
         UPDATE efp_follow_write_intents
@@ -355,6 +408,8 @@ async function finalizeSend(input: {
             transaction_hashes_json = ?3,
             status = ?4,
             sponsorship_reserved_transaction_count = ?6,
+            sponsorship_budget_date = CASE WHEN ?6 = 0 THEN NULL ELSE sponsorship_budget_date END,
+            sponsorship_review_after = CASE WHEN ?6 = 0 THEN NULL ELSE sponsorship_review_after END,
             submitted_at = CASE WHEN ?4 = 'submitted' THEN ?5 ELSE submitted_at END,
             updated_at = ?5
         WHERE follow_write_intent_id = ?1
@@ -536,17 +591,236 @@ function hashFromPrivyLookup(payload: unknown): Hex | null {
   return null
 }
 
+async function hashFromIndexedChainEvidence(input: {
+  client: Client
+  row: QueryResultRow
+}): Promise<Hex | null> {
+  const transactionIndex = numberValue(input.row, "sponsored_transaction_count")
+  const prepared = asPreparedTransactions(input.row.prepared_transactions_json)
+  const expected = prepared[transactionIndex]
+  if (!expected) return null
+  let result: QueryResult
+  if (transactionIndex === 0) {
+    result = await input.client.execute({
+      sql: `
+        SELECT transaction_hash
+        FROM efp_list_ops
+        WHERE chain_id = ?1
+          AND contract_address = ?2
+          AND slot = ?3
+          AND target_address = ?4
+          AND opcode = ?5
+        ORDER BY block_number ASC, transaction_index ASC, log_index ASC
+        LIMIT 1
+      `,
+      args: [
+        expected.chain_id,
+        expected.to.toLowerCase(),
+        String(input.row.list_slot),
+        String(input.row.target_wallet_address).toLowerCase(),
+        Number(input.row.desired_following) === 1 ? 1 : 2,
+      ],
+    })
+  } else {
+    const records = prepared[0]?.to.toLowerCase()
+    if (!records) return null
+    result = await input.client.execute({
+      sql: `
+        SELECT primary_event.transaction_hash
+        FROM efp_primary_list_events primary_event
+        JOIN efp_list_storage_location_events storage_event
+          ON storage_event.list_id = primary_event.list_id
+        WHERE primary_event.account_address = ?1
+          AND storage_event.storage_chain_id = ?2
+          AND storage_event.storage_contract_address = ?3
+          AND storage_event.storage_slot = ?4
+        ORDER BY primary_event.block_number ASC,
+                 primary_event.transaction_index ASC,
+                 primary_event.log_index ASC
+        LIMIT 1
+      `,
+      args: [
+        String(input.row.actor_wallet_address).toLowerCase(),
+        Number(input.row.list_chain_id),
+        records,
+        String(input.row.list_slot),
+      ],
+    })
+  }
+  const hash = String(result.rows[0]?.transaction_hash ?? "").toLowerCase()
+  return /^0x[a-f0-9]{64}$/u.test(hash) ? hash as Hex : null
+}
+
+async function expireAbandonedPreparedIntents(input: {
+  client: Client
+  now: string
+}): Promise<number> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE efp_follow_write_intents
+      SET status = 'expired',
+          semantic_attempt_key = NULL,
+          last_error = 'Prepared follow intent expired before submission',
+          updated_at = ?1
+      WHERE status = 'prepared'
+        AND expires_at <= ?1
+        AND sponsored_transaction_count = 0
+        AND sponsorship_reserved_transaction_count = 0
+    `,
+    args: [input.now],
+  })
+  return result.rowsAffected ?? 0
+}
+
+async function markSubmissionForManualReview(input: {
+  client: Client
+  intentId: string
+  now: string
+}): Promise<boolean> {
+  return withTransaction(input.client, "write", async (tx) => {
+    const result = await tx.execute({
+      sql: `
+        SELECT sponsorship_reserved_transaction_count, sponsorship_budget_date
+        FROM efp_follow_write_intents
+        WHERE follow_write_intent_id = ?1
+          AND status = 'submitting'
+          AND sponsorship_review_after <= ?2
+        FOR UPDATE
+      `,
+      args: [input.intentId, input.now],
+    })
+    const row = result.rows[0]
+    if (!row) return false
+    const reserved = numberValue(row, "sponsorship_reserved_transaction_count")
+    const budgetDate = row.sponsorship_budget_date == null
+      ? null
+      : String(row.sponsorship_budget_date).slice(0, 10)
+    if (reserved > 0 && !budgetDate) {
+      throw conflictError("Follow sponsorship reservation has no budget date")
+    }
+    if (reserved > 0) {
+      await tx.execute({
+        sql: `
+          UPDATE efp_follow_sponsorship_daily_budgets
+          SET reserved_transactions = reserved_transactions - ?2,
+              consumed_transactions = consumed_transactions + ?2,
+              updated_at = ?3
+          WHERE budget_date = ?1
+        `,
+        args: [budgetDate, reserved, input.now],
+      })
+    }
+    await tx.execute({
+      sql: `
+        UPDATE efp_follow_write_intents
+        SET status = 'manual_review',
+            sponsorship_reserved_transaction_count = 0,
+            sponsorship_budget_date = NULL,
+            sponsorship_review_after = NULL,
+            last_error = 'Submission outcome remained unknown after the review window; budget charged conservatively',
+            updated_at = ?2
+        WHERE follow_write_intent_id = ?1
+      `,
+      args: [input.intentId, input.now],
+    })
+    return true
+  })
+}
+
+async function supersedeDuplicatePartialIntents(input: {
+  client: Client
+  now: string
+}): Promise<number> {
+  const duplicates = await input.client.execute({
+    sql: `
+      SELECT follow_write_intent_id
+      FROM (
+        SELECT follow_write_intent_id,
+               ROW_NUMBER() OVER (
+                 PARTITION BY actor_user_id, target_user_id, desired_following
+                 ORDER BY created_at ASC, follow_write_intent_id ASC
+               ) AS attempt_rank
+        FROM efp_follow_write_intents
+        WHERE status = 'prepared'
+          AND sponsored_transaction_count > 0
+          AND sponsored_transaction_count < prepared_transaction_count
+      ) ranked
+      WHERE attempt_rank > 1
+      ORDER BY follow_write_intent_id ASC
+    `,
+  })
+  let superseded = 0
+  for (const duplicate of duplicates.rows) {
+    const intentId = String(duplicate.follow_write_intent_id)
+    await withTransaction(input.client, "write", async (tx) => {
+      const result = await tx.execute({
+        sql: `
+          SELECT sponsorship_reserved_transaction_count, sponsorship_budget_date
+          FROM efp_follow_write_intents
+          WHERE follow_write_intent_id = ?1 AND status = 'prepared'
+          FOR UPDATE
+        `,
+        args: [intentId],
+      })
+      const row = result.rows[0]
+      if (!row) return
+      const reserved = numberValue(row, "sponsorship_reserved_transaction_count")
+      const budgetDate = row.sponsorship_budget_date == null
+        ? null
+        : String(row.sponsorship_budget_date).slice(0, 10)
+      if (reserved > 0 && !budgetDate) {
+        throw conflictError("Follow sponsorship reservation has no budget date")
+      }
+      if (reserved > 0) {
+        await tx.execute({
+          sql: `
+            UPDATE efp_follow_sponsorship_daily_budgets
+            SET reserved_transactions = reserved_transactions - ?2, updated_at = ?3
+            WHERE budget_date = ?1
+          `,
+          args: [budgetDate, reserved, input.now],
+        })
+      }
+      await tx.execute({
+        sql: `
+          UPDATE efp_follow_write_intents
+          SET status = 'failed',
+              semantic_attempt_key = NULL,
+              sponsorship_reserved_transaction_count = 0,
+              sponsorship_budget_date = NULL,
+              sponsorship_review_after = NULL,
+              last_error = 'Superseded duplicate bootstrap; confirmed list slot remains intentionally orphaned',
+              updated_at = ?2
+          WHERE follow_write_intent_id = ?1 AND status = 'prepared'
+        `,
+        args: [intentId, input.now],
+      })
+      superseded += 1
+    })
+  }
+  return superseded
+}
+
 export async function reconcilePendingPrivyFollowSubmissions(input: {
   client: Client
   env: Env
   now?: Date
   limit?: number
   fetcher?: typeof fetch
-}): Promise<{ examined: number; recovered: number }> {
+}): Promise<{
+  examined: number
+  recovered: number
+  expired: number
+  manual_review: number
+  superseded: number
+}> {
   const config = requiredConfig(input.env)
   const pending = await input.client.execute({
     sql: `
-      SELECT follow_write_intent_id, actor_user_id, sponsored_transaction_count
+      SELECT follow_write_intent_id, actor_user_id, actor_wallet_address,
+             target_wallet_address, desired_following, list_chain_id, list_slot,
+             prepared_transactions_json, sponsored_transaction_count,
+             sponsorship_review_after
       FROM efp_follow_write_intents
       WHERE status = 'submitting'
         AND updated_at <= CURRENT_TIMESTAMP - INTERVAL '30 seconds'
@@ -559,6 +833,7 @@ export async function reconcilePendingPrivyFollowSubmissions(input: {
   const fetcher = input.fetcher ?? fetch
   const now = (input.now ?? new Date()).toISOString()
   let recovered = 0
+  let manualReview = 0
   for (const row of pending.rows) {
     const intentId = String(row.follow_write_intent_id)
     const actorUserId = String(row.actor_user_id)
@@ -566,19 +841,30 @@ export async function reconcilePendingPrivyFollowSubmissions(input: {
       intentId,
       numberValue(row, "sponsored_transaction_count"),
     )
-    const response = await fetcher(
-      `${apiUrl}/v1/transactions?reference_id=${encodeURIComponent(requestId)}`,
-      {
-        headers: {
-          authorization: `Basic ${btoa(`${config.appId}:${config.appSecret}`)}`,
-          "privy-app-id": config.appId,
+    let hash = await hashFromIndexedChainEvidence({ client: input.client, row })
+    if (!hash) {
+      const response = await fetcher(
+        `${apiUrl}/v1/transactions?reference_id=${encodeURIComponent(requestId)}`,
+        {
+          headers: {
+            authorization: `Basic ${btoa(`${config.appId}:${config.appSecret}`)}`,
+            "privy-app-id": config.appId,
+          },
+          signal: AbortSignal.timeout(5_000),
         },
-        signal: AbortSignal.timeout(5_000),
-      },
-    ).catch(() => null)
-    if (!response?.ok) continue
-    const hash = hashFromPrivyLookup(await response.json().catch(() => null))
-    if (!hash) continue
+      ).catch(() => null)
+      if (response?.ok) {
+        hash = hashFromPrivyLookup(await response.json().catch(() => null))
+      }
+    }
+    if (!hash) {
+      if (await markSubmissionForManualReview({
+        client: input.client,
+        intentId,
+        now,
+      })) manualReview += 1
+      continue
+    }
     await finalizeSend({
       client: input.client,
       actorUserId,
@@ -588,5 +874,13 @@ export async function reconcilePendingPrivyFollowSubmissions(input: {
     })
     recovered += 1
   }
-  return { examined: pending.rows.length, recovered }
+  const superseded = await supersedeDuplicatePartialIntents({ client: input.client, now })
+  const expired = await expireAbandonedPreparedIntents({ client: input.client, now })
+  return {
+    examined: pending.rows.length,
+    recovered,
+    expired,
+    manual_review: manualReview,
+    superseded,
+  }
 }

@@ -807,7 +807,29 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  if (
+    normalized.startsWith("ALTER TABLE EFP_FOLLOW_WRITE_INTENTS ")
+    && normalized.includes("ADD COLUMN SEMANTIC_ATTEMPT_KEY ")
+    && normalized.includes("ADD COLUMN SPONSORSHIP_BUDGET_DATE ")
+    && normalized.includes("ADD COLUMN SPONSORSHIP_REVIEW_AFTER ")
+  ) {
+    return [
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN semantic_attempt_key TEXT;",
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN sponsorship_budget_date TEXT;",
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN sponsorship_review_after TEXT;",
+    ]
+  }
+
   let sqliteCompat = statement
+  if (
+    normalized.startsWith("UPDATE EFP_FOLLOW_WRITE_INTENTS ")
+    && normalized.includes("SPONSORSHIP_REVIEW_AFTER = UPDATED_AT + INTERVAL '24 HOURS'")
+  ) {
+    sqliteCompat = sqliteCompat.replace(
+      /updated_at\s*\+\s*INTERVAL\s*'24 hours'/iu,
+      "datetime(updated_at, '+24 hours')",
+    )
+  }
   if (normalized.startsWith("CREATE TABLE IF NOT EXISTS COMMUNITY_ASSISTANT_CREDENTIALS")) {
     sqliteCompat = sqliteCompat.replace(
       /provider\s+IN\s+\('openrouter'\)/i,

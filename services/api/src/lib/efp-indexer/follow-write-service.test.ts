@@ -39,7 +39,7 @@ function client(input?: {
       }
       if (query.includes("COUNT(*) AS write_count")) return { rows: [{ write_count: 0 }] }
       if (query.includes("WHERE actor_user_id = ?1 AND idempotency_key")) return { rows: [] }
-      if (query.includes("sponsored_transaction_count > 0")) {
+      if (query.includes("status IN ('prepared', 'submitting', 'submitted', 'confirmed', 'manual_review')")) {
         return { rows: input?.resumableRow ? [input.resumableRow] : [] }
       }
       if (query.includes("FROM efp_effective_follows")) {
@@ -47,7 +47,7 @@ function client(input?: {
       }
       if (query.includes("INSERT INTO efp_follow_write_intents")) {
         inserts.push(statement as InStatement)
-        return { rows: [], rowsAffected: 1 }
+        return { rows: [{ follow_write_intent_id: "inserted" }], rowsAffected: 1 }
       }
       throw new Error(`Unexpected SQL: ${query}`)
     },
@@ -118,8 +118,9 @@ describe("prepareProfileFollowWrite", () => {
     expect(result.transactions).toHaveLength(2)
     expect(result.transactions.every((transaction) => transaction.chain_id === 8453)).toBe(true)
     expect(db.inserts).toHaveLength(1)
-    expect(db.inserts[0]?.args?.[7]).toBe("none")
-    expect(db.inserts[0]?.args?.[11]).toBe(2)
+    expect(db.inserts[0]?.args?.[2]).toBe("viewer:target:follow")
+    expect(db.inserts[0]?.args?.[8]).toBe("none")
+    expect(db.inserts[0]?.args?.[12]).toBe(2)
   })
 
   test("resumes only the unsent suffix of an incomplete bootstrap", async () => {
@@ -134,6 +135,8 @@ describe("prepareProfileFollowWrite", () => {
           expires_at: "2026-07-28T01:00:00.000Z",
           follow_write_intent_id: "efw_11111111111111111111111111111111",
           prepared_transactions_json: transactions,
+          prepared_transaction_count: 2,
+          status: "prepared",
           sponsored_transaction_count: 1,
           sponsorship_reserved_transaction_count: 1,
         },
@@ -155,6 +158,40 @@ describe("prepareProfileFollowWrite", () => {
     expect(result.transaction_index_offset).toBe(1)
     expect(result.transactions).toEqual([transactions[1]])
     expect(result.sponsorship.reserved_transaction_count).toBe(1)
+  })
+
+  test("reuses the earliest active semantic attempt even with a fresh idempotency key", async () => {
+    const transactions = [
+      { chain_id: 8453, data: "0x01", to: VIEWER },
+      { chain_id: 8453, data: "0x02", to: TARGET },
+    ]
+    const result = await prepareProfileFollowWrite({
+      actorUserId: "viewer",
+      client: client({
+        resumableRow: {
+          expires_at: "2026-07-28T01:00:00.000Z",
+          follow_write_intent_id: "efw_22222222222222222222222222222222",
+          prepared_transaction_count: 2,
+          prepared_transactions_json: transactions,
+          sponsored_transaction_count: 0,
+          sponsorship_reserved_transaction_count: 0,
+          status: "prepared",
+        },
+      }),
+      desiredFollowing: true,
+      env: ENV,
+      idempotencyKey: "different-client-attempt",
+      now: new Date("2026-07-28T00:00:00.000Z"),
+      targetPublicUserId: "usr_target",
+      targetUserId: "target",
+      users: users(),
+      resolvePrimaryList: async () => {
+        throw new Error("resolver must not mint a duplicate slot")
+      },
+    })
+
+    expect(result.intent_id).toBe("efw_22222222222222222222222222222222")
+    expect(result.transactions).toEqual(transactions)
   })
 })
 

@@ -239,6 +239,14 @@ function intentId(): string {
   return `efw_${crypto.randomUUID().replaceAll("-", "")}`
 }
 
+function semanticAttemptKey(input: {
+  actorUserId: string
+  targetUserId: string
+  desiredFollowing: boolean
+}): string {
+  return `${input.actorUserId}:${input.targetUserId}:${input.desiredFollowing ? "follow" : "unfollow"}`
+}
+
 export async function prepareProfileFollowWrite(input: {
   client: Client
   env: Env
@@ -293,19 +301,18 @@ export async function prepareProfileFollowWrite(input: {
     })
   }
 
-  const resumable = await input.client.execute({
+  const activeAttempt = await input.client.execute({
     sql: `
-      SELECT prepared_transactions_json, follow_write_intent_id, expires_at,
-             sponsorship_reserved_transaction_count, sponsored_transaction_count
+      SELECT status, prepared_transactions_json, follow_write_intent_id, expires_at,
+             sponsorship_reserved_transaction_count, sponsored_transaction_count,
+             prepared_transaction_count
       FROM efp_follow_write_intents
       WHERE actor_user_id = ?1
         AND target_user_id = ?2
         AND desired_following = ?3
-        AND status = 'prepared'
-        AND (expires_at > ?4 OR sponsored_transaction_count > 0)
-        AND sponsored_transaction_count > 0
-        AND sponsored_transaction_count < prepared_transaction_count
-      ORDER BY created_at DESC
+        AND status IN ('prepared', 'submitting', 'submitted', 'confirmed', 'manual_review')
+        AND (status <> 'prepared' OR expires_at > ?4 OR sponsored_transaction_count > 0)
+      ORDER BY created_at ASC
       LIMIT 1
     `,
     args: [
@@ -315,9 +322,12 @@ export async function prepareProfileFollowWrite(input: {
       nowIso,
     ],
   })
-  if (resumable.rows[0]) {
+  if (activeAttempt.rows[0]) {
+    if (String(activeAttempt.rows[0].status) !== "prepared") {
+      throw retryableConflictError("This follow write is already in progress")
+    }
     return resumableWrite({
-      row: resumable.rows[0],
+      row: activeAttempt.rows[0],
       sponsorshipEligible,
       targetPublicUserId: input.targetPublicUserId,
       desiredFollowing: input.desiredFollowing,
@@ -373,6 +383,7 @@ export async function prepareProfileFollowWrite(input: {
   })
   const prepared = serializeTransactions(transactions)
   const id = intentId()
+  const semanticKey = semanticAttemptKey(input)
   const expiresAt = new Date(now.getTime() + positiveInteger(
     input.env.EFP_FOLLOW_INTENT_TTL_SECONDS,
     DEFAULT_INTENT_TTL_SECONDS,
@@ -380,25 +391,53 @@ export async function prepareProfileFollowWrite(input: {
   const slot = resolution.kind === "found"
     ? resolution.slot
     : BigInt((transactions[0]?.args[0] as bigint | undefined) ?? 0n)
-  await input.client.execute({
+  const inserted = await input.client.execute({
     sql: `
       INSERT INTO efp_follow_write_intents (
-        follow_write_intent_id, idempotency_key, actor_user_id, actor_wallet_address,
+        follow_write_intent_id, idempotency_key, semantic_attempt_key,
+        actor_user_id, actor_wallet_address,
         target_user_id, target_wallet_address, desired_following, primary_list_resolution,
         list_chain_id, list_slot, prepared_transactions_json, prepared_transaction_count,
         status, expires_at, created_at, updated_at
       ) VALUES (
-        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-        'prepared', ?13, ?14, ?14
+        ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+        'prepared', ?14, ?15, ?15
       )
+      ON CONFLICT DO NOTHING
+      RETURNING follow_write_intent_id
     `,
     args: [
-      id, input.idempotencyKey, input.actorUserId, actorWallet, input.targetUserId,
-      targetWallet, input.desiredFollowing ? 1 : 0, resolution.kind,
+      id, input.idempotencyKey, semanticKey, input.actorUserId, actorWallet,
+      input.targetUserId, targetWallet, input.desiredFollowing ? 1 : 0, resolution.kind,
       resolution.kind === "found" ? resolution.chainId : BASE_CHAIN_ID,
       slot.toString(), JSON.stringify(prepared), prepared.length, expiresAt, nowIso,
     ],
   })
+  if (inserted.rows.length === 0) {
+    const concurrent = await input.client.execute({
+      sql: `
+        SELECT status, prepared_transactions_json, follow_write_intent_id, expires_at,
+               sponsorship_reserved_transaction_count, sponsored_transaction_count,
+               prepared_transaction_count
+        FROM efp_follow_write_intents
+        WHERE semantic_attempt_key = ?1
+          AND status IN ('prepared', 'submitting', 'submitted', 'confirmed', 'manual_review')
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      args: [semanticKey],
+    })
+    const row = concurrent.rows[0]
+    if (row && String(row.status) === "prepared") {
+      return resumableWrite({
+        row,
+        sponsorshipEligible,
+        targetPublicUserId: input.targetPublicUserId,
+        desiredFollowing: input.desiredFollowing,
+      })
+    }
+    throw retryableConflictError("This follow write is already in progress")
+  }
 
   return {
     object: "profile_follow_write",
