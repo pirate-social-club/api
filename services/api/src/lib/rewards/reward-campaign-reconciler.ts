@@ -408,8 +408,6 @@ export async function creditRewardCampaignQualification(input: {
     })
     return { result: "expired", amountCents: 0 }
   }
-  const provider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
-  const identity = await resolveActiveRewardIdentity(input.client, input.candidate.userId, provider)
   let shadowDecision: RewardNationalityShadowDecision | null = null
   try {
     shadowDecision = await resolveRewardNationalityBindingShadow({
@@ -429,6 +427,7 @@ export async function creditRewardCampaignQualification(input: {
     const campaign = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_id, eligible_activity, min_score_bps, daily_reward_cents,
+          reward_identity_provider,
           reward_period_cap_cents, funded_cents, reserved_cents, credited_cents,
           refunded_cents, terms_version, ends_at,
           CASE WHEN EXISTS (
@@ -458,6 +457,10 @@ export async function creditRewardCampaignQualification(input: {
     }
     const campaignRow = campaign as QueryResultRow
     const campaignId = text(campaignRow, "reward_campaign_id")
+    const campaignProvider = resolveRewardIdentityProvider(
+      stringOrNull(rowValue(campaignRow, "reward_identity_provider")) ?? undefined,
+    )
+    const identity = await resolveActiveRewardIdentity(tx, input.candidate.userId, campaignProvider)
     const amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
     if (!Number.isSafeInteger(amount) || amount <= 0) {
       await markPendingQualificationTerminal({
@@ -720,7 +723,6 @@ export async function reconcileRewardCampaigns(input: {
   const campaigns = resolveRewardCampaignConfig(input.env)
   const alertOwnershipConfigured = rewardCampaignAlertOwnership(input.env) !== null
   const enabled = campaigns.enabled && literalTrue(input.env.REWARDS_ACCRUAL_ENABLED)
-    && resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER) !== null
     && alertOwnershipConfigured
   const summary = emptySummary(enabled)
   if (!enabled) return summary

@@ -95,7 +95,8 @@ export type RewardSongOwnerPolicy = {
 
 const CAMPAIGN_COLUMNS = `
   reward_campaign_id, rewarder_user_id, community_id, post_id,
-  song_artifact_bundle_id, song_owner_user_id, status, eligible_activity,
+  song_artifact_bundle_id, song_owner_user_id, reward_identity_provider,
+  status, eligible_activity,
   min_score_bps, daily_reward_cents, milestone_7_cents, milestone_30_cents,
   default_amount_cents, max_claim_cents, payout_tiers_json,
   reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
@@ -140,6 +141,7 @@ function queryResultRow(value: unknown): QueryResultRow | null {
 }
 
 type RewardCampaignPayoutTier = RewardCampaign["payout_tiers"][number]
+type RewardCampaignIdentityProvider = RewardCampaign["reward_identity_provider"]
 
 function payoutTiers(value: unknown): RewardCampaignPayoutTier[] {
   let decoded = value
@@ -187,6 +189,7 @@ function campaignResource(row: CampaignRow): RewardCampaign {
     post: requiredString(row, "post_id"),
     song_artifact_bundle: requiredString(row, "song_artifact_bundle_id"),
     song_owner: requiredString(row, "song_owner_user_id"),
+    reward_identity_provider: requiredString(row, "reward_identity_provider") as RewardCampaignIdentityProvider,
     status: requiredString(row, "status") as RewardCampaignStatus,
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
@@ -328,6 +331,17 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     throw badRequestError("eligible_activity is invalid")
   }
   const normalizedTiers = normalizePayoutTiers(input.payout_tiers)
+  const rewardIdentityProvider = input.reward_identity_provider
+  if (
+    rewardIdentityProvider !== "self"
+    && rewardIdentityProvider !== "zkpassport"
+    && rewardIdentityProvider !== "very"
+  ) {
+    throw badRequestError("reward_identity_provider is invalid")
+  }
+  if (normalizedTiers.length > 0 && rewardIdentityProvider === "very") {
+    throw badRequestError("Nationality-tiered campaigns require Self or ZKPassport")
+  }
   const normalizedDailyReward = cents(input.daily_reward_cents, "daily_reward_cents", false)
   const normalizedDefaultAmount = input.default_amount_cents === undefined
     ? normalizedDailyReward
@@ -347,6 +361,7 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     community: decodePublicCommunityId(nonEmpty(input.community, "community")),
     post: decodePublicPostId(nonEmpty(input.post, "post")),
     idempotency_key: nonEmpty(input.idempotency_key, "idempotency_key"),
+    reward_identity_provider: rewardIdentityProvider,
     min_score_bps: basisPoints(input.min_score_bps, "min_score_bps"),
     daily_reward_cents: normalizedDailyReward,
     default_amount_cents: normalizedDefaultAmount,
@@ -398,6 +413,7 @@ function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTa
     post: target.postId,
     song_artifact_bundle: target.songArtifactBundleId,
     song_owner: target.songOwnerUserId,
+    reward_identity_provider: input.reward_identity_provider,
     eligible_activity: input.eligible_activity,
     min_score_bps: input.min_score_bps,
     daily_reward_cents: input.daily_reward_cents,
@@ -585,25 +601,27 @@ export async function createRewardCampaign(input: {
         INSERT INTO reward_campaigns (
           reward_campaign_id, campaign_kind, rewarder_user_id, creation_idempotency_key,
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
-          status, eligible_activity, min_score_bps, daily_reward_cents, milestone_7_cents,
+          status, reward_identity_provider, eligible_activity, min_score_bps,
+          daily_reward_cents, milestone_7_cents,
           milestone_30_cents, reward_period_cap_cents, budget_cents,
           default_amount_cents, max_claim_cents, payout_tiers_json,
           terms_version, terms_hash, starts_at, ends_at,
           requested_starts_at, requested_ends_at, created_at, updated_at
         ) VALUES (
-          ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9,
-          ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
-          ?18, ?19, ?20, ?21, ?20, ?21, ?22, ?22
+          ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9, ?10,
+          ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+          ?19, ?20, ?21, ?22, ?21, ?22, ?23, ?23
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
         args: [
         campaignId, input.userId, body.idempotency_key, target.communityId, target.postId,
-        target.songArtifactBundleId, target.songOwnerUserId, body.eligible_activity,
-        body.min_score_bps, body.daily_reward_cents, body.milestone_7_cents, body.milestone_30_cents,
+        target.songArtifactBundleId, target.songOwnerUserId, body.reward_identity_provider,
+        body.eligible_activity, body.min_score_bps, body.daily_reward_cents,
+        body.milestone_7_cents, body.milestone_30_cents,
         body.reward_period_cap_cents, body.budget_cents, body.default_amount_cents,
         Math.max(body.default_amount_cents ?? body.daily_reward_cents, ...body.payout_tiers!.map((tier) => tier.amount_cents)),
-        JSON.stringify(body.payout_tiers), body.payout_tiers!.length > 0 ? 3 : 2, termsHash,
+        JSON.stringify(body.payout_tiers), 4, termsHash,
         new Date(body.starts_at * 1000).toISOString(), new Date(body.ends_at * 1000).toISOString(), now,
         ],
       })
@@ -735,6 +753,7 @@ export async function createRewardCampaignFundingQuote(input: {
   campaignId: string
   amountCents: number
   idempotencyKey: string
+  rewardIdentityProvider?: unknown
   now?: string
   refundPolicyObserver?: RewardVaultRefundPolicyObserver
 }): Promise<RewardCampaignFundingQuote> {
@@ -744,6 +763,17 @@ export async function createRewardCampaignFundingQuote(input: {
   await assertRewardSolvencyAdmission({ env: input.env, client: input.client, now: new Date(input.now ?? Date.now()) })
   const amountCents = cents(input.amountCents, "amount_cents", false)
   const idempotencyKey = nonEmpty(input.idempotencyKey, "idempotency_key")
+  const assertedProvider = input.rewardIdentityProvider === undefined
+    ? null
+    : input.rewardIdentityProvider
+  if (
+    assertedProvider !== null
+    && assertedProvider !== "self"
+    && assertedProvider !== "zkpassport"
+    && assertedProvider !== "very"
+  ) {
+    throw badRequestError("reward_identity_provider is invalid")
+  }
   const now = input.now ?? nowIso()
   const expiresAt = new Date(Date.parse(now) + config.quoteTtlSeconds * 1000).toISOString()
   const existing = queryResultRow(await executeFirst(input.client, {
@@ -751,6 +781,13 @@ export async function createRewardCampaignFundingQuote(input: {
     args: [input.userId, idempotencyKey],
   }))
   if (existing) {
+    if (assertedProvider !== null) {
+      const campaign = await selectCampaign(input.client, input.campaignId)
+      if (!campaign) throw notFoundError("Reward campaign not found")
+      if (assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
+        throw conflictError("Funding provider assertion does not match the permanent song pool")
+      }
+    }
     if (
       requiredString(existing, "reward_campaign_id") !== input.campaignId
       || integer(rowValue(existing, "expected_amount_cents")) !== amountCents
@@ -770,6 +807,13 @@ export async function createRewardCampaignFundingQuote(input: {
       args: [input.userId, idempotencyKey],
     }))
     if (replay) {
+      if (assertedProvider !== null) {
+        const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
+        if (!campaign) throw notFoundError("Reward campaign not found")
+        if (assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
+          throw conflictError("Funding provider assertion does not match the permanent song pool")
+        }
+      }
       if (
         requiredString(replay, "reward_campaign_id") !== input.campaignId
         || integer(rowValue(replay, "expected_amount_cents")) !== amountCents
@@ -779,6 +823,9 @@ export async function createRewardCampaignFundingQuote(input: {
 
     const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
     if (!campaign) throw notFoundError("Reward campaign not found")
+    if (assertedProvider !== null && assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
+      throw conflictError("Funding provider assertion does not match the permanent song pool")
+    }
     if (payoutTiers(rowValue(campaign, "payout_tiers_json")).length > 0) {
       throw conflictError("Tiered reward campaigns cannot accept contributions until nationality payout resolution is enabled")
     }

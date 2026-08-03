@@ -1631,6 +1631,13 @@ const spec = {
                   "preferred_locale": {
                     "type": "string",
                     "nullable": true
+                  },
+                  "explicit_content_preference": {
+                    "type": "string",
+                    "enum": [
+                      "show",
+                      "hide"
+                    ]
                   }
                 }
               }
@@ -10606,6 +10613,13 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "explicit_content_preference": {
+            "type": "string",
+            "enum": [
+              "show",
+              "hide"
+            ]
+          },
           "display_verified_nationality_badge": {
             "type": "boolean",
             "nullable": true
@@ -17341,6 +17355,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very"
             ],
             "nullable": true
@@ -17489,6 +17504,7 @@ const spec = {
         "required": [
           "community",
           "post",
+          "reward_identity_provider",
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
@@ -17506,6 +17522,14 @@ const spec = {
           },
           "post": {
             "type": "string"
+          },
+          "reward_identity_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ]
           },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
@@ -17650,6 +17674,7 @@ const spec = {
           "post",
           "song_artifact_bundle",
           "song_owner",
+          "reward_identity_provider",
           "status",
           "funding_tx_hash",
           "eligible_activity",
@@ -17696,6 +17721,14 @@ const spec = {
           },
           "song_owner": {
             "type": "string"
+          },
+          "reward_identity_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/RewardCampaignStatus"
@@ -17960,6 +17993,14 @@ const spec = {
           },
           "idempotency_key": {
             "type": "string"
+          },
+          "reward_identity_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ]
           }
         }
       },
@@ -22854,6 +22895,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very"
             ],
             "nullable": true

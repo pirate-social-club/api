@@ -50,10 +50,16 @@ const CONCURRENT_POOLS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0159_control_plane_reward_concurrent_pools.sql",
   import.meta.url,
 )
+const IDENTITY_PROVIDER_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0188_control_plane_reward_campaign_identity_provider.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
-  REWARDS_IDENTITY_PROVIDER: "self",
+  // Deliberately disagrees with seeded `self` pools. Campaign terms, not this
+  // legacy environment default, must select the identity namespace.
+  REWARDS_IDENTITY_PROVIDER: "very",
   REWARDS_CAMPAIGNS_ENABLED: "true",
   REWARDS_ACCRUAL_ENABLED: "true",
   REWARDS_PAYOUTS_ENABLED: "true",
@@ -278,6 +284,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `)
     const concurrentPoolsMigration = await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8")
     await db.unsafe(concurrentPoolsMigration.replaceAll("TIMESTAMPTZ", "TEXT"))
+    await db.unsafe(await readFile(IDENTITY_PROVIDER_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
@@ -607,6 +614,67 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     }])
   })
 
+  test("uses the permanent pool provider and fails closed for another provider", async () => {
+    const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        reward_identity_provider, status, eligible_activity, min_score_bps,
+        daily_reward_cents, milestone_7_cents, milestone_30_cents,
+        reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
+        credited_cents, paid_cents, refunded_cents, terms_version, terms_hash,
+        starts_at, ends_at, updated_at
+      ) VALUES (
+        'rcp_provider_mismatch_pg', 'usr_reward_pg', 'provider-mismatch-pg',
+        'cmt_reward_pg', 'pst_provider_mismatch_pg', 'sab_provider_mismatch_pg',
+        'usr_reward_pg', 'zkpassport', 'active', 'study', 7000, 40, 0, 0,
+        40, 100, 100, 0, 0, 0, 0, 4, 'provider-mismatch-terms',
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
+      )
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_song_pools (
+        community_id, post_id, reward_campaign_id, created_at, updated_at
+      ) VALUES (
+        'cmt_reward_pg', 'pst_provider_mismatch_pg',
+        'rcp_provider_mismatch_pg', $1, $1
+      )
+    `, [NOW])
+    await seed.end()
+    try {
+      await withProductionPostgresClient(async (client) => {
+        const result = await creditRewardCampaignQualification({
+          env: PG_ENV,
+          client,
+          now: NOW,
+          candidate: {
+            eventId: "rqe_provider_mismatch_pg",
+            userId: "usr_reward_pg",
+            communityId: "cmt_reward_pg",
+            postId: "pst_provider_mismatch_pg",
+            artifactBundleId: "sab_provider_mismatch_pg",
+            activity: "study",
+            qualifiedAt: NOW,
+            periodKey: "2026-07-10",
+            policyVersion: "study-completed-set-v1",
+          },
+        })
+        expect(result).toEqual({ result: "identity", amountCents: 0 })
+        const accounting = await client.execute(`
+          SELECT
+            (SELECT COUNT(*)::int FROM reward_campaign_reservations
+              WHERE reward_campaign_id = 'rcp_provider_mismatch_pg') AS reservations,
+            (SELECT COUNT(*)::int FROM reward_events
+              WHERE reward_campaign_id = 'rcp_provider_mismatch_pg') AS events
+        `)
+        expect(accounting.rows[0]).toEqual({ reservations: 0, events: 0 })
+      })
+    } finally {
+      await removeCampaignTestPost("pst_provider_mismatch_pg")
+    }
+  })
+
   test("a later campaign cannot pay the other activity for the same human, song, and UTC day", async () => {
     const results = await withProductionPostgresClient(async (client) => {
       const study = await creditRewardCampaignQualification({
@@ -840,6 +908,19 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         WHERE reward_campaign_id = 'rcp_invariants_pg'
       `))
       expect(message).toContain("reward campaign score terms are immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0188 trigger rejects permanent pool provider mutations", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns SET reward_identity_provider = 'zkpassport'
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `))
+      expect(message).toContain("reward campaign identity provider is immutable")
     } finally {
       await db.end()
     }

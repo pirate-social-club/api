@@ -3,7 +3,7 @@ import type { InStatement, QueryResult } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { parseVerificationCapabilities } from "../auth/auth-serializers"
 
-export type RewardIdentityProvider = "self" | "very"
+export type RewardIdentityProvider = "self" | "zkpassport" | "very"
 
 export type ActiveRewardIdentity = {
   id: string
@@ -23,7 +23,7 @@ export async function deriveRewardIdentityId(
 
 export function resolveRewardIdentityProvider(raw: string | undefined): RewardIdentityProvider | null {
   const provider = String(raw ?? "").trim().toLowerCase()
-  return provider === "self" || provider === "very" ? provider : null
+  return provider === "self" || provider === "zkpassport" || provider === "very" ? provider : null
 }
 
 export async function hasActiveUniqueHumanNullifier(
