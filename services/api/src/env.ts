@@ -83,6 +83,8 @@ export type Env = {
   LOCAL_COMMUNITY_DB_ROOT?: string
   /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
   COMMUNITY_D1_SHARD?: ShardRpc
+  /** JSON map from persisted shard_worker_id values to service-binding names. */
+  COMMUNITY_D1_SHARD_ROUTES?: string
   /**
    * Step 5: shared secret for the shard's admin RPCs, consulted by the
    * D1-native reconciler scheduled task (reconciler-host.ts). Must equal the

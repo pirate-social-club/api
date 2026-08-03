@@ -104,6 +104,7 @@ function env(overrides: Partial<Env> = {}): Env {
   if (!rootDir) throw new Error("test root not initialized")
   return {
     COMMUNITY_D1_SHARD: makeLocalCommunityShard() as never,
+    COMMUNITY_D1_SHARD_ROUTES: '{"test-shard":"COMMUNITY_D1_SHARD"}',
     CONTROL_PLANE_DATABASE_URL: `file:${join(rootDir, "control-plane.db")}`,
     ENVIRONMENT: "test",
     LOCAL_COMMUNITY_DB_ROOT: rootDir,

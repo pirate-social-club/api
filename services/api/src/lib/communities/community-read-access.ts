@@ -11,6 +11,7 @@ import { CommunityBindingResolver } from "./community-binding-resolver"
 import { openCommunityDb } from "./community-db-factory"
 import { makeCommunityD1Client } from "./community-d1-client"
 import { shouldUseLocalCommunityDb } from "./community-local-mode"
+import { resolveCommunityShardRpc } from "./community-shard-registry"
 import {
   routeCommunityRead,
   invalidateOnStaleBindingError,
@@ -102,14 +103,9 @@ export function makeShardReadClient(shard: ShardReadRpc, binding: ResolvedCommun
   }
 }
 
-/** Build the shard invoker for this Worker: real client if the shard binding is
- * present, else the fail-loud not-provisioned stub. */
+/** Build an invoker that dispatches through the routing row's shard Worker id. */
 function shardReadInvokerFor(env: Env): CommunityReadInvoker {
-  const shard = env.COMMUNITY_D1_SHARD
-  if (!shard) {
-    return openShardReadClientNotProvisioned
-  }
-  return async (binding) => makeShardReadClient(shard, binding)
+  return async (binding) => makeShardReadClient(resolveCommunityShardRpc(env, binding.shardWorkerId), binding)
 }
 
 async function openLocalCommunityDb(
@@ -218,15 +214,7 @@ export async function openCommunityWriteClient(
       resolver: getResolver(),
       controlPlane: getControlPlaneClient(env),
       openD1: (binding) => {
-        const shard = env.COMMUNITY_D1_SHARD
-        if (!shard) {
-          throw new HttpError(
-            503,
-            "d1_backend_not_provisioned",
-            `Community ${communityId} routes to d1 but the shard backend is not provisioned`,
-            true,
-          )
-        }
+        const shard = resolveCommunityShardRpc(env, binding.shardWorkerId)
         return makeCommunityD1Client(shard, binding)
       },
     },

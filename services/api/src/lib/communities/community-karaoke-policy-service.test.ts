@@ -176,6 +176,7 @@ async function setup() {
     env: {
       ENVIRONMENT: "test",
       COMMUNITY_D1_SHARD: makeLocalCommunityShard(`file:${communityDbPath}`) as never,
+      COMMUNITY_D1_SHARD_ROUTES: '{"test-shard":"COMMUNITY_D1_SHARD"}',
       CONTROL_PLANE_DATABASE_URL: `file:${controlDbPath}`,
     } as Env,
     repo,
