@@ -188,6 +188,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         ends_at TEXT NOT NULL,
         terms_version INTEGER NOT NULL,
         terms_hash TEXT NOT NULL,
+        activated_at TEXT,
         exhausted_at TEXT,
         ended_at TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -866,7 +867,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           WHERE e.reward_pending_qualification_id = p.reward_pending_qualification_id) AS exposure_rows
         FROM reward_pending_qualifications p
         WHERE p.reward_qualification_event_id = 'rqe_unverified_tier'`)
-      expect(state.rows[0]).toEqual({ exposure_amount_cents: null, exposure_rows: 0 })
+      expect(state.rows[0]).toEqual({ exposure_amount_cents: null, exposure_rows: "0" })
     })
   })
 
@@ -1227,6 +1228,13 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
 
   test("canonical 0189 checks and composite foreign keys reject invalid tier state", async () => {
     const db = connect(TEST_DB, 1)
+    await db.unsafe(`INSERT INTO reward_qualification_events (
+      reward_qualification_event_id, user_id, community_id, post_id,
+      activity, qualified_at, reward_period_key, source_event_id, status,
+      created_at, updated_at
+    ) VALUES ('rqe_invalid_0189', 'usr_reward_pg', 'cmt_reward_pg',
+      'pst_reward_pg', 'study', $1, '2026-07-10',
+      'rqe_invalid_0189', 'pending', $1, $1)`, [NOW])
     const invalidDecision = await postgresErrorMessage(() => db.unsafe(`
       INSERT INTO reward_nationality_decisions (
         reward_nationality_decision_id, reward_qualification_event_id,
@@ -1234,7 +1242,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         outcome, retryability, campaign_terms_version, evaluator_version,
         evaluated_at, expires_at, created_at
       ) VALUES (
-        'rnd_invalid_0189', 'rqe_reward_pg', 'rcp_reward_pg', 'usr_reward_pg',
+        'rnd_invalid_0189', 'rqe_invalid_0189', 'rcp_reward_pg', 'usr_reward_pg',
         'default', NULL, 'resolved_default', 'resolved', 1, 'test-v1',
         $1, '2027-01-01T00:00:00.000Z', $1
       )
