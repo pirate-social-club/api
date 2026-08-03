@@ -6,7 +6,9 @@ ALTER TABLE reward_nationality_decisions
 
 ALTER TABLE reward_nationality_decisions
     ADD CONSTRAINT reward_nationality_decisions_amount_shape_check CHECK (
-        (retryability = 'resolved' AND resolved_amount_cents > 0)
+        (retryability = 'resolved'
+            AND resolved_amount_cents IS NOT NULL
+            AND resolved_amount_cents > 0)
         OR (retryability <> 'resolved' AND resolved_amount_cents IS NULL)
     );
 

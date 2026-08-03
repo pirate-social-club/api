@@ -13,7 +13,10 @@ import {
   setControlPlanePostgresPoolFactoryForTests,
   withRequestControlPlaneClients,
 } from "../runtime-deps"
-import { creditRewardCampaignQualification, reconcileRewardCampaigns } from "./reward-campaign-reconciler"
+import {
+  creditRewardCampaignQualification,
+  expirePendingRewardQualifications,
+} from "./reward-campaign-reconciler"
 import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./reward-campaign-monitor"
 import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
@@ -882,12 +885,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       )`)
     await db.end()
     await withProductionPostgresClient(async (client) => {
-      await reconcileRewardCampaigns({
-        env: PG_ENV,
-        controlPlaneClient: client,
-        communityRepository: { listActiveCommunities: async () => [] } as never,
-        now: NOW,
-      })
+      await expirePendingRewardQualifications({ client, now: NOW })
       const expired = await client.execute(`SELECT p.status,
         (SELECT COUNT(*) FROM reward_pending_qualification_funding_exposures e
           WHERE e.reward_pending_qualification_id = p.reward_pending_qualification_id) AS exposure_rows

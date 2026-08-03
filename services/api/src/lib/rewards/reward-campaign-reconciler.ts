@@ -188,6 +188,31 @@ export type RewardCampaignReconciliationSummary = {
   errors: number
 }
 
+export async function expirePendingRewardQualifications(input: {
+  client: Client
+  now: string
+}): Promise<number> {
+  return withTransaction(input.client, "write", async (tx) => {
+    const expired = await tx.execute({
+      sql: `
+        UPDATE reward_pending_qualifications
+        SET status = 'expired', terminal_reason = 'verification_window_expired', updated_at = ?1
+        WHERE status IN ('pending_verification', 'reconciling') AND expires_at <= ?1
+      `,
+      args: [input.now],
+    })
+    await tx.execute(`
+      DELETE FROM reward_pending_qualification_funding_exposures
+      WHERE reward_pending_qualification_id IN (
+        SELECT reward_pending_qualification_id
+        FROM reward_pending_qualifications
+        WHERE status IN ('expired', 'ineligible', 'credited')
+      )
+    `)
+    return expired.rowsAffected ?? expired.rows.length
+  })
+}
+
 function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
   return {
     enabled,
@@ -926,23 +951,10 @@ export async function reconcileRewardCampaigns(input: {
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
-  const expiredPending = await input.controlPlaneClient.execute({
-    sql: `
-      UPDATE reward_pending_qualifications
-      SET status = 'expired', terminal_reason = 'verification_window_expired', updated_at = ?1
-      WHERE status IN ('pending_verification', 'reconciling') AND expires_at <= ?1
-    `,
-    args: [now],
+  summary.expired_pending = await expirePendingRewardQualifications({
+    client: input.controlPlaneClient,
+    now,
   })
-  await input.controlPlaneClient.execute(`
-    DELETE FROM reward_pending_qualification_funding_exposures
-    WHERE reward_pending_qualification_id IN (
-      SELECT reward_pending_qualification_id
-      FROM reward_pending_qualifications
-      WHERE status IN ('expired', 'ineligible', 'credited')
-    )
-  `)
-  summary.expired_pending = expiredPending.rowsAffected ?? expiredPending.rows.length
   const lifecycle = await advanceRewardCampaignLifecycle({ client: input.controlPlaneClient, now })
   summary.activated_campaigns = lifecycle.activated_campaigns
   summary.ended_campaigns = lifecycle.ended_campaigns
