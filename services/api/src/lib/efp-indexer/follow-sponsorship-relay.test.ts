@@ -230,7 +230,7 @@ describe("relaySponsoredFollowTransaction", () => {
     const client = relayClient()
     client.execute = async (statement): Promise<QueryResult> => {
       const query = typeof statement === "string" ? statement : statement.sql
-      if (query.includes("WHERE status = 'submitting'")) {
+      if (query.includes("FROM efp_follow_write_intents") && query.includes("sponsorship_review_after, status")) {
         return {
           rows: [{
             actor_user_id: "viewer",
@@ -245,6 +245,7 @@ describe("relaySponsoredFollowTransaction", () => {
             ],
             sponsored_transaction_count: 0,
             sponsorship_review_after: "2026-07-29T12:00:00.000Z",
+            status: "submitting",
             target_wallet_address: TARGET,
           }],
         }
@@ -282,7 +283,7 @@ describe("relaySponsoredFollowTransaction", () => {
       async execute(statement: string | InStatement): Promise<QueryResult> {
         const normalized = typeof statement === "string" ? { sql: statement } : statement
         statements.push(normalized)
-        if (normalized.sql.includes("WHERE status = 'submitting'")) return { rows: [] }
+        if (normalized.sql.includes("sponsorship_review_after, status")) return { rows: [] }
         if (normalized.sql.includes("ROW_NUMBER() OVER")) {
           expect(normalized.sql).toContain("ORDER BY created_at ASC, follow_write_intent_id ASC")
           return { rows: [{ follow_write_intent_id: `efw_${"c".repeat(32)}` }] }
@@ -336,5 +337,104 @@ describe("relaySponsoredFollowTransaction", () => {
       statement.sql.includes("Superseded duplicate bootstrap")
     )
     expect(failedDuplicate?.args?.[0]).toBe(`efw_${"c".repeat(32)}`)
+  })
+
+  test("recovers indexed evidence after manual review and refunds only the unbroadcast suffix", async () => {
+    const statements: InStatement[] = []
+    const intentId = `efw_${"d".repeat(32)}`
+    const db = {
+      async execute(statement: string | InStatement): Promise<QueryResult> {
+        const normalized = typeof statement === "string" ? { sql: statement } : statement
+        statements.push(normalized)
+        if (normalized.sql.includes("sponsorship_review_after, status")) {
+          return {
+            rows: [{
+              actor_user_id: "viewer",
+              actor_wallet_address: VIEWER,
+              desired_following: 1,
+              follow_write_intent_id: intentId,
+              list_chain_id: 8453,
+              list_slot: "123",
+              prepared_transactions_json: [
+                { chain_id: 8453, data: DATA_ONE, to: RECORDS },
+                { chain_id: 8453, data: DATA_TWO, to: RECORDS },
+              ],
+              sponsored_transaction_count: 0,
+              sponsorship_review_after: null,
+              status: "manual_review",
+              target_wallet_address: TARGET,
+            }],
+          }
+        }
+        if (normalized.sql.includes("FROM efp_list_ops")) {
+          expect(normalized.sql).toContain("lower(substr(raw_op, length(raw_op) - 39, 40))")
+          return { rows: [{ transaction_hash: HASH }] }
+        }
+        if (normalized.sql.includes("ROW_NUMBER() OVER")) return { rows: [] }
+        if (normalized.sql.includes("status = 'expired'")) return { rows: [], rowsAffected: 0 }
+        throw new Error(`Unexpected SQL: ${normalized.sql}`)
+      },
+      async batch() { return [] },
+      async transaction(): Promise<Transaction> {
+        return {
+          async execute(statement): Promise<QueryResult> {
+            const normalized = typeof statement === "string" ? { sql: statement } : statement
+            statements.push(normalized)
+            if (normalized.sql.includes("status = 'manual_review'") && normalized.sql.includes("FOR UPDATE")) {
+              return {
+                rows: [{
+                  actor_wallet_address: VIEWER,
+                  created_at: "2026-07-30T12:02:11.088Z",
+                  prepared_transaction_count: 2,
+                  sponsored_transaction_count: 0,
+                  sponsorship_budget_date: null,
+                  target_wallet_address: TARGET,
+                  transaction_hashes_json: [],
+                }],
+              }
+            }
+            return { rows: [], rowsAffected: 1 }
+          },
+          async batch() { return [] },
+          async commit() {},
+          async rollback() {},
+          close() {},
+        }
+      },
+    } satisfies Client
+
+    const result = await reconcilePendingPrivyFollowSubmissions({
+      client: db,
+      env: {
+        PRIVY_APP_ID: "app",
+        PRIVY_APP_SECRET: "secret",
+        EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT: "100",
+        EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION: "800",
+      } as Env,
+      now: new Date("2026-08-03T12:00:00.000Z"),
+      fetcher: async () => { throw new Error("Privy lookup must not run when chain evidence exists") },
+    })
+
+    expect(result).toEqual({
+      examined: 1,
+      recovered: 1,
+      expired: 0,
+      manual_review: 0,
+      superseded: 0,
+    })
+    const refund = statements.find((statement) =>
+      statement.sql.includes("consumed_transactions = consumed_transactions - ?2")
+    )
+    expect(refund?.args).toEqual(["2026-07-30", 1, "2026-08-03T12:00:00.000Z"])
+    const recovered = statements.find((statement) =>
+      statement.sql.includes("Recovered sponsored transaction from indexed chain evidence")
+    )
+    expect(recovered?.args).toEqual([
+      intentId,
+      1,
+      JSON.stringify([HASH]),
+      "prepared",
+      "2026-08-03T12:00:00.000Z",
+    ])
   })
 })

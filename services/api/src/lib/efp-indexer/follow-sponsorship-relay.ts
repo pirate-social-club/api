@@ -608,7 +608,17 @@ async function hashFromIndexedChainEvidence(input: {
         WHERE chain_id = ?1
           AND contract_address = ?2
           AND slot = ?3
-          AND target_address = ?4
+          AND (
+            target_address = ?4
+            OR (
+              target_address IS NULL
+              AND op_version = 1
+              AND record_version = 1
+              AND record_type = 36
+              AND lower(substr(raw_op, length(raw_op) - 39, 40)) =
+                  lower(substr(?4, length(?4) - 39, 40))
+            )
+          )
           AND opcode = ?5
         ORDER BY block_number ASC, transaction_index ASC, log_index ASC
         LIMIT 1
@@ -715,7 +725,6 @@ async function markSubmissionForManualReview(input: {
         UPDATE efp_follow_write_intents
         SET status = 'manual_review',
             sponsorship_reserved_transaction_count = 0,
-            sponsorship_budget_date = NULL,
             sponsorship_review_after = NULL,
             last_error = 'Submission outcome remained unknown after the review window; budget charged conservatively',
             updated_at = ?2
@@ -724,6 +733,102 @@ async function markSubmissionForManualReview(input: {
       args: [input.intentId, input.now],
     })
     return true
+  })
+}
+
+async function recoverManualReviewFromChainEvidence(input: {
+  client: Client
+  actorUserId: string
+  intentId: string
+  txHash: Hex
+  now: string
+}): Promise<void> {
+  await withTransaction(input.client, "write", async (tx) => {
+    const result = await tx.execute({
+      sql: `
+        SELECT prepared_transaction_count, sponsored_transaction_count,
+               actor_wallet_address, target_wallet_address, transaction_hashes_json,
+               sponsorship_budget_date, created_at
+        FROM efp_follow_write_intents
+        WHERE follow_write_intent_id = ?1
+          AND actor_user_id = ?2
+          AND status = 'manual_review'
+        FOR UPDATE
+      `,
+      args: [input.intentId, input.actorUserId],
+    })
+    const row = result.rows[0]
+    if (!row) throw conflictError("Follow write intent left manual review before recovery")
+    const preparedCount = numberValue(row, "prepared_transaction_count")
+    const nextCount = numberValue(row, "sponsored_transaction_count") + 1
+    if (nextCount > preparedCount) throw conflictError("Follow sponsorship recovery count is invalid")
+    const refundCount = preparedCount - nextCount
+    const budgetDate = String(row.sponsorship_budget_date ?? row.created_at).slice(0, 10)
+    if (!/^\d{4}-\d{2}-\d{2}$/u.test(budgetDate)) {
+      throw conflictError("Follow sponsorship review has no recoverable budget date")
+    }
+    if (refundCount > 0) {
+      const budgetUpdate = await tx.execute({
+        sql: `
+          UPDATE efp_follow_sponsorship_daily_budgets
+          SET consumed_transactions = consumed_transactions - ?2,
+              updated_at = ?3
+          WHERE budget_date = ?1
+            AND consumed_transactions >= ?2
+        `,
+        args: [budgetDate, refundCount, input.now],
+      })
+      if (budgetUpdate.rowsAffected !== 1) {
+        throw conflictError("Follow sponsorship review budget cannot be reconciled")
+      }
+    }
+    const hashes = Array.isArray(row.transaction_hashes_json)
+      ? row.transaction_hashes_json
+      : JSON.parse(String(row.transaction_hashes_json))
+    hashes.push(input.txHash)
+    const complete = nextCount === preparedCount
+    await tx.execute({
+      sql: `
+        UPDATE efp_follow_write_intents
+        SET sponsored_transaction_count = ?2,
+            transaction_hashes_json = ?3,
+            status = ?4,
+            sponsorship_budget_date = NULL,
+            last_error = 'Recovered sponsored transaction from indexed chain evidence',
+            submitted_at = CASE WHEN ?4 = 'submitted' THEN ?5 ELSE submitted_at END,
+            updated_at = ?5
+        WHERE follow_write_intent_id = ?1
+          AND status = 'manual_review'
+      `,
+      args: [
+        input.intentId,
+        nextCount,
+        JSON.stringify(hashes),
+        complete ? "submitted" : "prepared",
+        input.now,
+      ],
+    })
+    if (complete) {
+      for (const wallet of [String(row.actor_wallet_address), String(row.target_wallet_address)]) {
+        await tx.execute({
+          sql: `
+            INSERT INTO efp_follow_reconciliation_queue (
+              wallet_address, requested_by_follow_write_intent_id, status,
+              requested_at, available_at, updated_at
+            ) VALUES (?1, ?2, 'pending', ?3, ?3, ?3)
+            ON CONFLICT (wallet_address) DO UPDATE SET
+              requested_by_follow_write_intent_id = excluded.requested_by_follow_write_intent_id,
+              status = 'pending',
+              requested_at = excluded.requested_at,
+              available_at = excluded.available_at,
+              completed_at = NULL,
+              last_error = NULL,
+              updated_at = excluded.updated_at
+          `,
+          args: [wallet, input.intentId, input.now],
+        })
+      }
+    }
   })
 }
 
@@ -820,10 +925,11 @@ export async function reconcilePendingPrivyFollowSubmissions(input: {
       SELECT follow_write_intent_id, actor_user_id, actor_wallet_address,
              target_wallet_address, desired_following, list_chain_id, list_slot,
              prepared_transactions_json, sponsored_transaction_count,
-             sponsorship_review_after
+             sponsorship_review_after, status
       FROM efp_follow_write_intents
-      WHERE status = 'submitting'
-        AND updated_at <= CURRENT_TIMESTAMP - INTERVAL '30 seconds'
+      WHERE (status = 'submitting'
+             AND updated_at <= CURRENT_TIMESTAMP - INTERVAL '30 seconds')
+         OR status = 'manual_review'
       ORDER BY updated_at ASC
       LIMIT ?1
     `,
@@ -858,20 +964,30 @@ export async function reconcilePendingPrivyFollowSubmissions(input: {
       }
     }
     if (!hash) {
-      if (await markSubmissionForManualReview({
+      if (String(row.status) === "submitting" && await markSubmissionForManualReview({
         client: input.client,
         intentId,
         now,
       })) manualReview += 1
       continue
     }
-    await finalizeSend({
-      client: input.client,
-      actorUserId,
-      intentId,
-      txHash: hash,
-      now,
-    })
+    if (String(row.status) === "manual_review") {
+      await recoverManualReviewFromChainEvidence({
+        client: input.client,
+        actorUserId,
+        intentId,
+        txHash: hash,
+        now,
+      })
+    } else {
+      await finalizeSend({
+        client: input.client,
+        actorUserId,
+        intentId,
+        txHash: hash,
+        now,
+      })
+    }
     recovered += 1
   }
   const superseded = await supersedeDuplicatePartialIntents({ client: input.client, now })
