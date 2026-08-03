@@ -287,6 +287,51 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(IDENTITY_PROVIDER_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
+        ADD COLUMN default_amount_cents INTEGER NOT NULL DEFAULT 40,
+        ADD COLUMN max_claim_cents INTEGER NOT NULL DEFAULT 40,
+        ADD COLUMN payout_tiers_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+      ALTER TABLE reward_pending_qualifications
+        ADD COLUMN exposure_amount_cents INTEGER;
+      CREATE TABLE user_attestations (
+        user_attestation_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+        source_verification_session_id TEXT, provider TEXT NOT NULL,
+        attestation_type TEXT NOT NULL, capability_key TEXT NOT NULL,
+        status TEXT NOT NULL, value_json JSONB NOT NULL, verified_at TEXT NOT NULL,
+        revoked_at TEXT, source_identity_nullifier_id TEXT
+      );
+      CREATE TABLE reward_identity_bindings (
+        reward_identity_binding_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
+        identity_nullifier_id TEXT NOT NULL, status TEXT NOT NULL,
+        selected_at TEXT NOT NULL, superseded_at TEXT
+      );
+      CREATE TABLE reward_nationality_decisions (
+        reward_nationality_decision_id TEXT PRIMARY KEY,
+        reward_qualification_event_id TEXT NOT NULL UNIQUE,
+        reward_campaign_id TEXT NOT NULL, user_id TEXT NOT NULL,
+        result_key TEXT, resolved_amount_cents INTEGER, outcome TEXT NOT NULL,
+        retryability TEXT NOT NULL, campaign_terms_version INTEGER NOT NULL,
+        evaluator_version TEXT NOT NULL, evaluated_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE reward_pending_qualification_funding_exposures (
+        reward_pending_qualification_id TEXT NOT NULL,
+        reward_campaign_id TEXT NOT NULL,
+        reward_campaign_funding_effect_id TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL, exposed_at TEXT NOT NULL,
+        PRIMARY KEY (reward_pending_qualification_id, reward_campaign_funding_effect_id)
+      );
+      CREATE TABLE reward_identity_binding_enforcements (
+        reward_identity_binding_enforcement_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL, reward_campaign_id TEXT NOT NULL,
+        status TEXT NOT NULL, reason TEXT NOT NULL,
+        first_detected_at TEXT NOT NULL, last_detected_at TEXT NOT NULL,
+        cleared_at TEXT, expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE (user_id, reward_campaign_id)
+      );
+    `)
+    await db.unsafe(`
+      ALTER TABLE reward_campaigns
         ADD COLUMN status_before_operational_hold TEXT,
         ADD COLUMN operational_hold_reason TEXT,
         ADD COLUMN operational_held_at TIMESTAMPTZ,
@@ -612,6 +657,100 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       amount_cents: 40,
       reward_campaign_funding_effect_id: "rcf_seed_rcp_reward_pg",
     }])
+  })
+
+  test("mixed-tier claimants concurrently reserve exact amounts without crossing funded lots", async () => {
+    const seed = connect(TEST_DB, 1)
+    for (const claimant of [
+      { suffix: "vn", nationality: "VNM", amount: 60 },
+      { suffix: "us", nationality: "USA", amount: 80 },
+    ]) {
+      await seed.unsafe(`INSERT INTO users VALUES ($1, $2)`, [
+        `usr_tier_${claimant.suffix}`,
+        JSON.stringify({ unique_human: { state: "verified", provider: "self",
+          mechanism: "passport", verified_at: NOW } }),
+      ])
+      await seed.unsafe(`INSERT INTO identity_nullifiers VALUES (
+        $1, $2, 'self', 'passport', $3, 'active', $4
+      )`, [`idn_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`,
+        `tier-${claimant.suffix}-nullifier`, NOW])
+      await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
+        $1, $2, $3, 'active', $4, NULL
+      )`, [`rib_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`,
+        `idn_tier_${claimant.suffix}`, NOW])
+      await seed.unsafe(`INSERT INTO user_attestations VALUES (
+        $1, $2, NULL, 'self', 'nationality', 'nationality', 'accepted',
+        $3::jsonb, $4, NULL, $5
+      )`, [`att_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`,
+        JSON.stringify({ nationality: claimant.nationality }), NOW,
+        `idn_tier_${claimant.suffix}`])
+      await seed.unsafe(`INSERT INTO reward_qualification_events (
+        reward_qualification_event_id, user_id, community_id, post_id,
+        activity, qualified_at, reward_period_key, source_event_id, status,
+        created_at, updated_at
+      ) VALUES ($1, $2, 'cmt_reward_pg', 'pst_tier_pg', 'study', $3,
+        '2026-07-10', $1, 'pending', $3, $3)`, [
+        `rqe_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`, NOW,
+      ])
+    }
+    await seed.unsafe(`INSERT INTO reward_campaigns (
+      reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+      community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+      status, eligible_activity, daily_reward_cents, default_amount_cents,
+      max_claim_cents, payout_tiers_json, reward_period_cap_cents,
+      budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+      refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at
+    ) VALUES (
+      'rcp_tier_pg', 'usr_reward_pg', 'tier-pg', 'cmt_reward_pg', 'pst_tier_pg',
+      'sab_tier_pg', 'usr_reward_pg', 'active', 'study', 40, 40, 80,
+      '[{"nationalities":["VNM"],"amount_cents":60},{"nationalities":["USA"],"amount_cents":80}]',
+      80, 140, 140, 0, 0, 0, 0, 4, 'terms-tier-pg',
+      '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
+    )`, [NOW])
+    for (const suffix of ["a", "b"]) {
+      await seed.unsafe(`INSERT INTO reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id, reward_campaign_id, status,
+        expected_amount_cents, confirmed_at
+      ) VALUES ($1, 'rcp_tier_pg', 'confirmed', 70, $2)`, [`rcf_tier_${suffix}`, NOW])
+    }
+    await seed.end()
+
+    await withProductionPostgresClient(async (client) => {
+      const results = await Promise.all(["vn", "us"].map((suffix) =>
+        creditRewardCampaignQualification({
+          env: PG_ENV,
+          client,
+          now: NOW,
+          candidate: {
+            eventId: `rqe_tier_${suffix}`,
+            userId: `usr_tier_${suffix}`,
+            communityId: "cmt_reward_pg",
+            postId: "pst_tier_pg",
+            artifactBundleId: "sab_tier_pg",
+            activity: "study",
+            qualifiedAt: NOW,
+            periodKey: "2026-07-10",
+            policyVersion: "study-completed-set-v1",
+          },
+        })
+      ))
+      expect(results.map((result) => result.amountCents).sort()).toEqual([60, 80])
+      const invariant = await client.execute(`SELECT
+        c.funded_cents, c.reserved_cents, c.credited_cents, c.refunded_cents,
+        (SELECT SUM(amount_cents) FROM reward_campaign_reservation_funding_allocations a
+          JOIN reward_campaign_reservations r USING (reward_campaign_reservation_id)
+          WHERE r.reward_campaign_id = c.reward_campaign_id) AS allocated_cents,
+        (SELECT COUNT(*) FROM reward_pending_qualification_funding_exposures e
+          WHERE e.reward_campaign_id = c.reward_campaign_id) AS pending_exposures
+        FROM reward_campaigns c WHERE c.reward_campaign_id = 'rcp_tier_pg'`)
+      const row = invariant.rows[0]!
+      expect(Number(row.funded_cents)).toBe(140)
+      expect(Number(row.reserved_cents) + Number(row.credited_cents)
+        + Number(row.refunded_cents)).toBeLessThanOrEqual(Number(row.funded_cents))
+      expect(Number(row.credited_cents)).toBe(140)
+      expect(Number(row.allocated_cents)).toBe(140)
+      expect(Number(row.pending_exposures)).toBe(0)
+    })
   })
 
   test("uses the permanent pool provider and fails closed for another provider", async () => {
