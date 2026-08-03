@@ -232,7 +232,14 @@ describe("reward campaign reconciler", () => {
       `,
       args: [session.userId, now],
     })
-    expect(await creditRewardCampaignQualification({ env: ctx.env, client: ctx.client, candidate, now })).toEqual({
+    expect(await creditRewardCampaignQualification({
+      // Deliberately disagrees with the persisted `self` pool. The campaign
+      // term must win and allow the Self identity to credit.
+      env: { ...ctx.env, REWARDS_IDENTITY_PROVIDER: "very" },
+      client: ctx.client,
+      candidate,
+      now,
+    })).toEqual({
       result: "credited",
       amountCents: 100,
     })
@@ -310,7 +317,7 @@ describe("reward campaign reconciler", () => {
     })
   })
 
-  test("fails closed unless campaign flags, identity provider, and alert ownership are configured", async () => {
+  test("fails closed unless campaign flags and alert ownership are configured", async () => {
     let listed = false
     const summary = await reconcileRewardCampaigns({
       env: { ...env(), REWARDS_CAMPAIGNS_ENABLED: "false" } as never,
@@ -354,6 +361,7 @@ describe("reward campaign reconciler", () => {
     })
     expect(withoutDeliverySink.enabled).toBe(false)
     expect(listed).toBe(false)
+
   })
 
   test("checkpoints qualifications and atomically credits one identity/song/period reward", async () => {

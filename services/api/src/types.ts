@@ -178,7 +178,7 @@ type RewardsCashoutSummary = {
   eligible: boolean
   min_cents: number
   verification_state: RewardVerificationState
-  verification_provider: "self" | "very" | null
+  verification_provider: "self" | "zkpassport" | "very" | null
 }
 
 type RewardPendingVerificationSummary = {

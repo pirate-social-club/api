@@ -2879,7 +2879,7 @@ export type RewardsCashoutSummary = {
   eligible: boolean;
   min_cents: number;
   verification_state: RewardVerificationState;
-  verification_provider: "self" | "very" | null;
+  verification_provider: "self" | "zkpassport" | "very" | null;
 };
 
 export type RewardsSummaryResponse = {
@@ -2957,7 +2957,7 @@ export type RewardIdentityBinding = {
 
 export type RewardIdentityBindingResponse = {
   capability: RewardIdentityBindingCapability;
-  provider: "self" | "very" | null;
+  provider: "self" | "zkpassport" | "very" | null;
   active_binding: RewardIdentityBinding | null;
   selectable_documents: Array<RewardIdentityBindingDocument>;
 };
@@ -3014,6 +3014,7 @@ export type RewardCampaign = {
   post: string;
   song_artifact_bundle: string;
   song_owner: string;
+  reward_identity_provider: "self" | "zkpassport" | "very";
   status: RewardCampaignStatus;
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
@@ -3044,6 +3045,7 @@ export type RewardCampaign = {
 export type RewardCampaignCreateRequest = {
   community: string;
   post: string;
+  reward_identity_provider: "self" | "zkpassport" | "very";
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
   daily_reward_cents: number;
@@ -3082,6 +3084,7 @@ export type RewardCampaignFundingQuote = {
 export type RewardCampaignFundingQuoteRequest = {
   amount_cents: number;
   idempotency_key: string;
+  reward_identity_provider?: "self" | "zkpassport" | "very";
 };
 
 export type RewardCampaignFundingConfirmRequest = {

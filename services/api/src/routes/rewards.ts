@@ -316,7 +316,11 @@ rewards.put("/reward_song_policies/:communityId/:postId", async (c) => {
 
 rewards.post("/reward_campaigns/:campaignId/funding_quotes", async (c) => {
   const actor = c.get("actor")
-  const body = await c.req.json<{ amount_cents?: unknown; idempotency_key?: unknown }>().catch(() => null)
+  const body = await c.req.json<{
+    amount_cents?: unknown
+    idempotency_key?: unknown
+    reward_identity_provider?: unknown
+  }>().catch(() => null)
   if (!body || typeof body !== "object") throw badRequestError("Invalid reward funding quote payload")
   const result = await createRewardCampaignFundingQuote({
     env: c.env,
@@ -325,6 +329,7 @@ rewards.post("/reward_campaigns/:campaignId/funding_quotes", async (c) => {
     campaignId: c.req.param("campaignId"),
     amountCents: Number(body.amount_cents),
     idempotencyKey: typeof body.idempotency_key === "string" ? body.idempotency_key : "",
+    rewardIdentityProvider: body.reward_identity_provider,
   })
   return c.json(result, 201, { "cache-control": "no-store" })
 })
