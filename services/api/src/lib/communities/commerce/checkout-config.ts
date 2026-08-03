@@ -71,10 +71,21 @@ export function resolvePirateCheckoutUsdcTokenAddress(env: Env): string {
 }
 
 export function resolvePirateCheckoutRpcUrl(env: Env): string {
-  const explicit = String(env.PIRATE_CHECKOUT_RPC_URL || "").trim()
-  if (explicit) return explicit
-
   const chainId = resolvePirateCheckoutSourceChainId(env)
+
+  // PIRATE_CHECKOUT_RPC_URL is an injected secret with no chain in its name,
+  // so after a source-chain cutover it is the piece of config most likely to
+  // still point at the old network. A stale RPC does not misdirect funds
+  // (ethers pins the provider to the expected chain id) but it does strand
+  // every payment in "pending", which is silent. Reject it loudly instead.
+  const explicit = String(env.PIRATE_CHECKOUT_RPC_URL || "").trim()
+  if (explicit) {
+    if (chainId === BASE_MAINNET_CHAIN_ID && /(^|[.\/])sepolia\./i.test(explicit)) {
+      throw badRequestError("PIRATE_CHECKOUT_RPC_URL points at a testnet while checkout is on Base mainnet")
+    }
+    return explicit
+  }
+
   if (chainId === BASE_MAINNET_CHAIN_ID) {
     const baseRpc = String(env.BASE_MAINNET_RPC_URL || env.ETHEREUM_RPC_URL || "").trim()
     if (baseRpc) return baseRpc
