@@ -4,6 +4,23 @@
 ALTER TABLE reward_nationality_decisions
     ADD COLUMN resolved_amount_cents INTEGER;
 
+-- Decisions written while nationality evaluation was in shadow mode already
+-- carry the immutable campaign terms version and result key, but predate the
+-- materialized amount column. Reconstruct the amount from those campaign terms
+-- before making the resolved-row shape constraint valid.
+UPDATE reward_nationality_decisions AS decision
+SET resolved_amount_cents = CASE
+    WHEN decision.result_key = 'default'
+        THEN campaign.default_amount_cents
+    WHEN decision.result_key ~ '^tier:[0-9]+$'
+        THEN ((campaign.payout_tiers_json ->
+            split_part(decision.result_key, ':', 2)::INTEGER) ->> 'amount_cents')::INTEGER
+    ELSE NULL
+END
+FROM reward_campaigns AS campaign
+WHERE decision.reward_campaign_id = campaign.reward_campaign_id
+  AND decision.retryability = 'resolved';
+
 ALTER TABLE reward_nationality_decisions
     ADD CONSTRAINT reward_nationality_decisions_amount_shape_check CHECK (
         (retryability = 'resolved'
