@@ -874,7 +874,14 @@ async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
     client: getControlPlaneClient(env),
     limit: 100,
   })
-  await recordEfpFollowAdoptionSnapshot({ client: getControlPlaneClient(env) })
+  const adoptionSnapshotStartedAtMs = Date.now()
+  const adoptionSnapshot = await recordEfpFollowAdoptionSnapshot({ client: getControlPlaneClient(env) })
+  console.info(JSON.stringify({
+    component: "efp_follow_writes",
+    operation: "adoption_snapshot",
+    recorded: adoptionSnapshot.recorded,
+    duration_ms: Date.now() - adoptionSnapshotStartedAtMs,
+  }))
   if (summary.examined > 0 || sponsorship.examined > 0) {
     console.info(JSON.stringify({
       component: "efp_follow_writes",
