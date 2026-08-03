@@ -18,6 +18,7 @@ import {
 import {
   readEfpIndexerCursor,
   replaceEfpIndexerRange,
+  type EfpRangeReplacementSummary,
   type PersistedEfpListOp,
   type PersistedListStorageLocationEvent,
   type PersistedPrimaryListEvent,
@@ -205,6 +206,7 @@ export type EfpScanSummary = {
   unsupportedListOpCount: number
   primaryListEventCount: number
   storageLocationEventCount: number
+  replacement?: EfpRangeReplacementSummary
 }
 
 export async function scanEfpChainOnce(input: {
@@ -373,7 +375,7 @@ export async function scanEfpChainOnce(input: {
     }
   })
   const scanCompletedAt = now().toISOString()
-  await replaceEfpIndexerRange({
+  const replacement = await replaceEfpIndexerRange({
     client: input.client,
     chainId: config.chainId,
     fromBlock,
@@ -413,6 +415,7 @@ export async function scanEfpChainOnce(input: {
     unsupportedListOpCount: listOps.filter((item) => item.decoded.classification === "unsupported").length,
     primaryListEventCount: primaryListEvents.length,
     storageLocationEventCount: storageLocationEvents.length,
+    replacement,
   }
 }
 
