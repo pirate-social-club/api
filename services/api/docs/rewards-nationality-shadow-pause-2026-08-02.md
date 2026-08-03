@@ -30,3 +30,8 @@ qualification, or settlement. Staging and production are explicitly configured
 
 Re-enabling collection requires an approved data policy and a reviewed config
 change. Retain-versus-delete remains explicitly undecided.
+
+The forward-looking policy proposal and activation checklist are documented in
+`rewards-nationality-data-policy-proposal.md`. The proposal does not authorize
+collection, and its retention periods remain subject to owner, privacy, and
+compliance approval.
