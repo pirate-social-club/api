@@ -737,7 +737,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       expect(results.map((result) => result.amountCents).sort()).toEqual([60, 80])
       const invariant = await client.execute(`SELECT
         c.funded_cents, c.reserved_cents, c.credited_cents, c.refunded_cents,
-        (SELECT SUM(amount_cents) FROM reward_campaign_reservation_funding_allocations a
+        (SELECT SUM(a.amount_cents) FROM reward_campaign_reservation_funding_allocations a
           JOIN reward_campaign_reservations r USING (reward_campaign_reservation_id)
           WHERE r.reward_campaign_id = c.reward_campaign_id) AS allocated_cents,
         (SELECT COUNT(*) FROM reward_pending_qualification_funding_exposures e
