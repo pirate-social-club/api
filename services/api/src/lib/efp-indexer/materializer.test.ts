@@ -15,6 +15,7 @@ import {
   type EfpProjectionRebuildStats,
 } from "./materializer"
 import { replaceEfpIndexerRange } from "./repository"
+import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
 
 const FOLLOWER = "0x1111111111111111111111111111111111111111" as Address
@@ -123,6 +124,59 @@ function spyGraphWrites(client: Client): { client: Client; statements: string[] 
       },
     },
   }
+}
+
+function rawAddOp(target: Address) {
+  return `0x01010101${target.slice(2)}`.toLowerCase()
+}
+
+function primaryListEvent(account: Address, listId: bigint, blockNumber: number) {
+  return {
+    sql: `INSERT INTO efp_primary_list_events (
+      chain_id, contract_address, account_address, metadata_key, raw_value,
+      list_id, block_number, block_hash, transaction_hash, transaction_index,
+      log_index, created_at
+    ) VALUES (8453, ?1, ?2, 'primary-list', '0x', ?3, ?4, ?5, ?5, 0, 0, ?6)`,
+    args: [CONTRACT, account, listId.toString(), blockNumber, HASH, NOW],
+  }
+}
+
+function storageLocationEvent(listId: bigint, slot: bigint, blockNumber: number) {
+  return {
+    sql: `INSERT INTO efp_list_storage_location_events (
+      chain_id, registry_address, list_id, raw_storage_location,
+      storage_chain_id, storage_contract_address, storage_slot,
+      block_number, block_hash, transaction_hash, transaction_index,
+      log_index, created_at
+    ) VALUES (8453, ?1, ?2, '0x', 8453, ?1, ?3, ?4, ?5, ?5, 0, 0, ?6)`,
+    args: [CONTRACT, listId.toString(), slot.toString(), blockNumber, HASH, NOW],
+  }
+}
+
+function listOp(slot: bigint, rawOp: string, blockNumber: number) {
+  return {
+    sql: `INSERT INTO efp_list_ops (
+      chain_id, contract_address, slot, block_number, block_hash,
+      transaction_hash, transaction_index, log_index, raw_op
+    ) VALUES (8453, ?1, ?2, ?3, ?4, ?4, 0, 0, ?5)`,
+    args: [CONTRACT, slot.toString(), blockNumber, HASH, rawOp],
+  }
+}
+
+async function rebuildWithExecuteSpy(
+  client: Client,
+  input: Omit<Parameters<typeof rebuildEfpProjectionAfterRangeReplacement>[0], "tx">,
+): Promise<string[]> {
+  const statements: string[] = []
+  await withTransaction(client, "write", async (tx) => {
+    const execute = tx.execute.bind(tx)
+    tx.execute = async (statement) => {
+      statements.push(typeof statement === "string" ? statement : statement.sql)
+      return execute(statement)
+    }
+    await rebuildEfpProjectionAfterRangeReplacement({ ...input, tx })
+  })
+  return statements
 }
 
 describe("EFP follow materializer", () => {
@@ -934,5 +988,240 @@ describe("EFP follow materializer", () => {
        FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453`,
     )
     expect(watermark.rows).toEqual([{ applied_through_block: 120, projection_revision: 2 }])
+  })
+
+  test("batched lookup resolves the same follower union as per-slot semantics", async () => {
+    const client = await setup()
+    const slotOneOwner = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address
+    const slotTwoOwner = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as Address
+    const listIdOwner = "0xcccccccccccccccccccccccccccccccccccccccc" as Address
+    const stalePointerOwner = "0xdddddddddddddddddddddddddddddddddddddddd" as Address
+    const movedPrimaryOwner = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" as Address
+    const projectedOnly = "0xffffffffffffffffffffffffffffffffffffffff" as Address
+    const directAccount = "0x9999999999999999999999999999999999999999" as Address
+    const targetOne = "0x1010101010101010101010101010101010101010" as Address
+    const targetTwo = "0x2020202020202020202020202020202020202020" as Address
+    const targetThree = "0x3030303030303030303030303030303030303030" as Address
+    const staleTarget = "0x4040404040404040404040404040404040404040" as Address
+    const projectedTarget = "0x5050505050505050505050505050505050505050" as Address
+    await client.batch([
+      // Projected-only follower of affected slot 11; re-derived to zero edges.
+      {
+        sql: "INSERT INTO efp_effective_follows VALUES (?1, ?2, 8453, ?3, '11', 100, ?4, 0, 0, ?5)",
+        args: [projectedOnly, projectedTarget, CONTRACT, HASH, NOW],
+      },
+      // stalePointerOwner keeps a projected edge on unaffected slot 44.
+      {
+        sql: "INSERT INTO efp_effective_follows VALUES (?1, ?2, 8453, ?3, '44', 100, ?4, 0, 0, ?5)",
+        args: [stalePointerOwner, staleTarget, CONTRACT, HASH, NOW],
+      },
+      primaryListEvent(slotOneOwner, 1n, 10),
+      storageLocationEvent(1n, 11n, 20),
+      listOp(11n, rawAddOp(targetOne), 30),
+      primaryListEvent(slotTwoOwner, 2n, 10),
+      storageLocationEvent(2n, 22n, 20),
+      listOp(22n, rawAddOp(targetTwo), 30),
+      primaryListEvent(listIdOwner, 3n, 10),
+      storageLocationEvent(3n, 33n, 20),
+      listOp(33n, rawAddOp(targetThree), 30),
+      // List 4 once pointed at affected slot 11 but its latest event moved to 44.
+      primaryListEvent(stalePointerOwner, 4n, 10),
+      storageLocationEvent(4n, 11n, 15),
+      storageLocationEvent(4n, 44n, 25),
+      // movedPrimaryOwner's latest primary list is 6 on unaffected slot 66;
+      // only its older list 5 still sits on affected slot 22.
+      primaryListEvent(movedPrimaryOwner, 5n, 5),
+      primaryListEvent(movedPrimaryOwner, 6n, 30),
+      storageLocationEvent(5n, 22n, 20),
+      storageLocationEvent(6n, 66n, 20),
+    ], "write")
+
+    const stats = await withTransaction(client, "write", (tx) =>
+      rebuildEfpProjectionAfterRangeReplacement({
+        tx,
+        affectedSlots: [
+          { chainId: 8453, contractAddress: CONTRACT, slot: 11n },
+          { chainId: 8453, contractAddress: CONTRACT, slot: 22n },
+        ],
+        affectedAccounts: [directAccount],
+        affectedListIds: [3n],
+        chainId: 8453,
+        appliedThroughBlock: 200n,
+        appliedThroughBlockHash: HASH,
+        projectionRevision: 7n,
+        now: NOW,
+      }))
+
+    // All five expected followers (4 with edge changes + directAccount) are in
+    // the resolution set.
+    expect(stats.followers).toBe(5)
+
+    const edges = await client.execute(
+      `SELECT follower_address, followed_address, list_slot
+       FROM efp_effective_follows ORDER BY follower_address`,
+    )
+    expect(edges.rows).toEqual([
+      { follower_address: slotOneOwner, followed_address: targetOne, list_slot: "11" },
+      { follower_address: slotTwoOwner, followed_address: targetTwo, list_slot: "22" },
+      { follower_address: listIdOwner, followed_address: targetThree, list_slot: "33" },
+      { follower_address: stalePointerOwner, followed_address: staleTarget, list_slot: "44" },
+    ])
+    const counts = await client.execute("SELECT wallet_address FROM efp_follow_counts")
+    const wallets = new Set(counts.rows.map((row) => row.wallet_address))
+    for (const expected of [
+      slotOneOwner,
+      slotTwoOwner,
+      listIdOwner,
+      projectedOnly,
+    ]) {
+      expect(wallets.has(expected)).toBe(true)
+    }
+    // directAccount had no edges before or after, so the differential
+    // projection writes it no counts row (missing reads as zero while the
+    // projection is current); its resolution is proven by stats.followers.
+    expect(wallets.has(directAccount)).toBe(false)
+    expect(wallets.has(stalePointerOwner)).toBe(false)
+    expect(wallets.has(movedPrimaryOwner)).toBe(false)
+  })
+
+  test("pointer history: only the latest storage event makes a slot authoritative", async () => {
+    const client = await setup()
+    const movedOffOwner = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Address
+    const onSlotOwner = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as Address
+    const target = "0x1010101010101010101010101010101010101010" as Address
+    const strandedTarget = "0x6060606060606060606060606060606060606060" as Address
+    await client.batch([
+      // List 8 pointed at affected slot 77 at block 10, then moved to slot 99.
+      primaryListEvent(movedOffOwner, 8n, 5),
+      storageLocationEvent(8n, 77n, 10),
+      storageLocationEvent(8n, 99n, 20),
+      // List 9 currently points at affected slot 77.
+      primaryListEvent(onSlotOwner, 9n, 5),
+      storageLocationEvent(9n, 77n, 15),
+      listOp(77n, rawAddOp(target), 30),
+      // Pre-existing edge on the list's current (unaffected) slot: survives
+      // only when the rebuild does not treat movedOffOwner as affected.
+      {
+        sql: "INSERT INTO efp_effective_follows VALUES (?1, ?2, 8453, ?3, '99', 100, ?4, 0, 0, ?5)",
+        args: [movedOffOwner, strandedTarget, CONTRACT, HASH, NOW],
+      },
+    ], "write")
+
+    await withTransaction(client, "write", (tx) =>
+      rebuildEfpProjectionAfterRangeReplacement({
+        tx,
+        affectedSlots: [{ chainId: 8453, contractAddress: CONTRACT, slot: 77n }],
+        affectedAccounts: [],
+        affectedListIds: [],
+        chainId: 8453,
+        appliedThroughBlock: 200n,
+        appliedThroughBlockHash: HASH,
+        projectionRevision: 3n,
+        now: NOW,
+      }))
+
+    const edges = await client.execute(
+      `SELECT follower_address, followed_address, list_slot
+       FROM efp_effective_follows ORDER BY follower_address`,
+    )
+    expect(edges.rows).toEqual([
+      { follower_address: movedOffOwner, followed_address: strandedTarget, list_slot: "99" },
+      { follower_address: onSlotOwner, followed_address: target, list_slot: "77" },
+    ])
+    const counts = await client.execute("SELECT wallet_address FROM efp_follow_counts")
+    const wallets = new Set(counts.rows.map((row) => row.wallet_address))
+    expect(wallets.has(onSlotOwner)).toBe(true)
+    expect(wallets.has(movedOffOwner)).toBe(false)
+  })
+
+  test("runs one window query and one projected query for many slots and list ids", async () => {
+    const client = await setup()
+    const owners = [
+      "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "0xcccccccccccccccccccccccccccccccccccccccc",
+      "0xdddddddddddddddddddddddddddddddddddddddd",
+    ] as Address[]
+    const targets = [
+      "0x1010101010101010101010101010101010101010",
+      "0x2020202020202020202020202020202020202020",
+      "0x3030303030303030303030303030303030303030",
+      "0x4040404040404040404040404040404040404040",
+    ] as Address[]
+    await client.batch(owners.flatMap((owner, index) => [
+      primaryListEvent(owner, BigInt(index + 1), 10),
+      storageLocationEvent(BigInt(index + 1), BigInt((index + 1) * 11), 20),
+      listOp(BigInt((index + 1) * 11), rawAddOp(targets[index]!), 30),
+    ]), "write")
+
+    const statements = await rebuildWithExecuteSpy(client, {
+      affectedSlots: [
+        { chainId: 8453, contractAddress: CONTRACT, slot: 11n },
+        { chainId: 8453, contractAddress: CONTRACT, slot: 22n },
+      ],
+      affectedAccounts: [],
+      affectedListIds: [3n, 4n],
+      chainId: 8453,
+      appliedThroughBlock: 200n,
+      appliedThroughBlockHash: HASH,
+      projectionRevision: 5n,
+      now: NOW,
+    })
+
+    const windowed = statements.filter((sql) => sql.includes("ROW_NUMBER() OVER ("))
+    const projected = statements.filter((sql) =>
+      sql.includes("SELECT DISTINCT follower_address")
+      && sql.includes("FROM efp_effective_follows"))
+    expect(windowed).toHaveLength(1)
+    expect(projected).toHaveLength(1)
+    const edges = await client.execute(
+      "SELECT follower_address FROM efp_effective_follows ORDER BY follower_address",
+    )
+    expect(edges.rows.map((row) => row.follower_address)).toEqual(owners)
+  })
+
+  test("skips the authoritative and projected lookups when nothing is affected", async () => {
+    const client = await setup()
+    const directAccount = "0x9999999999999999999999999999999999999999" as Address
+
+    const statements = await rebuildWithExecuteSpy(client, {
+      affectedSlots: [],
+      affectedAccounts: [directAccount],
+      affectedListIds: [],
+      chainId: 8453,
+      appliedThroughBlock: 200n,
+      appliedThroughBlockHash: HASH,
+      now: NOW,
+    })
+
+    expect(
+      statements.filter((sql) => sql.includes("ROW_NUMBER() OVER (")),
+    ).toHaveLength(0)
+    expect(
+      statements.filter((sql) =>
+        sql.includes("SELECT DISTINCT follower_address")
+        && sql.includes("FROM efp_effective_follows")),
+    ).toHaveLength(0)
+    const counts = await client.execute({
+      sql: `SELECT follower_count, following_count
+            FROM efp_follow_counts WHERE wallet_address = ?1`,
+      args: [directAccount],
+    })
+    // Edge membership never changed for this account (no edges before or
+    // after), so the differential projection writes no counts row.
+    expect(counts.rows).toEqual([])
+    const watermark = await client.execute(
+      `SELECT applied_through_block, projection_revision
+       FROM efp_follow_projection_chain_watermarks WHERE chain_id = 8453`,
+    )
+    expect(watermark.rows[0]).toEqual({
+      applied_through_block: 200,
+      projection_revision: 1,
+    })
+    const state = await client.execute(
+      `SELECT status, last_error FROM efp_follow_projection_state
+       WHERE projection_key = 'effective-graph'`,
+    )
+    expect(state.rows[0]).toEqual({ status: "rebuilding", last_error: null })
   })
 })
