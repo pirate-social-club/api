@@ -5,7 +5,9 @@ import { providerUnavailable } from "../errors"
 import { resolveRewardsSettlementRpcUrl } from "../communities/bookings/booking-chain-config"
 import {
   resolveRewardsSettlementBackend,
+  resolveRewardVaultConfig,
   resolveRewardVaultLitConfig,
+  type RewardVaultConfig,
 } from "./reward-vault-lit-config"
 
 const VAULT_POLICY_ABI = [
@@ -28,6 +30,14 @@ export type RewardVaultRefundPolicyObserver = (
   now: string,
 ) => Promise<RewardVaultRefundPolicyObservation | null>
 
+export function resolveRewardVaultRefundPolicyConfig(env: Env): RewardVaultConfig | null {
+  const backend = resolveRewardsSettlementBackend(env)
+  if (backend === "local") return null
+  return backend === "lit_vault"
+    ? resolveRewardVaultLitConfig(env)
+    : resolveRewardVaultConfig(env)
+}
+
 export const observeRewardVaultRefundPolicy: RewardVaultRefundPolicyObserver = async (
   env,
   now,
@@ -35,7 +45,8 @@ export const observeRewardVaultRefundPolicy: RewardVaultRefundPolicyObserver = a
   if (resolveRewardsSettlementBackend(env) === "local") return null
 
   try {
-    const expected = resolveRewardVaultLitConfig(env)
+    const expected = resolveRewardVaultRefundPolicyConfig(env)
+    if (!expected) return null
     const provider = new JsonRpcProvider(resolveRewardsSettlementRpcUrl(env))
     const block = await provider.getBlock("latest")
     if (!block) throw new Error("latest block was unavailable")
