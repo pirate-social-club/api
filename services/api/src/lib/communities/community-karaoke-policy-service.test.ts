@@ -120,6 +120,12 @@ async function setup() {
       donation_partner_status TEXT NOT NULL,
       governance_mode TEXT NOT NULL,
       settings_json TEXT,
+      karaoke_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_enabled IN (0, 1)),
+      karaoke_scoring_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_scoring_enabled IN (0, 1)),
+      karaoke_stt_provider TEXT NOT NULL DEFAULT 'assistant' CHECK (karaoke_stt_provider IN ('assistant', 'elevenlabs', 'mistral', 'openai', 'none')),
+      karaoke_stt_model TEXT NOT NULL DEFAULT '',
+      karaoke_voice_coach_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_voice_coach_enabled IN (0, 1)),
+      karaoke_audio_retention TEXT NOT NULL DEFAULT 'not_stored' CHECK (karaoke_audio_retention = 'not_stored'),
       created_by_user_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -238,5 +244,24 @@ describe("community karaoke policy", () => {
         karaoke_enabled: 1,
       },
     ])
+  })
+
+  test("fails legibly instead of widening schema when karaoke columns are missing", async () => {
+    const ctx = await setup()
+    const communityDb = createClient({ url: `file:${ctx.communityDbPath}` })
+    await communityDb.execute("ALTER TABLE communities DROP COLUMN karaoke_enabled")
+    communityDb.close()
+
+    await expect(updateCommunityKaraokePolicy({
+      actor: {
+        authType: "admin",
+        userId: "usr_owner",
+        adminOverride: { adminActorId: "adm_test", scope: "test" },
+      },
+      body: { karaoke_enabled: true },
+      communityId: ctx.communityId,
+      communityRepository: ctx.repo,
+      env: ctx.env,
+    })).rejects.toThrow(/missing karaoke policy columns \(migrations 1096_community_karaoke_enabled\.sql and 1098_community_karaoke_scoring_policy\.sql\); an operator must converge/u)
   })
 })
