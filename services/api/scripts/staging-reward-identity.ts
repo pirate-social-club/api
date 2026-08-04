@@ -20,6 +20,8 @@ type Options = {
   mode: Mode
   userId: string | null
   nationality: string | null
+  provider: "self" | "zkpassport"
+  projectEligibility: boolean
   snapshotPath: string
   databaseUrlEnv: string
 }
@@ -27,7 +29,7 @@ type Options = {
 function usage(exitCode = 1): never {
   console.error(`Usage:
   bun scripts/staging-reward-identity.ts seed --user-id usr_... --snapshot /secure/path/reward-identity.json
-  bun scripts/staging-reward-identity.ts seed-nationality-shadow --user-id usr_... [--nationality USA] --snapshot /secure/path/reward-identity.json
+  bun scripts/staging-reward-identity.ts seed-nationality-shadow --user-id usr_... [--provider self|zkpassport] [--project-eligibility] [--nationality USA] --snapshot /secure/path/reward-identity.json
   bun scripts/staging-reward-identity.ts cleanup --snapshot /secure/path/reward-identity.json [--user-id usr_...]
 
 Requires ENVIRONMENT=staging and a Postgres URL in CONTROL_PLANE_MIGRATOR_DATABASE_URL.
@@ -54,6 +56,8 @@ function parseArgs(argv: string[]): Options {
   if (mode !== "seed" && mode !== "seed-nationality-shadow" && mode !== "cleanup") usage()
   let userId: string | null = null
   let nationality: string | null = null
+  let provider: "self" | "zkpassport" = "self"
+  let projectEligibility = false
   let snapshotPath = ""
   let databaseUrlEnv = "CONTROL_PLANE_MIGRATOR_DATABASE_URL"
   for (let index = 1; index < argv.length;) {
@@ -64,6 +68,14 @@ function parseArgs(argv: string[]): Options {
     } else if (flag === "--nationality") {
       nationality = value(argv, index, flag).toUpperCase()
       index += 2
+    } else if (flag === "--provider") {
+      const requested = value(argv, index, flag).toLowerCase()
+      if (requested !== "self" && requested !== "zkpassport") usage()
+      provider = requested
+      index += 2
+    } else if (flag === "--project-eligibility") {
+      projectEligibility = true
+      index += 1
     } else if (flag === "--snapshot") {
       snapshotPath = resolve(value(argv, index, flag))
       index += 2
@@ -79,8 +91,8 @@ function parseArgs(argv: string[]): Options {
   if (nationality && !/^[A-Z]{3}$/u.test(nationality)) {
     throw new Error("nationality_must_be_iso_3166_alpha_3")
   }
-  if (mode !== "seed-nationality-shadow" && nationality) usage()
-  return { mode, userId, nationality, snapshotPath, databaseUrlEnv }
+  if (mode !== "seed-nationality-shadow" && (nationality || provider !== "self" || projectEligibility)) usage()
+  return { mode, userId, nationality, provider, projectEligibility, snapshotPath, databaseUrlEnv }
 }
 
 function assertStagingEnvironment(options: Options): Env {
@@ -121,6 +133,8 @@ await withStandaloneControlPlaneClient(env, async (client) => {
     const snapshot = await seedStagingRewardNationalityShadowIdentity({
       client,
       userId: options.userId as string,
+      provider: options.provider,
+      projectEligibility: options.projectEligibility,
       nationality: options.nationality,
       rowLocks: true,
       writeSnapshot: (value) => {

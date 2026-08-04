@@ -40,10 +40,11 @@ export type StagingRewardNationalityShadowSnapshot = {
   purpose: "staging_reward_nationality_shadow"
   user_id: string
   seeded_at: string
+  projected_eligibility: boolean
   seed: {
     identity_nullifier_id: string
-    provider: "self"
-    mechanism: "zk-nullifier"
+    provider: "self" | "zkpassport"
+    mechanism: "zk-nullifier" | "zkpassport-unique-identifier"
     nullifier_hash: string
     reward_identity_binding_id: string
     verification_session_id: string | null
@@ -325,12 +326,14 @@ export async function cleanupStagingRewardIdentity(input: {
 
 function assertNationalityShadowSnapshot(snapshot: StagingRewardNationalityShadowSnapshot): void {
   const seed = snapshot.seed
+  const expectedMechanism = seed.provider === "self" ? "zk-nullifier" : "zkpassport-unique-identifier"
   if (
     snapshot.version !== SNAPSHOT_VERSION
     || snapshot.purpose !== "staging_reward_nationality_shadow"
     || !snapshot.user_id
-    || seed.provider !== "self"
-    || seed.mechanism !== "zk-nullifier"
+    || typeof snapshot.projected_eligibility !== "boolean"
+    || (seed.provider !== "self" && seed.provider !== "zkpassport")
+    || seed.mechanism !== expectedMechanism
     || !/^nul_staging_reward_[0-9a-f]{32}$/u.test(seed.identity_nullifier_id)
     || !/^[0-9a-f]{64}$/u.test(seed.nullifier_hash)
     || !/^rib_staging_reward_[0-9a-f]{32}$/u.test(seed.reward_identity_binding_id)
@@ -349,6 +352,8 @@ function assertNationalityShadowSnapshot(snapshot: StagingRewardNationalityShado
 export async function seedStagingRewardNationalityShadowIdentity(input: {
   client: Client
   userId: string
+  provider?: "self" | "zkpassport"
+  projectEligibility?: boolean
   nationality: string | null
   now?: string
   rowLocks?: boolean
@@ -357,6 +362,10 @@ export async function seedStagingRewardNationalityShadowIdentity(input: {
   const now = input.now ?? new Date().toISOString()
   if (!Number.isFinite(Date.parse(now))) throw new Error("staging_reward_identity_invalid_now")
   const nationality = input.nationality?.trim().toUpperCase() ?? null
+  const provider = input.provider ?? "self"
+  const capabilityProvider = provider === "zkpassport" ? "zkpass" : provider
+  const projectEligibility = input.projectEligibility ?? false
+  const mechanism = provider === "self" ? "zk-nullifier" : "zkpassport-unique-identifier"
   if (nationality !== null && !/^[A-Z]{3}$/u.test(nationality)) {
     throw new Error("nationality_must_be_iso_3166_alpha_3")
   }
@@ -379,12 +388,25 @@ export async function seedStagingRewardNationalityShadowIdentity(input: {
     })
     if (!user) throw new Error("staging_reward_identity_user_not_found")
     const original = originalUser(user as QueryResultRow)
+    if (projectEligibility) {
+      assertDedicatedUnverifiedUser(original)
+      const activeWallet = await executeFirst(tx, {
+        sql: `
+          SELECT wallet_attachment_id
+          FROM wallet_attachments
+          WHERE user_id = ?1 AND status = 'active' AND chain_namespace IN ('eip155', 'eip155:1')
+          LIMIT 1
+        `,
+        args: [input.userId],
+      })
+      if (!activeWallet) throw new Error("staging_reward_identity_active_evm_wallet_required")
+    }
 
     const activeNullifier = await executeFirst(tx, {
-      sql: "SELECT identity_nullifier_id FROM identity_nullifiers WHERE user_id = ?1 AND provider = 'self' AND status = 'active' LIMIT 1",
-      args: [input.userId],
+      sql: "SELECT identity_nullifier_id FROM identity_nullifiers WHERE user_id = ?1 AND provider = ?2 AND status = 'active' LIMIT 1",
+      args: [input.userId, provider],
     })
-    if (activeNullifier) throw new Error("staging_reward_identity_active_self_nullifier_exists")
+    if (activeNullifier) throw new Error("staging_reward_identity_active_provider_nullifier_exists")
     const activeBinding = await executeFirst(tx, {
       sql: "SELECT reward_identity_binding_id FROM reward_identity_bindings WHERE user_id = ?1 AND status = 'active' LIMIT 1",
       args: [input.userId],
@@ -395,10 +417,11 @@ export async function seedStagingRewardNationalityShadowIdentity(input: {
       purpose: "staging_reward_nationality_shadow",
       user_id: input.userId,
       seeded_at: now,
+      projected_eligibility: projectEligibility,
       seed: {
         identity_nullifier_id: identityNullifierId,
-        provider: "self",
-        mechanism: "zk-nullifier",
+        provider,
+        mechanism,
         nullifier_hash: nullifierHash,
         reward_identity_binding_id: bindingId,
         verification_session_id: verificationSessionId,
@@ -409,15 +432,38 @@ export async function seedStagingRewardNationalityShadowIdentity(input: {
     }
     input.writeSnapshot(snapshot)
 
+    if (projectEligibility) {
+      const capabilities = parseJsonObject(original.verification_capabilities_json)
+      capabilities.unique_human = {
+        state: "verified",
+        provider,
+        proof_type: "unique_human",
+        mechanism: "session_complete",
+        verified_at: Math.floor(Date.parse(now) / 1000),
+      }
+      const updated = await tx.execute({
+        sql: `
+          UPDATE users
+          SET verification_state = 'verified', capability_provider = ?2,
+            verification_capabilities_json = ?3, verified_at = ?4, updated_at = ?4
+          WHERE user_id = ?1 AND verification_state = 'unverified'
+            AND capability_provider IS NULL AND verified_at IS NULL
+            AND current_verification_session_id IS NULL AND updated_at = ?5
+        `,
+        args: [input.userId, capabilityProvider, JSON.stringify(capabilities), now, original.updated_at],
+      })
+      if ((updated.rowsAffected ?? 0) !== 1) throw new Error("staging_reward_identity_user_changed_during_seed")
+    }
+
     await tx.execute({
       sql: `
         INSERT INTO identity_nullifiers (
           identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
           source_verification_session_id, source_user_attestation_id, status,
           first_seen_at, revoked_at, created_at, updated_at
-        ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, NULL, NULL, 'active', ?4, NULL, ?4, ?4)
+        ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, NULL, ?6, ?6)
       `,
-      args: [identityNullifierId, input.userId, nullifierHash, now],
+      args: [identityNullifierId, input.userId, provider, mechanism, nullifierHash, now],
     })
     if (nationality && verificationSessionId && userAttestationId) {
       await tx.execute({
@@ -426,10 +472,10 @@ export async function seedStagingRewardNationalityShadowIdentity(input: {
             verification_session_id, user_id, provider, session_kind,
             requested_capabilities_json, status, started_at, completed_at,
             created_at, updated_at
-          ) VALUES (?1, ?2, 'self', 'identity', '["nationality"]',
-            'verified', ?3, ?3, ?3, ?3)
+          ) VALUES (?1, ?2, ?3, 'identity', '["nationality"]',
+            'verified', ?4, ?4, ?4, ?4)
         `,
-        args: [verificationSessionId, input.userId, now],
+        args: [verificationSessionId, input.userId, provider, now],
       })
       await tx.execute({
         sql: `
@@ -437,11 +483,11 @@ export async function seedStagingRewardNationalityShadowIdentity(input: {
             user_attestation_id, user_id, source_verification_session_id, provider,
             attestation_type, capability_key, status, value_json, verified_at,
             revoked_at, created_at, updated_at, source_identity_nullifier_id
-          ) VALUES (?1, ?2, ?3, 'self', 'nationality', 'nationality',
-            'accepted', ?4, ?5, NULL, ?5, ?5, ?6)
+          ) VALUES (?1, ?2, ?3, ?4, 'nationality', 'nationality',
+            'accepted', ?5, ?6, NULL, ?6, ?6, ?7)
         `,
         args: [
-          userAttestationId, input.userId, verificationSessionId,
+          userAttestationId, input.userId, verificationSessionId, provider,
           JSON.stringify({ nationality }), now, identityNullifierId,
         ],
       })
@@ -476,8 +522,38 @@ export async function cleanupStagingRewardNationalityShadowIdentity(input: {
       args: [input.snapshot.user_id],
     })
     if (!user) throw new Error("staging_reward_identity_user_not_found")
-    if (!isDeepStrictEqual(originalUser(user as QueryResultRow), input.snapshot.original_user)) {
+    const currentUser = originalUser(user as QueryResultRow)
+    const userMatchesOriginal = isDeepStrictEqual(currentUser, input.snapshot.original_user)
+    if (!input.snapshot.projected_eligibility && !userMatchesOriginal) {
       throw new Error("staging_reward_nationality_shadow_user_changed")
+    }
+    if (input.snapshot.projected_eligibility && !userMatchesOriginal) {
+      const currentCapabilities = parseJsonObject(currentUser.verification_capabilities_json)
+      const originalCapabilities = parseJsonObject(input.snapshot.original_user.verification_capabilities_json)
+      const expectedUniqueHuman = {
+        state: "verified",
+        provider: input.snapshot.seed.provider,
+        proof_type: "unique_human",
+        mechanism: "session_complete",
+        verified_at: Math.floor(Date.parse(input.snapshot.seeded_at) / 1000),
+      }
+      if (!isDeepStrictEqual(currentCapabilities.unique_human, expectedUniqueHuman)) {
+        throw new Error("staging_reward_nationality_shadow_eligibility_changed")
+      }
+      if (Object.hasOwn(originalCapabilities, "unique_human")) {
+        currentCapabilities.unique_human = originalCapabilities.unique_human
+      } else {
+        delete currentCapabilities.unique_human
+      }
+      if (
+        currentUser.verification_state !== "verified"
+        || currentUser.capability_provider !== (input.snapshot.seed.provider === "zkpassport" ? "zkpass" : input.snapshot.seed.provider)
+        || currentUser.verified_at !== input.snapshot.seeded_at
+        || currentUser.current_verification_session_id !== input.snapshot.original_user.current_verification_session_id
+        || !isDeepStrictEqual(currentCapabilities, originalCapabilities)
+      ) {
+        throw new Error("staging_reward_nationality_shadow_eligibility_changed")
+      }
     }
 
     const nullifier = await executeFirst(tx, {
@@ -500,12 +576,20 @@ export async function cleanupStagingRewardNationalityShadowIdentity(input: {
         args: [input.snapshot.seed.verification_session_id],
       })
       : null
-    if (!nullifier && !binding && !attestation && !session) return "already_clean"
+    if (!nullifier && !binding && !attestation && !session) {
+      if (!userMatchesOriginal) {
+        throw new Error("staging_reward_nationality_shadow_fixture_missing_user_not_restored")
+      }
+      return "already_clean"
+    }
+    if (input.snapshot.projected_eligibility && userMatchesOriginal) {
+      throw new Error("staging_reward_nationality_shadow_fixture_user_restored_early")
+    }
     if (!nullifier || !binding) throw new Error("staging_reward_nationality_shadow_fixture_incomplete")
     if (
       requiredString(nullifier as QueryResultRow, "user_id") !== input.snapshot.user_id
-      || requiredString(nullifier as QueryResultRow, "provider") !== "self"
-      || requiredString(nullifier as QueryResultRow, "mechanism") !== "zk-nullifier"
+      || requiredString(nullifier as QueryResultRow, "provider") !== input.snapshot.seed.provider
+      || requiredString(nullifier as QueryResultRow, "mechanism") !== input.snapshot.seed.mechanism
       || requiredString(nullifier as QueryResultRow, "nullifier_hash") !== input.snapshot.seed.nullifier_hash
       || requiredString(nullifier as QueryResultRow, "status") !== "active"
       || requiredString(binding as QueryResultRow, "user_id") !== input.snapshot.user_id
@@ -519,14 +603,14 @@ export async function cleanupStagingRewardNationalityShadowIdentity(input: {
       const value = parseJsonObject(jsonText(rowValue(attestation as QueryResultRow, "value_json")))
       if (
         requiredString(attestation as QueryResultRow, "user_id") !== input.snapshot.user_id
-        || requiredString(attestation as QueryResultRow, "provider") !== "self"
+        || requiredString(attestation as QueryResultRow, "provider") !== input.snapshot.seed.provider
         || requiredString(attestation as QueryResultRow, "capability_key") !== "nationality"
         || requiredString(attestation as QueryResultRow, "status") !== "accepted"
         || requiredString(attestation as QueryResultRow, "source_verification_session_id") !== input.snapshot.seed.verification_session_id
         || requiredString(attestation as QueryResultRow, "source_identity_nullifier_id") !== input.snapshot.seed.identity_nullifier_id
         || value.nationality !== input.snapshot.seed.nationality
         || requiredString(session as QueryResultRow, "user_id") !== input.snapshot.user_id
-        || requiredString(session as QueryResultRow, "provider") !== "self"
+        || requiredString(session as QueryResultRow, "provider") !== input.snapshot.seed.provider
         || requiredString(session as QueryResultRow, "session_kind") !== "identity"
         || requiredString(session as QueryResultRow, "status") !== "verified"
       ) {
@@ -554,6 +638,33 @@ export async function cleanupStagingRewardNationalityShadowIdentity(input: {
       sql: "DELETE FROM identity_nullifiers WHERE identity_nullifier_id = ?1",
       args: [input.snapshot.seed.identity_nullifier_id],
     })
+    if (input.snapshot.projected_eligibility) {
+      const restored = await tx.execute({
+        sql: `
+          UPDATE users
+          SET verification_state = ?2, capability_provider = ?3,
+            verification_capabilities_json = ?4, verified_at = ?5,
+            current_verification_session_id = ?6, updated_at = ?7
+          WHERE user_id = ?1 AND verification_state = 'verified'
+            AND capability_provider = ?8 AND verified_at = ?9 AND updated_at = ?10
+        `,
+        args: [
+          input.snapshot.user_id,
+          input.snapshot.original_user.verification_state,
+          input.snapshot.original_user.capability_provider,
+          input.snapshot.original_user.verification_capabilities_json,
+          input.snapshot.original_user.verified_at,
+          input.snapshot.original_user.current_verification_session_id,
+          input.snapshot.original_user.updated_at,
+          input.snapshot.seed.provider === "zkpassport" ? "zkpass" : input.snapshot.seed.provider,
+          input.snapshot.seeded_at,
+          currentUser.updated_at,
+        ],
+      })
+      if ((restored.rowsAffected ?? 0) !== 1) {
+        throw new Error("staging_reward_nationality_shadow_user_changed_during_cleanup")
+      }
+    }
     return "cleaned"
   })
 }
