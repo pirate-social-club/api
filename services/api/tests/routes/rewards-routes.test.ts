@@ -57,6 +57,7 @@ describe("rewards routes", () => {
       REWARDS_CAMPAIGNS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
@@ -292,6 +293,83 @@ describe("rewards routes", () => {
     const rows = await ctx.client.execute("SELECT COUNT(*) AS count FROM reward_campaigns")
     expect(Number(rows.rows[0]?.count)).toBe(0)
   })
+
+  test("guards campaign creation, quote issuance, and funding acceptance against the cashout provider", async () => {
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      REWARDS_IDENTITY_PROVIDER: "self",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-provider-compatibility")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const incompatibleCreate = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        idempotency_key: "provider-incompatible-create",
+        reward_identity_provider: "very",
+      })),
+    }, ctx.env)
+    expect(incompatibleCreate.status).toBe(409)
+
+    const created = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "provider-compatible-create" })),
+    }, ctx.env)
+    expect(created.status).toBe(201)
+    const campaign = await json(created) as { id: string }
+
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
+    const incompatibleQuote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "provider-compatible-quote" }),
+    }, ctx.env)
+    expect(incompatibleQuote.status).toBe(409)
+
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "self"
+    const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "provider-compatible-quote" }),
+    }, ctx.env)
+    expect(quoted.status).toBe(201)
+    const quote = await json(quoted) as { id: string }
+    const txHash = `0x${"e".repeat(64)}`
+    const confirmUrl = `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`
+
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
+    const incompatibleConfirm = await app.request(confirmUrl, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ tx_hash: txHash }),
+    }, ctx.env)
+    expect(incompatibleConfirm.status).toBe(409)
+
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+    }))
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "self"
+    const confirmed = await app.request(confirmUrl, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ tx_hash: txHash }),
+    }, ctx.env)
+    expect(confirmed.status).toBe(200)
+
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
+    const grandfatheredReplay = await app.request(confirmUrl, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ tx_hash: txHash }),
+    }, ctx.env)
+    expect(grandfatheredReplay.status).toBe(200)
+  }, 30_000)
 
   test("does not advertise or quote campaign funding without a usable settlement signer", async () => {
     const ctx = await createRouteTestContext({
@@ -863,7 +941,6 @@ describe("rewards routes", () => {
       headers: { ...authHeaders(secondBooster.accessToken), "content-type": "application/json" },
       body: JSON.stringify(campaignBody({
         idempotency_key: "reward-pool-second",
-        reward_identity_provider: "zkpassport",
       })),
     }, ctx.env)
     expect(duplicatePool.status).toBe(409)

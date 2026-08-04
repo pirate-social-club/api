@@ -19,6 +19,7 @@ import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
+import { assertOpenRewardCampaignProvidersCompatible } from "./reward-provider-compatibility"
 
 const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 const REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS = 86_400_000
@@ -950,6 +951,10 @@ export async function reconcileRewardCampaigns(input: {
     && alertOwnershipConfigured
   const summary = emptySummary(enabled)
   if (!enabled) return summary
+  await assertOpenRewardCampaignProvidersCompatible({
+    env: input.env,
+    client: input.controlPlaneClient,
+  })
   const now = input.now ?? nowIso()
   summary.expired_pending = await expirePendingRewardQualifications({
     client: input.controlPlaneClient,
