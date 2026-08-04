@@ -326,7 +326,8 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       );
     `)
     await db.unsafe(await readFile(NATIONALITY_DECISIONS_MIGRATION_URL, "utf8"))
-    // Reproduce rows written by the pre-accounting evaluator. Migration 0189
+    // Reproduce legacy rows that caused the first staging 0189 attempt to fail.
+    // These were written by the pre-accounting evaluator. Migration 0189
     // must derive their amounts from immutable campaign terms before installing
     // the resolved-amount constraint.
     await db.unsafe(`
