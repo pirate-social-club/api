@@ -15,6 +15,7 @@
     "diagnose:stuck-story-settlements": "bun run scripts/list-stuck-story-settlement-effects.ts",
     "efp:compare-index": "bun run scripts/compare-efp-index.ts",
     "efp:backfill-index": "bun run scripts/backfill-efp-index.ts",
+    "efp:verify-known-divergences": "bun run scripts/verify-efp-known-divergences.ts",
     "fund:story-runtime-signers": "bun run scripts/fund-story-runtime-signers.ts",
     "rewards:rehearsal:preflight": "bun run scripts/rewards-rehearsal/run-preflight.ts",
     "rewards:rehearsal:seed-baseline": "bun run scripts/rewards-rehearsal/seed-baseline.ts",

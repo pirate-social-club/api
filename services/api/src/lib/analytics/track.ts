@@ -48,6 +48,8 @@ const clientEventNames = new Set<AnalyticsEventName>([
   "handle_claim_failed",
   "home_feed_viewed",
   "video_impression",
+  "profile_follow_affordance_viewed",
+  "profile_follow_clicked",
   "community_viewed",
   "community_follow_contract_drift",
   "community_join_requested",
@@ -93,6 +95,18 @@ const propertyAllowlist: Partial<Record<AnalyticsEventName, readonly string[]>> 
     "replay_count",
     "slide_entry_sequence",
     "sound_on",
+  ],
+  profile_follow_affordance_viewed: [
+    "surface",
+    "state",
+    "authenticated",
+    "target_has_wallet",
+  ],
+  profile_follow_clicked: [
+    "surface",
+    "desired_following",
+    "authenticated",
+    "availability",
   ],
   community_viewed: ["tab"],
   community_follow_contract_drift: [
