@@ -326,6 +326,52 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       );
     `)
     await db.unsafe(await readFile(NATIONALITY_DECISIONS_MIGRATION_URL, "utf8"))
+    // Reproduce rows written by the pre-accounting evaluator. Migration 0189
+    // must derive their amounts from immutable campaign terms before installing
+    // the resolved-amount constraint.
+    await db.unsafe(`
+      INSERT INTO users VALUES ('usr_legacy_0189', '{}'::jsonb);
+      INSERT INTO communities VALUES ('cmt_legacy_0189');
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at, updated_at,
+        default_amount_cents, max_claim_cents, payout_tiers_json,
+        reward_identity_provider
+      ) VALUES (
+        'rcp_legacy_0189', 'usr_legacy_0189', 'create-legacy-0189',
+        'cmt_legacy_0189', 'pst_legacy_0189', 'sab_legacy_0189', 'usr_legacy_0189',
+        'active', 'study', 25, 75, 100, 100, 0, 0, 0, 0, 1,
+        'terms-legacy-0189', '2026-07-01T00:00:00.000Z',
+        '2026-07-31T23:59:59.999Z', '${NOW}', 25, 75,
+        '[{"nationalities":["VN"],"amount_cents":75}]'::jsonb, 'self'
+      );
+      INSERT INTO reward_qualification_events (
+        reward_qualification_event_id, user_id, community_id, post_id,
+        activity, qualified_at, reward_period_key, source_event_id, status,
+        created_at, updated_at
+      ) VALUES
+        ('rqe_legacy_default_0189', 'usr_legacy_0189', 'cmt_legacy_0189',
+          'pst_legacy_0189', 'study', '${NOW}', '2026-07-10',
+          'source-legacy-default-0189', 'pending', '${NOW}', '${NOW}'),
+        ('rqe_legacy_tier_0189', 'usr_legacy_0189', 'cmt_legacy_0189',
+          'pst_legacy_0189', 'study', '${NOW}', '2026-07-10',
+          'source-legacy-tier-0189', 'pending', '${NOW}', '${NOW}');
+      INSERT INTO reward_nationality_decisions (
+        reward_nationality_decision_id, reward_qualification_event_id,
+        reward_campaign_id, user_id, result_key, outcome, retryability,
+        campaign_terms_version, evaluator_version, evaluated_at, expires_at,
+        created_at
+      ) VALUES
+        ('rnd_legacy_default_0189', 'rqe_legacy_default_0189',
+          'rcp_legacy_0189', 'usr_legacy_0189', 'default', 'resolved_default',
+          'resolved', 1, 'legacy-v1', '${NOW}', '2027-01-01T00:00:00.000Z', '${NOW}'),
+        ('rnd_legacy_tier_0189', 'rqe_legacy_tier_0189',
+          'rcp_legacy_0189', 'usr_legacy_0189', 'tier:0', 'resolved_tier',
+          'resolved', 1, 'legacy-v1', '${NOW}', '2027-01-01T00:00:00.000Z', '${NOW}');
+    `)
     await db.unsafe(await readFile(TIER_ACCOUNTING_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       ALTER TABLE reward_campaigns
@@ -1219,6 +1265,24 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         WHERE reward_campaign_id = 'rcp_invariants_pg'
       `))
       expect(message).toContain("reward campaign identity provider is immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0189 backfills legacy default and tier decision amounts", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const rows = await db.unsafe(`
+        SELECT result_key, resolved_amount_cents
+        FROM reward_nationality_decisions
+        WHERE reward_campaign_id = 'rcp_legacy_0189'
+        ORDER BY result_key
+      `)
+      expect(rows).toEqual([
+        { result_key: "default", resolved_amount_cents: 25 },
+        { result_key: "tier:0", resolved_amount_cents: 75 },
+      ])
     } finally {
       await db.end()
     }
