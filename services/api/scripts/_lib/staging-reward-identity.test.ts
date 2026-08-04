@@ -87,11 +87,15 @@ async function seed(client: Client): Promise<StagingRewardIdentitySnapshot> {
 async function seedNationalityShadow(
   client: Client,
   nationality: string | null,
+  provider: "self" | "zkpassport" = "self",
+  projectEligibility = false,
 ): Promise<StagingRewardNationalityShadowSnapshot> {
   let snapshot: StagingRewardNationalityShadowSnapshot | null = null
   const result = await seedStagingRewardNationalityShadowIdentity({
     client,
     userId: USER_ID,
+    provider,
+    projectEligibility,
     nationality,
     now: NOW,
     writeSnapshot: (value) => { snapshot = value },
@@ -253,6 +257,38 @@ describe("staging reward identity projection", () => {
       identityNullifierId: snapshot.seed.identity_nullifier_id,
     })
     expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("cleaned")
+  })
+
+  test("seeds and exactly cleans up a ZKPassport nationality chain", async () => {
+    const client = await setup()
+    const snapshot = await seedNationalityShadow(client, "JPN", "zkpassport", true)
+
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "zkpassport")).toMatchObject({
+      provider: "zkpassport",
+    })
+
+    const rows = await client.execute({
+      sql: `
+        SELECT n.provider, n.mechanism, a.provider AS attestation_provider,
+          a.value_json, s.provider AS session_provider
+        FROM identity_nullifiers n
+        JOIN user_attestations a ON a.source_identity_nullifier_id = n.identity_nullifier_id
+        JOIN verification_sessions s ON s.verification_session_id = a.source_verification_session_id
+        WHERE n.identity_nullifier_id = ?1
+      `,
+      args: [snapshot.seed.identity_nullifier_id],
+    })
+    expect(rows.rows[0]).toMatchObject({
+      provider: "zkpassport",
+      mechanism: "zkpassport-unique-identifier",
+      attestation_provider: "zkpassport",
+      session_provider: "zkpassport",
+    })
+    expect(JSON.parse(String(rows.rows[0]?.value_json))).toEqual({ nationality: "JPN" })
+
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("cleaned")
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "zkpassport")).toBeNull()
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("already_clean")
   })
 
   test("adds and removes only the Self shadow chain beside an existing Very reward identity", async () => {
