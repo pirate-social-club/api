@@ -75,6 +75,7 @@ describe("d1NativeProvisioningBackend", () => {
     const env = buildEnv({
       COMMUNITY_D1_SHARD: {} as ShardRpc,
       COMMUNITY_D1_SHARD_REGION: "weur",
+      COMMUNITY_SCHEMA_POLICY_DIGEST: "a".repeat(64),
     })
     const communityId = "cmt_d1_provision_test"
     const repo: CommunityProvisioningRepository = {
@@ -146,10 +147,19 @@ describe("d1NativeProvisioningBackend", () => {
     // (the load array; CONTENT is asserted in d1-snapshot-statements.test.ts —
     // here we pin the orchestrator's call SEQUENCE, robust to mock.module of
     // create/repository in the shared test process).
-    const load = calls[1]!.input as { communityId: string; bindingName: string; statements: unknown[] }
+    const load = calls[1]!.input as {
+      communityId: string
+      bindingName: string
+      statements: unknown[]
+      attestation?: { effectivePolicyDigest: string; expectedObservationProof: { kind: string } }
+    }
     expect(load.communityId).toBe(communityId)
     expect(load.bindingName).toBe("DB_CMTY_D1_TEST")
     expect(Array.isArray(load.statements)).toBe(true)
+    expect(load.attestation).toMatchObject({
+      effectivePolicyDigest: "a".repeat(64),
+      expectedObservationProof: { kind: "raw" },
+    })
 
     // The routing row was upserted at 'ready' with the shard's worker id.
     const upsert = calls[2]!.input as {

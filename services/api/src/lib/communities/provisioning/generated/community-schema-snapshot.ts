@@ -897,3 +897,11 @@ export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: str
     "checksum": "b779fb68a37de6929c03161a33afe283e80f3f4a3f8e2e16cd439c1a38afb359"
   }
 ]
+
+export const COMMUNITY_SCHEMA_OBSERVATION_PROOF = {
+  "format_version": 1,
+  "kind": "raw",
+  "schema_fingerprint": "b0658f7e6a9aa9f94cfa21f2b8f5f677968b476ded8bf89d046c1212dda2f81d",
+  "migration_ledger_digest": "f1147feb8e3216da827ea7c7d971844a534099ae5d3b59ae32a568f97beec296",
+  "canonical_inventory_digest": "53136636d7cee64edc4c0a1b879d07a7e7add2f401e2b6c33387af154c38d49d"
+} as const

@@ -1,4 +1,6 @@
 import {
+  BOOTSTRAP_STATE_TABLE_DDL,
+  BOOTSTRAP_STATE_TABLE_NAME,
   isReadOnlyStatement,
   isWriteAllowedStatement,
   isBootstrapAllowedStatement,
@@ -379,7 +381,7 @@ const MAX_BIND_ATTEMPTS = 5
 const MAX_ATTRIBUTION_LENGTH = 200
 
 /** Target-D1 proof that the bootstrap batch committed before the pool CAS. */
-const BOOTSTRAP_STATE_TABLE = "_pirate_bootstrap_state"
+const BOOTSTRAP_STATE_TABLE = BOOTSTRAP_STATE_TABLE_NAME
 
 /**
  * Attribution is DIAGNOSTIC and must never be able to fail an allocation, so this
@@ -788,10 +790,7 @@ export async function runShardLoadSnapshot(
   }
   const completedAt = new Date().toISOString()
   const markerStatements = [
-    dbOrError.prepare(
-      `CREATE TABLE IF NOT EXISTS ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} (` +
-        "community_id TEXT PRIMARY KEY, snapshot_digest TEXT NOT NULL, completed_at TEXT NOT NULL)",
-    ),
+    dbOrError.prepare(BOOTSTRAP_STATE_TABLE_DDL),
     dbOrError
       .prepare(
         `INSERT INTO ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} ` +
@@ -1143,6 +1142,12 @@ export async function runShardDecommission(
         `refusing to finalize ${input.bindingName}: released target still contains user tables`,
       )
     }
+    await clearReleasedAttestationBestEffort(
+      pool,
+      input.bindingName,
+      input.communityId,
+      input.expectedPoolVersion,
+    )
     return { ok: true, value: { tablesDropped: 0, released: false } }
   }
   if (tableNames.length > 0) {
@@ -1163,9 +1168,43 @@ export async function runShardDecommission(
   if ((released.meta?.changes ?? 0) !== 1) {
     return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while decommissioning")
   }
+  await clearReleasedAttestationBestEffort(
+    pool,
+    input.bindingName,
+    input.communityId,
+    input.expectedPoolVersion,
+  )
   return {
     ok: true,
     value: { tablesDropped: tableNames.length, released: true },
+  }
+}
+
+async function clearReleasedAttestationBestEffort(
+  pool: D1Database,
+  bindingName: string,
+  communityId: string,
+  poolVersion: number,
+): Promise<void> {
+  try {
+    await pool
+      .prepare(
+        "DELETE FROM d1_pool_schema_attestations " +
+          "WHERE binding_name = ?1 AND community_id = ?2 AND pool_version = ?3",
+      )
+      .bind(bindingName, communityId, poolVersion)
+      .run()
+  } catch (error) {
+    // Cleanup is hygiene only. Generation-bound joins already make stale rows
+    // unreachable, so failure here must not reverse a successful release.
+    console.warn(JSON.stringify({
+      event: "community_schema_attestation_cleanup",
+      binding_name: bindingName,
+      community_id: communityId,
+      pool_version: poolVersion,
+      status: "error",
+      detail: error instanceof Error ? error.message : String(error),
+    }))
   }
 }
 
@@ -1197,6 +1236,13 @@ export async function runShardRelease(
   if ((result.meta?.changes ?? 0) !== 1) {
     return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while releasing")
   }
+
+  await clearReleasedAttestationBestEffort(
+    pool,
+    input.bindingName,
+    input.expectedCommunityId,
+    input.expectedPoolVersion,
+  )
 
   return { ok: true, value: { released: true } }
 }

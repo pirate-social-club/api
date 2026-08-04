@@ -1,6 +1,19 @@
 import { describe, expect, test } from "bun:test"
-import { isBootstrapAllowedStatement } from "@pirate/api-shared"
-import { COMMUNITY_SCHEMA_STATEMENTS } from "./community-schema-snapshot"
+import { Database } from "bun:sqlite"
+import {
+  BOOTSTRAP_STATE_TABLE_DDL,
+  SCHEMA_ATTESTATION_INVENTORY_SQL,
+  SCHEMA_ATTESTATION_MIGRATION_LEDGER_SQL,
+  isBootstrapAllowedStatement,
+  shardSchemaObservationProof,
+  type ShardMigrationLedgerRow,
+  type ShardSchemaInventoryRow,
+} from "@pirate/api-shared"
+import {
+  COMMUNITY_SCHEMA_MIGRATIONS,
+  COMMUNITY_SCHEMA_OBSERVATION_PROOF,
+  COMMUNITY_SCHEMA_STATEMENTS,
+} from "./community-schema-snapshot"
 
 /**
  * Regression pin: every statement in the COMMITTED community schema snapshot
@@ -28,5 +41,28 @@ describe("COMMUNITY_SCHEMA_STATEMENTS vs the shard bootstrap guard", () => {
     expect(
       COMMUNITY_SCHEMA_STATEMENTS.some((sql) => /^CREATE TRIGGER\b/i.test(sql)),
     ).toBe(true)
+  })
+
+  test("the generated observation proof matches an independently loaded database", async () => {
+    const db = new Database(":memory:")
+    try {
+      for (const sql of COMMUNITY_SCHEMA_STATEMENTS) db.exec(sql)
+      db.exec(BOOTSTRAP_STATE_TABLE_DDL)
+      const insertMigration = db.prepare(
+        "INSERT INTO schema_migrations (migration_name, migration_label, checksum) VALUES (?1, 'community-template', ?2)",
+      )
+      for (const migration of COMMUNITY_SCHEMA_MIGRATIONS) {
+        insertMigration.run(migration.name, migration.checksum)
+      }
+      const actual = await shardSchemaObservationProof({
+        schemaRows: db.query<ShardSchemaInventoryRow, []>(SCHEMA_ATTESTATION_INVENTORY_SQL).all(),
+        migrationLedgerRows: db
+          .query<ShardMigrationLedgerRow, []>(SCHEMA_ATTESTATION_MIGRATION_LEDGER_SQL)
+          .all(),
+      })
+      expect(actual).toEqual(COMMUNITY_SCHEMA_OBSERVATION_PROOF)
+    } finally {
+      db.close()
+    }
   })
 })

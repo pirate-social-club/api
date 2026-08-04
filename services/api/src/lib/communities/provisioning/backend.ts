@@ -22,6 +22,7 @@ import {
   listConfiguredCommunityShards,
   resolveCommunityAllocationShard,
 } from "../community-shard-registry"
+import { provisioningSchemaAttestation } from "./schema-attestation"
 
 type BindingInput = {
   env: Env
@@ -257,6 +258,7 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
     const loadResult = await shard.communityD1LoadSnapshot({
       communityId,
       bindingName,
+      attestation: provisioningSchemaAttestation(input.env),
       statements: localCommunityShardStatements({
         env: input.env,
         body: input.body,

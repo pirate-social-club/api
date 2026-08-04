@@ -109,6 +109,8 @@ export type Env = {
   COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS?: string
   /** Expected shard/shared source fingerprint, compile-stamped by the deploy wrapper. */
   COMMUNITY_D1_SHARD_SOURCE_VERSION?: string
+  /** Effective release schema-policy digest used by generation-fenced local attestations. */
+  COMMUNITY_SCHEMA_POLICY_DIGEST?: string
   /**
    * Region label recorded on D1-native routing rows (satisfies the 0117
    * `chk_d1_fields` NOT NULL). Informational — actual D1 placement is set
