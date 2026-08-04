@@ -42,9 +42,9 @@ loser). A rare race can still aggregate twice; it cannot write twice.
 ### Step 2 — Pre-create the three production indexes CONCURRENTLY
 
 **Hard deployment gate. The riskiest failure mode in this rollout is an
-ordinary (blocking) index build on the saturated primary.** Migration 0189
+ordinary (blocking) index build on the saturated primary.** Migration 0190
 uses `IF NOT EXISTS` precisely so that pre-created indexes make it a no-op.
-If this step is skipped, applying 0189 builds all three indexes
+If this step is skipped, applying 0190 builds all three indexes
 non-concurrently in one transaction — stop conditions below assume you do
 not let that happen.
 
@@ -78,15 +78,15 @@ WHERE c.relname IN (
 - **GO** only when all three indexes are present with `indisvalid = true`
   and `indisready = true`.
 - **STOP** if any index is absent or invalid: `DROP INDEX CONCURRENTLY IF
-  EXISTS <name>;`, recreate it, re-verify. Do not apply migration 0189 until
+  EXISTS <name>;`, recreate it, re-verify. Do not apply migration 0190 until
   this passes.
 
 ### Step 3 — Core PR2 → API fixture-sync PR2
 
 Merge Core first (the API fixture check compares against Core's tree), then
-the API sync PR, then apply migration 0189 through the reviewed runner.
+the API sync PR, then apply migration 0190 through the reviewed runner.
 
-- **GO** if 0189 records effectively instantly: the indexes already exist, so
+- **GO** if 0190 records effectively instantly: the indexes already exist, so
   `IF NOT EXISTS` turns the apply into ledger bookkeeping with no build.
 - **STOP** if the apply takes more than a few seconds — that means it is
   building an index non-concurrently. Cancel, return to step 2, and find the
@@ -199,7 +199,7 @@ Reverse order (PR5 → PR1) if more than one must go back.
   pre-existing cost; no correctness risk). No schema change involved.
 - **PR2:** indexes are additive. Rollback is
   `DROP INDEX CONCURRENTLY IF EXISTS idx_efp_list_ops_chain_block;` (and the
-  other two), never a blocking `DROP INDEX`. The 0189 ledger row may stay —
+  other two), never a blocking `DROP INDEX`. The 0190 ledger row may stay —
   `IF NOT EXISTS` makes any re-apply a no-op.
 - **PR3:** revert the deploy. Full-range delete/reinsert returns (the
   pre-existing churn). Raw-table contents are semantically identical either
