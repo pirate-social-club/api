@@ -14,6 +14,7 @@ import { decodeEfpListOp } from "./list-op"
 import {
   rebuildEfpProjectionAfterRangeReplacement,
   refreshEfpProjectionAvailability,
+  type EfpProjectionRebuildStats,
 } from "./materializer"
 import {
   readEfpIndexerCursor,
@@ -207,6 +208,7 @@ export type EfpScanSummary = {
   primaryListEventCount: number
   storageLocationEventCount: number
   replacement?: EfpRangeReplacementSummary
+  projection?: EfpProjectionRebuildStats
 }
 
 export async function scanEfpChainOnce(input: {
@@ -375,6 +377,7 @@ export async function scanEfpChainOnce(input: {
     }
   })
   const scanCompletedAt = now().toISOString()
+  let projection: EfpProjectionRebuildStats | undefined
   const replacement = await replaceEfpIndexerRange({
     client: input.client,
     chainId: config.chainId,
@@ -390,7 +393,7 @@ export async function scanEfpChainOnce(input: {
     onRangeReplaced: input.deferProjection
       ? undefined
       : async (affected) => {
-          await rebuildEfpProjectionAfterRangeReplacement({
+          projection = await rebuildEfpProjectionAfterRangeReplacement({
             ...affected,
             chainId: config.chainId,
             appliedThroughBlock: throughBlock,
@@ -416,6 +419,7 @@ export async function scanEfpChainOnce(input: {
     primaryListEventCount: primaryListEvents.length,
     storageLocationEventCount: storageLocationEvents.length,
     replacement,
+    projection,
   }
 }
 
