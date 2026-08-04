@@ -31,6 +31,21 @@ describe("decodeEfpListOp", () => {
     expect(decodeEfpListOp(op(2)).valid).toBe(true)
   })
 
+  test("decodes the compact address op emitted by Pirate's transaction builder", () => {
+    expect(decodeEfpListOp(
+      "0x0101012468665ba04ff399317cb72522252de05f021425",
+    )).toEqual({
+      classification: "effective",
+      opVersion: 1,
+      opcode: 1,
+      recordVersion: 1,
+      recordType: 1,
+      targetAddress: "0x2468665ba04ff399317cb72522252de05f021425",
+      tag: null,
+      valid: true,
+    })
+  })
+
   test("normalizes tags and rejects malformed or unsupported records", () => {
     expect(decodeEfpListOp(op(3, "MUTE")).tag).toBe("mute")
     expect(decodeEfpListOp(op(3))).toMatchObject({
