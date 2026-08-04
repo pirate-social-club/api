@@ -87,7 +87,7 @@ describe("minimum age gate evaluation", () => {
     expect(result.missingCapabilities).toEqual(["minimum_age"])
   })
 
-  test("Self-only minimum_age overrides earlier Very-only unique human suggestion", async () => {
+  test("does not suggest one provider for Very unique-human plus Self minimum-age requirements", async () => {
     const result = await evaluateMembershipGateRules({
       env: {},
       rules: [makeVeryUniqueHumanRule(), makeMinimumAgeRule(30)],
@@ -96,10 +96,10 @@ describe("minimum age gate evaluation", () => {
     })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["unique_human", "minimum_age"])
-    expect(result.suggestedVerificationProvider).toBe("self")
+    expect(result.suggestedVerificationProvider).toBeNull()
   })
 
-  test("Self-only age_over_18 overrides earlier Very-only unique human suggestion", async () => {
+  test("does not suggest one provider for Very unique-human plus Self adult requirements", async () => {
     const result = await evaluateMembershipGateRules({
       env: {},
       rules: [makeVeryUniqueHumanRule(), makeAgeOver18Rule()],
@@ -108,7 +108,7 @@ describe("minimum age gate evaluation", () => {
     })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["unique_human", "age_over_18"])
-    expect(result.suggestedVerificationProvider).toBe("self")
+    expect(result.suggestedVerificationProvider).toBeNull()
   })
 
   test("returns minimum_age_mismatch when proof is below threshold", async () => {

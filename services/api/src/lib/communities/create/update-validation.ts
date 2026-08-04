@@ -100,6 +100,7 @@ export type UpdateCommunityRequestBody = {
   agent_daily_post_cap?: number | null
   agent_daily_reply_cap?: number | null
   human_verification_lane?: "self" | "very" | null
+  preferred_verification_provider?: "self" | "zkpassport" | "very" | null
   accepted_agent_ownership_providers?: Array<"self_agent_id" | "clawkey"> | null
 }
 
@@ -406,6 +407,7 @@ export function assertUpdateCommunityRequest(
     || "agent_daily_post_cap" in body
     || "agent_daily_reply_cap" in body
     || "human_verification_lane" in body
+    || "preferred_verification_provider" in body
     || "accepted_agent_ownership_providers" in body
 
   if (!hasSupportedField) {
@@ -514,6 +516,16 @@ export function assertUpdateCommunityRequest(
     && body.human_verification_lane !== "very"
   ) {
     throw badRequestError("Invalid human_verification_lane payload")
+  }
+
+  if (
+    body.preferred_verification_provider !== undefined
+    && body.preferred_verification_provider !== null
+    && body.preferred_verification_provider !== "self"
+    && body.preferred_verification_provider !== "zkpassport"
+    && body.preferred_verification_provider !== "very"
+  ) {
+    throw badRequestError("Invalid preferred_verification_provider payload")
   }
 
   if (

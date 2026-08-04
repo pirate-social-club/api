@@ -87,6 +87,29 @@ describe("throwUnsatisfiedMembershipGate", () => {
     expect(result.message).toBe("Verification is required to post in this community")
   })
 
+  test("does not suggest one provider for a multi-provider remediation set", () => {
+    const result = catchGateFailure({
+      evaluation: {
+        satisfied: false,
+        outcome: "action_required",
+        trace: { kind: "op", op: "and", passed: false, children: [] },
+        requiredActionSet: {
+          kind: "set",
+          mode: "any",
+          items: [
+            { kind: "action", provider: "self", capability: "unique_human" },
+            { kind: "action", provider: "very", capability: "unique_human" },
+            { kind: "action", provider: "zkpassport", capability: "unique_human" },
+          ],
+        },
+      },
+      gateSummaries: [{ gate_type: "unique_human" }],
+      walletScoreStatus: null,
+    })
+
+    expect(result.details.suggested_verification_provider).toBeNull()
+  })
+
   test("uses proof-of-work message for ALTCHA-only comment_create failures", () => {
     const result = catchGateFailure({
       evaluation: {

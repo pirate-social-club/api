@@ -89,7 +89,7 @@ describe("gender gate evaluation", () => {
     expect(result.suggestedVerificationProvider).toBe("self")
   })
 
-  test("Self-only gender overrides earlier Very-only unique human suggestion", async () => {
+  test("does not suggest one provider for Very unique-human plus Self gender requirements", async () => {
     const result = await evaluateMembershipGateRules({
       env: {},
       rules: [makeVeryUniqueHumanRule(), makeGenderRule("M")],
@@ -101,7 +101,7 @@ describe("gender gate evaluation", () => {
     })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["unique_human", "gender"])
-    expect(result.suggestedVerificationProvider).toBe("self")
+    expect(result.suggestedVerificationProvider).toBeNull()
   })
 
   test("returns gender_mismatch when verified gender differs", async () => {
