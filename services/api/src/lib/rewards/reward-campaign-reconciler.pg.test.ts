@@ -201,7 +201,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         exhausted_at TEXT,
         ended_at TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMPTZ NOT NULL,
+        updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
         CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
         CHECK (reserved_cents >= 0 AND credited_cents >= 0 AND paid_cents >= 0 AND refunded_cents >= 0),
@@ -642,10 +642,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       ) VALUES
         ('rcp_slot_a_pg', 'usr_reward_pg', 'slot-a', 'cmt_reward_pg', 'pst_slot_pg',
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1, $2, $1),
+          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1::timestamptz, $2::timestamptz, $1::text),
         ('rcp_slot_b_pg', 'usr_reward_pg', 'slot-b', 'cmt_reward_pg', 'pst_slot_pg',
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1, $2, $1)
+          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1::timestamptz, $2::timestamptz, $1::text)
     `, [NOW, "2026-07-11T12:00:00.000Z"])
     try {
       await withProductionPostgresClient(async (client) => {
