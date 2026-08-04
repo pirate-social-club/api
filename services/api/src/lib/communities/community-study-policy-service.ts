@@ -2,7 +2,7 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
-import { badRequestError, notFoundError } from "../errors"
+import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import { openCommunityReadClient, openCommunityWriteClient } from "./community-read-access"
@@ -62,12 +62,6 @@ function toCommunityStudyPolicy(input: {
   }
 }
 
-async function ensureCommunityStudyPolicyColumn(client: CommunityColumnClient): Promise<void> {
-  if (!await hasCommunityColumn(client, "study_enabled")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1))")
-  }
-}
-
 function isMissingStudyEnabledColumnError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
   return /(?:no such column|unknown column|column .*study_enabled.* does not exist|no column named study_enabled)/iu.test(message)
@@ -79,8 +73,13 @@ export async function updateStudyPolicyRow(input: {
   studyEnabled: boolean
   updatedAt: string
 }): Promise<void> {
-  const update = () =>
-    input.client.execute({
+  // Writes never widen schema. study_enabled comes from migration
+  // 1115_community_study_enabled.sql; a shard missing it must fail legibly for
+  // an operator to converge via the reviewed migration path, not be silently
+  // ALTERed on a request path — a write-time ALTER creates objects with no
+  // ledger row, the exact drift class the release gate fails on.
+  try {
+    await input.client.execute({
       sql: `
         UPDATE communities
         SET study_enabled = ?2,
@@ -93,15 +92,13 @@ export async function updateStudyPolicyRow(input: {
         input.updatedAt,
       ],
     })
-
-  try {
-    await update()
   } catch (error) {
     if (!isMissingStudyEnabledColumnError(error)) {
       throw error
     }
-    await ensureCommunityStudyPolicyColumn(input.client)
-    await update()
+    throw internalError(
+      `Community ${input.communityId} is missing the study_enabled column (migration 1115_community_study_enabled.sql); an operator must converge the community database schema via the reviewed migration path before study policy writes can proceed`,
+    )
   }
 }
 

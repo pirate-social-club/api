@@ -122,6 +122,7 @@ async function setup() {
       donation_partner_status TEXT NOT NULL,
       governance_mode TEXT NOT NULL,
       settings_json TEXT,
+      study_enabled INTEGER NOT NULL DEFAULT 0 CHECK (study_enabled IN (0, 1)),
       created_by_user_id TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -261,5 +262,20 @@ describe("community study policy", () => {
     expect(statements).toHaveLength(1)
     expect(statements[0]).toContain("UPDATE communities")
     expect(statements[0]).toContain("study_enabled")
+  })
+
+  test("fails legibly instead of widening schema when study_enabled is missing", async () => {
+    const ctx = await setup()
+    const communityDb = createClient({ url: `file:${ctx.communityDbPath}` })
+    await communityDb.execute("ALTER TABLE communities DROP COLUMN study_enabled")
+    communityDb.close()
+
+    await expect(updateCommunityStudyPolicy({
+      actor: adminActor,
+      body: { study_enabled: true },
+      communityId: ctx.communityId,
+      communityRepository: ctx.repo,
+      env: ctx.env,
+    })).rejects.toThrow(/missing the study_enabled column \(migration 1115_community_study_enabled\.sql\); an operator must converge/u)
   })
 })
