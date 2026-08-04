@@ -40,6 +40,7 @@ import {
   runShardReset,
   runShardWrite,
 } from "./shard-read"
+import { publishProvisioningSchemaAttestation } from "./schema-attestation"
 import { shardVersionInfo } from "./version"
 
 /**
@@ -108,10 +109,47 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
    * rows into the allocated D1 binding. Idempotent — re-running on an
    * already-loaded binding is a no-op (`loaded: false`).
    */
-  communityD1LoadSnapshot(
+  async communityD1LoadSnapshot(
     input: ShardLoadSnapshotRequest,
   ): Promise<ShardResult<ShardLoadSnapshotResponse>> {
-    return runShardLoadSnapshot(this.env, input)
+    const result = await runShardLoadSnapshot(this.env, input)
+    if (result.ok && input.attestation) {
+      try {
+        this.ctx.waitUntil(
+          publishProvisioningSchemaAttestation(this.env, input)
+            .then((outcome) => {
+              const detail = {
+                event: "community_schema_provisioning_attestation",
+                binding_name: input.bindingName,
+                community_id: input.communityId,
+                ...outcome,
+              }
+              if (outcome.status === "published") console.info(JSON.stringify(detail))
+              else console.warn(JSON.stringify(detail))
+            })
+            .catch((error: unknown) => {
+              console.error(JSON.stringify({
+                event: "community_schema_provisioning_attestation",
+                binding_name: input.bindingName,
+                community_id: input.communityId,
+                status: "error",
+                detail: error instanceof Error ? error.message : String(error),
+              }))
+            }),
+        )
+      } catch (error: unknown) {
+        // Attestation is only a release optimization. Even a synchronous
+        // scheduling failure must not turn a successful load into a failed creation.
+        console.error(JSON.stringify({
+          event: "community_schema_provisioning_attestation_schedule",
+          binding_name: input.bindingName,
+          community_id: input.communityId,
+          status: "error",
+          detail: error instanceof Error ? error.message : String(error),
+        }))
+      }
+    }
+    return result
   }
 
   /**

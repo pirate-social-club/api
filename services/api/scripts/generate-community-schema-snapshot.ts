@@ -23,6 +23,14 @@ import { createClient } from "@libsql/client"
 // Use the source module directly: this script runs in CI before API workspace
 // dependencies are installed, while the shared source is already checked out.
 import { isBootstrapAllowedStatement } from "../../shared/src/sql-read-guard"
+import {
+  BOOTSTRAP_STATE_TABLE_DDL,
+  SCHEMA_ATTESTATION_INVENTORY_SQL,
+  SCHEMA_ATTESTATION_MIGRATION_LEDGER_SQL,
+  shardSchemaObservationProof,
+  type ShardMigrationLedgerRow,
+  type ShardSchemaInventoryRow,
+} from "../../shared/src/schema-attestation"
 import { createHash } from "node:crypto"
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
@@ -70,6 +78,30 @@ async function main(): Promise<void> {
   ).rows
   const statements = rows.map((r) => `${String(r.sql).trim()};`)
 
+  // Expected value only: the shard still has to query the real target after
+  // loading it. Include the same bootstrap marker and migration ledger that
+  // exist in a freshly provisioned community D1.
+  await db.execute(BOOTSTRAP_STATE_TABLE_DDL)
+  for (const migration of migrations) {
+    await db.execute({
+      sql: "INSERT INTO schema_migrations (migration_name, migration_label, checksum) VALUES (?1, 'community-template', ?2)",
+      args: [migration.name, migration.checksum],
+    })
+  }
+  const attestationSchemaRows = (await db.execute(SCHEMA_ATTESTATION_INVENTORY_SQL)).rows.map((row) => ({
+    type: String(row.type) as "index" | "table",
+    name: String(row.name),
+    sql: row.sql == null ? null : String(row.sql),
+  })) satisfies ShardSchemaInventoryRow[]
+  const attestationMigrationRows = (await db.execute(SCHEMA_ATTESTATION_MIGRATION_LEDGER_SQL)).rows.map((row) => ({
+    migration_name: String(row.migration_name),
+    checksum: String(row.checksum),
+  })) satisfies ShardMigrationLedgerRow[]
+  const observationProof = await shardSchemaObservationProof({
+    schemaRows: attestationSchemaRows,
+    migrationLedgerRows: attestationMigrationRows,
+  })
+
   // Hard contract, enforced — not a comment. Every emitted statement must pass
   // the shard bootstrap guard, or communityD1LoadSnapshot will reject the load
   // in production. Fail generation (and --check, which CI runs) loudly instead.
@@ -92,7 +124,8 @@ async function main(): Promise<void> {
     `// asserted against the shard bootstrap guard (isBootstrapAllowedStatement) at\n` +
     `// generation time — no ALTER/DROP/PRAGMA reaches the shard, only these CREATEs.\n\n` +
     `export const COMMUNITY_SCHEMA_STATEMENTS: readonly string[] = ${JSON.stringify(statements, null, 2)}\n\n` +
-    `export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: string }[] = ${JSON.stringify(migrations, null, 2)}\n`
+    `export const COMMUNITY_SCHEMA_MIGRATIONS: readonly { name: string; checksum: string }[] = ${JSON.stringify(migrations, null, 2)}\n\n` +
+    `export const COMMUNITY_SCHEMA_OBSERVATION_PROOF = ${JSON.stringify(observationProof, null, 2)} as const\n`
 
   const outPath = join(dirname(fileURLToPath(import.meta.url)), OUT_REL)
 

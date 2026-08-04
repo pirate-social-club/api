@@ -1,3 +1,5 @@
+import type { ShardSchemaObservationProof } from "./schema-attestation.js"
+
 /**
  * RPC contract between the API Worker and the community D1 shard Worker
  * (read-only). Shared so both sides compile against one shape.
@@ -164,6 +166,11 @@ export interface ShardPoolRpc {
 export type ShardLoadSnapshotRequest = {
   communityId: string
   bindingName: string
+  /** Optional best-effort proof publication after an independently observed load. */
+  attestation?: {
+    effectivePolicyDigest: string
+    expectedObservationProof: ShardSchemaObservationProof
+  }
   /** Ordered D1 statements: schema DDL first, then snapshot rows. */
   statements: ShardSqlStatement[]
 }
