@@ -4,7 +4,11 @@ import type { Env } from "../../env"
 import type { UserRepository } from "../auth/repositories"
 import { HttpError } from "../errors"
 import type { Client, InStatement, QueryResult } from "../sql-client"
-import { prepareProfileFollowWrite, reconcilePendingFollowWrites } from "./follow-write-service"
+import {
+  prepareProfileFollowWrite,
+  reconcilePendingFollowWrites,
+  recordEfpFollowAdoptionSnapshot,
+} from "./follow-write-service"
 
 const VIEWER = "0x1111111111111111111111111111111111111111"
 const TARGET = "0x2222222222222222222222222222222222222222"
@@ -247,5 +251,88 @@ describe("reconcilePendingFollowWrites", () => {
     })
     expect(pendingQuery).toContain("i.updated_at AS intent_updated_at")
     expect(pendingQuery).toContain("ORDER BY intent_updated_at ASC")
+  })
+})
+
+describe("recordEfpFollowAdoptionSnapshot", () => {
+  function snapshotClient(storedDates: Set<string>, opts?: { guardMissDate?: string }) {
+    const executed: string[] = []
+    const client = {
+      executed,
+      async execute(statement: string | InStatement): Promise<QueryResult> {
+        const query = typeof statement === "string" ? statement : statement.sql
+        const args = typeof statement === "string" ? [] : (statement.args ?? [])
+        executed.push(query)
+        const snapshotDate = String(args[0]).slice(0, 10)
+        if (query.includes("FROM efp_follow_adoption_daily")) {
+          const present = storedDates.has(snapshotDate) && snapshotDate !== opts?.guardMissDate
+          return { rows: present ? [{ present: 1 }] : [] }
+        }
+        if (query.includes("INSERT INTO efp_follow_adoption_daily")) {
+          // Emulate ON CONFLICT DO NOTHING RETURNING: a row comes back only
+          // when this statement actually inserts.
+          if (storedDates.has(snapshotDate)) return { rows: [], rowsAffected: 0 }
+          storedDates.add(snapshotDate)
+          return { rows: [{ snapshot_date: snapshotDate }], rowsAffected: 1 }
+        }
+        throw new Error(`Unexpected SQL: ${query}`)
+      },
+      async batch() { return [] },
+      async transaction() { throw new Error("not used") },
+    } satisfies Client & { executed: string[] }
+    return client
+  }
+
+  test("records on the first run of a UTC date", async () => {
+    const db = snapshotClient(new Set())
+    const result = await recordEfpFollowAdoptionSnapshot({
+      client: db,
+      now: new Date("2026-08-03T00:01:00.000Z"),
+    })
+    expect(result).toEqual({ recorded: true })
+    expect(db.executed.some((sql) => sql.includes("INSERT INTO efp_follow_adoption_daily"))).toBe(true)
+  })
+
+  test("skips the aggregation when today's row already exists", async () => {
+    const db = snapshotClient(new Set())
+    const now = new Date("2026-08-03T00:01:00.000Z")
+    await recordEfpFollowAdoptionSnapshot({ client: db, now })
+    const insertsBefore = db.executed.filter((sql) => sql.includes("INSERT INTO efp_follow_adoption_daily")).length
+
+    const second = await recordEfpFollowAdoptionSnapshot({
+      client: db,
+      now: new Date("2026-08-03T00:02:00.000Z"),
+    })
+    expect(second).toEqual({ recorded: false })
+    const insertsAfter = db.executed.filter((sql) => sql.includes("INSERT INTO efp_follow_adoption_daily")).length
+    expect(insertsBefore).toBe(1)
+    expect(insertsAfter).toBe(1)
+  })
+
+  test("records again on the next UTC date", async () => {
+    const db = snapshotClient(new Set())
+    await recordEfpFollowAdoptionSnapshot({ client: db, now: new Date("2026-08-03T23:59:00.000Z") })
+    const next = await recordEfpFollowAdoptionSnapshot({ client: db, now: new Date("2026-08-04T00:00:00.000Z") })
+    expect(next).toEqual({ recorded: true })
+  })
+
+  test("stays idempotent under a concurrent same-day insert", async () => {
+    const db = snapshotClient(new Set())
+    await recordEfpFollowAdoptionSnapshot({ client: db, now: new Date("2026-08-03T00:01:00.000Z") })
+    const insert = db.executed.find((sql) => sql.includes("INSERT INTO efp_follow_adoption_daily"))
+    expect(insert).toContain("ON CONFLICT (snapshot_date) DO NOTHING")
+    expect(insert).toContain("RETURNING snapshot_date")
+  })
+
+  test("reports recorded: false when a concurrent tick wins the insert race", async () => {
+    // The guard sees no row (concurrent tick has not committed yet), but the
+    // conflicting insert returns no RETURNING row, so the log must not claim
+    // a recording that did not happen.
+    const db = snapshotClient(new Set(["2026-08-03"]), { guardMissDate: "2026-08-03" })
+    const result = await recordEfpFollowAdoptionSnapshot({
+      client: db,
+      now: new Date("2026-08-03T00:01:00.000Z"),
+    })
+    expect(result).toEqual({ recorded: false })
   })
 })

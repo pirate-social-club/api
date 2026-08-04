@@ -592,12 +592,28 @@ export async function reconcilePendingFollowWrites(input: {
   return { examined: pending.rows.length, reflected }
 }
 
+// The scheduled batch runs every minute, but this is a daily snapshot: at most
+// one aggregation per UTC date. Without the guard every cycle re-aggregates the
+// full follows graph and rewrites the same row.
 export async function recordEfpFollowAdoptionSnapshot(input: {
   client: Client
   now?: Date
-}): Promise<void> {
+}): Promise<{ recorded: boolean }> {
   const now = (input.now ?? new Date()).toISOString()
-  await input.client.execute({
+  const existing = await input.client.execute({
+    sql: `
+      SELECT 1 AS present
+      FROM efp_follow_adoption_daily
+      WHERE snapshot_date = CAST(?1 AS DATE)
+      LIMIT 1
+    `,
+    args: [now],
+  })
+  if (existing.rows.length > 0) return { recorded: false }
+  // RETURNING keeps the reported outcome truthful when two callers race past
+  // the guard: only the tick that actually inserts reports recorded: true.
+  // (In practice the SCHEDULED_CRON_LOCK lease already serializes batches.)
+  const inserted = await input.client.execute({
     sql: `
       INSERT INTO efp_follow_adoption_daily (
         snapshot_date, attached_wallets_in_graph, edges_by_attached_wallets, captured_at
@@ -622,11 +638,10 @@ export async function recordEfpFollowAdoptionSnapshot(input: {
         ON edge.follower_address = wa.wallet_address_normalized
       WHERE wa.status = 'active'
         AND wa.chain_namespace LIKE 'eip155%'
-      ON CONFLICT (snapshot_date) DO UPDATE SET
-        attached_wallets_in_graph = excluded.attached_wallets_in_graph,
-        edges_by_attached_wallets = excluded.edges_by_attached_wallets,
-        captured_at = excluded.captured_at
+      ON CONFLICT (snapshot_date) DO NOTHING
+      RETURNING snapshot_date
     `,
     args: [now],
   })
+  return { recorded: inserted.rows.length > 0 }
 }
