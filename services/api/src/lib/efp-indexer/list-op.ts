@@ -31,8 +31,20 @@ export function decodeEfpListOp(raw: Hex): DecodedEfpListOp {
   const opVersion = byte(raw, 0)
   const opcode = byte(raw, 1)
   const recordVersion = byte(raw, 2)
-  const recordType = byte(raw, 3)
-  const addressHex = raw.length >= 50 ? `0x${raw.slice(10, 50)}` : null
+  // EFP's established address-record encoding carries an explicit record type:
+  //   version | opcode | record-version | record-type | address
+  // Pirate's shared transaction builder emits the compact encoding accepted by
+  // EFPListRecords for add/remove operations:
+  //   version | opcode | record-version | address
+  // The compact form is exactly 23 bytes, which makes it unambiguous from the
+  // established 24-byte address record (and from tagged operations).
+  const compactAddressRecord = raw.length === 48 && (opcode === 1 || opcode === 2)
+  const recordType = compactAddressRecord ? EFP_ADDRESS_RECORD_TYPE : byte(raw, 3)
+  const addressStart = compactAddressRecord ? 8 : 10
+  const minimumLength = compactAddressRecord ? 48 : 50
+  const addressHex = raw.length >= minimumLength
+    ? `0x${raw.slice(addressStart, addressStart + 40)}`
+    : null
   const targetAddress = addressHex && isAddress(addressHex)
     ? addressHex.toLowerCase() as Address
     : null
@@ -52,7 +64,7 @@ export function decodeEfpListOp(raw: Hex): DecodedEfpListOp {
     && recordType === EFP_ADDRESS_RECORD_TYPE
     && targetAddress !== null
   const validShape = opcode === 1 || opcode === 2
-    ? raw.length >= 50
+    ? raw.length >= minimumLength
     : (opcode === 3 || opcode === 4) && tag !== null
 
   const valid = validHeader && validShape
