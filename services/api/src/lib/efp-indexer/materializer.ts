@@ -746,18 +746,80 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
   const followers = new Set<Address>(
     input.affectedAccounts.map((item) => item.toLowerCase() as Address),
   )
-  for (const slot of input.affectedSlots) {
+  if (input.affectedSlots.length > 0) {
+    const projectedArgs: (string | number)[] = []
+    const slotTuples = input.affectedSlots.map((slot) => {
+      const offset = projectedArgs.length
+      projectedArgs.push(
+        slot.chainId,
+        slot.contractAddress.toLowerCase(),
+        slot.slot.toString(),
+      )
+      return `(?${offset + 1}, ?${offset + 2}, ?${offset + 3})`
+    }).join(", ")
     const projected = await input.tx.execute({
       sql: `
         SELECT DISTINCT follower_address
         FROM efp_effective_follows
-        WHERE list_chain_id = ?1 AND list_contract_address = ?2 AND list_slot = ?3
+        WHERE (list_chain_id, list_contract_address, list_slot) IN (${slotTuples})
       `,
-      args: [slot.chainId, slot.contractAddress.toLowerCase(), slot.slot.toString()],
+      args: projectedArgs,
     })
     for (const row of projected.rows) {
       const follower = address(row, "follower_address")
       if (follower) followers.add(follower)
+    }
+  }
+  if (input.affectedSlots.length > 0 || input.affectedListIds.length > 0) {
+    // One batched global window per replay replaces the former per-slot and
+    // per-list-id window scans: rank the complete history once, then filter
+    // the joined latest pointers. No new index on purpose here — a
+    // reverse-lookup index on efp_list_storage_location_events (storage
+    // chain/contract/slot) is the documented follow-up if production EXPLAIN
+    // still shows hot spots.
+    const authoritativeArgs: (string | number)[] = []
+    let latestStorageCte = ""
+    const branches: string[] = []
+    if (input.affectedSlots.length > 0) {
+      const slotTuples = input.affectedSlots.map((slot) => {
+        const offset = authoritativeArgs.length
+        authoritativeArgs.push(
+          slot.chainId,
+          slot.contractAddress.toLowerCase(),
+          slot.slot.toString(),
+        )
+        return `(?${offset + 1}, ?${offset + 2}, ?${offset + 3})`
+      }).join(", ")
+      latestStorageCte = `, latest_storage AS (
+          SELECT list_id, storage_chain_id, storage_contract_address, storage_slot,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY list_id
+                   ORDER BY block_number DESC, transaction_index DESC, log_index DESC
+                 ) AS rank
+          FROM efp_list_storage_location_events
+        )`
+      branches.push(`
+        SELECT primary_list.account_address AS follower_address
+        FROM latest_primary primary_list
+        JOIN latest_storage storage ON storage.list_id = primary_list.list_id
+        WHERE primary_list.rank = 1 AND storage.rank = 1
+          AND (
+            storage.storage_chain_id,
+            storage.storage_contract_address,
+            storage.storage_slot
+          ) IN (${slotTuples})
+      `)
+    }
+    if (input.affectedListIds.length > 0) {
+      const listIdPlaceholders = input.affectedListIds.map((listId) => {
+        authoritativeArgs.push(listId.toString())
+        return `?${authoritativeArgs.length}`
+      }).join(", ")
+      branches.push(`
+        SELECT account_address AS follower_address
+        FROM latest_primary
+        WHERE rank = 1 AND list_id IN (${listIdPlaceholders})
+      `)
     }
     const authoritative = await input.tx.execute({
       sql: `
@@ -768,47 +830,12 @@ export async function rebuildEfpProjectionAfterRangeReplacement(input: {
                    ORDER BY block_number DESC, transaction_index DESC, log_index DESC
                  ) AS rank
           FROM efp_primary_list_events
-        ), latest_storage AS (
-          SELECT list_id, storage_chain_id, storage_contract_address, storage_slot,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY list_id
-                   ORDER BY block_number DESC, transaction_index DESC, log_index DESC
-                 ) AS rank
-          FROM efp_list_storage_location_events
-        )
-        SELECT primary_list.account_address AS follower_address
-        FROM latest_primary primary_list
-        JOIN latest_storage storage ON storage.list_id = primary_list.list_id
-        WHERE primary_list.rank = 1 AND storage.rank = 1
-          AND storage.storage_chain_id = ?1
-          AND storage.storage_contract_address = ?2
-          AND storage.storage_slot = ?3
+        )${latestStorageCte}
+        ${branches.join("\n        UNION\n")}
       `,
-      args: [slot.chainId, slot.contractAddress.toLowerCase(), slot.slot.toString()],
+      args: authoritativeArgs,
     })
     for (const row of authoritative.rows) {
-      const follower = address(row, "follower_address")
-      if (follower) followers.add(follower)
-    }
-  }
-  for (const listId of input.affectedListIds) {
-    const result = await input.tx.execute({
-      sql: `
-        WITH latest_primary AS (
-          SELECT account_address, list_id,
-                 ROW_NUMBER() OVER (
-                   PARTITION BY account_address
-                   ORDER BY block_number DESC, transaction_index DESC, log_index DESC
-                 ) AS rank
-          FROM efp_primary_list_events
-        )
-        SELECT account_address AS follower_address
-        FROM latest_primary
-        WHERE rank = 1 AND list_id = ?1
-      `,
-      args: [listId.toString()],
-    })
-    for (const row of result.rows) {
       const follower = address(row, "follower_address")
       if (follower) followers.add(follower)
     }
