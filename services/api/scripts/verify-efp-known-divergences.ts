@@ -52,7 +52,7 @@ async function withRateLimitRetry<T>(operation: () => Promise<T>): Promise<T> {
     } catch (error) {
       const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase()
       if (!message.includes("rate limit") || attempt === 4) throw error
-      await Bun.sleep(delayMs)
+      await new Promise((resolve) => setTimeout(resolve, delayMs))
       delayMs *= 2
     }
   }
