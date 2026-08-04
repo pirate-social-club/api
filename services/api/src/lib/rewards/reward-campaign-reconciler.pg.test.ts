@@ -563,10 +563,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `, [NOW])
     await db.unsafe(`
       UPDATE reward_campaigns
-      SET requested_starts_at = starts_at, requested_ends_at = ends_at;
-      ALTER TABLE reward_campaigns
-        ALTER COLUMN requested_starts_at SET NOT NULL,
-        ALTER COLUMN requested_ends_at SET NOT NULL;
+      SET requested_starts_at = starts_at, requested_ends_at = ends_at
     `)
     // Apply the canonical migration verbatim. Trigger constraints are neither
     // mirrored nor modified in this harness.
