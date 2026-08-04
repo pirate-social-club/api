@@ -1,48 +1,16 @@
 import { nowIso } from "../helpers"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { getGlobalHandleRow, getProfileRow, getUserRow } from "../auth/auth-db-user-queries"
-import { parseVerificationCapabilities, serializeGlobalHandle } from "../auth/auth-serializers"
+import { serializeGlobalHandle } from "../auth/auth-serializers"
 import { isCleanupRenameAvailable } from "../auth/global-handle-policy"
 import { resolveUserTask, upsertUserTask } from "./notification-task-store"
-import type { UserTask } from "../../types"
-import { unixSeconds } from "../../serializers/time"
 
-const SYNTHETIC_UNIQUE_HUMAN_TASK_ID_PREFIX = "synth:unique_human:"
+// Verification is community/reward-scoped; the platform never demands a
+// specific unique-human provider globally, so no synthetic task exists for it.
+// The type constant remains only to filter legacy stored rows out of reads.
 export const UNIQUE_HUMAN_TASK_TYPE = "unique_human_verification_required"
 const PROFILE_COMPLETION_TASK_TYPE = "profile_completion_suggested"
 const GLOBAL_HANDLE_CLEANUP_TASK_TYPE = "global_handle_cleanup_suggested"
-
-export function isSyntheticUniqueHumanTaskId(taskId: string): boolean {
-  return taskId.startsWith(SYNTHETIC_UNIQUE_HUMAN_TASK_ID_PREFIX)
-}
-
-export function buildUniqueHumanTask(userId: string): UserTask {
-  const createdAt = nowIso()
-  return {
-    id: `task_${SYNTHETIC_UNIQUE_HUMAN_TASK_ID_PREFIX}${userId}`,
-    object: "user_task",
-    user: `usr_${userId}`,
-    type: UNIQUE_HUMAN_TASK_TYPE,
-    subject_type: "user",
-    subject: userId,
-    status: "open",
-    priority: 100,
-    payload: {
-      target_path: "/onboarding?verify=human",
-      verification_provider: "very",
-    },
-    resolved_at: null,
-    dismissed_at: null,
-    created: unixSeconds(createdAt),
-  }
-}
-
-export async function needsUniqueHumanTask(executor: DbExecutor, userId: string): Promise<boolean> {
-  const userRow = await getUserRow(executor, userId)
-  if (!userRow) return false
-  const capabilities = parseVerificationCapabilities(userRow.verification_capabilities_json)
-  return capabilities.unique_human.state !== "verified"
-}
 
 function isProfileComplete(profile: Awaited<ReturnType<typeof getProfileRow>>): boolean {
   if (!profile?.display_name?.trim()) return false
