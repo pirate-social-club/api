@@ -137,8 +137,8 @@ describe.skipIf(!RUN)("home feed booking discovery (real Postgres)", () => {
         hold_id, host_user_id, booker_user_id, slot_start_utc, slot_end_utc,
         price_cents, status, source_community_id, expires_at_utc, created_at, updated_at
       ) VALUES
-        ('hold_locked_1', 'host_locked', 'booker_1', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', 2000, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW()),
-        ('hold_locked_2', 'host_locked', 'booker_2', '2026-07-27T09:00:00Z', '2026-07-27T10:00:00Z', 2000, 'active', NULL, '2026-08-04T00:00:00Z', NOW(), NOW())
+        ('hold_locked_1', 'host_locked', 'booker_1', '2026-07-20T09:00:00Z', '2026-07-20T10:00:00Z', 2000, 'active', NULL, NOW() + INTERVAL '1 day', NOW(), NOW()),
+        ('hold_locked_2', 'host_locked', 'booker_2', '2026-07-27T09:00:00Z', '2026-07-27T10:00:00Z', 2000, 'active', NULL, NOW() + INTERVAL '1 day', NOW(), NOW())
     `)
     await setup.unsafe(`
       INSERT INTO bookings.feed_discovery_snapshots (
