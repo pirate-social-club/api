@@ -25,7 +25,6 @@ import {
 } from "./community-identity-media"
 import { decodePublicId } from "../public-ids"
 import { unixSeconds } from "../../serializers/time"
-import type { GateAtom, GateExpression } from "./membership/gate-types"
 import { parseJsonField } from "../json"
 import { normalizeCommunityCountryCode } from "./country-code"
 
@@ -264,46 +263,19 @@ function parseStoredAgentPostingScope(
   return "replies_only"
 }
 
-function gatePolicyHasAtom(
-  expression: GateExpression | null | undefined,
-  predicate: (atom: GateAtom) => boolean,
-): boolean {
-  if (!expression) return false
-  if (expression.op === "gate") return predicate(expression.gate)
-  return expression.children.some((child) => gatePolicyHasAtom(child, predicate))
-}
-
-function communityRequiresSelfLane(local: LocalCommunitySnapshot | null): boolean {
-  return gatePolicyHasAtom(local?.gate_policy?.expression, (atom) => (
-    (atom.type === "unique_human" && atom.provider === "self")
-    || atom.type === "minimum_age"
-    || atom.type === "nationality"
-    || atom.type === "gender"
-  ))
-}
-
-function communityAllowsVeryLane(local: LocalCommunitySnapshot | null): boolean {
-  return gatePolicyHasAtom(local?.gate_policy?.expression, (atom) => atom.type === "unique_human" && atom.provider === "very")
-}
-
 function parseStoredHumanVerificationLane(
   storedSettings: Record<string, unknown>,
-  local: LocalCommunitySnapshot | null,
 ): Community["human_verification_lane"] {
-  if (communityRequiresSelfLane(local)) {
-    return "self"
-  }
+  return normalizeHumanVerificationLane(storedSettings.human_verification_lane)
+}
 
-  const explicitLane = normalizeHumanVerificationLane(storedSettings.human_verification_lane)
-  if (explicitLane) {
-    return explicitLane
-  }
-
-  if (communityAllowsVeryLane(local)) {
-    return "very"
-  }
-
-  return "self"
+function parseStoredPreferredVerificationProvider(
+  storedSettings: Record<string, unknown>,
+): Community["preferred_verification_provider"] {
+  const value = storedSettings.preferred_verification_provider
+  return value === "self" || value === "zkpassport" || value === "very"
+    ? value
+    : null
 }
 
 function parseStoredHumanVerificationLaneOrigin(
@@ -350,7 +322,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     : null
   const allowedDisclosedQualifiers = parseStoredAllowedDisclosedQualifiers(storedSettings)
   const allowQualifiersOnAnonymousPosts = parseStoredAllowQualifiersOnAnonymousPosts(storedSettings)
-  const humanVerificationLane = parseStoredHumanVerificationLane(storedSettings, local)
+  const humanVerificationLane = parseStoredHumanVerificationLane(storedSettings)
   const humanVerificationLaneOrigin = parseStoredHumanVerificationLaneOrigin(storedSettings)
   const agentPostingPolicy = parseStoredAgentPostingPolicy(storedSettings)
   const guestCommentPolicy = parseStoredGuestCommentPolicy(storedSettings)
@@ -407,6 +379,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     allow_qualifiers_on_anonymous_posts: allowQualifiersOnAnonymousPosts,
     governance_mode: local?.governance_mode ?? "centralized",
     human_verification_lane: humanVerificationLane,
+    preferred_verification_provider: parseStoredPreferredVerificationProvider(storedSettings),
     human_verification_lane_origin: humanVerificationLaneOrigin,
     donation_policy_mode: normalizeDonationPolicyMode(local?.donation_policy_mode),
     donation_partner_status: donationPartnerStatus,

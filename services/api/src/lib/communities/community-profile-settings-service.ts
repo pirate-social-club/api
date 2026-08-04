@@ -91,6 +91,9 @@ export async function updateCommunity(input: {
     if ("human_verification_lane" in input.body) {
       nextSettings.human_verification_lane = input.body.human_verification_lane ?? null
     }
+    if ("preferred_verification_provider" in input.body) {
+      nextSettings.preferred_verification_provider = input.body.preferred_verification_provider ?? null
+    }
     if ("accepted_agent_ownership_providers" in input.body) {
       nextSettings.accepted_agent_ownership_providers = input.body.accepted_agent_ownership_providers == null
         ? null

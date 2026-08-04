@@ -346,6 +346,9 @@ export function buildBootstrapInitialSettings(body: CreateCommunityRequestBody):
   if (body.human_verification_lane) {
     settings.human_verification_lane = body.human_verification_lane
   }
+  if (body.preferred_verification_provider) {
+    settings.preferred_verification_provider = body.preferred_verification_provider
+  }
   if (body.accepted_agent_ownership_providers) {
     settings.accepted_agent_ownership_providers = body.accepted_agent_ownership_providers
   }

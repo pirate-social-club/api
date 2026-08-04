@@ -11274,10 +11274,21 @@ const spec = {
             "nullable": true
           },
           "human_verification_lane": {
-            "$ref": "#/components/schemas/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane",
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
+            ],
+            "nullable": true
           },
           "human_verification_lane_origin": {
-            "$ref": "#/components/schemas/CommunityAgentResolutionOrigin"
+            "$ref": "#/components/schemas/CommunityAgentResolutionOrigin",
+            "deprecated": true
           },
           "allowed_disclosed_qualifiers": {
             "type": "array",
@@ -13015,7 +13026,17 @@ const spec = {
             }
           },
           "human_verification_lane": {
-            "$ref": "#/components/schemas/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane",
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
+            ],
+            "nullable": true
           },
           "member_count": {
             "type": "integer",
@@ -13129,7 +13150,17 @@ const spec = {
             ]
           },
           "human_verification_lane": {
-            "$ref": "#/components/schemas/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane",
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
+            ],
+            "nullable": true
           },
           "joinable_now": {
             "type": "boolean"
@@ -19074,6 +19105,15 @@ const spec = {
         "enum": [
           "very",
           "self"
+        ],
+        "deprecated": true
+      },
+      "CommunityHumanVerificationProvider": {
+        "type": "string",
+        "enum": [
+          "self",
+          "zkpassport",
+          "very"
         ]
       },
       "CommunityAgentResolutionOrigin": {
@@ -23937,6 +23977,15 @@ const spec = {
             "enum": [
               "very",
               "self"
+            ],
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
             ],
             "nullable": true
           },

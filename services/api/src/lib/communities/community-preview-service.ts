@@ -137,55 +137,34 @@ function parsePreviewAcceptedAgentOwnershipProviders(
 function resolvePreviewAcceptedAgentOwnershipProviders(input: {
   env: Env
   settings: Record<string, unknown>
-  humanVerificationLane: CommunityPreview["human_verification_lane"]
 }): AgentOwnershipProvider[] {
   const explicit = parsePreviewAcceptedAgentOwnershipProviders(input.settings)
   if (explicit !== null) {
     return explicit
   }
 
-  if (input.humanVerificationLane === "very") {
-    return input.env.PLATFORM_APPROVED_KYA_PROVIDERS == null
-      ? [...DEFAULT_PLATFORM_APPROVED_DERIVED_KYA_PROVIDERS]
-      : dedupeStrings(splitCsv(input.env.PLATFORM_APPROVED_KYA_PROVIDERS))
-          .filter((value): value is AgentOwnershipProvider => value === "self_agent_id" || value === "clawkey")
-  }
-
-  return []
+  return input.env.PLATFORM_APPROVED_KYA_PROVIDERS == null
+    ? [...DEFAULT_PLATFORM_APPROVED_DERIVED_KYA_PROVIDERS]
+    : dedupeStrings(splitCsv(input.env.PLATFORM_APPROVED_KYA_PROVIDERS))
+        .filter((value): value is AgentOwnershipProvider => value === "self_agent_id" || value === "clawkey")
 }
 
 function parsePreviewHumanVerificationLane(
   settings: Record<string, unknown>,
-  summaries: NonNullable<CommunityPreview["membership_gate_summaries"]>,
 ): CommunityPreview["human_verification_lane"] {
   if (settings.human_verification_lane === "self" || settings.human_verification_lane === "very") {
     return settings.human_verification_lane
   }
+  return null
+}
 
-  if (summaries.some((summary) =>
-    summary.gate_type === "nationality"
-    || summary.gate_type === "gender"
-    || summary.gate_type === "minimum_age"
-    || (summary.gate_type !== "unique_human" && summary.accepted_providers?.includes("self"))
-  )) {
-    return "self"
-  }
-
-  if (summaries.some((summary) =>
-    summary.gate_type === "unique_human"
-    && (!summary.accepted_providers?.length || summary.accepted_providers.includes("very"))
-  )) {
-    return "very"
-  }
-
-  if (summaries.some((summary) =>
-    summary.gate_type === "unique_human"
-    && summary.accepted_providers?.includes("self")
-  )) {
-    return "self"
-  }
-
-  return "very"
+function parsePreviewPreferredVerificationProvider(
+  settings: Record<string, unknown>,
+): CommunityPreview["preferred_verification_provider"] {
+  const value = settings.preferred_verification_provider
+  return value === "self" || value === "zkpassport" || value === "very"
+    ? value
+    : null
 }
 
 async function getActiveCommunityForPreview(
@@ -516,7 +495,7 @@ async function buildCommunityPreview(input: {
     )),
   ])
 
-  const humanVerificationLane = parsePreviewHumanVerificationLane(settings, membershipGateSummaries)
+  const humanVerificationLane = parsePreviewHumanVerificationLane(settings)
   const preview: CommunityPreview = {
     community_id: input.communityId,
     display_name: displayName,
@@ -547,11 +526,11 @@ async function buildCommunityPreview(input: {
     accepted_agent_ownership_providers: resolvePreviewAcceptedAgentOwnershipProviders({
       env: input.env,
       settings,
-      humanVerificationLane,
     }),
     allowed_disclosed_qualifiers: parsePreviewAllowedDisclosedQualifiers(settings),
     allow_qualifiers_on_anonymous_posts: parsePreviewAllowQualifiersOnAnonymousPosts(settings),
     human_verification_lane: humanVerificationLane,
+    preferred_verification_provider: parsePreviewPreferredVerificationProvider(settings),
     member_count: memberCount,
     follower_count: followerCount,
     donation_policy_mode: donationPolicyMode,

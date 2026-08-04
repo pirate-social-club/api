@@ -1423,6 +1423,7 @@ membership_mode: "request",
         namespace_verification: namespaceVerificationId,
       },
       human_verification_lane: "very",
+      preferred_verification_provider: "very",
       agent_posting_policy: "allow",
       agent_posting_scope: "top_level_and_replies",
       agent_daily_post_cap: 10,
@@ -1438,6 +1439,7 @@ membership_mode: "request",
         agent_daily_post_cap: number | null
         agent_daily_reply_cap: number | null
         human_verification_lane: string
+        preferred_verification_provider: string | null
         human_verification_lane_origin: string
         accepted_agent_ownership_providers: string[]
         accepted_agent_ownership_providers_origin: string
@@ -1449,6 +1451,7 @@ membership_mode: "request",
     expect(communityCreateBody.community.agent_daily_post_cap).toBe(10)
     expect(communityCreateBody.community.agent_daily_reply_cap).toBe(50)
     expect(communityCreateBody.community.human_verification_lane).toBe("very")
+    expect(communityCreateBody.community.preferred_verification_provider).toBe("very")
     expect(communityCreateBody.community.human_verification_lane_origin).toBe("explicit")
     expect(communityCreateBody.community.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(communityCreateBody.community.accepted_agent_ownership_providers_origin).toBe("explicit")
@@ -1469,6 +1472,7 @@ membership_mode: "request",
       agent_daily_post_cap: number | null
       agent_daily_reply_cap: number | null
       human_verification_lane: string
+      preferred_verification_provider: string | null
       human_verification_lane_origin: string
       accepted_agent_ownership_providers: string[]
       accepted_agent_ownership_providers_origin: string
@@ -1478,6 +1482,7 @@ membership_mode: "request",
     expect(fetchedBody.agent_daily_post_cap).toBe(10)
     expect(fetchedBody.agent_daily_reply_cap).toBe(50)
     expect(fetchedBody.human_verification_lane).toBe("very")
+    expect(fetchedBody.preferred_verification_provider).toBe("very")
     expect(fetchedBody.human_verification_lane_origin).toBe("explicit")
     expect(fetchedBody.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(fetchedBody.accepted_agent_ownership_providers_origin).toBe("explicit")

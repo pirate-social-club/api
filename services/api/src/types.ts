@@ -830,6 +830,7 @@ export type Community = {
   allow_anonymous_identity: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
   human_verification_lane: HumanVerificationLane
+  preferred_verification_provider?: ContractCommunity["preferred_verification_provider"]
   human_verification_lane_origin: CommunityAgentResolutionOrigin
   allowed_disclosed_qualifiers?: Array<string> | null
   allow_qualifiers_on_anonymous_posts?: boolean | null
@@ -917,6 +918,7 @@ export type CommunityPreview = {
   allowed_disclosed_qualifiers?: Array<string> | null
   allow_qualifiers_on_anonymous_posts?: boolean | null
   human_verification_lane: HumanVerificationLane
+  preferred_verification_provider?: ContractCommunityPreview["preferred_verification_provider"]
   member_count?: number | null
   follower_count?: number | null
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null

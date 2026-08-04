@@ -17,6 +17,14 @@ import type {
   SuggestedVerificationProvider,
 } from "./gate-types"
 
+function explicitlyAcceptedIdentityProvider(
+  acceptedProviders: readonly string[] | null | undefined,
+  candidates: Array<"self" | "very" | "zkpassport">,
+): "self" | "very" | "zkpassport" | null {
+  const accepted = candidates.filter((provider) => acceptedProviders?.includes(provider))
+  return accepted.length === 1 ? accepted[0] ?? null : null
+}
+
 function satisfiesProofRequirement(user: User, requirement: ProofRequirement, gateConfig: Record<string, unknown> | null): boolean {
   switch (requirement.proof_type) {
     case "unique_human":
@@ -90,8 +98,10 @@ export function evaluateIdentityGateRule(input: {
         const capability = input.user.verification_capabilities.nationality
         if (capability.state !== "verified") {
           missingCapabilities.push("nationality")
-          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
-          else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
+          suggestedProvider = explicitlyAcceptedIdentityProvider(
+            requirement.accepted_providers,
+            ["self", "zkpassport"],
+          ) ?? suggestedProvider
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         } else {
@@ -111,9 +121,10 @@ export function evaluateIdentityGateRule(input: {
         const capability = input.user.verification_capabilities.unique_human
         if (capability.state !== "verified") {
           missingCapabilities.push("unique_human")
-          if (includesAcceptedProvider(requirement.accepted_providers, "very")) suggestedProvider = suggestedProvider ?? "very"
-          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = suggestedProvider ?? "self"
-          if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = suggestedProvider ?? "zkpassport"
+          suggestedProvider = explicitlyAcceptedIdentityProvider(
+            requirement.accepted_providers,
+            ["self", "zkpassport", "very"],
+          ) ?? suggestedProvider
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         }
@@ -122,8 +133,10 @@ export function evaluateIdentityGateRule(input: {
       case "age_over_18": {
         if (!satisfiesMinimumAgeRequirement(input.user, requirement.accepted_providers, 18)) {
           missingCapabilities.push("age_over_18")
-          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
-          else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
+          suggestedProvider = explicitlyAcceptedIdentityProvider(
+            requirement.accepted_providers,
+            ["self", "zkpassport"],
+          ) ?? suggestedProvider
         }
         break
       }
@@ -138,8 +151,10 @@ export function evaluateIdentityGateRule(input: {
             mismatchReasons.push("minimum_age_mismatch")
           } else {
             missingCapabilities.push("minimum_age")
-            if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
-            else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
+            suggestedProvider = explicitlyAcceptedIdentityProvider(
+              requirement.accepted_providers,
+              ["self", "zkpassport"],
+            ) ?? suggestedProvider
           }
         }
         break
@@ -148,8 +163,10 @@ export function evaluateIdentityGateRule(input: {
         const capability = input.user.verification_capabilities.gender
         if (capability.state !== "verified") {
           missingCapabilities.push("gender")
-          if (includesAcceptedProvider(requirement.accepted_providers, "self")) suggestedProvider = "self"
-          else if (includesAcceptedProvider(requirement.accepted_providers, "zkpassport")) suggestedProvider = "zkpassport"
+          suggestedProvider = explicitlyAcceptedIdentityProvider(
+            requirement.accepted_providers,
+            ["self", "zkpassport"],
+          ) ?? suggestedProvider
         } else if (!includesAcceptedProvider(requirement.accepted_providers, capability.provider)) {
           mismatchReasons.push("provider_not_accepted")
         } else if (typeof config.required_value === "string" && capability.value !== config.required_value) {

@@ -13,7 +13,7 @@ import type { Env } from "../../env"
 // community's real `karaoke_enabled` value. A prior bug omitted the column from
 // the preview SELECT, so every preview reported false and the web Sing button
 // (gated on community.karaoke_enabled) never appeared even when karaoke was on.
-async function buildCommunityDb(karaokeEnabled: 0 | 1) {
+async function buildCommunityDb(karaokeEnabled: 0 | 1, settings: Record<string, unknown> | null = null) {
   const dir = await mkdtemp(join(tmpdir(), "preview-karaoke-"))
   const dbPath = join(dir, "community.db")
   const communityId = "cmt_preview_karaoke"
@@ -38,10 +38,10 @@ async function buildCommunityDb(karaokeEnabled: 0 | 1) {
         ?1, ?2, NULL, 'active', NULL,
         'fan_run', 'open', 'none', 0,
         NULL, NULL, 'none', 'unconfigured',
-        'centralized', NULL, ?3, ?4, ?4, ?5
+        'centralized', ?6, ?3, ?4, ?4, ?5
       )
     `,
-    args: [communityId, "Preview Karaoke Test", "usr_owner", now, karaokeEnabled],
+    args: [communityId, "Preview Karaoke Test", "usr_owner", now, karaokeEnabled, settings ? JSON.stringify(settings) : null],
   })
 
   const community: CommunityRow = {
@@ -95,6 +95,38 @@ describe("community preview karaoke_enabled propagation", () => {
         communityRepository: ctx.communityRepository,
       })
       expect(preview.karaoke_enabled).toBe(false)
+    } finally {
+      ctx.client.close()
+    }
+  })
+
+  test("preview does not fabricate a verification provider when none is configured", async () => {
+    const ctx = await buildCommunityDb(0)
+    try {
+      const preview = await getPublicCommunityPreviewFromCommunityDb({
+        env: {} as Env,
+        client: ctx.client,
+        communityId: ctx.communityId,
+        communityRepository: ctx.communityRepository,
+      })
+      expect(preview.human_verification_lane).toBeNull()
+      expect(preview.preferred_verification_provider).toBeNull()
+    } finally {
+      ctx.client.close()
+    }
+  })
+
+  test("preview emits only an explicitly configured provider preference", async () => {
+    const ctx = await buildCommunityDb(0, { preferred_verification_provider: "zkpassport" })
+    try {
+      const preview = await getPublicCommunityPreviewFromCommunityDb({
+        env: {} as Env,
+        client: ctx.client,
+        communityId: ctx.communityId,
+        communityRepository: ctx.communityRepository,
+      })
+      expect(preview.human_verification_lane).toBeNull()
+      expect(preview.preferred_verification_provider).toBe("zkpassport")
     } finally {
       ctx.client.close()
     }
