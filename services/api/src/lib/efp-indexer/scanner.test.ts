@@ -7,6 +7,7 @@ import {
   EFP_BASE_LIST_REGISTRY,
   EFP_BASE_LIST_RECORDS,
   EFP_BASE_START_BLOCK,
+  EFP_CONFIRMATION_DEPTH,
   EFP_INDEXER_CHAINS,
   EFP_OPTIMISM_CHAIN_ID,
   EFP_OPTIMISM_LIST_RECORDS,
@@ -54,6 +55,94 @@ async function ensureProjectionSchema(client: Awaited<ReturnType<typeof createCo
       applied_through_block_hash TEXT NOT NULL, projection_revision INTEGER NOT NULL,
       last_successful_at TEXT NOT NULL, updated_at TEXT NOT NULL)` },
   ], "write")
+}
+
+type ReplayLogs = {
+  listOps: Array<Record<string, unknown>>
+  metadata: Array<Record<string, unknown>>
+  storage: Array<Record<string, unknown>>
+}
+
+function listOpLog(slot: bigint, blockNumber: bigint) {
+  return {
+    args: {
+      op: encodePacked(["uint8", "uint8", "uint8", "uint8", "address"], [1, 1, 1, 1, TARGET]),
+      slot,
+    },
+    blockHash: BLOCK_HASH,
+    blockNumber,
+    logIndex: 3,
+    transactionHash: TX_HASH,
+    transactionIndex: 2,
+  }
+}
+
+function primaryListLog(blockNumber: bigint) {
+  return {
+    args: { addr: ACCOUNT, key: "primary-list", value: `0x${"0".repeat(63)}7` },
+    blockHash: BLOCK_HASH,
+    blockNumber,
+    logIndex: 100,
+    transactionHash: TX_HASH,
+    transactionIndex: 2,
+  }
+}
+
+function storageLog(blockNumber: bigint) {
+  return {
+    args: {
+      tokenId: 7n,
+      listStorageLocation: encodePacked(
+        ["uint8", "uint8", "uint256", "address", "uint256"],
+        [1, 1, 8453n, EFP_BASE_LIST_RECORDS, 42n],
+      ),
+    },
+    blockHash: BLOCK_HASH,
+    blockNumber,
+    logIndex: 300,
+    transactionHash: TX_HASH,
+    transactionIndex: 2,
+  }
+}
+
+function createReplayReader(logs: ReplayLogs, getHead: () => bigint) {
+  return {
+    getBlockNumber: async () => getHead(),
+    getBlock: async () => ({ hash: BLOCK_HASH }),
+    getLogs: async ({
+      address,
+      fromBlock,
+      toBlock,
+    }: {
+      address: Address
+      fromBlock: bigint
+      toBlock: bigint
+    }) => {
+      const selected = address === EFP_BASE_LIST_RECORDS ? logs.listOps
+        : address === EFP_BASE_ACCOUNT_METADATA ? logs.metadata
+        : address === EFP_BASE_LIST_REGISTRY ? logs.storage
+        : []
+      return selected.filter((log) => {
+        const blockNumber = log.blockNumber as bigint
+        return blockNumber >= fromBlock && blockNumber <= toBlock
+      })
+    },
+  }
+}
+
+async function rawCreatedAt(
+  client: Awaited<ReturnType<typeof createControlPlaneTestClient>>["client"],
+) {
+  const timestamps: Record<string, unknown[]> = {}
+  for (const table of [
+    "efp_list_ops",
+    "efp_primary_list_events",
+    "efp_list_storage_location_events",
+  ]) {
+    const rows = await client.execute(`SELECT created_at FROM ${table} ORDER BY created_at`)
+    timestamps[table] = rows.rows.map((row) => row.created_at)
+  }
+  return timestamps
 }
 
 describe("scanEfpBaseOnce", () => {
@@ -243,5 +332,134 @@ describe("scanEfpBaseOnce", () => {
       "SELECT chain_id FROM efp_follow_projection_chain_watermarks WHERE chain_id = 10",
     )
     expect(watermarks.rows).toHaveLength(0)
+  })
+
+  test("identical replay leaves raw rows untouched and reports an empty diff", async () => {
+    const database = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanups.push(database.cleanup)
+    await ensureProjectionSchema(database.client)
+    const blockNumber = EFP_BASE_START_BLOCK + 10n
+    let head = blockNumber + EFP_CONFIRMATION_DEPTH
+    const logs: ReplayLogs = {
+      listOps: [listOpLog(42n, blockNumber)],
+      metadata: [primaryListLog(blockNumber)],
+      storage: [storageLog(blockNumber)],
+    }
+    const reader = createReplayReader(logs, () => head)
+    const first = await scanEfpBaseOnce({
+      client: database.client,
+      rpcUrl: "https://base.example.test",
+      reader: reader as never,
+      now: () => new Date("2026-07-25T00:00:00.000Z"),
+    })
+    expect(first.replacement).toEqual({
+      listOps: { existing: 0, inserted: 1, deleted: 0, changed: 0 },
+      primaryListEvents: { existing: 0, inserted: 1, deleted: 0, changed: 0 },
+      storageLocationEvents: { existing: 0, inserted: 1, deleted: 0, changed: 0 },
+      affectedSlotCount: 1,
+      affectedAccountCount: 1,
+      affectedListIdCount: 1,
+    })
+    const createdAtBefore = await rawCreatedAt(database.client)
+
+    head = blockNumber + EFP_CONFIRMATION_DEPTH + 1n
+    const second = await scanEfpBaseOnce({
+      client: database.client,
+      rpcUrl: "https://base.example.test",
+      reader: reader as never,
+      now: () => new Date("2026-07-25T00:01:00.000Z"),
+    })
+    expect(second.replacement).toEqual({
+      listOps: { existing: 1, inserted: 0, deleted: 0, changed: 0 },
+      primaryListEvents: { existing: 1, inserted: 0, deleted: 0, changed: 0 },
+      storageLocationEvents: { existing: 1, inserted: 0, deleted: 0, changed: 0 },
+      affectedSlotCount: 0,
+      affectedAccountCount: 0,
+      affectedListIdCount: 0,
+    })
+    expect(await rawCreatedAt(database.client)).toEqual(createdAtBefore)
+  })
+
+  test("scan over empty new blocks still advances the cursor", async () => {
+    const database = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanups.push(database.cleanup)
+    await ensureProjectionSchema(database.client)
+    const head = EFP_BASE_START_BLOCK + 1_000n
+    const reader = createReplayReader({ listOps: [], metadata: [], storage: [] }, () => head)
+    const summary = await scanEfpBaseOnce({
+      client: database.client,
+      rpcUrl: "https://base.example.test",
+      reader: reader as never,
+      now: () => new Date("2026-07-25T00:00:00.000Z"),
+    })
+
+    expect(summary).toMatchObject({ status: "indexed", listOpCount: 0 })
+    expect(summary.replacement).toEqual({
+      listOps: { existing: 0, inserted: 0, deleted: 0, changed: 0 },
+      primaryListEvents: { existing: 0, inserted: 0, deleted: 0, changed: 0 },
+      storageLocationEvents: { existing: 0, inserted: 0, deleted: 0, changed: 0 },
+      affectedSlotCount: 0,
+      affectedAccountCount: 0,
+      affectedListIdCount: 0,
+    })
+    const cursors = await database.client.execute(
+      "SELECT indexed_through_block FROM efp_indexer_cursors",
+    )
+    expect(cursors.rows).toHaveLength(1)
+    expect(Number(cursors.rows[0]?.indexed_through_block)).toBe(
+      Number(EFP_BASE_START_BLOCK + 936n),
+    )
+  })
+
+  test("reorg-dropped op deletes the raw row and its projected follow edge", async () => {
+    const database = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanups.push(database.cleanup)
+    await ensureProjectionSchema(database.client)
+    const blockNumber = EFP_BASE_START_BLOCK + 10n
+    let head = blockNumber + EFP_CONFIRMATION_DEPTH
+    const logs: ReplayLogs = {
+      listOps: [listOpLog(42n, blockNumber)],
+      metadata: [primaryListLog(blockNumber)],
+      storage: [storageLog(blockNumber)],
+    }
+    const reader = createReplayReader(logs, () => head)
+    await scanEfpBaseOnce({
+      client: database.client,
+      rpcUrl: "https://base.example.test",
+      reader: reader as never,
+      now: () => new Date("2026-07-25T00:00:00.000Z"),
+    })
+    const edges = await database.client.execute(
+      "SELECT follower_address, followed_address FROM efp_effective_follows",
+    )
+    expect(edges.rows).toEqual([{ follower_address: ACCOUNT, followed_address: TARGET }])
+
+    logs.listOps = []
+    head = blockNumber + EFP_CONFIRMATION_DEPTH + 1n
+    const reorg = await scanEfpBaseOnce({
+      client: database.client,
+      rpcUrl: "https://base.example.test",
+      reader: reader as never,
+      now: () => new Date("2026-07-25T00:01:00.000Z"),
+    })
+    expect(reorg.replacement?.listOps).toEqual({
+      existing: 1,
+      inserted: 0,
+      deleted: 1,
+      changed: 0,
+    })
+    expect(reorg.replacement?.affectedSlotCount).toBe(1)
+    expect((await database.client.execute("SELECT * FROM efp_list_ops")).rows).toHaveLength(0)
+    expect(
+      (await database.client.execute("SELECT * FROM efp_effective_follows")).rows,
+    ).toHaveLength(0)
+    const counts = await database.client.execute(
+      `SELECT wallet_address, follower_count, following_count
+       FROM efp_follow_counts ORDER BY wallet_address`,
+    )
+    expect(counts.rows).toEqual([
+      { wallet_address: TARGET, follower_count: 0, following_count: 0 },
+      { wallet_address: ACCOUNT, follower_count: 0, following_count: 0 },
+    ])
   })
 })

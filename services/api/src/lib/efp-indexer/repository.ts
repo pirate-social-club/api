@@ -63,6 +63,26 @@ const EFP_LIST_OP_INSERT_COLUMN_COUNT = 16
 const EFP_PRIMARY_LIST_INSERT_COLUMN_COUNT = 12
 const EFP_STORAGE_LOCATION_INSERT_COLUMN_COUNT = 13
 
+// Every persisted column except created_at, which is restamped on each insert
+// and therefore excluded from replay comparison.
+const EFP_LIST_OP_DIFF_COLUMNS = [
+  "chain_id", "contract_address", "slot", "block_number", "block_hash",
+  "transaction_hash", "transaction_index", "log_index", "raw_op",
+  "op_version", "opcode", "record_version", "record_type", "target_address",
+  "tag",
+] as const
+const EFP_PRIMARY_LIST_DIFF_COLUMNS = [
+  "chain_id", "contract_address", "account_address", "metadata_key",
+  "raw_value", "list_id", "block_number", "block_hash", "transaction_hash",
+  "transaction_index", "log_index",
+] as const
+const EFP_STORAGE_LOCATION_DIFF_COLUMNS = [
+  "chain_id", "registry_address", "list_id", "raw_storage_location",
+  "storage_chain_id", "storage_contract_address", "storage_slot",
+  "block_number", "block_hash", "transaction_hash", "transaction_index",
+  "log_index",
+] as const
+
 function integer(row: QueryResultRow | undefined, key: string): bigint | null {
   const value = row?.[key]
   if (typeof value === "bigint") return value
@@ -103,6 +123,186 @@ export async function readEfpIndexerCursor(
   }
 }
 
+export type EfpRangeTableDiff = {
+  existing: number
+  // Changed rows are deleted and re-inserted, so they count in both totals.
+  inserted: number
+  deleted: number
+  changed: number
+}
+
+export type EfpRangeReplacementSummary = {
+  listOps: EfpRangeTableDiff
+  primaryListEvents: EfpRangeTableDiff
+  storageLocationEvents: EfpRangeTableDiff
+  affectedSlotCount: number
+  affectedAccountCount: number
+  affectedListIdCount: number
+}
+
+type EfpRowDiff<TItem> = {
+  added: TItem[]
+  changed: Array<{ oldRow: QueryResultRow; item: TItem }>
+  removed: QueryResultRow[]
+  summary: EfpRangeTableDiff
+}
+
+// Stored values come back driver-typed (Postgres BIGINT as string, SQLite as
+// number) while fresh scans hold TS bigint/number values, so both sides are
+// compared through String(...). null/NULL compare equal and hex values
+// (addresses, hashes, raw bytes) compare lowercase, matching insert casing.
+function canonical(value: unknown): string | null {
+  if (value == null) return null
+  if (typeof value === "string" && value.startsWith("0x")) return value.toLowerCase()
+  return String(value)
+}
+
+function rowKey(chainId: unknown, transactionHash: unknown, logIndex: unknown): string {
+  return `${canonical(chainId)}:${canonical(transactionHash)}:${canonical(logIndex)}`
+}
+
+function itemKey(item: { chainId: number; transactionHash: Hex; logIndex: number }): string {
+  return rowKey(item.chainId, item.transactionHash, item.logIndex)
+}
+
+function diffEfpRows<TItem extends { chainId: number; transactionHash: Hex; logIndex: number }>(
+  input: {
+    oldRows: readonly QueryResultRow[]
+    newItems: readonly TItem[]
+    columns: readonly string[]
+    valuesOf: (item: TItem) => readonly unknown[]
+  },
+): EfpRowDiff<TItem> {
+  const oldByKey = new Map<string, QueryResultRow>()
+  for (const row of input.oldRows) {
+    oldByKey.set(rowKey(row.chain_id, row.transaction_hash, row.log_index), row)
+  }
+  const matchedKeys = new Set<string>()
+  const added: TItem[] = []
+  const changed: Array<{ oldRow: QueryResultRow; item: TItem }> = []
+  for (const item of input.newItems) {
+    const key = itemKey(item)
+    const oldRow = oldByKey.get(key)
+    if (!oldRow) {
+      added.push(item)
+      continue
+    }
+    matchedKeys.add(key)
+    const oldPayload = input.columns.map((column) => canonical(oldRow[column]))
+    const newPayload = input.valuesOf(item).map(canonical)
+    const unchanged = oldPayload.length === newPayload.length
+      && oldPayload.every((value, index) => value === newPayload[index])
+    if (!unchanged) changed.push({ oldRow, item })
+  }
+  const removed = input.oldRows.filter(
+    (row) => !matchedKeys.has(rowKey(row.chain_id, row.transaction_hash, row.log_index)),
+  )
+  return {
+    added,
+    changed,
+    removed,
+    summary: {
+      existing: input.oldRows.length,
+      inserted: added.length + changed.length,
+      deleted: removed.length + changed.length,
+      changed: changed.length,
+    },
+  }
+}
+
+function listOpValues(item: PersistedEfpListOp): readonly unknown[] {
+  return [
+    item.chainId,
+    item.contractAddress,
+    item.slot,
+    item.blockNumber,
+    item.blockHash,
+    item.transactionHash,
+    item.transactionIndex,
+    item.logIndex,
+    item.rawOp,
+    item.decoded.opVersion,
+    item.decoded.opcode,
+    item.decoded.recordVersion,
+    item.decoded.recordType,
+    item.decoded.targetAddress,
+    item.decoded.tag,
+  ]
+}
+
+function primaryListEventValues(item: PersistedPrimaryListEvent): readonly unknown[] {
+  return [
+    item.chainId,
+    item.contractAddress,
+    item.accountAddress,
+    "primary-list",
+    item.rawValue,
+    item.listId,
+    item.blockNumber,
+    item.blockHash,
+    item.transactionHash,
+    item.transactionIndex,
+    item.logIndex,
+  ]
+}
+
+function storageLocationEventValues(item: PersistedListStorageLocationEvent): readonly unknown[] {
+  return [
+    item.chainId,
+    item.registryAddress,
+    item.listId,
+    item.rawStorageLocation,
+    item.storageChainId,
+    item.storageContractAddress,
+    item.storageSlot,
+    item.blockNumber,
+    item.blockHash,
+    item.transactionHash,
+    item.transactionIndex,
+    item.logIndex,
+  ]
+}
+
+async function deleteEfpRowsByKey(
+  tx: Transaction,
+  table: "efp_list_ops" | "efp_primary_list_events" | "efp_list_storage_location_events",
+  chainId: number,
+  fromBlock: bigint,
+  throughBlock: bigint,
+  rows: readonly QueryResultRow[],
+): Promise<void> {
+  for (
+    let batchStart = 0;
+    batchStart < rows.length;
+    batchStart += EFP_EVENT_INSERT_BATCH_SIZE
+  ) {
+    const batch = rows.slice(batchStart, batchStart + EFP_EVENT_INSERT_BATCH_SIZE)
+    const args: Array<number | string> = [chainId, Number(fromBlock), Number(throughBlock)]
+    const keys = batch.map((row) => {
+      const firstPlaceholder = args.length + 1
+      args.push(String(row.transaction_hash), Number(row.log_index))
+      return `(?${firstPlaceholder}, ?${firstPlaceholder + 1})`
+    })
+    await tx.execute({
+      sql: `
+        DELETE FROM ${table}
+        WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
+          AND (transaction_hash, log_index) IN (VALUES ${keys.join(", ")})
+      `,
+      args,
+    })
+  }
+}
+
+/**
+ * Replaces one scanned block range differentially: rows whose primary key and
+ * persisted payload already match the fresh scan produce no DML, removed rows
+ * are deleted by primary key, changed rows are deleted and re-inserted, and
+ * added rows are inserted. Only removed/added/changed rows contribute affected
+ * identities, so an identical replay triggers no projection rebuild work. The
+ * cursor always advances and the callback always fires, even when the diff is
+ * empty.
+ */
 export async function replaceEfpIndexerRange(input: {
   client: Client
   chainId: number
@@ -121,47 +321,65 @@ export async function replaceEfpIndexerRange(input: {
     affectedAccounts: readonly Address[]
     affectedListIds: readonly bigint[]
   }) => Promise<void>
-}): Promise<void> {
-  await withTransaction(input.client, "write", async (tx) => {
-    const oldSlots = await tx.execute({
+}): Promise<EfpRangeReplacementSummary> {
+  return await withTransaction(input.client, "write", async (tx) => {
+    const rangeArgs = [input.chainId, Number(input.fromBlock), Number(input.throughBlock)]
+    const oldListOps = await tx.execute({
       sql: `
-        SELECT DISTINCT contract_address, slot
+        SELECT ${EFP_LIST_OP_DIFF_COLUMNS.join(", ")}
         FROM efp_list_ops
         WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
       `,
-      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
+      args: rangeArgs,
     })
-    const oldAccounts = await tx.execute({
+    const oldPrimaryListEvents = await tx.execute({
       sql: `
-        SELECT DISTINCT account_address
+        SELECT ${EFP_PRIMARY_LIST_DIFF_COLUMNS.join(", ")}
         FROM efp_primary_list_events
         WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
       `,
-      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
+      args: rangeArgs,
     })
-    const oldListIds = await tx.execute({
+    const oldStorageLocationEvents = await tx.execute({
       sql: `
-        SELECT DISTINCT list_id
+        SELECT ${EFP_STORAGE_LOCATION_DIFF_COLUMNS.join(", ")}
         FROM efp_list_storage_location_events
         WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3
       `,
-      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
+      args: rangeArgs,
     })
+
+    const listOps = diffEfpRows({
+      oldRows: oldListOps.rows,
+      newItems: input.listOps,
+      columns: EFP_LIST_OP_DIFF_COLUMNS,
+      valuesOf: listOpValues,
+    })
+    const primaryListEvents = diffEfpRows({
+      oldRows: oldPrimaryListEvents.rows,
+      newItems: input.primaryListEvents,
+      columns: EFP_PRIMARY_LIST_DIFF_COLUMNS,
+      valuesOf: primaryListEventValues,
+    })
+    const storageLocationEvents = diffEfpRows({
+      oldRows: oldStorageLocationEvents.rows,
+      newItems: input.storageLocationEvents,
+      columns: EFP_STORAGE_LOCATION_DIFF_COLUMNS,
+      valuesOf: storageLocationEventValues,
+    })
+
     const affectedSlots = new Map<string, EfpAffectedListSlot>()
-    for (const row of oldSlots.rows) {
+    for (const row of [...listOps.removed, ...listOps.changed.map((entry) => entry.oldRow)]) {
       if (typeof row.contract_address !== "string" || typeof row.slot !== "string") continue
-      const item = {
+      const contractAddress = row.contract_address.toLowerCase() as Address
+      const slot = BigInt(row.slot)
+      affectedSlots.set(`${input.chainId}:${contractAddress}:${slot}`, {
         chainId: input.chainId,
-        contractAddress: row.contract_address.toLowerCase() as Address,
-        listSlot: BigInt(row.slot),
-      }
-      affectedSlots.set(`${item.chainId}:${item.contractAddress}:${item.listSlot}`, {
-        chainId: item.chainId,
-        contractAddress: item.contractAddress,
-        slot: item.listSlot,
+        contractAddress,
+        slot,
       })
     }
-    for (const item of input.listOps) {
+    for (const item of [...listOps.added, ...listOps.changed.map((entry) => entry.item)]) {
       affectedSlots.set(`${item.chainId}:${item.contractAddress}:${item.slot}`, {
         chainId: item.chainId,
         contractAddress: item.contractAddress.toLowerCase() as Address,
@@ -169,39 +387,76 @@ export async function replaceEfpIndexerRange(input: {
       })
     }
     const affectedAccounts = new Set<Address>()
-    for (const row of oldAccounts.rows) {
+    for (
+      const row of [
+        ...primaryListEvents.removed,
+        ...primaryListEvents.changed.map((entry) => entry.oldRow),
+      ]
+    ) {
       if (typeof row.account_address === "string") {
         affectedAccounts.add(row.account_address.toLowerCase() as Address)
       }
     }
-    for (const item of input.primaryListEvents) {
+    for (
+      const item of [
+        ...primaryListEvents.added,
+        ...primaryListEvents.changed.map((entry) => entry.item),
+      ]
+    ) {
       affectedAccounts.add(item.accountAddress.toLowerCase() as Address)
     }
     const affectedListIds = new Set<bigint>()
-    for (const row of oldListIds.rows) {
+    for (
+      const row of [
+        ...storageLocationEvents.removed,
+        ...storageLocationEvents.changed.map((entry) => entry.oldRow),
+      ]
+    ) {
       if (typeof row.list_id === "string") affectedListIds.add(BigInt(row.list_id))
     }
-    for (const item of input.storageLocationEvents) affectedListIds.add(item.listId)
+    for (
+      const item of [
+        ...storageLocationEvents.added,
+        ...storageLocationEvents.changed.map((entry) => entry.item),
+      ]
+    ) {
+      affectedListIds.add(item.listId)
+    }
 
-    await tx.execute({
-      sql: "DELETE FROM efp_list_ops WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3",
-      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
-    })
-    await tx.execute({
-      sql: "DELETE FROM efp_primary_list_events WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3",
-      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
-    })
-    await tx.execute({
-      sql: "DELETE FROM efp_list_storage_location_events WHERE chain_id = ?1 AND block_number BETWEEN ?2 AND ?3",
-      args: [input.chainId, Number(input.fromBlock), Number(input.throughBlock)],
-    })
+    await deleteEfpRowsByKey(tx, "efp_list_ops", input.chainId, input.fromBlock, input.throughBlock, [
+      ...listOps.removed,
+      ...listOps.changed.map((entry) => entry.oldRow),
+    ])
+    await deleteEfpRowsByKey(
+      tx,
+      "efp_primary_list_events",
+      input.chainId,
+      input.fromBlock,
+      input.throughBlock,
+      [
+        ...primaryListEvents.removed,
+        ...primaryListEvents.changed.map((entry) => entry.oldRow),
+      ],
+    )
+    await deleteEfpRowsByKey(
+      tx,
+      "efp_list_storage_location_events",
+      input.chainId,
+      input.fromBlock,
+      input.throughBlock,
+      [
+        ...storageLocationEvents.removed,
+        ...storageLocationEvents.changed.map((entry) => entry.oldRow),
+      ],
+    )
 
+    const listOpsToInsert = [...listOps.added, ...listOps.changed.map((entry) => entry.item)]
     for (
       let batchStart = 0;
-      batchStart < input.listOps.length;
+      batchStart < listOpsToInsert.length;
       batchStart += EFP_EVENT_INSERT_BATCH_SIZE
     ) {
-      const batch = input.listOps.slice(batchStart, batchStart + EFP_EVENT_INSERT_BATCH_SIZE)
+      const batch = listOpsToInsert.slice(batchStart, batchStart + EFP_EVENT_INSERT_BATCH_SIZE)
       const args: Array<bigint | number | string | null> = []
       const values = batch.map((item) => {
         const firstPlaceholder = args.length + 1
@@ -241,12 +496,16 @@ export async function replaceEfpIndexerRange(input: {
       })
     }
 
+    const primaryListEventsToInsert = [
+      ...primaryListEvents.added,
+      ...primaryListEvents.changed.map((entry) => entry.item),
+    ]
     for (
       let batchStart = 0;
-      batchStart < input.primaryListEvents.length;
+      batchStart < primaryListEventsToInsert.length;
       batchStart += EFP_EVENT_INSERT_BATCH_SIZE
     ) {
-      const batch = input.primaryListEvents.slice(
+      const batch = primaryListEventsToInsert.slice(
         batchStart,
         batchStart + EFP_EVENT_INSERT_BATCH_SIZE,
       )
@@ -284,12 +543,16 @@ export async function replaceEfpIndexerRange(input: {
       })
     }
 
+    const storageLocationEventsToInsert = [
+      ...storageLocationEvents.added,
+      ...storageLocationEvents.changed.map((entry) => entry.item),
+    ]
     for (
       let batchStart = 0;
-      batchStart < input.storageLocationEvents.length;
+      batchStart < storageLocationEventsToInsert.length;
       batchStart += EFP_EVENT_INSERT_BATCH_SIZE
     ) {
-      const batch = input.storageLocationEvents.slice(
+      const batch = storageLocationEventsToInsert.slice(
         batchStart,
         batchStart + EFP_EVENT_INSERT_BATCH_SIZE,
       )
@@ -359,5 +622,14 @@ export async function replaceEfpIndexerRange(input: {
       affectedAccounts: [...affectedAccounts],
       affectedListIds: [...affectedListIds],
     })
+
+    return {
+      listOps: listOps.summary,
+      primaryListEvents: primaryListEvents.summary,
+      storageLocationEvents: storageLocationEvents.summary,
+      affectedSlotCount: affectedSlots.size,
+      affectedAccountCount: affectedAccounts.size,
+      affectedListIdCount: affectedListIds.size,
+    }
   })
 }
