@@ -27,6 +27,8 @@ const signals: CommunityPublishAlertSignals[] = [
     stuck_royalty_allocation_projection_samples: [],
     stale_locked_delivery_assets: 0,
     stale_locked_delivery_asset_samples: [],
+    failed_story_delivery_assets: 0,
+    failed_story_delivery_asset_samples: [],
     retried_locked_delivery_jobs: 0,
     retried_locked_delivery_job_samples: [],
     story_registration_reconciliation_required: 0,
@@ -52,6 +54,15 @@ const signals: CommunityPublishAlertSignals[] = [
       asset_id: "ast_delivery_stuck",
       locked_delivery_status: "requested",
       updated_at: "2026-07-08T10:01:00.000Z",
+    }],
+    failed_story_delivery_assets: 1,
+    failed_story_delivery_asset_samples: [{
+      asset_id: "ast_failed_wallet",
+      story_status: "failed",
+      locked_delivery_status: "failed",
+      story_error: "Primary wallet is required",
+      locked_delivery_error: "Primary wallet is required",
+      updated_at: "2026-07-08T10:04:00.000Z",
     }],
     retried_locked_delivery_jobs: 1,
     retried_locked_delivery_job_samples: [{
@@ -90,6 +101,9 @@ describe("ops-alerts emit", () => {
     expect(alerts.find((alert) => alert.key === "terminal_failed_finalize_jobs")?.count).toBe(3)
     expect(alerts.find((alert) => alert.key === "stuck_royalty_allocation_projection_sync")?.severity).toBe("high")
     expect(alerts.find((alert) => alert.key === "stale_locked_delivery_requested_assets")?.count).toBe(1)
+    const failedDelivery = alerts.find((alert) => alert.key === "failed_story_or_locked_delivery_assets")
+    expect(failedDelivery).toMatchObject({ severity: "high", count: 1, community_ids: ["c2"] })
+    expect(JSON.stringify(failedDelivery?.details)).toContain("Primary wallet is required")
     expect(alerts.find((alert) => alert.key === "retried_locked_asset_delivery_jobs")?.severity).toBe("medium")
     expect(alerts.find((alert) => alert.key === "story_registration_reconciliation_required")?.severity).toBe("high")
     expect(alerts.find((alert) => alert.key === "community_job_pickup_stale:telegram_post_publish"))

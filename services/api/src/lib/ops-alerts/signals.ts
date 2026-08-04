@@ -1,6 +1,7 @@
 import type { ReadClient } from "../sql-client"
 import type {
   CommunityPublishAlertSignals,
+  FailedStoryDeliveryAssetSample,
   PublishFailureCount,
   RetriedLockedDeliveryJobSample,
   StaleLockedDeliveryAssetSample,
@@ -104,6 +105,36 @@ export async function collectCommunityPublishAlertSignals(input: {
       updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
     }))
 
+  const failedStoryDeliveryResult = await input.client.execute({
+    sql: `
+      SELECT COUNT(*) AS count
+      FROM assets
+      WHERE (story_status = 'failed' OR locked_delivery_status = 'failed')
+        AND updated_at >= ?1
+    `,
+    args: [input.since],
+  })
+  const failedStoryDeliverySamplesResult = await input.client.execute({
+    sql: `
+      SELECT asset_id, story_status, locked_delivery_status, story_error, locked_delivery_error, updated_at
+      FROM assets
+      WHERE (story_status = 'failed' OR locked_delivery_status = 'failed')
+        AND updated_at >= ?1
+      ORDER BY updated_at DESC
+      LIMIT ${SAMPLE_LIMIT}
+    `,
+    args: [input.since],
+  })
+  const failed_story_delivery_asset_samples: FailedStoryDeliveryAssetSample[] =
+    failedStoryDeliverySamplesResult.rows.map((row) => ({
+      asset_id: String(row.asset_id ?? ""),
+      story_status: String(row.story_status ?? ""),
+      locked_delivery_status: String(row.locked_delivery_status ?? ""),
+      story_error: typeof row.story_error === "string" ? row.story_error : null,
+      locked_delivery_error: typeof row.locked_delivery_error === "string" ? row.locked_delivery_error : null,
+      updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
+    }))
+
   const retriedLockedDeliveryJobsResult = await input.client.execute({
     sql: `
       SELECT COUNT(*) AS count
@@ -200,6 +231,8 @@ export async function collectCommunityPublishAlertSignals(input: {
     stuck_royalty_allocation_projection_samples,
     stale_locked_delivery_assets: Number(staleLockedDeliveryResult.rows[0]?.count ?? 0),
     stale_locked_delivery_asset_samples,
+    failed_story_delivery_assets: Number(failedStoryDeliveryResult.rows[0]?.count ?? 0),
+    failed_story_delivery_asset_samples,
     retried_locked_delivery_jobs: Number(retriedLockedDeliveryJobsResult.rows[0]?.count ?? 0),
     retried_locked_delivery_job_samples,
     story_registration_reconciliation_required: Number(storyRegistrationReconciliationResult.rows[0]?.count ?? 0),

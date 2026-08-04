@@ -38,6 +38,15 @@ export type StaleReadyJobLane = {
   oldest_ready_age_ms: number
 }
 
+export type FailedStoryDeliveryAssetSample = {
+  asset_id: string
+  story_status: string
+  locked_delivery_status: string
+  story_error: string | null
+  locked_delivery_error: string | null
+  updated_at: string | null
+}
+
 export type CommunityPublishAlertSignals = {
   community_id: string
   failure_codes: PublishFailureCount[]
@@ -46,6 +55,8 @@ export type CommunityPublishAlertSignals = {
   stuck_royalty_allocation_projection_samples: StuckRoyaltyProjectionSample[]
   stale_locked_delivery_assets: number
   stale_locked_delivery_asset_samples: StaleLockedDeliveryAssetSample[]
+  failed_story_delivery_assets: number
+  failed_story_delivery_asset_samples: FailedStoryDeliveryAssetSample[]
   retried_locked_delivery_jobs: number
   retried_locked_delivery_job_samples: RetriedLockedDeliveryJobSample[]
   story_registration_reconciliation_required: number
