@@ -83,11 +83,20 @@ WHERE c.relname IN (
 
 ### Step 3 — Core PR2 → API fixture-sync PR2
 
-Merge Core first, then bump `.github/ci-refs/core.sha` to the Core merge
+Ordering fact, verified against Core's workflows: **merging the Core PR does
+not apply migrations to production** — Core has CI/test/hygiene workflows
+only, no deploy pipeline; the runner is operator-invoked. So the merge itself
+is production-safe at any point. The production-affecting event is the
+reviewed-runner apply of 0190, which this gate blocks until step 2 passes.
+Keep the merge after pre-creation anyway: it removes any path by which 0190
+can be applied early under time pressure, and it keeps the API pin bump
+unambiguous.
+
+Merge Core, then bump `.github/ci-refs/core.sha` to the Core merge
 commit (api-ci checks Core out at that pin, so the fixture-freshness check
 compares against the pinned tree — the API sync PR stays red by design until
-the pin contains 0190), then the API sync PR, then apply migration 0190
-through the reviewed runner.
+the pin contains 0190, and it must turn green this way, never by override),
+then the API sync PR, then apply migration 0190 through the reviewed runner.
 
 - **GO** if 0190 records effectively instantly: the indexes already exist, so
   `IF NOT EXISTS` turns the apply into ledger bookkeeping with no build.
