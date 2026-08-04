@@ -41,15 +41,15 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.nationality_payout_tiers).toBe("enabled")
   })
 
-  test("keeps draft tier terms available when the configured provider cannot preview binding", () => {
+  test("reports tier funding from per-pool support, independent of the legacy environment provider", () => {
     expect(getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_IDENTITY_PROVIDER: "very",
-    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("draft_only")
+    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("enabled")
     expect(getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_IDENTITY_PROVIDER: "unknown",
-    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("unavailable")
+    } as unknown as Env, "pst_allowed").nationality_payout_tiers).toBe("enabled")
     expect(getRewardCampaignCapabilities({
       ...enabledEnv,
       REWARDS_IDENTITY_PROVIDER: "zkpassport",
