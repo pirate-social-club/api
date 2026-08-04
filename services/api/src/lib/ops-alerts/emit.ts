@@ -20,6 +20,9 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
   let staleLockedDeliveryAssets = 0
   const staleLockedDeliveryCommunities = new Set<string>()
   const staleLockedDeliverySamples: Array<Record<string, unknown>> = []
+  let failedStoryDeliveryAssets = 0
+  const failedStoryDeliveryCommunities = new Set<string>()
+  const failedStoryDeliverySamples: Array<Record<string, unknown>> = []
   let retriedLockedDeliveryJobs = 0
   const retriedLockedDeliveryCommunities = new Set<string>()
   const retriedLockedDeliverySamples: Array<Record<string, unknown>> = []
@@ -59,6 +62,14 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       for (const sample of signal.stale_locked_delivery_asset_samples) {
         if (staleLockedDeliverySamples.length >= 10) break
         staleLockedDeliverySamples.push({ community_id: signal.community_id, ...sample })
+      }
+    }
+    if (signal.failed_story_delivery_assets > 0) {
+      failedStoryDeliveryAssets += signal.failed_story_delivery_assets
+      failedStoryDeliveryCommunities.add(signal.community_id)
+      for (const sample of signal.failed_story_delivery_asset_samples) {
+        if (failedStoryDeliverySamples.length >= 10) break
+        failedStoryDeliverySamples.push({ community_id: signal.community_id, ...sample })
       }
     }
     if (signal.retried_locked_delivery_jobs > 0) {
@@ -132,6 +143,16 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       count: staleLockedDeliveryAssets,
       community_ids: [...staleLockedDeliveryCommunities].sort(),
       details: { samples: staleLockedDeliverySamples },
+    })
+  }
+  if (failedStoryDeliveryAssets > 0) {
+    alerts.push({
+      key: "failed_story_or_locked_delivery_assets",
+      severity: "high",
+      title: "Story/locked-delivery assets in failed state",
+      count: failedStoryDeliveryAssets,
+      community_ids: [...failedStoryDeliveryCommunities].sort(),
+      details: { samples: failedStoryDeliverySamples },
     })
   }
   if (retriedLockedDeliveryJobs > 0) {
