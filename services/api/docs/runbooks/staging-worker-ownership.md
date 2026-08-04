@@ -84,7 +84,12 @@ anything:
 
 ## Current holds
 
-None.
+- **2026-08-04, Codex nationality-tier acceptance** — holding the shared
+  staging Worker on Web-pinned API `50a514739` while exercising the manual
+  Self/ZKPassport tier-accounting acceptance matrix, including the Base
+  Sepolia cashout/reconciliation leg. No Worker deploy is planned; evidence
+  is invalid if the served API SHA changes. Window: 2026-08-04 until the
+  matrix completes or this hold is explicitly released.
 
 ## Hold history
 
