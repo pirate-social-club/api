@@ -791,7 +791,8 @@ export type Community = {
   karaoke_enabled: boolean;
   allow_anonymous_identity: boolean;
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null;
-  human_verification_lane: HumanVerificationLane;
+  human_verification_lane: HumanVerificationLane | null;
+  preferred_verification_provider?: CommunityHumanVerificationProvider | null;
   human_verification_lane_origin: CommunityAgentResolutionOrigin;
   allowed_disclosed_qualifiers?: Array<string> | null;
   allow_qualifiers_on_anonymous_posts?: boolean | null;
@@ -2619,7 +2620,8 @@ export type CommunityPreview = {
   agent_daily_post_cap?: number | null;
   agent_daily_reply_cap?: number | null;
   accepted_agent_ownership_providers?: Array<AgentOwnershipProvider>;
-  human_verification_lane: HumanVerificationLane;
+  human_verification_lane: HumanVerificationLane | null;
+  preferred_verification_provider?: CommunityHumanVerificationProvider | null;
   member_count?: number | null;
   follower_count?: number | null;
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null;
@@ -2640,7 +2642,8 @@ export type CommunityPreview = {
 export type JoinEligibility = {
   community: string;
   membership_mode: "open" | "request" | "gated";
-  human_verification_lane: HumanVerificationLane;
+  human_verification_lane: HumanVerificationLane | null;
+  preferred_verification_provider?: CommunityHumanVerificationProvider | null;
   joinable_now: boolean;
   status: "joinable" | "requestable" | "pending_request" | "verification_required" | "gate_failed" | "already_joined" | "banned";
   membership_gate_summaries: Array<MembershipGateSummary>;
@@ -2678,7 +2681,8 @@ export type MembershipRequestListResponse = {
 };
 
 export type GateFailureDetails = {
-  human_verification_lane?: HumanVerificationLane;
+  human_verification_lane?: HumanVerificationLane | null;
+  preferred_verification_provider?: CommunityHumanVerificationProvider | null;
   membership_gate_summaries?: Array<MembershipGateSummary> | null;
   membership_gate_expression?: MembershipGateExpressionSummary | null;
   missing_capabilities?: Array<string> | null;
@@ -3358,6 +3362,8 @@ type CommunityHandleQuoteClaimGate = {
   summaries?: Array<MembershipGateSummary> | null;
 };
 
+type CommunityHumanVerificationProvider = "self" | "zkpassport" | "very";
+
 type CommunityIdentifiedPersonMediaScope = "subject_only" | "subject_or_authorized" | "public_source_allowed";
 
 type CommunityImageAuthenticityPolicySettings = {
@@ -3789,6 +3795,7 @@ type CreateCommunityRequestBase = {
   agent_min_owner_trust_tier?: "new" | "established" | "trusted" | "high_trust" | null;
   agent_owner_active_limit?: number | null;
   human_verification_lane?: "very" | "self" | null;
+  preferred_verification_provider?: CommunityHumanVerificationProvider | null;
   accepted_agent_ownership_providers?: Array<AgentOwnershipProvider> | null;
   namespace?: NamespaceAttachmentInput | null;
   handle_policy: HandlePolicyInput;
