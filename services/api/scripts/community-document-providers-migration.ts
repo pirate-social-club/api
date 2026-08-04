@@ -348,18 +348,12 @@ async function resolveCommunities(
   return communities
 }
 
-const NO_REMOTE_PREFLIGHTS = {
-  ensureRemoteThreadCommentLockColumns: async () => undefined,
-  ensureRemoteCommentGuestAuthorship: async () => undefined,
-  ensureRemotePostSongTitleColumn: async () => undefined,
-}
-
 async function fetchCommunityPolicy(input: {
   env: Env
   repository: CommunityRepository
   communityId: string
 }): Promise<CommunityPolicyRow | null> {
-  const db = await openCommunityDb(input.env, input.repository, input.communityId, NO_REMOTE_PREFLIGHTS)
+  const db = await openCommunityDb(input.env, input.repository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
@@ -426,7 +420,7 @@ async function readCurrentMembershipPolicy(input: {
   repository: CommunityRepository
   communityId: string
 }): Promise<{ policy: GatePolicy; close: () => void; client: Awaited<ReturnType<typeof openCommunityDb>>["client"] }> {
-  const db = await openCommunityDb(input.env, input.repository, input.communityId, NO_REMOTE_PREFLIGHTS)
+  const db = await openCommunityDb(input.env, input.repository, input.communityId)
   try {
     const result = await db.client.execute({
       sql: `
