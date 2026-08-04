@@ -2,7 +2,6 @@ import type { Env } from "../../env"
 import { decodePublicPostId } from "../public-ids"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
-import { resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 
 export type RewardCampaignCapabilities = {
   enabled: boolean
@@ -58,8 +57,6 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
   } catch {
     return DISABLED
   }
-  const identityProvider = resolveRewardIdentityProvider(env.REWARDS_IDENTITY_PROVIDER)
-
   return {
     enabled: true,
     // Page routes supply canonical public IDs (`post_pst_…`), while the
@@ -75,11 +72,10 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
       config.maxDurationSeconds,
     ),
     eligible_activities: ELIGIBLE_ACTIVITIES,
-    nationality_payout_tiers: identityProvider === "self" || identityProvider === "zkpassport"
-      ? "enabled"
-      : identityProvider === "very"
-        ? "draft_only"
-        : "unavailable",
+    // Provider selection is an immutable per-pool term. The legacy
+    // environment-wide provider remains relevant only to historical uniform
+    // pools and must not hide Self/ZKPassport tier creation.
+    nationality_payout_tiers: "enabled",
     chain_id: config.chainId,
     token_address: config.tokenAddress,
     // Deliberately omits rpcUrl (may carry a provider credential) and
