@@ -12,9 +12,12 @@ UPDATE reward_nationality_decisions AS decision
 SET resolved_amount_cents = CASE
     WHEN decision.result_key = 'default'
         THEN campaign.default_amount_cents
-    WHEN decision.result_key ~ '^tier:[0-9]+$'
-        THEN ((campaign.payout_tiers_json ->
-            split_part(decision.result_key, ':', 2)::INTEGER) ->> 'amount_cents')::INTEGER
+    WHEN decision.result_key LIKE 'tier:%'
+        AND decision.result_key = 'tier:' || CAST(
+            CAST(substr(decision.result_key, 6) AS INTEGER) AS TEXT
+        )
+        THEN CAST((campaign.payout_tiers_json ->
+            CAST(substr(decision.result_key, 6) AS INTEGER)) ->> 'amount_cents' AS INTEGER)
     ELSE NULL
 END
 FROM reward_campaigns AS campaign
