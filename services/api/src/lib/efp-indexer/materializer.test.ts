@@ -15,7 +15,6 @@ import {
   type EfpProjectionRebuildStats,
 } from "./materializer"
 import { replaceEfpIndexerRange } from "./repository"
-import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
 
 const FOLLOWER = "0x1111111111111111111111111111111111111111" as Address
