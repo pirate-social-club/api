@@ -11,7 +11,12 @@ import {
 } from "../src/lib/runtime-deps"
 import {
   classifyReclamationCandidate,
+  parseBindingAllowlist,
+  poolDatabaseIdFromConfig,
+  resolveReclamationInventoryScope,
   type CandidateDecision,
+  type ReclamationInventoryScope,
+  type SignatureEvidence,
 } from "./_lib/staging-d1-reclamation-inventory"
 import { isMachineGeneratedStagingSmokeName } from "../src/lib/communities/staging-smoke-signatures"
 
@@ -20,21 +25,16 @@ function option(name: string): string | undefined {
   return index < 0 ? undefined : process.argv[index + 1]?.trim()
 }
 
-function requireStagingEnvironment(): void {
-  if (String(process.env.ENVIRONMENT ?? "").trim().toLowerCase() !== "staging") {
-    throw new Error("refusing_reclamation_inventory_outside_staging")
-  }
-}
-
-async function stagingPoolDatabaseId(): Promise<string> {
+async function poolDatabaseId(environment: "staging" | "prod"): Promise<string> {
   const configPath = resolve(import.meta.dir, "../../community-d1-shard/wrangler.jsonc")
-  const config = await readFile(configPath, "utf8")
-  const match = config.match(/\{\s*"binding"\s*:\s*"D1_POOL"[\s\S]*?"database_id"\s*:\s*"([0-9a-f-]+)"/u)
-  if (!match?.[1]) throw new Error("staging D1_POOL database id not found in wrangler config")
-  return match[1]
+  return poolDatabaseIdFromConfig(await readFile(configPath, "utf8"), environment)
 }
 
-async function queryPoolRows(): Promise<Array<Record<string, unknown>>> {
+async function queryPoolRows(scope: ReclamationInventoryScope): Promise<Array<Record<string, unknown>>> {
+  const label = scope.environment
+  const poolDatabaseName = scope.environment === "prod"
+    ? "community-d1-shard-pool-prod"
+    : "community-d1-shard-pool-staging"
   const accountId = String(process.env.CLOUDFLARE_ACCOUNT_ID ?? "").trim()
   const token = String(process.env.CLOUDFLARE_D1_API_TOKEN ?? process.env.CLOUDFLARE_API_TOKEN ?? "").trim()
   const sql = "SELECT binding_name, community_id, version, allocated_at, last_loaded_at, last_error, released_at FROM d1_pool ORDER BY binding_name"
@@ -45,7 +45,7 @@ async function queryPoolRows(): Promise<Array<Record<string, unknown>>> {
       "wrangler",
       "d1",
       "execute",
-      "community-d1-shard-pool-staging",
+      poolDatabaseName,
       "--remote",
       "--json",
       "--command",
@@ -56,12 +56,12 @@ async function queryPoolRows(): Promise<Array<Record<string, unknown>>> {
       new Response(child.stderr).text(),
       child.exited,
     ])
-    if (exitCode !== 0) throw new Error(`staging D1_POOL Wrangler read failed: ${stderr.trim()}`)
+    if (exitCode !== 0) throw new Error(`${label} D1_POOL Wrangler read failed: ${stderr.trim()}`)
     const payload = JSON.parse(stdout) as Array<{ success?: boolean; results?: Array<Record<string, unknown>> }>
-    if (payload[0]?.success !== true) throw new Error("staging D1_POOL Wrangler read did not report success")
+    if (payload[0]?.success !== true) throw new Error(`${label} D1_POOL Wrangler read did not report success`)
     return payload[0].results ?? []
   }
-  const databaseId = await stagingPoolDatabaseId()
+  const databaseId = await poolDatabaseId(scope.environment)
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/d1/database/${encodeURIComponent(databaseId)}/query`,
     {
@@ -76,23 +76,45 @@ async function queryPoolRows(): Promise<Array<Record<string, unknown>>> {
     result?: Array<{ success?: boolean; results?: Array<Record<string, unknown>> }>
   }
   if (!response.ok || payload.success !== true || payload.result?.[0]?.success !== true) {
-    throw new Error(`staging D1_POOL read failed: HTTP ${response.status} ${JSON.stringify(payload.errors ?? [])}`)
+    throw new Error(`${label} D1_POOL read failed: HTTP ${response.status} ${JSON.stringify(payload.errors ?? [])}`)
   }
   return payload.result[0]?.results ?? []
 }
 
 async function main(): Promise<void> {
-  requireStagingEnvironment()
+  // Scoped gate: the --prod allowance is { environment: "prod",
+  // mode: "inventory-readonly" } and is consumed ONLY by this read-only
+  // inventory below. It is never written to process.env; a future
+  // reclaim/release/delete path must define its own guard, not reuse this one.
+  const scope = resolveReclamationInventoryScope(process.argv, process.env)
+  const allowlistPath = option("--allowlist")
+  let evidence: SignatureEvidence = { mode: "staging" }
+  if (scope.environment === "prod") {
+    console.error("=".repeat(72))
+    console.error("PROD RECLAMATION INVENTORY — READ-ONLY")
+    console.error("Target: PRODUCTION D1 pool + PRODUCTION control plane.")
+    console.error("This run inventories and classifies only; it cannot reclaim,")
+    console.error("release, or delete anything. Classification is restricted to the")
+    console.error("--allowlist cohort; staging smoke signatures are NOT prod evidence.")
+    console.error("=".repeat(72))
+    if (!allowlistPath) throw new Error("prod_reclamation_inventory_requires_allowlist")
+    evidence = {
+      mode: "prod-allowlist",
+      allowlist: parseBindingAllowlist(await readFile(resolve(allowlistPath), "utf8")),
+    }
+  } else if (allowlistPath) {
+    throw new Error("reclamation_inventory_allowlist_requires_prod_opt_in")
+  }
   const databaseUrl = String(
     process.env.CONTROL_PLANE_MIGRATOR_DATABASE_URL
       ?? process.env.CONTROL_PLANE_DATABASE_URL
       ?? "",
   ).trim()
   if (!isPostgresControlPlaneUrl(databaseUrl)) {
-    throw new Error("staging_control_plane_database_url_must_be_postgres")
+    throw new Error(`${scope.environment}_control_plane_database_url_must_be_postgres`)
   }
   const [poolRows, controlRows] = await Promise.all([
-    queryPoolRows(),
+    queryPoolRows(scope),
     withStandaloneControlPlaneClient({
       ...process.env,
       CONTROL_PLANE_DATABASE_URL: databaseUrl,
@@ -147,11 +169,16 @@ async function main(): Promise<void> {
       last_loaded_at: pool?.last_loaded_at ? String(pool.last_loaded_at) : null,
       last_error: pool?.last_error ? String(pool.last_error) : null,
       released_at: pool?.released_at ? String(pool.released_at) : null,
-    })
+    }, evidence)
   })
   const eligible = decisions.filter((row) => row.eligible)
+  // Staging: archive inventory is the machine-generated staging smoke names.
+  // Prod: staging smoke signatures are not prod evidence, so the inventory is
+  // the explicit --allowlist cohort instead.
   const archiveInventory = controlRows
-    .filter((row) => isMachineGeneratedStagingSmokeName(String(row.display_name ?? "")))
+    .filter((row) => evidence.mode === "prod-allowlist"
+      ? evidence.allowlist.has(String(row.binding_name ?? ""))
+      : isMachineGeneratedStagingSmokeName(String(row.display_name ?? "")))
     .map((row) => ({
       community_id: String(row.community_id ?? ""),
       creator_user_id: String(row.creator_user_id ?? ""),
@@ -175,7 +202,13 @@ async function main(): Promise<void> {
   const poolQuarantined = poolRows.filter((row) => row.community_id === null && row.released_at).length
   const artifact = {
     format_version: 1,
-    environment: "staging",
+    environment: scope.environment,
+    ...(scope.environment === "prod"
+      ? {
+        mode: scope.mode,
+        signature_evidence: "prod classification restricted to the --allowlist cohort; staging smoke signatures were not applied as prod evidence",
+      }
+      : {}),
     observed_at: new Date().toISOString(),
     read_only: true,
     pool: { total: poolRows.length, allocated: poolAllocated, free: poolFree, quarantined: poolQuarantined },
