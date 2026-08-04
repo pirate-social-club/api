@@ -645,3 +645,67 @@ export async function recordEfpFollowAdoptionSnapshot(input: {
   })
   return { recorded: inserted.rows.length > 0 }
 }
+
+export type EfpFollowWeeklyAdoptionReport = {
+  snapshot_date: string
+  attached_wallets_in_graph: number
+  edges_by_attached_wallets: number
+  attached_wallets_weekly_delta: number | null
+  edges_weekly_delta: number | null
+}
+
+// One query reads the latest daily snapshot and the latest snapshot at least
+// seven days older. The scheduler emits this only after Monday's snapshot wins
+// its once-per-day insert, so each UTC week has at most one report.
+export async function readEfpFollowWeeklyAdoptionReport(input: {
+  client: Client
+  now?: Date
+}): Promise<EfpFollowWeeklyAdoptionReport | null> {
+  const now = (input.now ?? new Date()).toISOString()
+  const result = await input.client.execute({
+    sql: `
+      WITH current_snapshot AS (
+        SELECT snapshot_date, attached_wallets_in_graph, edges_by_attached_wallets
+        FROM efp_follow_adoption_daily
+        WHERE snapshot_date <= CAST(?1 AS DATE)
+        ORDER BY snapshot_date DESC
+        LIMIT 1
+      ), prior_snapshot AS (
+        SELECT attached_wallets_in_graph, edges_by_attached_wallets
+        FROM efp_follow_adoption_daily
+        WHERE snapshot_date <= CAST(?1 AS DATE) - INTERVAL '7 days'
+        ORDER BY snapshot_date DESC
+        LIMIT 1
+      )
+      SELECT
+        current_snapshot.snapshot_date,
+        current_snapshot.attached_wallets_in_graph,
+        current_snapshot.edges_by_attached_wallets,
+        CASE WHEN prior_snapshot.attached_wallets_in_graph IS NULL THEN NULL
+          ELSE current_snapshot.attached_wallets_in_graph - prior_snapshot.attached_wallets_in_graph
+        END AS attached_wallets_weekly_delta,
+        CASE WHEN prior_snapshot.edges_by_attached_wallets IS NULL THEN NULL
+          ELSE current_snapshot.edges_by_attached_wallets - prior_snapshot.edges_by_attached_wallets
+        END AS edges_weekly_delta
+      FROM current_snapshot
+      LEFT JOIN prior_snapshot ON TRUE
+    `,
+    args: [now],
+  })
+  const row = result.rows[0]
+  if (!row) return null
+  const integer = (value: unknown): number => {
+    const parsed = Number(value)
+    if (!Number.isSafeInteger(parsed)) throw new Error("EFP adoption report contains an invalid count")
+    return parsed
+  }
+  return {
+    snapshot_date: String(row.snapshot_date).slice(0, 10),
+    attached_wallets_in_graph: integer(row.attached_wallets_in_graph),
+    edges_by_attached_wallets: integer(row.edges_by_attached_wallets),
+    attached_wallets_weekly_delta: row.attached_wallets_weekly_delta == null
+      ? null
+      : integer(row.attached_wallets_weekly_delta),
+    edges_weekly_delta: row.edges_weekly_delta == null ? null : integer(row.edges_weekly_delta),
+  }
+}

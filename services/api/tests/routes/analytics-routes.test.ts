@@ -76,6 +76,53 @@ describe("analytics routes", () => {
     expect(body.message).toBe("Unsupported analytics event")
   })
 
+  test("client analytics route queues sanitized follow affordance signals", async () => {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const env = buildTestEnv({
+      DEV_MEMORY_STORE_ENABLED: "false",
+      CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+      ANALYTICS_ENABLED: "true",
+      ANALYTICS_HMAC_SECRET: "analytics-secret",
+      ENVIRONMENT: "staging",
+    })
+
+    const response = await app.request("http://pirate.test/analytics/events", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        event_id: "evt_route_follow_affordance",
+        event_name: "profile_follow_affordance_viewed",
+        properties: {
+          authenticated: true,
+          state: "followable",
+          surface: "video_feed",
+          target_has_wallet: true,
+          target_user_id: "must-not-leave-api",
+        },
+      }),
+    }, env)
+
+    expect(response.status).toBe(202)
+
+    const result = await setup.client.execute({
+      sql: `
+        SELECT event_name, properties_json
+        FROM analytics_outbox
+        WHERE analytics_event_id = ?1
+      `,
+      args: ["evt_route_follow_affordance"],
+    })
+
+    expect(result.rows[0]?.event_name).toBe("profile_follow_affordance_viewed")
+    expect(result.rows[0]?.properties_json).toBe(JSON.stringify({
+      surface: "video_feed",
+      state: "followable",
+      authenticated: true,
+      target_has_wallet: true,
+    }))
+  })
+
   test("client analytics route stores community ids for community views", async () => {
     const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
     cleanup = setup.cleanup

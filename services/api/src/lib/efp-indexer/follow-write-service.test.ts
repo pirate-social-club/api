@@ -6,6 +6,7 @@ import { HttpError } from "../errors"
 import type { Client, InStatement, QueryResult } from "../sql-client"
 import {
   prepareProfileFollowWrite,
+  readEfpFollowWeeklyAdoptionReport,
   reconcilePendingFollowWrites,
   recordEfpFollowAdoptionSnapshot,
 } from "./follow-write-service"
@@ -230,6 +231,62 @@ describe("prepareProfileFollowWrite", () => {
 
     expect(result.intent_id).toBe("efw_22222222222222222222222222222222")
     expect(result.transactions).toEqual(transactions)
+  })
+})
+
+describe("readEfpFollowWeeklyAdoptionReport", () => {
+  test("returns the current totals and seven-day deltas from one query", async () => {
+    const executed: InStatement[] = []
+    const client = {
+      async execute(statement: string | InStatement): Promise<QueryResult> {
+        if (typeof statement === "string") throw new Error("Expected a parameterized statement")
+        executed.push(statement)
+        return {
+          rows: [{
+            snapshot_date: "2026-08-10T00:00:00.000Z",
+            attached_wallets_in_graph: "12",
+            edges_by_attached_wallets: "19",
+            attached_wallets_weekly_delta: "3",
+            edges_weekly_delta: "7",
+          }],
+        }
+      },
+      async batch() { return [] },
+      async transaction() { throw new Error("not used") },
+    } satisfies Client
+
+    await expect(readEfpFollowWeeklyAdoptionReport({
+      client,
+      now: new Date("2026-08-10T00:01:00.000Z"),
+    })).resolves.toEqual({
+      snapshot_date: "2026-08-10",
+      attached_wallets_in_graph: 12,
+      edges_by_attached_wallets: 19,
+      attached_wallets_weekly_delta: 3,
+      edges_weekly_delta: 7,
+    })
+    expect(executed).toHaveLength(1)
+    expect(executed[0]?.sql).toContain("INTERVAL '7 days'")
+  })
+
+  test("keeps weekly deltas unknown until a prior snapshot exists", async () => {
+    const client = {
+      async execute(): Promise<QueryResult> {
+        return { rows: [{
+          snapshot_date: "2026-08-10",
+          attached_wallets_in_graph: 2,
+          edges_by_attached_wallets: 1,
+          attached_wallets_weekly_delta: null,
+          edges_weekly_delta: null,
+        }] }
+      },
+      async batch() { return [] },
+      async transaction() { throw new Error("not used") },
+    } satisfies Client
+
+    const report = await readEfpFollowWeeklyAdoptionReport({ client })
+    expect(report?.attached_wallets_weekly_delta).toBeNull()
+    expect(report?.edges_weekly_delta).toBeNull()
   })
 })
 

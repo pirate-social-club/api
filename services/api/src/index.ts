@@ -96,6 +96,7 @@ import {
 import {
   reconcilePendingFollowWrites,
   recordEfpFollowAdoptionSnapshot,
+  readEfpFollowWeeklyAdoptionReport,
 } from "./lib/efp-indexer/follow-write-service"
 import { reconcilePendingPrivyFollowSubmissions } from "./lib/efp-indexer/follow-sponsorship-relay"
 import {
@@ -882,6 +883,16 @@ async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
     recorded: adoptionSnapshot.recorded,
     duration_ms: Date.now() - adoptionSnapshotStartedAtMs,
   }))
+  if (adoptionSnapshot.recorded && new Date().getUTCDay() === 1) {
+    const weekly = await readEfpFollowWeeklyAdoptionReport({ client: getControlPlaneClient(env) })
+    if (weekly) {
+      console.info(JSON.stringify({
+        component: "efp_follow_writes",
+        operation: "weekly_adoption_report",
+        ...weekly,
+      }))
+    }
+  }
   if (summary.examined > 0 || sponsorship.examined > 0) {
     console.info(JSON.stringify({
       component: "efp_follow_writes",

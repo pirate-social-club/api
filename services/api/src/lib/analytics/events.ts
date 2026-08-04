@@ -29,6 +29,8 @@ export type AnalyticsEventName =
   | "onboarding_skipped"
   | "home_feed_viewed"
   | "video_impression"
+  | "profile_follow_affordance_viewed"
+  | "profile_follow_clicked"
   | "community_viewed"
   | "community_followed"
   | "community_follow_contract_drift"
