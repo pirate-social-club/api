@@ -69,6 +69,10 @@ const TIER_ACCOUNTING_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0189_control_plane_reward_tier_accounting.sql",
   import.meta.url,
 )
+const SCHEDULE_REANCHOR_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0191_control_plane_reward_campaign_schedule_reanchor.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -187,8 +191,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         refunded_cents INTEGER NOT NULL,
         platform_fee_bps INTEGER NOT NULL DEFAULT 0,
         platform_fee_cents INTEGER NOT NULL DEFAULT 0,
-        starts_at TEXT NOT NULL,
-        ends_at TEXT NOT NULL,
+        starts_at TIMESTAMPTZ NOT NULL,
+        ends_at TIMESTAMPTZ NOT NULL,
+        requested_starts_at TIMESTAMPTZ,
+        requested_ends_at TIMESTAMPTZ,
         terms_version INTEGER NOT NULL,
         terms_hash TEXT NOT NULL,
         activated_at TEXT,
@@ -555,6 +561,13 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       FROM reward_campaigns
       WHERE funded_cents > 0
     `, [NOW])
+    await db.unsafe(`
+      UPDATE reward_campaigns
+      SET requested_starts_at = starts_at, requested_ends_at = ends_at
+    `)
+    // Apply the canonical migration verbatim. Trigger constraints are neither
+    // mirrored nor modified in this harness.
+    await db.unsafe(await readFile(SCHEDULE_REANCHOR_MIGRATION_URL, "utf8"))
     await db.end()
   })
 
@@ -629,10 +642,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       ) VALUES
         ('rcp_slot_a_pg', 'usr_reward_pg', 'slot-a', 'cmt_reward_pg', 'pst_slot_pg',
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1, $2, $1),
+          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1::timestamptz, $2::timestamptz, $1::text),
         ('rcp_slot_b_pg', 'usr_reward_pg', 'slot-b', 'cmt_reward_pg', 'pst_slot_pg',
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1, $2, $1)
+          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1::timestamptz, $2::timestamptz, $1::text)
     `, [NOW, "2026-07-11T12:00:00.000Z"])
     try {
       await withProductionPostgresClient(async (client) => {
@@ -1240,6 +1253,90 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         WHERE reward_campaign_id = 'rcp_invariants_pg'
       `))
       expect(message).toContain("reward campaign terms are immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0191 permits exactly one forward duration-preserving activation re-anchor", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`
+        UPDATE reward_campaigns
+        SET status = 'funding_confirming'
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `)
+      await db.unsafe(`
+        UPDATE reward_campaigns
+        SET status = 'active',
+            starts_at = starts_at + INTERVAL '2 hours',
+            ends_at = ends_at + INTERVAL '2 hours'
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `)
+      const rows = await db.unsafe(`
+        SELECT status,
+          (ends_at - starts_at) = (requested_ends_at - requested_starts_at) AS duration_preserved,
+          starts_at > requested_starts_at AS moved_forward
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `)
+      expect(rows).toEqual([{
+        status: "active",
+        duration_preserved: true,
+        moved_forward: true,
+      }])
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0191 rejects a duration-stretching activation re-anchor", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+          community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+          status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+          budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+          refunded_cents, terms_version, terms_hash, starts_at, ends_at,
+          requested_starts_at, requested_ends_at, updated_at
+        ) SELECT 'rcp_reanchor_stretch_pg', rewarder_user_id, 'create-reanchor-stretch-pg',
+          community_id, 'pst_reanchor_stretch_pg', 'sab_reanchor_stretch_pg', song_owner_user_id,
+          'funding_confirming', eligible_activity, daily_reward_cents, reward_period_cap_cents,
+          budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+          refunded_cents, terms_version, 'terms-reanchor-stretch-pg', starts_at, ends_at,
+          requested_starts_at, requested_ends_at, updated_at
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `)
+      const message = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns
+        SET status = 'active', starts_at = starts_at + INTERVAL '2 hours',
+            ends_at = ends_at + INTERVAL '3 hours'
+        WHERE reward_campaign_id = 'rcp_reanchor_stretch_pg'
+      `))
+      expect(message).toContain("reward campaign terms are immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0191 rejects a second re-anchor and requested-schedule mutation", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      const secondMessage = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns
+        SET starts_at = starts_at + INTERVAL '1 hour',
+            ends_at = ends_at + INTERVAL '1 hour'
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `))
+      expect(secondMessage).toContain("reward campaign terms are immutable")
+
+      const requestedMessage = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns
+        SET requested_starts_at = requested_starts_at + INTERVAL '1 hour'
+        WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `))
+      expect(requestedMessage).toContain("reward campaign terms are immutable")
     } finally {
       await db.end()
     }
