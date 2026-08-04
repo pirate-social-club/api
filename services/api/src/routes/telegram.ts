@@ -77,6 +77,7 @@ import {
 } from "../lib/telegram/webhook-parsing"
 import { handleTelegramStudyVoiceMessage } from "../lib/telegram/study-voice-service"
 import { isTelegramStudyVoiceEnabled } from "../lib/telegram/study-voice-admission"
+import { answerPrivateStudyTutorQuestion } from "../lib/telegram/private-study-tutor-service"
 import {
   continueTelegramChatStudyAfterVoice,
   handleTelegramChatStudyCallback,
@@ -1272,6 +1273,41 @@ async function handleTelegramWebhookUpdate(
         waitUntil,
       })) {
         return
+      }
+      const tutorQuestion = typeof message.text === "string" ? message.text.trim() : ""
+      if (tutorQuestion && chatId && telegramUserId && typeof message.message_id === "number") {
+        try {
+          const tutor = await answerPrivateStudyTutorQuestion({
+            bot,
+            env,
+            question: tutorQuestion,
+            telegramChatId: chatId,
+            telegramMessageId: message.message_id,
+            telegramUserId,
+          })
+          if (tutor) {
+            await safeSendTelegramMessage(bot, {
+              chat_id: chatId,
+              text: telegramText(`${tutor.disclosure}\n\n${tutor.answer}`),
+            })
+            return
+          }
+        } catch (error) {
+          console.warn("[private-study-tutor] prompt failed", {
+            ...telegramRouteErrorLogFields(error),
+            communityId: bot.communityId,
+            telegramChatId: chatId,
+            telegramCommunityBotId: bot.id,
+            telegramUserId,
+          })
+          await safeSendTelegramMessage(bot, {
+            chat_id: chatId,
+            text: error instanceof HttpError && error.status === 429
+              ? "The study tutor is rate limited right now. Try again in a minute."
+              : "The study tutor is unavailable right now. Your exercise is still waiting for your voice answer.",
+          })
+          return
+        }
       }
       await handleDirectAssistantMessage(env, message, bot)
     } else {
