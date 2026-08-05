@@ -26,7 +26,10 @@ import {
 } from "../../../src/lib/telegram/study-voice-service"
 import { telegramStudyPlaybackButton } from "../../../src/lib/telegram/chat-study-playback-service"
 import { getTelegramStudyCopy } from "../../../src/lib/telegram/study-copy"
-import { answerPrivateStudyTutorQuestion } from "../../../src/lib/telegram/private-study-tutor-service"
+import {
+  answerPrivateStudyTutorQuestion,
+  releaseTutorDisclosureReceipt,
+} from "../../../src/lib/telegram/private-study-tutor-service"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -2914,6 +2917,10 @@ describe("community study routes", () => {
       expect(answer.kind === "answered" && answer.answer).toContain("introduces the clause")
       expect(answer.kind === "answered" && answer.answer).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
       expect(answer.kind === "answered" && answer.disclosure).toContain("sent to this community's AI provider")
+      if (answer.kind !== "answered" || !answer.disclosureReceipt) {
+        throw new Error("first tutor answer must claim its disclosure receipt")
+      }
+      const initialDisclosureReceipt = answer.disclosureReceipt
       const providerBody = providerBodies[0]
       expect(providerBody?.model).toBe("test/tutor-model")
       expect(providerBody?.max_completion_tokens).toBe(320)
@@ -2985,7 +2992,16 @@ describe("community study routes", () => {
         action_kind: "await_voice", action_token: "voice-wait-token",
         current_exercise_id: exercise!.id, status: "active",
       })
-      expect(JSON.parse(String(stillActive.rows[0]?.action_payload_json))).toMatchObject({ tutorDisclosureShown: true })
+      const disclosureReceipt = await ctx.client.execute({
+        sql: `
+          SELECT disclosure_version
+          FROM telegram_tutor_disclosure_receipts
+          WHERE user_id = ?1 AND community_id = ?2
+        `,
+        args: [session.userId, communityId],
+      })
+      expect(disclosureReceipt.rows).toHaveLength(1)
+      expect(disclosureReceipt.rows[0]).toMatchObject({ disclosure_version: 1 })
       const event = await ctx.client.execute(
         "SELECT channel, status, assistant_message_ref, prompt FROM telegram_assistant_events WHERE telegram_message_id = 700",
       )
@@ -3170,6 +3186,61 @@ describe("community study routes", () => {
       expect(serverErrorRow.error_message).toBe("http_error")
       // The durable row must never retain provider-authored text.
       expect(serverErrorRow.error_message).not.toContain("upstream detail")
+
+      // A learner may rotate sessions by opening settings, changing language,
+      // or returning to the picker. The provider disclosure stays shown once
+      // for that learner and community, rather than once per short-lived
+      // exercise session.
+      await policyClientReenable(ctx, communityId)
+      await ctx.client.execute({
+        sql: "UPDATE telegram_chat_study_sessions SET status = 'canceled' WHERE chat_study_session_id = ?1",
+        args: ["tcs_private_study_tutor"],
+      })
+      await ctx.client.execute({
+        sql: `INSERT INTO telegram_chat_study_sessions (
+                chat_study_session_id, telegram_community_bot_id, telegram_user_id,
+                user_id, community_id, post_id, target_language, status,
+                action_token, action_kind, action_payload_json, current_exercise_id,
+                expires_at, created_at, updated_at
+              ) VALUES (
+                'tcs_private_study_tutor_rotated', 'tcb_private_study_tutor', '424242',
+                ?1, ?2, 'pst_study_route_song', 'en', 'active', 'voice-wait-token-rotated',
+                'await_voice', ?4, ?3, '2099-01-01T00:00:00.000Z', ?5, ?5
+              )`,
+        args: [
+          session.userId,
+          communityId,
+          exercise!.id,
+          JSON.stringify({ deliveryMode: "text", exerciseId: exercise!.id }),
+          now,
+        ],
+      })
+      globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(requestInput, init)
+        if (request.url.startsWith("https://api.telegram.org/")) {
+          return Response.json({ ok: true, result: { message_id: 809 } })
+        }
+        return Response.json({
+          id: "provider-private-study-rotated",
+          choices: [{ message: { content: "Everybody takes the singular verb wants." } }],
+        })
+      }) as typeof fetch
+      const afterRotation = await answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it wants?",
+        telegramChatId: "424242", telegramMessageId: 708, telegramUserId: "424242",
+      })
+      expect(afterRotation.kind === "answered" && afterRotation.disclosure).toBeNull()
+
+      // Receipt claims happen before delivery to prevent concurrent duplicate
+      // disclosures. If delivery fails, the caller releases its claim; a later
+      // answer must then disclose again instead of silently suppressing it.
+      await releaseTutorDisclosureReceipt({ env: ctx.env, receipt: initialDisclosureReceipt })
+      const afterDeliveryFailure = await answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it wants?",
+        telegramChatId: "424242", telegramMessageId: 709, telegramUserId: "424242",
+      })
+      expect(afterDeliveryFailure.kind === "answered" && afterDeliveryFailure.disclosure)
+        .toContain("sent to this community's AI provider")
     } finally {
       globalThis.fetch = originalFetch
     }

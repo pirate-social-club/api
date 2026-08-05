@@ -81,6 +81,7 @@ import {
 import { isTelegramStudyVoiceEnabled } from "../lib/telegram/study-voice-admission"
 import {
   answerPrivateStudyTutorQuestion,
+  releaseTutorDisclosureReceipt,
 } from "../lib/telegram/private-study-tutor-service"
 import { telegramStudyContinueTutorButton } from "../lib/telegram/chat-study-playback-service"
 import {
@@ -967,18 +968,25 @@ async function respondToPrivateStudyTutorQuestion(input: {
     if (tutor.kind === "no_session") {
       return false
     }
-    await safeSendTelegramMessage(bot, {
+    if (tutor.kind !== "answered") {
+      await safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        text: "The study tutor is not available in this community yet. Your exercise is still waiting for your answer.",
+        reply_parameters: { message_id: input.telegramMessageId },
+      })
+      return true
+    }
+    const delivered = await safeSendTelegramMessage(bot, {
       chat_id: chatId,
-      text: tutor.kind === "answered"
-        ? telegramText(tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer)
-        : "The study tutor is not available in this community yet. Your exercise is still waiting for your answer.",
+      text: telegramText(tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer),
       reply_parameters: { message_id: input.telegramMessageId },
-      ...(tutor.kind === "answered" ? {
-        reply_markup: {
-          inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
-        },
-      } : {}),
+      reply_markup: {
+        inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
+      },
     })
+    if (!delivered && tutor.disclosureReceipt) {
+      await releaseTutorDisclosureReceipt({ env, receipt: tutor.disclosureReceipt }).catch(() => undefined)
+    }
     return true
   } catch (error) {
     console.warn("[private-study-tutor] prompt failed", {
