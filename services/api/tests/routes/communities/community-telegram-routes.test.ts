@@ -1071,7 +1071,7 @@ describe("community Telegram routes", () => {
       reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
       text?: string
     }
-    expect(sendBody.text).toBe("Send a question to talk to this community assistant.")
+    expect(sendBody.text).toBe("Welcome to Community Webhook Club. Link your Pirate account to verify and join.")
     expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual(expect.objectContaining({
       callback_data: "menu:assistant",
       text: "💬 Ask the assistant",

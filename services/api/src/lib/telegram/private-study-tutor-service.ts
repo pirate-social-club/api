@@ -17,7 +17,12 @@ const PRIVATE_STUDY_COMMUNITY_MINUTE_CAP = 120
 const PRIVATE_STUDY_WINDOW_MS = 60_000
 const PRIVATE_STUDY_TIMEOUT_MS = 30_000
 
+// Exercises the tutor can explain. `select_song` is excluded on purpose: there
+// is no current exercise to ground an answer in before a song is picked.
+const TUTORABLE_ACTION_KINDS = ["await_voice", "answer_choice"] as const
+
 type ActivePrivateStudySession = {
+  askModeArmed: boolean
   communityId: string
   currentExerciseId: string
   id: string
@@ -31,8 +36,89 @@ export type PrivateStudyTutorAnswer = {
   disclosure: string
 }
 
+/**
+ * `no_session` means the learner is not mid-exercise, so the caller may fall
+ * back to the community board assistant. Every other outcome is terminal for an
+ * active study session: a learner asking about the line in front of them must
+ * never be handed a "join this community" prompt.
+ */
+export type PrivateStudyTutorOutcome =
+  | ({ kind: "answered" } & PrivateStudyTutorAnswer)
+  | { kind: "no_session" }
+  | { kind: "unavailable" }
+
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
+}
+
+function parseActionPayload(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+  if (typeof value !== "string" || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {}
+  } catch {
+    return {}
+  }
+}
+
+function readAskModeArmed(value: unknown): boolean {
+  return parseActionPayload(value).awaitTutorInput === true
+}
+
+async function writeAskMode(input: {
+  env: Env
+  sessionId: string
+  armed: boolean
+}): Promise<void> {
+  const client = getControlPlaneClient(input.env)
+  const row = await executeFirst(client, {
+    sql: "SELECT action_payload_json FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1 LIMIT 1",
+    args: [input.sessionId],
+  }) as Record<string, unknown> | null
+  if (!row) return
+  const payload = parseActionPayload(row.action_payload_json)
+  if (input.armed) {
+    payload.awaitTutorInput = true
+  } else {
+    delete payload.awaitTutorInput
+  }
+  await client.execute({
+    sql: "UPDATE telegram_chat_study_sessions SET action_payload_json = ?1, updated_at = ?2 WHERE chat_study_session_id = ?3",
+    args: [JSON.stringify(payload), nowIso(), input.sessionId],
+  })
+}
+
+/**
+ * Arms a one-shot "the next message is a question" flag. Set when the learner
+ * taps "Ask about this line" so a spoken question is never graded as an answer.
+ */
+export async function armPrivateStudyAskMode(input: { env: Env; sessionId: string }): Promise<void> {
+  await writeAskMode({ ...input, armed: true })
+}
+
+/**
+ * Returns the active session only when ask mode is armed, so voice dispatch can
+ * divert a spoken question before it reaches the grading path. The pending voice
+ * intent is deliberately left untouched: the exercise still needs a real answer.
+ */
+export async function getArmedPrivateStudyAskSession(input: {
+  bot: TelegramCommunityBotCredential
+  env: Env
+  telegramUserId: string
+}): Promise<{ communityId: string; postId: string; sessionId: string; userId: string } | null> {
+  const session = await loadActivePrivateStudySession(input)
+  if (!session?.askModeArmed) return null
+  return {
+    communityId: session.communityId,
+    postId: session.postId,
+    sessionId: session.id,
+    userId: session.userId,
+  }
 }
 
 async function loadActivePrivateStudySession(input: {
@@ -40,22 +126,23 @@ async function loadActivePrivateStudySession(input: {
   env: Env
   telegramUserId: string
 }): Promise<ActivePrivateStudySession | null> {
+  const actionKindPlaceholders = TUTORABLE_ACTION_KINDS.map((_, index) => `?${index + 5}`).join(", ")
   const row = await executeFirst(getControlPlaneClient(input.env), {
     sql: `
       SELECT chat_study_session_id, user_id, community_id, post_id,
-             target_language, current_exercise_id
+             target_language, current_exercise_id, action_payload_json
       FROM telegram_chat_study_sessions
       WHERE telegram_community_bot_id = ?1
         AND telegram_user_id = ?2
         AND community_id = ?3
         AND status IN ('active', 'processing')
-        AND action_kind = 'await_voice'
+        AND action_kind IN (${actionKindPlaceholders})
         AND post_id IS NOT NULL
         AND current_exercise_id IS NOT NULL
         AND expires_at > ?4
       LIMIT 1
     `,
-    args: [input.bot.id, input.telegramUserId, input.bot.communityId, nowIso()],
+    args: [input.bot.id, input.telegramUserId, input.bot.communityId, nowIso(), ...TUTORABLE_ACTION_KINDS],
   }) as Record<string, unknown> | null
   const id = stringOrNull(row?.chat_study_session_id)
   const userId = stringOrNull(row?.user_id)
@@ -64,7 +151,15 @@ async function loadActivePrivateStudySession(input: {
   const currentExerciseId = stringOrNull(row?.current_exercise_id)
   const targetLanguage = stringOrNull(row?.target_language)
   return id && userId && communityId && postId && currentExerciseId && targetLanguage
-    ? { id, userId, communityId, postId, currentExerciseId, targetLanguage }
+    ? {
+      askModeArmed: readAskModeArmed(row?.action_payload_json),
+      id,
+      userId,
+      communityId,
+      postId,
+      currentExerciseId,
+      targetLanguage,
+    }
     : null
 }
 
@@ -207,16 +302,22 @@ export async function answerPrivateStudyTutorQuestion(input: {
   telegramChatId: string
   telegramMessageId: number
   telegramUserId: string
-}): Promise<PrivateStudyTutorAnswer | null> {
+}): Promise<PrivateStudyTutorOutcome> {
   const session = await loadActivePrivateStudySession(input)
-  if (!session) return null
+  if (!session) return { kind: "no_session" }
+
+  // The learner is mid-exercise, so ask mode has served its purpose whatever
+  // happens next; leaving it armed would divert their real answer.
+  if (session.askModeArmed) {
+    await writeAskMode({ env: input.env, sessionId: session.id, armed: false }).catch(() => undefined)
+  }
 
   const policy = await getCommunityAssistantVoicePolicyForCommunity({
     env: input.env,
     communityRepository: getCommunityRepository(input.env),
     communityId: session.communityId,
   })
-  if (!policy.enabled || !policy.telegramPrivateAssistantEnabled) return null
+  if (!policy.enabled || !policy.telegramPrivateAssistantEnabled) return { kind: "unavailable" }
   if (policy.openRouterKeyStatus.kind !== "connected") {
     throw new HttpError(400, "bad_request", "OpenRouter API key is required before using the private study tutor")
   }
@@ -324,6 +425,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
         providerMessageId: providerMessageId(completion.body),
       })
       return {
+        kind: "answered",
         answer: completion.content.trim(),
         disclosure: "AI tutor: this community's configured AI provider processes this study question and context.",
       }

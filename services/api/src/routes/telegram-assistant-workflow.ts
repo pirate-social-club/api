@@ -269,15 +269,28 @@ export async function sendDirectAssistantOnboardingPrompt(input: {
   }
 }
 
-export async function getTelegramDirectAssistantPolicy(input: {
+/**
+ * Presentation-level assistant policy. Deliberately NOT gated on
+ * `telegramPrivateAssistantEnabled`: that flag governs the private study tutor
+ * only. Gating start copy and non-member previews on it made one toggle change
+ * three unrelated behaviours at once.
+ */
+export async function getTelegramCommunityAssistantPolicy(input: {
   env: Env
   communityId: string
 }): Promise<CommunityAssistantPolicy> {
-  const policy = await getCommunityAssistantRuntimePolicyForCommunity({
+  return await getCommunityAssistantRuntimePolicyForCommunity({
     env: input.env,
     communityRepository: getCommunityRepository(input.env),
     communityId: input.communityId,
   })
+}
+
+export async function getTelegramDirectAssistantPolicy(input: {
+  env: Env
+  communityId: string
+}): Promise<CommunityAssistantPolicy> {
+  const policy = await getTelegramCommunityAssistantPolicy(input)
   if (!policy.telegramPrivateAssistantEnabled) {
     throw notFoundError("Telegram private assistant is not enabled")
   }
