@@ -80,7 +80,7 @@ describe("reward campaign reconciler", () => {
       })
     }
 
-    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now })).toEqual({
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
       activated_campaigns: 1,
       canceled_draft_campaigns: 0,
       ended_campaigns: 2,
@@ -160,7 +160,7 @@ describe("reward campaign reconciler", () => {
       args: [session.userId],
     })
 
-    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now })).toEqual({
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
       activated_campaigns: 0,
       canceled_draft_campaigns: 1,
       ended_campaigns: 0,

@@ -12,16 +12,18 @@ export const UNFUNDED_DRAFT_POOL_TTL_SECONDS = 24 * 60 * 60
 export async function advanceRewardCampaignLifecycle(input: {
   client: Client
   now: string
+  postgres: boolean
 }): Promise<RewardCampaignLifecycleSummary> {
   const nowMs = Date.parse(input.now)
   if (!Number.isFinite(nowMs)) throw new Error("Reward campaign lifecycle timestamp is invalid")
   const draftCutoff = new Date(nowMs - UNFUNDED_DRAFT_POOL_TTL_SECONDS * 1000).toISOString()
+  const nowExpression = input.postgres ? "CAST(?1 AS TIMESTAMPTZ)" : "CAST(?1 AS TEXT)"
 
   return withTransaction(input.client, "write", async (tx) => {
     const canceledDrafts = await tx.execute({
       sql: `
         UPDATE reward_campaigns
-        SET status = 'canceled', canceled_at = CAST(?1 AS TEXT), updated_at = ?1
+        SET status = 'canceled', canceled_at = ${nowExpression}, updated_at = ${nowExpression}
         WHERE status = 'draft'
           AND created_at <= ?2
           AND funded_cents = 0
@@ -41,7 +43,7 @@ export async function advanceRewardCampaignLifecycle(input: {
     const ended = await tx.execute({
       sql: `
         UPDATE reward_campaigns
-        SET status = 'ended', ended_at = COALESCE(ended_at, CAST(?1 AS TEXT)), updated_at = ?1
+        SET status = 'ended', ended_at = COALESCE(ended_at, ${nowExpression}), updated_at = ${nowExpression}
         WHERE status IN ('scheduled', 'active', 'paused', 'exhausted')
           AND ends_at <= ?1
         RETURNING reward_campaign_id
@@ -62,7 +64,7 @@ export async function advanceRewardCampaignLifecycle(input: {
     const activated = await tx.execute({
       sql: `
         UPDATE reward_campaigns
-        SET status = 'active', activated_at = COALESCE(activated_at, CAST(?1 AS TEXT)), updated_at = ?1
+        SET status = 'active', activated_at = COALESCE(activated_at, ${nowExpression}), updated_at = ${nowExpression}
         WHERE status = 'scheduled'
           AND starts_at <= ?1
           AND ends_at > ?1

@@ -21,7 +21,7 @@ import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./rew
 import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
-import { cancelRewardCampaignDraft, REWARD_SONG_POOL_REGISTER_SQL } from "./reward-campaign-service"
+import { cancelRewardCampaignDraft, rewardSongPoolRegisterSql } from "./reward-campaign-service"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
@@ -198,12 +198,12 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         requested_ends_at TIMESTAMPTZ,
         terms_version INTEGER NOT NULL,
         terms_hash TEXT NOT NULL,
-        activated_at TEXT,
-        exhausted_at TEXT,
-        ended_at TEXT,
-        canceled_at TEXT,
-        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TEXT NOT NULL,
+        activated_at TIMESTAMPTZ,
+        exhausted_at TIMESTAMPTZ,
+        ended_at TIMESTAMPTZ,
+        canceled_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL,
         CHECK (budget_cents >= 0),
         CHECK (funded_cents >= 0 AND funded_cents <= budget_cents),
         CHECK (reserved_cents >= 0 AND credited_cents >= 0 AND paid_cents >= 0 AND refunded_cents >= 0),
@@ -306,8 +306,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT
       );
     `)
-    const concurrentPoolsMigration = await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8")
-    await db.unsafe(concurrentPoolsMigration.replaceAll("TIMESTAMPTZ", "TEXT"))
+    await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(NATIONALITY_TIERS_MIGRATION_URL, "utf8"))
     // Legacy campaign fixtures in this broad harness predate tier terms and
     // intentionally omit them. Preserve the prior harness default without
@@ -644,15 +643,15 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       ) VALUES
         ('rcp_slot_a_pg', 'usr_reward_pg', 'slot-a', 'cmt_reward_pg', 'pst_slot_pg',
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1::timestamptz, $2::timestamptz, $1::text),
+          100, 0, 0, 0, 0, 0, 2, 'slot-a', $1::timestamptz, $2::timestamptz, $1::timestamptz),
         ('rcp_slot_b_pg', 'usr_reward_pg', 'slot-b', 'cmt_reward_pg', 'pst_slot_pg',
           'sab_slot_pg', 'usr_reward_pg', 'draft', 'karaoke', 7000, 40, 0, 0, 40,
-          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1::timestamptz, $2::timestamptz, $1::text)
+          100, 0, 0, 0, 0, 0, 2, 'slot-b', $1::timestamptz, $2::timestamptz, $1::timestamptz)
     `, [NOW, "2026-07-11T12:00:00.000Z"])
     try {
       await withProductionPostgresClient(async (client) => {
         const register = (campaignId: string) => client.execute({
-          sql: REWARD_SONG_POOL_REGISTER_SQL,
+          sql: rewardSongPoolRegisterSql(true),
           args: ["cmt_reward_pg", "pst_slot_pg", campaignId, NOW],
         })
         const attempts = await Promise.all([
@@ -750,7 +749,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           now: NOW,
         })).rejects.toMatchObject({ status: 409 })
 
-        expect(await advanceRewardCampaignLifecycle({ client, now: NOW })).toEqual({
+        expect(await advanceRewardCampaignLifecycle({ client, now: NOW, postgres: true })).toEqual({
           activated_campaigns: 0,
           canceled_draft_campaigns: 1,
           ended_campaigns: 0,
