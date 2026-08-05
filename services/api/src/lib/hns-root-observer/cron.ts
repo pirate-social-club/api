@@ -34,22 +34,21 @@ async function seedVerifiedHnsRoots(client: Client, now: string): Promise<void> 
       INSERT INTO hns_root_delegation_state (
         normalized_root_label, rollover_state, state_changed_at, created_at, updated_at
       )
-      SELECT DISTINCT nv.normalized_root_label, 'none', ?1, ?1, ?1
+      SELECT DISTINCT nv.normalized_root_label, 'none',
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       FROM namespace_verifications nv
       JOIN community_namespace_bindings cnb
         ON cnb.namespace_verification_id = nv.namespace_verification_id
       WHERE nv.family = 'hns'
         AND nv.status = 'verified'
         AND nv.club_attach_allowed = 1
-        -- Keep the predicate on its own bind parameter. PostgreSQL otherwise
-        -- has to infer one parameter both from these projected INSERT values
-        -- and from a TIMESTAMPTZ comparison, and rejects the statement with
-        -- "inconsistent types deduced for parameter $1".
-        AND nv.expires_at > ?2
+        -- Do not reuse this bind as a projected INSERT value: PostgreSQL
+        -- resolves it as text in the projection but as TIMESTAMPTZ here.
+        AND nv.expires_at > ?1
         AND cnb.status = 'active'
       ON CONFLICT(normalized_root_label) DO NOTHING
     `,
-    args: [now, now],
+    args: [now],
   })
 }
 
