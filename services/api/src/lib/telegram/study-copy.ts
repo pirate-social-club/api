@@ -47,7 +47,7 @@ type StudyCopy = {
 
 const COPY: Record<StudyHelperLanguage, StudyCopy> = {
   en: {
-    continueExercise: "▶️ Continue", chooseTranslation: "Choose the translation",
+    continueExercise: "▶️ Continue", chooseTranslation: "Choose the translation:",
     explainGrammar: "Grammar", explainMeaning: "Meaning", grammarQuestion: "Explain the grammar in this line.", meaningQuestion: "Explain what this line means.", tutorDisclosure: "AI answer — your question and study context are sent to this community's AI provider.", rewardPerDay: ({ amount }) => `${amount} $USDC/day`,
     checkAgain: "Check again", chooseDelivery: "How should prompts be delivered?", chooseLanguage: "Your language:",
     chooseSong: "Choose a song to study:", complete: "Study complete", correct: "Correct", correctAnswer: "Correct answer", deliveryAudio: "Audio", deliveryBoth: "Audio + text",
@@ -60,7 +60,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "Start again", studyUnavailable: "Study is not available here yet.", tutorUnavailable: "The study tutor is unavailable right now. Your exercise is still open.", suggested: "Suggested", translationsReady: "Translations are ready.", youSaid: "You said",
   },
   zh: {
-    continueExercise: "▶️ 继续", chooseTranslation: "选择译文",
+    continueExercise: "▶️ 继续", chooseTranslation: "选择译文：",
     explainGrammar: "语法", explainMeaning: "含义", grammarQuestion: "解释这句的语法。", meaningQuestion: "解释这句话的意思。", tutorDisclosure: "AI 回复 — 你的问题和学习内容会发送给此社区的 AI 服务商。", rewardPerDay: ({ amount }) => `${amount} $USDC/天`,
     checkAgain: "再检查", chooseDelivery: "你希望如何接收练习提示？", chooseLanguage: "你的语言：",
     chooseSong: "选择一首歌来学习：", complete: "学习完成", correct: "正确", correctAnswer: "正确答案", deliveryAudio: "音频", deliveryBoth: "音频和文字",
@@ -73,7 +73,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", tutorUnavailable: "学习助手暂时不可用。练习仍在进行。", suggested: "推荐", translationsReady: "翻译已准备好。", youSaid: "你说的是",
   },
   ar: {
-    continueExercise: "▶️ متابعة", chooseTranslation: "اختر الترجمة",
+    continueExercise: "▶️ متابعة", chooseTranslation: "اختر الترجمة:",
     explainGrammar: "القواعد", explainMeaning: "المعنى", grammarQuestion: "اشرح قواعد هذا السطر.", meaningQuestion: "اشرح معنى هذا السطر.", tutorDisclosure: "إجابة بالذكاء الاصطناعي — يُرسل سؤالك وسياق الدراسة إلى مزوّد الذكاء الاصطناعي لهذا المجتمع.", rewardPerDay: ({ amount }) => `${amount} $USDC/يوم`,
     checkAgain: "تحقق مجددًا", chooseDelivery: "كيف تريد تلقي التمارين؟", chooseLanguage: "لغتك:",
     chooseSong: "اختر أغنية للدراسة:", complete: "اكتملت الدراسة", correct: "صحيح", correctAnswer: "الإجابة الصحيحة", deliveryAudio: "صوت", deliveryBoth: "صوت ونص",
@@ -86,7 +86,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", tutorUnavailable: "مساعد الدراسة غير متاح الآن. التمرين ما زال مفتوحًا.", suggested: "مقترح", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
   },
   ka: {
-    continueExercise: "▶️ გაგრძელება", chooseTranslation: "აირჩიეთ თარგმანი",
+    continueExercise: "▶️ გაგრძელება", chooseTranslation: "აირჩიეთ თარგმანი:",
     explainGrammar: "გრამატიკა", explainMeaning: "მნიშვნელობა", grammarQuestion: "ამიხსენი ამ სტრიქონის გრამატიკა.", meaningQuestion: "ამიხსენი, რას ნიშნავს ეს სტრიქონი.", tutorDisclosure: "AI პასუხი — თქვენი შეკითხვა და სასწავლო კონტექსტი იგზავნება ამ თემის AI პროვაიდერთან.", rewardPerDay: ({ amount }) => `${amount} $USDC/დღე`,
     checkAgain: "ხელახლა შემოწმება", chooseDelivery: "როგორ გსურთ სავარჯიშოების მიღება?", chooseLanguage: "თქვენი ენა:",
     chooseSong: "აირჩიეთ სასწავლი სიმღერა:", complete: "სწავლა დასრულდა", correct: "სწორია", correctAnswer: "სწორი პასუხი", deliveryAudio: "აუდიო", deliveryBoth: "აუდიო და ტექსტი",
@@ -99,7 +99,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "თავიდან დაწყება", studyUnavailable: "სწავლა აქ ჯერ ხელმისაწვდომი არ არის.", tutorUnavailable: "სასწავლო ასისტენტი ამჟამად მიუწვდომელია. სავარჯიშო ღია რჩება.", suggested: "რეკომენდებული", translationsReady: "თარგმანები მზადაა.", youSaid: "თქვენ თქვით",
   },
   ru: {
-    continueExercise: "▶️ Продолжить", chooseTranslation: "Выберите перевод",
+    continueExercise: "▶️ Продолжить", chooseTranslation: "Выберите перевод:",
     explainGrammar: "Грамматика", explainMeaning: "Значение", grammarQuestion: "Объясни грамматику этой строки.", meaningQuestion: "Объясни, что означает эта строка.", tutorDisclosure: "Ответ ИИ — ваш вопрос и учебный контекст отправляются ИИ-провайдеру этого сообщества.", rewardPerDay: ({ amount }) => `${amount} $USDC/день`,
     checkAgain: "Проверить снова", chooseDelivery: "Как показывать задания?", chooseLanguage: "Ваш язык:",
     chooseSong: "Выберите песню для изучения:", complete: "Урок завершён", correct: "Верно", correctAnswer: "Правильный ответ", deliveryAudio: "Аудио", deliveryBoth: "Аудио + текст",

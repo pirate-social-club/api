@@ -28,6 +28,7 @@ const PRIVATE_STUDY_TIMEOUT_MS = 30_000
 // tokens can spend the whole budget before producing visible text. The 90-word
 // instruction, not this ceiling, is what keeps answers short.
 const PRIVATE_STUDY_MAX_COMPLETION_TOKENS = 320
+const TYPING_REFRESH_MS = 4_000
 
 // Exercises the tutor can explain. `select_song` is excluded on purpose: there
 // is no current exercise to ground an answer in before a song is picked.
@@ -303,6 +304,24 @@ function providerMessageId(body: Record<string, unknown>): string | null {
   return stringOrNull(body.id)
 }
 
+/**
+ * Telegram clears a typing indicator after about five seconds, and tutor
+ * generation measured 4-7s in production, so a single action expires before the
+ * answer lands. Refresh until the work settles, then stop.
+ */
+function keepTypingUntilSettled(input: {
+  bot: TelegramCommunityBotCredential
+  telegramChatId: string
+}): { stop: () => void } {
+  const send = () => {
+    void sendTelegramChatAction(input.bot, { action: "typing", chat_id: input.telegramChatId })
+      .catch(() => undefined)
+  }
+  send()
+  const timer = setInterval(send, TYPING_REFRESH_MS)
+  return { stop: () => clearInterval(timer) }
+}
+
 function isOpenRouterDiagnosticsCarrier(error: unknown): error is { openRouterDiagnostics: OpenRouterDiagnostics } {
   return Boolean(error) && typeof error === "object" && "openRouterDiagnostics" in (error as object)
 }
@@ -416,6 +435,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
         communityId: session.communityId,
       })
       const providerStartedAt = Date.now()
+      const typing = keepTypingUntilSettled({ bot: input.bot, telegramChatId: input.telegramChatId })
       const [completion] = await Promise.all([
         requestOpenRouterChatCompletion({
           apiKey,
@@ -450,8 +470,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
             ],
           },
         }),
-        sendTelegramChatAction(input.bot, { action: "typing", chat_id: input.telegramChatId }).catch(() => undefined),
-      ])
+      ]).finally(() => typing.stop())
       console.info("[private-study-tutor] provider completed", {
         communityId: session.communityId,
         durationMs: Date.now() - providerStartedAt,

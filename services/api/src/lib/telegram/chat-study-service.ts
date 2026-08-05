@@ -988,7 +988,6 @@ async function presentNextExercise(input: {
             callback_data: callbackData(token, index),
             text: option.text.slice(0, 60),
           }]),
-          ...telegramStudyTutorButtons(input.session.id, language),
         ],
       },
     })
@@ -1196,7 +1195,6 @@ async function resendActiveTelegramStudyExercise(input: {
             callback_data: callbackData(session.actionToken, index),
             text: text.slice(0, 60),
           }]),
-          ...telegramStudyTutorButtons(session.id, language),
         ],
       },
     })

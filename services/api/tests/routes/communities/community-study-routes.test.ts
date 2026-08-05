@@ -988,8 +988,10 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
-      expect(answerButtons.find((button) => button.text === "含义")?.callback_data).toMatch(/^study-explain:m:tcs_/u)
-      expect(answerButtons.find((button) => button.text === "语法")?.callback_data).toMatch(/^study-explain:g:tcs_/u)
+      // Tutor shortcuts are deliberately absent on translation choices: Meaning
+      // would hand over the answer, and the line was already explainable on the
+      // say-it-back exercise that precedes it. Typed questions still reach the tutor.
+      expect(answerButtons.some((button) => button.callback_data?.startsWith("study-explain:"))).toBe(false)
       expect(answerButtons.some((button) => button.callback_data?.startsWith("study-ask:"))).toBe(false)
       const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
       expect(replayButton).toBeUndefined()
