@@ -205,6 +205,21 @@ async function seedReadyTranslationExercises(input: {
   }
 }
 
+async function policyClientReenable(
+  ctx: { communityDbRoot: string },
+  communityId: string,
+): Promise<void> {
+  const client = createClient({ url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId) })
+  try {
+    await client.execute({
+      sql: "UPDATE community_assistant_policy SET telegram_private_assistant_enabled = 1 WHERE community_id = ?1",
+      args: [communityId],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 describe("community study routes", () => {
   test("formats Telegram reward amounts without misleading trailing zeroes", () => {
     expect(formatUsdcCents(100)).toBe("1")
@@ -3023,6 +3038,29 @@ describe("community study routes", () => {
         bot: tutorBot, env: ctx.env, question: "Why is it that?",
         telegramChatId: "424242", telegramMessageId: 703, telegramUserId: "424242",
       })).kind).toBe("unavailable")
+
+      // A provider that returns empty content is already retried by the client,
+      // so two empties in a row must surface as a failure rather than a third
+      // silent attempt. This is the shape seen in production.
+      await policyClientReenable(ctx, communityId)
+      const emptyAttempts: Array<Record<string, unknown>> = []
+      globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(requestInput, init)
+        if (request.url.startsWith("https://api.telegram.org/")) {
+          return Response.json({ ok: true, result: { message_id: 799 } })
+        }
+        emptyAttempts.push(await request.json() as Record<string, unknown>)
+        return Response.json({
+          id: "provider-private-study-empty",
+          choices: [{ finish_reason: "length", message: { content: "" } }],
+          usage: { completion_tokens: 320, completion_tokens_details: { reasoning_tokens: 320 }, prompt_tokens: 900, total_tokens: 1220 },
+        })
+      }) as typeof fetch
+      await expect(answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it that?",
+        telegramChatId: "424242", telegramMessageId: 704, telegramUserId: "424242",
+      })).rejects.toThrow(/response was empty/u)
+      expect(emptyAttempts).toHaveLength(2)
     } finally {
       globalThis.fetch = originalFetch
     }

@@ -2,7 +2,11 @@ import type { Env } from "../../env"
 import { executeFirst } from "../db-helpers"
 import { HttpError, rateLimited } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import { requestOpenRouterChatCompletion } from "../openrouter-client"
+import {
+  openRouterDiagnosticsFrom,
+  requestOpenRouterChatCompletion,
+  type OpenRouterDiagnostics,
+} from "../openrouter-client"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { decryptActiveCommunityOpenRouterKey } from "../communities/assistant-policy/credential-service"
@@ -256,7 +260,10 @@ async function finishTutorEvent(input: {
       input.eventId,
       input.error ? (rateLimitedFailure ? "rate_limited" : "failed") : "answered",
       input.providerMessageId ?? null,
-      input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null,
+      // Classification only. The upstream message can embed up to 500 characters
+      // of provider response body, which may echo model output or the learner's
+      // question, and this row is durable.
+      input.error ? privateStudyFailureKind(input.error) : null,
       nowIso(),
     ],
   })
@@ -293,6 +300,20 @@ function parseFeedback(value: unknown): { missing: string[]; extra: string[] } {
 
 function providerMessageId(body: Record<string, unknown>): string | null {
   return stringOrNull(body.id)
+}
+
+function isOpenRouterDiagnosticsCarrier(error: unknown): error is { openRouterDiagnostics: OpenRouterDiagnostics } {
+  return Boolean(error) && typeof error === "object" && "openRouterDiagnostics" in (error as object)
+}
+
+/**
+ * Coarse, self-authored failure classification. Never derived from provider
+ * text, so it cannot carry model output or learner content into logs.
+ */
+function privateStudyFailureKind(error: unknown): "empty_response" | "rate_limited" | "http_error" | "unknown" {
+  if (isOpenRouterDiagnosticsCarrier(error)) return "empty_response"
+  if (error instanceof HttpError) return error.status === 429 ? "rate_limited" : "http_error"
+  return "unknown"
 }
 
 export async function answerPrivateStudyTutorQuestion(input: {
@@ -423,9 +444,8 @@ export async function answerPrivateStudyTutorQuestion(input: {
       console.info("[private-study-tutor] provider completed", {
         communityId: session.communityId,
         durationMs: Date.now() - providerStartedAt,
-        finishReason: completion.body.choices?.[0]?.finish_reason ?? null,
         model: policy.selectedModelId,
-        usage: completion.body.usage ?? null,
+        ...openRouterDiagnosticsFrom(completion.body),
       })
       await finishTutorEvent({
         env: input.env,
@@ -445,14 +465,17 @@ export async function answerPrivateStudyTutorQuestion(input: {
       db.close()
     }
   } catch (error) {
+    // Deliberately no provider error text: an upstream message can echo model
+    // output or the learner's question. Only our own failure classification and
+    // allowlisted completion metadata are recorded.
     console.warn("[private-study-tutor] provider failed", {
       communityId: session.communityId,
-      error: error instanceof Error ? error.message : String(error),
+      errorName: error instanceof Error ? error.name : "unknown",
+      failureKind: privateStudyFailureKind(error),
+      httpStatus: error instanceof HttpError ? error.status : null,
       maxCompletionTokens: PRIVATE_STUDY_MAX_COMPLETION_TOKENS,
       model: policy.selectedModelId,
-      ...(error && typeof error === "object" && "openRouterDiagnostics" in error
-        ? { diagnostics: (error as { openRouterDiagnostics: unknown }).openRouterDiagnostics }
-        : {}),
+      ...(isOpenRouterDiagnosticsCarrier(error) ? error.openRouterDiagnostics : {}),
     })
     await finishTutorEvent({ env: input.env, eventId, error }).catch(() => undefined)
     throw error

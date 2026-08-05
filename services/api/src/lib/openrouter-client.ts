@@ -88,6 +88,52 @@ function responseBodyPreview(value: string): string {
   return trimmed ? trimmed.slice(0, 500) : "<empty>"
 }
 
+export type OpenRouterDiagnostics = {
+  completionTokens: number | null
+  finishReason: string | null
+  nativeFinishReason: string | null
+  promptTokens: number | null
+  reasoningTokens: number | null
+  totalTokens: number | null
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Allowlisted, provider-agnostic completion metadata. Only known enum-like
+ * reason strings and numeric token counts survive; provider-authored prose
+ * never reaches logs, so a diagnostic can never leak model output or a
+ * learner's question back out.
+ */
+const OPEN_ROUTER_FINISH_REASONS = new Set([
+  "content_filter",
+  "error",
+  "function_call",
+  "length",
+  "stop",
+  "tool_calls",
+])
+
+function finishReasonOrNull(value: unknown): string | null {
+  return typeof value === "string" && OPEN_ROUTER_FINISH_REASONS.has(value) ? value : null
+}
+
+export function openRouterDiagnosticsFrom(body: OpenRouterChatCompletionResponse): OpenRouterDiagnostics {
+  const choice = body.choices?.[0] as Record<string, unknown> | undefined
+  const usage = body.usage as Record<string, unknown> | undefined
+  const details = usage?.completion_tokens_details as Record<string, unknown> | undefined
+  return {
+    completionTokens: finiteNumberOrNull(usage?.completion_tokens),
+    finishReason: finishReasonOrNull(choice?.finish_reason),
+    nativeFinishReason: finishReasonOrNull(choice?.native_finish_reason),
+    promptTokens: finiteNumberOrNull(usage?.prompt_tokens),
+    reasoningTokens: finiteNumberOrNull(details?.reasoning_tokens),
+    totalTokens: finiteNumberOrNull(usage?.total_tokens),
+  }
+}
+
 function isRetryableOpenRouterResponseError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.message.includes("response was not valid JSON")
@@ -148,13 +194,10 @@ async function requestOpenRouterChatCompletionOnce(input: {
     if (!content.trim() && !Array.isArray(toolCalls)) {
       // Carry the provider's own account of why nothing came back. Without it an
       // empty response is indistinguishable from a truncation caused by our own
-      // completion-token ceiling, which is a very different fix.
+      // completion-token ceiling, which is a very different fix. Sanitized here
+      // so no provider-authored text can escape into logs.
       throw Object.assign(new Error(`OpenRouter ${input.errorLabel} response was empty`), {
-        openRouterDiagnostics: {
-          finishReason: body.choices?.[0]?.finish_reason ?? null,
-          nativeFinishReason: (body.choices?.[0] as Record<string, unknown> | undefined)?.native_finish_reason ?? null,
-          usage: body.usage ?? null,
-        },
+        openRouterDiagnostics: openRouterDiagnosticsFrom(body),
       })
     }
 
