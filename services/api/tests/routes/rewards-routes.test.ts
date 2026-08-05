@@ -346,6 +346,110 @@ describe("rewards routes", () => {
     expect(grandfatheredReplay.status).toBe(200)
   }, 30_000)
 
+  test("lets only the rewarder cancel an untouched draft and atomically releases its song slot", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-owner")
+    const stranger = await exchangeJwt(ctx.env, "reward-draft-cancel-stranger")
+    await seedCampaignSong(ctx, owner.userId)
+
+    const created = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-first" })),
+    }, ctx.env)
+    expect(created.status).toBe(201)
+    const campaign = await json(created) as { id: string }
+
+    const strangerCancel = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(stranger.accessToken),
+    }, ctx.env)
+    expect(strangerCancel.status).toBe(404)
+
+    const canceled = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(canceled.status).toBe(200)
+    expect(await json(canceled)).toMatchObject({ id: campaign.id, status: "canceled" })
+    const released = await ctx.client.execute({
+      sql: "SELECT reward_campaign_id FROM reward_song_pools WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(released.rows).toEqual([])
+
+    const replay = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(replay.status).toBe(200)
+    expect(await json(replay)).toMatchObject({ id: campaign.id, status: "canceled" })
+
+    const replacement = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-replacement" })),
+    }, ctx.env)
+    expect(replacement.status).toBe(201)
+    expect((await json(replacement) as { id: string }).id).not.toBe(campaign.id)
+  })
+
+  test("refuses cancellation once funding has started or completed", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-funded-owner")
+    await addWallet(ctx, owner.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, owner.userId)
+
+    const created = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-funded" })),
+    }, ctx.env)
+    const campaign = await json(created) as { id: string }
+    const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "draft-cancel-funded-quote" }),
+    }, ctx.env)
+    expect(quoted.status).toBe(201)
+    const quote = await json(quoted) as { id: string }
+
+    const duringFunding = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(duringFunding.status).toBe(409)
+
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+    }))
+    const confirmed = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"f".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(confirmed.status).toBe(200)
+
+    const afterFunding = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(afterFunding.status).toBe(409)
+    const pool = await ctx.client.execute({
+      sql: "SELECT reward_campaign_id FROM reward_song_pools WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(pool.rows).toEqual([{ reward_campaign_id: campaign.id }])
+  }, 30_000)
+
   test("does not advertise or quote campaign funding without a usable settlement signer", async () => {
     const ctx = await createRouteTestContext({
       ...campaignEnv(),

@@ -21,7 +21,8 @@ import { markRewardCampaignIncidentAlerted, monitorRewardCampaigns } from "./rew
 import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
-import { REWARD_SONG_POOL_REGISTER_SQL } from "./reward-campaign-service"
+import { cancelRewardCampaignDraft, REWARD_SONG_POOL_REGISTER_SQL } from "./reward-campaign-service"
+import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -200,6 +201,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         activated_at TEXT,
         exhausted_at TEXT,
         ended_at TEXT,
+        canceled_at TEXT,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL,
         CHECK (budget_cents >= 0),
@@ -669,6 +671,112 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       })
     } finally {
       await seed.end()
+    }
+  })
+
+  test("cancels only untouched owner drafts and expires stale draft slots under PostgreSQL locks", async () => {
+    const postIds = [
+      "pst_cancel_draft_pg",
+      "pst_cancel_funded_pg",
+      "pst_expired_draft_pg",
+      "pst_recent_draft_pg",
+    ]
+    const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, min_score_bps, daily_reward_cents,
+        milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at,
+        created_at, updated_at
+      ) VALUES
+        ('rcp_cancel_draft_pg', 'usr_reward_pg', 'cancel-draft-pg',
+          'cmt_reward_pg', 'pst_cancel_draft_pg', 'sab_cancel_draft_pg', 'usr_reward_pg',
+          'draft', 'study', 7000, 40, 0, 0, 40, 100, 0, 0, 0, 0, 0, 4,
+          'cancel-draft-terms', '2026-07-10T13:00:00.000Z',
+          '2026-07-12T13:00:00.000Z', '2026-07-10T11:00:00.000Z', $1),
+        ('rcp_cancel_funded_pg', 'usr_reward_pg', 'cancel-funded-pg',
+          'cmt_reward_pg', 'pst_cancel_funded_pg', 'sab_cancel_funded_pg', 'usr_reward_pg',
+          'active', 'study', 7000, 40, 0, 0, 40, 100, 100, 0, 0, 0, 0, 4,
+          'cancel-funded-terms', '2026-07-10T11:00:00.000Z',
+          '2026-07-12T13:00:00.000Z', '2026-07-10T11:00:00.000Z', $1),
+        ('rcp_expired_draft_pg', 'usr_reward_pg', 'expired-draft-pg',
+          'cmt_reward_pg', 'pst_expired_draft_pg', 'sab_expired_draft_pg', 'usr_reward_pg',
+          'draft', 'study', 7000, 40, 0, 0, 40, 100, 0, 0, 0, 0, 0, 4,
+          'expired-draft-terms', '2026-07-10T13:00:00.000Z',
+          '2026-07-12T13:00:00.000Z', '2026-07-09T12:00:00.000Z', $1),
+        ('rcp_recent_draft_pg', 'usr_reward_pg', 'recent-draft-pg',
+          'cmt_reward_pg', 'pst_recent_draft_pg', 'sab_recent_draft_pg', 'usr_reward_pg',
+          'draft', 'study', 7000, 40, 0, 0, 40, 100, 0, 0, 0, 0, 0, 4,
+          'recent-draft-terms', '2026-07-10T13:00:00.000Z',
+          '2026-07-12T13:00:00.000Z', '2026-07-09T12:00:00.001Z', $1)
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_song_pools (
+        community_id, post_id, reward_campaign_id, created_at, updated_at
+      ) VALUES
+        ('cmt_reward_pg', 'pst_cancel_draft_pg', 'rcp_cancel_draft_pg', $1, $1),
+        ('cmt_reward_pg', 'pst_cancel_funded_pg', 'rcp_cancel_funded_pg', $1, $1),
+        ('cmt_reward_pg', 'pst_expired_draft_pg', 'rcp_expired_draft_pg', $1, $1),
+        ('cmt_reward_pg', 'pst_recent_draft_pg', 'rcp_recent_draft_pg', $1, $1)
+    `, [NOW])
+    await seed.end()
+
+    try {
+      await withProductionPostgresClient(async (client) => {
+        const canceled = await cancelRewardCampaignDraft({
+          env: PG_ENV,
+          client,
+          userId: "usr_reward_pg",
+          campaignId: "rcp_cancel_draft_pg",
+          now: NOW,
+        })
+        expect(canceled.status).toBe("canceled")
+        expect((await cancelRewardCampaignDraft({
+          env: PG_ENV,
+          client,
+          userId: "usr_reward_pg",
+          campaignId: "rcp_cancel_draft_pg",
+          now: NOW,
+        })).status).toBe("canceled")
+
+        await expect(cancelRewardCampaignDraft({
+          env: PG_ENV,
+          client,
+          userId: "usr_reward_pg",
+          campaignId: "rcp_cancel_funded_pg",
+          now: NOW,
+        })).rejects.toMatchObject({ status: 409 })
+
+        expect(await advanceRewardCampaignLifecycle({ client, now: NOW })).toEqual({
+          activated_campaigns: 0,
+          canceled_draft_campaigns: 1,
+          ended_campaigns: 0,
+        })
+        const state = await client.execute(`
+          SELECT c.reward_campaign_id, c.status,
+            EXISTS (
+              SELECT 1 FROM reward_song_pools p
+              WHERE p.reward_campaign_id = c.reward_campaign_id
+            ) AS holds_pool
+          FROM reward_campaigns c
+          WHERE c.post_id IN (
+            'pst_cancel_draft_pg', 'pst_cancel_funded_pg',
+            'pst_expired_draft_pg', 'pst_recent_draft_pg'
+          )
+          ORDER BY c.reward_campaign_id
+        `)
+        expect(state.rows).toEqual([
+          { reward_campaign_id: "rcp_cancel_draft_pg", status: "canceled", holds_pool: false },
+          { reward_campaign_id: "rcp_cancel_funded_pg", status: "active", holds_pool: true },
+          { reward_campaign_id: "rcp_expired_draft_pg", status: "canceled", holds_pool: false },
+          { reward_campaign_id: "rcp_recent_draft_pg", status: "draft", holds_pool: true },
+        ])
+      })
+    } finally {
+      for (const postId of postIds) await removeCampaignTestPost(postId)
     }
   })
 

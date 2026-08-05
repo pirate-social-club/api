@@ -7497,6 +7497,48 @@ const spec = {
         ]
       }
     },
+    "/reward_campaigns/{campaign_id}/cancel": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reward_campaigns_cancel",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Cancel an unfunded draft reward campaign",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {},
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/public/reward_campaigns/{campaign_id}": {
       "parameters": [
         {

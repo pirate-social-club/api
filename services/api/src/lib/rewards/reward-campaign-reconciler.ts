@@ -173,6 +173,7 @@ export type RewardCampaignReconciliationSummary = {
   credited_events: number
   credited_cents: number
   activated_campaigns: number
+  canceled_draft_campaigns: number
   ended_campaigns: number
   skipped_identity: number
   pending_verification: number
@@ -223,6 +224,7 @@ function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
     credited_events: 0,
     credited_cents: 0,
     activated_campaigns: 0,
+    canceled_draft_campaigns: 0,
     ended_campaigns: 0,
     skipped_identity: 0,
     pending_verification: 0,
@@ -957,6 +959,7 @@ export async function reconcileRewardCampaigns(input: {
   })
   const lifecycle = await advanceRewardCampaignLifecycle({ client: input.controlPlaneClient, now })
   summary.activated_campaigns = lifecycle.activated_campaigns
+  summary.canceled_draft_campaigns = lifecycle.canceled_draft_campaigns
   summary.ended_campaigns = lifecycle.ended_campaigns
   const communityIds = selectScheduledCommunityJobPollIds(
     await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
