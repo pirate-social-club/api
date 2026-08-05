@@ -961,7 +961,7 @@ describe("community study routes", () => {
         sql: "SELECT status FROM telegram_chat_study_callback_deliveries WHERE callback_query_id = 'callback-localization-check'",
       })).rows).toHaveLength(1)
       const exercisePrompt = [...telegramBodies].reverse().find((body) =>
-        typeof body.text === "string" && body.text.includes("选择最佳翻译。")
+        typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
       const mcqDeliveryWindow = await ctx.client.execute({
@@ -1336,7 +1336,7 @@ describe("community study routes", () => {
         chatId: "454546", chatStudySessionId: String(mixIntent.rows[0]?.chat_study_session_id),
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
-      expect(telegramBodies.some((body) => typeof body.text === "string" && body.text.includes("选择最佳翻译。"))).toBe(true)
+      expect(telegramBodies.some((body) => typeof body.text === "string" && body.text.includes("选择译文"))).toBe(true)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1690,7 +1690,7 @@ describe("community study routes", () => {
       const audioForm = await audioRequests[0]!.clone().formData()
       expect(audioForm.get("voice")).toBeInstanceOf(File)
       expect((audioForm.get("voice") as File).type).toBe("audio/ogg")
-      expect(String(audioForm.get("caption"))).toBe("Say this:\n\nType a question, or send a voice answer.")
+      expect(String(audioForm.get("caption"))).toBe("Say this:")
 
       cachedAudio.clear()
       await createTelegramChatStudyVoiceIntent({
@@ -2896,10 +2896,10 @@ describe("community study routes", () => {
       expect(answer.kind).toBe("answered")
       expect(answer.kind === "answered" && answer.answer).toContain("introduces the clause")
       expect(answer.kind === "answered" && answer.answer).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
-      expect(answer.kind === "answered" && answer.disclosure).toContain("community's configured provider")
+      expect(answer.kind === "answered" && answer.disclosure).toContain("sent to this community's AI provider")
       const providerBody = providerBodies[0]
       expect(providerBody?.model).toBe("test/tutor-model")
-      expect(providerBody?.max_completion_tokens).toBe(160)
+      expect(providerBody?.max_completion_tokens).toBe(320)
       const systemMessage = providerBody?.messages?.find((message) => message.role === "system")?.content ?? ""
       const userMessage = providerBody?.messages?.find((message) => message.role === "user")?.content ?? ""
       expect(systemMessage).toContain("private language-study tutor")
@@ -2944,7 +2944,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       expect(tutorReply?.text).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
-      expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("▶️ Continue exercise")
+      expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("▶️ Continue")
       expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.callback_data).toBe("study-continue:tcs_private_study_tutor")
       const messagesBeforeContinue = telegramBodies.length
       expect(await handleTelegramChatStudyCallback({
@@ -2958,7 +2958,7 @@ describe("community study routes", () => {
         env: ctx.env,
       })).toBe(true)
       const continuedPrompt = telegramBodies.slice(messagesBeforeContinue).find((body) =>
-        typeof body.text === "string" && body.text.includes("Type a question, or send a voice answer.")
+        typeof body.text === "string" && body.text.includes("Say this:")
       )
       expect(continuedPrompt?.text).toContain(exercise!.reference_text ?? "")
       const stillActive = await ctx.client.execute(

@@ -146,7 +146,16 @@ async function requestOpenRouterChatCompletionOnce(input: {
     const content = normalizeOpenRouterMessageContent(body.choices?.[0]?.message?.content)
     const toolCalls = body.choices?.[0]?.message?.tool_calls
     if (!content.trim() && !Array.isArray(toolCalls)) {
-      throw new Error(`OpenRouter ${input.errorLabel} response was empty`)
+      // Carry the provider's own account of why nothing came back. Without it an
+      // empty response is indistinguishable from a truncation caused by our own
+      // completion-token ceiling, which is a very different fix.
+      throw Object.assign(new Error(`OpenRouter ${input.errorLabel} response was empty`), {
+        openRouterDiagnostics: {
+          finishReason: body.choices?.[0]?.finish_reason ?? null,
+          nativeFinishReason: (body.choices?.[0] as Record<string, unknown> | undefined)?.native_finish_reason ?? null,
+          usage: body.usage ?? null,
+        },
+      })
     }
 
     return { body, content }

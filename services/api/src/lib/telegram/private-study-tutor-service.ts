@@ -19,6 +19,10 @@ const PRIVATE_STUDY_USER_MINUTE_CAP = 5
 const PRIVATE_STUDY_COMMUNITY_MINUTE_CAP = 120
 const PRIVATE_STUDY_WINDOW_MS = 60_000
 const PRIVATE_STUDY_TIMEOUT_MS = 30_000
+// Raised from 160 after production empty responses: models that emit reasoning
+// tokens can spend the whole budget before producing visible text. The 90-word
+// instruction, not this ceiling, is what keeps answers short.
+const PRIVATE_STUDY_MAX_COMPLETION_TOKENS = 320
 
 // Exercises the tutor can explain. `select_song` is excluded on purpose: there
 // is no current exercise to ground an answer in before a song is picked.
@@ -387,7 +391,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
           errorLabel: "private study tutor",
           timeoutMs: PRIVATE_STUDY_TIMEOUT_MS,
           body: {
-            max_completion_tokens: 160,
+            max_completion_tokens: PRIVATE_STUDY_MAX_COMPLETION_TOKENS,
             model: policy.selectedModelId,
             messages: [
               {
@@ -419,7 +423,9 @@ export async function answerPrivateStudyTutorQuestion(input: {
       console.info("[private-study-tutor] provider completed", {
         communityId: session.communityId,
         durationMs: Date.now() - providerStartedAt,
+        finishReason: completion.body.choices?.[0]?.finish_reason ?? null,
         model: policy.selectedModelId,
+        usage: completion.body.usage ?? null,
       })
       await finishTutorEvent({
         env: input.env,
@@ -439,6 +445,15 @@ export async function answerPrivateStudyTutorQuestion(input: {
       db.close()
     }
   } catch (error) {
+    console.warn("[private-study-tutor] provider failed", {
+      communityId: session.communityId,
+      error: error instanceof Error ? error.message : String(error),
+      maxCompletionTokens: PRIVATE_STUDY_MAX_COMPLETION_TOKENS,
+      model: policy.selectedModelId,
+      ...(error && typeof error === "object" && "openRouterDiagnostics" in error
+        ? { diagnostics: (error as { openRouterDiagnostics: unknown }).openRouterDiagnostics }
+        : {}),
+    })
     await finishTutorEvent({ env: input.env, eventId, error }).catch(() => undefined)
     throw error
   }
