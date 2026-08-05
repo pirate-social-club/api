@@ -3061,6 +3061,45 @@ describe("community study routes", () => {
         telegramChatId: "424242", telegramMessageId: 704, telegramUserId: "424242",
       })).rejects.toThrow(/response was empty/u)
       expect(emptyAttempts).toHaveLength(2)
+
+      // Provider HTTP failures arrive as plain Errors, so they must be classified
+      // from structured detail rather than parsing the message. A 429 has to be
+      // recorded as rate limited, not as a generic failure.
+      const providerHttpCase = async (status: number, messageId: number) => {
+        await policyClientReenable(ctx, communityId)
+        // Clear the minute window so the internal 5/min limiter cannot pre-empt
+        // the provider failure under test and mask it as a rate limit.
+        await ctx.client.execute({
+          sql: "DELETE FROM telegram_assistant_events WHERE community_id = ?1 AND telegram_message_id <> ?2",
+          args: [communityId, messageId],
+        })
+        globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(requestInput, init)
+          if (request.url.startsWith("https://api.telegram.org/")) {
+            return Response.json({ ok: true, result: { message_id: 800 + status } })
+          }
+          return new Response("{\"error\":{\"message\":\"upstream detail\"}}", { status })
+        }) as typeof fetch
+        await expect(answerPrivateStudyTutorQuestion({
+          bot: tutorBot, env: ctx.env, question: "Why is it that?",
+          telegramChatId: "424242", telegramMessageId: messageId, telegramUserId: "424242",
+        })).rejects.toThrow()
+        const row = await ctx.client.execute({
+          sql: "SELECT status, error_message FROM telegram_assistant_events WHERE telegram_message_id = ?1",
+          args: [messageId],
+        })
+        return row.rows[0] as unknown as { error_message: string | null; status: string }
+      }
+
+      const rateLimitedRow = await providerHttpCase(429, 705)
+      expect(rateLimitedRow.status).toBe("rate_limited")
+      expect(rateLimitedRow.error_message).toBe("rate_limited")
+
+      const serverErrorRow = await providerHttpCase(500, 706)
+      expect(serverErrorRow.status).toBe("failed")
+      expect(serverErrorRow.error_message).toBe("http_error")
+      // The durable row must never retain provider-authored text.
+      expect(serverErrorRow.error_message).not.toContain("upstream detail")
     } finally {
       globalThis.fetch = originalFetch
     }

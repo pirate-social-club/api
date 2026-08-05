@@ -88,6 +88,24 @@ function responseBodyPreview(value: string): string {
   return trimmed ? trimmed.slice(0, 500) : "<empty>"
 }
 
+export type OpenRouterHttpFailure = {
+  category: "client_error" | "rate_limited" | "server_error"
+  status: number
+}
+
+function openRouterHttpDetails(status: number): OpenRouterHttpFailure {
+  return {
+    category: status === 429 ? "rate_limited" : status >= 500 ? "server_error" : "client_error",
+    status,
+  }
+}
+
+export function isOpenRouterHttpFailure(error: unknown): error is { openRouterHttp: OpenRouterHttpFailure } {
+  if (!error || typeof error !== "object" || !("openRouterHttp" in error)) return false
+  const detail = (error as { openRouterHttp: unknown }).openRouterHttp
+  return Boolean(detail) && typeof detail === "object" && typeof (detail as { status?: unknown }).status === "number"
+}
+
 export type OpenRouterDiagnostics = {
   completionTokens: number | null
   finishReason: string | null
@@ -171,7 +189,13 @@ async function requestOpenRouterChatCompletionOnce(input: {
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "")
       const suffix = errorBody.trim() ? `: ${errorBody.trim().slice(0, 500)}` : ""
-      throw new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}${suffix}`)
+      // The message keeps the body for callers that debug against it, but the
+      // status and category are attached structurally so privacy-sensitive
+      // callers can classify a failure without touching provider-authored text.
+      throw Object.assign(
+        new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}${suffix}`),
+        { openRouterHttp: openRouterHttpDetails(response.status) },
+      )
     }
 
     const responseText = await response.text().catch(() => "")

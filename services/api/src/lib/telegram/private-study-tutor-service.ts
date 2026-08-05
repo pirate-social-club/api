@@ -3,6 +3,7 @@ import { executeFirst } from "../db-helpers"
 import { HttpError, rateLimited } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import {
+  isOpenRouterHttpFailure,
   openRouterDiagnosticsFrom,
   requestOpenRouterChatCompletion,
   type OpenRouterDiagnostics,
@@ -246,7 +247,7 @@ async function finishTutorEvent(input: {
   error?: unknown
   providerMessageId?: string | null
 }): Promise<void> {
-  const rateLimitedFailure = input.error instanceof HttpError && input.error.status === 429
+  const rateLimitedFailure = input.error ? privateStudyFailureKind(input.error) === "rate_limited" : false
   await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_assistant_events
@@ -312,8 +313,18 @@ function isOpenRouterDiagnosticsCarrier(error: unknown): error is { openRouterDi
  */
 function privateStudyFailureKind(error: unknown): "empty_response" | "rate_limited" | "http_error" | "unknown" {
   if (isOpenRouterDiagnosticsCarrier(error)) return "empty_response"
+  // Provider HTTP failures are plain Errors, not our HttpError, so they must be
+  // classified from the structured detail the client attaches.
+  if (isOpenRouterHttpFailure(error)) {
+    return error.openRouterHttp.category === "rate_limited" ? "rate_limited" : "http_error"
+  }
   if (error instanceof HttpError) return error.status === 429 ? "rate_limited" : "http_error"
   return "unknown"
+}
+
+function privateStudyFailureStatus(error: unknown): number | null {
+  if (isOpenRouterHttpFailure(error)) return error.openRouterHttp.status
+  return error instanceof HttpError ? error.status : null
 }
 
 export async function answerPrivateStudyTutorQuestion(input: {
@@ -472,7 +483,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
       communityId: session.communityId,
       errorName: error instanceof Error ? error.name : "unknown",
       failureKind: privateStudyFailureKind(error),
-      httpStatus: error instanceof HttpError ? error.status : null,
+      httpStatus: privateStudyFailureStatus(error),
       maxCompletionTokens: PRIVATE_STUDY_MAX_COMPLETION_TOKENS,
       model: policy.selectedModelId,
       ...(isOpenRouterDiagnosticsCarrier(error) ? error.openRouterDiagnostics : {}),
