@@ -294,7 +294,7 @@ describe("rewards routes", () => {
     expect(Number(rows.rows[0]?.count)).toBe(0)
   })
 
-  test("guards campaign creation, quote issuance, and funding acceptance against the cashout provider", async () => {
+  test("admits every supported pool provider independently of the legacy cashout provider", async () => {
     const ctx = await createRouteTestContext({
       ...campaignEnv(),
       REWARDS_IDENTITY_PROVIDER: "self",
@@ -304,57 +304,33 @@ describe("rewards routes", () => {
     await addWallet(ctx, session.userId, new Date().toISOString())
     await seedCampaignSong(ctx, session.userId)
 
-    const incompatibleCreate = await app.request("http://pirate.test/reward_campaigns", {
-      method: "POST",
-      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody({
-        idempotency_key: "provider-incompatible-create",
-        reward_identity_provider: "very",
-      })),
-    }, ctx.env)
-    expect(incompatibleCreate.status).toBe(409)
-
     const created = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody({ idempotency_key: "provider-compatible-create" })),
+      body: JSON.stringify(campaignBody({
+        idempotency_key: "provider-independent-create",
+        reward_identity_provider: "very",
+      })),
     }, ctx.env)
     expect(created.status).toBe(201)
     const campaign = await json(created) as { id: string }
 
     ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
-    const incompatibleQuote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
-      method: "POST",
-      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "provider-compatible-quote" }),
-    }, ctx.env)
-    expect(incompatibleQuote.status).toBe(409)
-
-    ctx.env.REWARDS_IDENTITY_PROVIDER = "self"
     const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "provider-compatible-quote" }),
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "provider-independent-quote" }),
     }, ctx.env)
     expect(quoted.status).toBe(201)
     const quote = await json(quoted) as { id: string }
     const txHash = `0x${"e".repeat(64)}`
     const confirmUrl = `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`
 
-    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
-    const incompatibleConfirm = await app.request(confirmUrl, {
-      method: "POST",
-      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify({ tx_hash: txHash }),
-    }, ctx.env)
-    expect(incompatibleConfirm.status).toBe(409)
-
     setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
       kind: "verified",
       senderAddress: expected.senderAddress,
       txRef: fundingTxRef,
     }))
-    ctx.env.REWARDS_IDENTITY_PROVIDER = "self"
     const confirmed = await app.request(confirmUrl, {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
@@ -362,7 +338,6 @@ describe("rewards routes", () => {
     }, ctx.env)
     expect(confirmed.status).toBe(200)
 
-    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
     const grandfatheredReplay = await app.request(confirmUrl, {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
@@ -1528,7 +1503,7 @@ describe("rewards routes", () => {
       eligible: false,
       min_cents: 100,
       verification_state: "unverified",
-      verification_provider: "self",
+      verification_provider: null,
     })
 
     await addNullifier(ctx, session.userId, now)
@@ -1586,7 +1561,7 @@ describe("rewards routes", () => {
       { headers: authHeaders(session.accessToken) },
       ctx.env,
     )
-    expect((await json(wrongIdentityNamespace) as { cashout: { verification_state: string } }).cashout.verification_state).toBe("unverified")
+    expect((await json(wrongIdentityNamespace) as { cashout: { verification_state: string } }).cashout.verification_state).toBe("verified")
   })
 
   test("GET /me/rewards requires authentication", async () => {
@@ -1707,12 +1682,12 @@ describe("rewards routes", () => {
     expect(settleCount).toBe(0)
   })
 
-  test("accepts ZKPassport as a configured reward identity namespace", async () => {
+  test("accepts ZKPassport and Very cashouts while the legacy environment provider is Self", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
-      REWARDS_IDENTITY_PROVIDER: "zkpassport",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -1765,6 +1740,45 @@ describe("rewards routes", () => {
     )
     expect(response.status).toBe(202)
     expect(settleCount).toBe(1)
+
+    const verySession = await exchangeJwt(ctx.env, "reward-very-namespace-user")
+    await addWallet(ctx, verySession.userId, now, "0x2000000000000000000000000000000000000002")
+    await addRewardEvent(ctx, verySession.userId, 150, now)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash, status,
+          first_seen_at, created_at, updated_at
+        ) VALUES (
+          'idn_rewards_very', ?1, 'very', 'palm-nullifier',
+          'reward-very-nullifier', 'active', ?2, ?2, ?2
+        )
+      `,
+      args: [verySession.userId, now],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
+      args: [verySession.userId, JSON.stringify({
+        unique_human: {
+          state: "verified",
+          provider: "very",
+          proof_type: "unique_human",
+          mechanism: "palm-nullifier",
+          verified_at: Math.floor(Date.parse(now) / 1000),
+        },
+      })],
+    })
+    const veryResponse = await app.request(
+      "http://pirate.test/me/rewards/cashouts",
+      {
+        method: "POST",
+        headers: { ...authHeaders(verySession.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100, idempotency_key: "reward-cashout-very" }),
+      },
+      ctx.env,
+    )
+    expect(veryResponse.status).toBe(202)
+    expect(settleCount).toBe(2)
   })
 
   test("POST /me/rewards/cashouts gates on nullifier, balance, and idempotently confirms a payout", async () => {

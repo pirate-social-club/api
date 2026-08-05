@@ -7,7 +7,9 @@ import {
   assertRewardsCampaignAndSettlementChainsMatch,
   resolveRewardsSettlementChainId,
 } from "../communities/bookings/booking-chain-config"
-import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
+import {
+  resolveActiveSupportedRewardIdentity,
+} from "../verification/unique-human-eligibility"
 import type {
   RewardEventKind,
   RewardEventSummary,
@@ -119,7 +121,6 @@ export async function getRewardsSummaryForUser(input: {
   const activityDate = input.activityDate ?? todayUtc()
   const recentLimit = Math.max(1, Math.min(50, Math.trunc(input.recentLimit ?? 10)))
   const minCashoutCents = parseConfiguredCents(input.env.REWARDS_MIN_CASHOUT_CENTS, DEFAULT_REWARDS_MIN_CASHOUT_CENTS)
-  const verificationProvider = resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)
   assertRewardsCampaignAndSettlementChainsMatch(input.env)
   const chainId = resolveRewardsSettlementChainId(input.env)
   if (!rewardReadsEnabled(input.env)) {
@@ -138,7 +139,7 @@ export async function getRewardsSummaryForUser(input: {
         eligible: false,
         min_cents: minCashoutCents,
         verification_state: "unverified",
-        verification_provider: verificationProvider,
+        verification_provider: null,
       },
       latest_in_flight_cashout: null,
     }
@@ -218,7 +219,7 @@ export async function getRewardsSummaryForUser(input: {
       `,
       args: [input.userId],
     }),
-    hasActiveUniqueHumanNullifier(client, input.userId, verificationProvider),
+    resolveActiveSupportedRewardIdentity(client, input.userId, Date.parse(input.now ?? new Date().toISOString())),
   ])
 
   const creditCents = numberOrNull(rowValue(creditRow, "credit_cents")) ?? 0
@@ -228,7 +229,7 @@ export async function getRewardsSummaryForUser(input: {
   const pendingCount = numberOrNull(rowValue(pendingRow, "pending_count")) ?? 0
   const pendingConditionalCents = numberOrNull(rowValue(pendingRow, "conditional_cents")) ?? 0
   const pendingExpiresAt = rowValue(pendingRow, "earliest_expires_at")
-  const verificationState = resolveVerificationState(hasNullifier)
+  const verificationState = resolveVerificationState(Boolean(hasNullifier))
 
   return {
     chain_id: chainId,
@@ -245,7 +246,7 @@ export async function getRewardsSummaryForUser(input: {
       eligible: balanceCents >= minCashoutCents && verificationState === "verified",
       min_cents: minCashoutCents,
       verification_state: verificationState,
-      verification_provider: verificationProvider,
+      verification_provider: hasNullifier?.provider ?? null,
     },
     latest_in_flight_cashout: latestInFlightRow ? serializeRewardPayout(latestInFlightRow as QueryResultRow, chainId) : null,
   }
