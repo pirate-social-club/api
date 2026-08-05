@@ -530,22 +530,30 @@ membership_mode: "request",
     )
     expect(attachedNamespaces.status).toBe(200)
     expect((await json(attachedNamespaces) as { namespaces: unknown[] }).namespaces).toEqual([
-      {
+      expect.objectContaining({
         namespace_verification: primaryVerification,
         namespace_role: "primary",
         family: "hns",
         root_label: "pokemon",
         route_slug: "pokemon",
         verification_status: "verified",
-      },
-      {
+        delegation: expect.objectContaining({
+          delegation_security: "unknown",
+          pirate_web_routing_allowed: false,
+        }),
+      }),
+      expect.objectContaining({
         namespace_verification: mirrorVerification,
         namespace_role: "mirror",
         family: "hns",
         root_label: "charizard",
         route_slug: "charizard",
         verification_status: "verified",
-      },
+        delegation: expect.objectContaining({
+          delegation_security: "unknown",
+          pirate_web_routing_allowed: false,
+        }),
+      }),
     ])
 
     const communityClient = createClient({

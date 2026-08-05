@@ -551,6 +551,64 @@ async function recordDeferredAttempt(input: {
   }))
 }
 
+async function reconcileLegacyRoutingClaims(input: {
+  client: Client
+  candidate: RevalidationCandidate
+  inspection: HnsInspectResult | null
+  now: string
+}): Promise<void> {
+  const authorityVerified = input.inspection?.pirate_dns_authority_verified === true ? 1 : 0
+  await input.client.batch([
+    {
+      sql: `
+        UPDATE namespace_verifications
+        SET routing_enabled = ?2,
+            pirate_dns_authority_verified = ?2,
+            pirate_web_routing_allowed = 0,
+            pirate_subdomain_issuance_allowed = 0,
+            updated_at = ?3
+        WHERE namespace_verification_id = ?1
+          AND status = 'verified'
+      `,
+      args: [input.candidate.namespaceVerificationId, authorityVerified, input.now],
+    },
+    {
+      sql: `
+        UPDATE namespace_verification_assertions
+        SET assertion_value = CASE
+              WHEN assertion_name IN ('routing_enabled', 'pirate_dns_authority_verified') THEN ?2
+              ELSE assertion_value
+            END,
+            status = CASE
+              WHEN assertion_name IN ('routing_enabled', 'pirate_dns_authority_verified') AND ?2 = 1
+                THEN 'accepted'
+              ELSE 'stale'
+            END,
+            last_revalidated_at = ?3,
+            updated_at = ?3
+        WHERE namespace_verification_id = ?1
+          AND assertion_name IN ('routing_enabled', 'pirate_dns_authority_verified')
+      `,
+      args: [input.candidate.namespaceVerificationId, authorityVerified, input.now],
+    },
+    {
+      sql: `
+        UPDATE namespace_verification_capabilities
+        SET capability_value = 0,
+            status = 'stale',
+            last_revalidated_at = ?2,
+            updated_at = ?2
+        WHERE namespace_verification_id = ?1
+          AND capability_name IN (
+            'pirate_web_routing_allowed',
+            'pirate_subdomain_issuance_allowed'
+          )
+      `,
+      args: [input.candidate.namespaceVerificationId, input.now],
+    },
+  ], "write")
+}
+
 export async function sweepHnsNamespaceRevalidations(input: {
   client: Client
   env: Env
@@ -634,6 +692,7 @@ export async function sweepHnsNamespaceRevalidations(input: {
       const leaseExpired = Date.parse(candidate.expiresAt) <= now.getTime()
 
       if (trustedChainObservation && inspection.expiry_root_exists === false) {
+        await reconcileLegacyRoutingClaims({ client: input.client, candidate, inspection, now: nowIso })
         await staleCandidate({
           client: input.client,
           candidate,
@@ -649,6 +708,7 @@ export async function sweepHnsNamespaceRevalidations(input: {
       // Expiry-only evidence can never revive it: the current root may now
       // belong to someone else even when hsd reports a healthy renewal horizon.
       if (leaseExpired) {
+        await reconcileLegacyRoutingClaims({ client: input.client, candidate, inspection, now: nowIso })
         await staleCandidate({
           client: input.client,
           candidate,
@@ -675,6 +735,15 @@ export async function sweepHnsNamespaceRevalidations(input: {
           now: nowIso,
           nextExpiry,
         })
+        // refreshCandidate still maintains the legacy capability snapshot for
+        // older consumers. Keep authenticated routing/issuance fail-closed;
+        // the delegation read model is now their sole positive authority.
+        await reconcileLegacyRoutingClaims({
+          client: input.client,
+          candidate,
+          inspection,
+          now: nowIso,
+        })
         summary.refreshed += 1
         continue
       }
@@ -684,6 +753,7 @@ export async function sweepHnsNamespaceRevalidations(input: {
         && inspection.expiry_root_exists === true
         && inspection.expiry_horizon_sufficient === false
       ) {
+        await reconcileLegacyRoutingClaims({ client: input.client, candidate, inspection, now: nowIso })
         await downgradeCandidate({ client: input.client, candidate, inspection, now: nowIso })
         summary.downgraded += 1
         if (leaseNeedsAttention(candidate, now, config.intervalSeconds)) {

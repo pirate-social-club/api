@@ -24,6 +24,31 @@ export function isHnsRootObserverEnabled(env: Env): boolean {
   return env.HNS_ROOT_OBSERVER_ENABLED?.trim() === "true"
 }
 
+async function seedVerifiedHnsRoots(client: Client, now: string): Promise<void> {
+  // Attachment verification predates the delegation observer. Seed its queue
+  // idempotently so existing and newly attached roots do not remain `unknown`
+  // forever. Routing stays dark: canonical eligibility retains its default and
+  // must still be activated per root after healthy observations.
+  await client.execute({
+    sql: `
+      INSERT INTO hns_root_delegation_state (
+        normalized_root_label, rollover_state, state_changed_at, created_at, updated_at
+      )
+      SELECT DISTINCT nv.normalized_root_label, 'none', ?1, ?1, ?1
+      FROM namespace_verifications nv
+      JOIN community_namespace_bindings cnb
+        ON cnb.namespace_verification_id = nv.namespace_verification_id
+      WHERE nv.family = 'hns'
+        AND nv.status = 'verified'
+        AND nv.club_attach_allowed = 1
+        AND nv.expires_at > ?1
+        AND cnb.status = 'active'
+      ON CONFLICT(normalized_root_label) DO NOTHING
+    `,
+    args: [now],
+  })
+}
+
 function text(row: QueryResultRow | undefined, key: string): string | null {
   const value = row?.[key]
   return typeof value === "string" && value.trim() ? value : null
@@ -377,6 +402,7 @@ export async function observeDueHnsRoots(
   now = new Date(),
 ): Promise<{ attempted: number; succeeded: number; failed: number }> {
   if (!isHnsRootObserverEnabled(env)) return { attempted: 0, succeeded: 0, failed: 0 }
+  await seedVerifiedHnsRoots(client, now.toISOString())
   const intervalSeconds = positiveInt(
     env.HNS_ROOT_OBSERVER_INTERVAL_SECONDS,
     DEFAULT_INTERVAL_SECONDS,

@@ -166,6 +166,7 @@ export function registerCommunityCreateRoutes(communities: Hono<AuthenticatedEnv
         root_label: row.normalizedRootLabel,
         route_slug: row.family === "spaces" ? `@${row.normalizedRootLabel}` : row.normalizedRootLabel,
         verification_status: row.verificationStatus,
+        delegation: row.delegation,
       })),
     }, 200)
   })
