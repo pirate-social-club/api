@@ -24,8 +24,11 @@ waking a container.
 
 ## Configuration
 
-The Docker image installs native `ffmpeg` and reuses the API service dependency
-graph:
+The Docker image installs native `ffmpeg`. Its production dependencies come
+from `services/song-preview-runtime`, not from the full API development
+manifest. Keep that runtime manifest limited to packages imported by
+`song-preview-service.ts` and audit it independently in CI. The shared local
+package gets its own frozen production install inside the image.
 
 ```jsonc
 {
