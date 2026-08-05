@@ -106,12 +106,14 @@ import {
 } from "./telegram-assistant-workflow"
 import { completeTelegramChannelSetupByRequest } from "../lib/telegram/channel-destination-service"
 import { getWaitUntil } from "./execution-context"
+import { getRewardsSummaryForUser } from "../lib/rewards/reward-read-service"
 
 const telegram = new Hono<{ Bindings: Env }>()
 
 const TELEGRAM_START_MENU_STUDY = "menu:study"
 const TELEGRAM_START_MENU_ASSISTANT = "menu:assistant"
 const TELEGRAM_START_MENU_PREFERENCES = "menu:preferences"
+const TELEGRAM_START_MENU_REWARDS = "menu:rewards"
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
@@ -296,6 +298,22 @@ function telegramCommunityParticipationUrl(env: Env, communityId: string): strin
   return origin ? `${origin}/tg/c/${encodeURIComponent(publicCommunityId(communityId))}` : null
 }
 
+function telegramRewardsUrl(env: Env): string | null {
+  const origin = telegramWebPublicOrigin(env)
+  return origin ? `${origin}/wallet` : null
+}
+
+function telegramRewardDeadline(locale: RuntimeUiLocaleCode, value: number | string | null): string | null {
+  if (value === null || value === "") return null
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return null
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(date)
+}
+
 function telegramCommunityVerificationUrl(env: Env, communityId: string): string | null {
   const origin = telegramWebPublicOrigin(env)
   return origin ? `${origin}/tg/verify/${encodeURIComponent(publicCommunityId(communityId))}` : null
@@ -311,23 +329,21 @@ function telegramMiniAppLauncherMarkup(url: string): unknown {
 }
 
 function telegramCommunityStartMarkup(input: {
-  action?: { text: string; url: string }
   assistantEnabled: boolean
   boardUrl: string
+  copy: ReturnType<typeof getTelegramCopy>
   studyEnabled: boolean
 }): unknown {
   const rows: Array<Array<Record<string, unknown>>> = []
   if (input.studyEnabled) {
-    rows.push([{ text: "📚 Study songs", callback_data: TELEGRAM_START_MENU_STUDY }])
-    rows.push([{ text: "⚙️ Language", callback_data: TELEGRAM_START_MENU_PREFERENCES }])
+    rows.push([{ text: input.copy.menu.study, callback_data: TELEGRAM_START_MENU_STUDY }])
+    rows.push([{ text: input.copy.menu.preferences, callback_data: TELEGRAM_START_MENU_PREFERENCES }])
   }
+  rows.push([{ text: input.copy.menu.rewards, callback_data: TELEGRAM_START_MENU_REWARDS }])
   if (input.assistantEnabled) {
-    rows.push([{ text: "💬 Ask the assistant", callback_data: TELEGRAM_START_MENU_ASSISTANT }])
+    rows.push([{ text: input.copy.menu.assistant, callback_data: TELEGRAM_START_MENU_ASSISTANT }])
   }
-  if (input.action && input.action.url !== input.boardUrl) {
-    rows.push([{ text: input.action.text, web_app: { url: input.action.url } }])
-  }
-  rows.push([{ text: "🌐 Open community", web_app: { url: input.boardUrl } }])
+  rows.push([{ text: input.copy.menu.community, web_app: { url: input.boardUrl } }])
   return {
     inline_keyboard: rows,
   }
@@ -346,7 +362,8 @@ async function handleTelegramStartMenuCallback(input: {
 }): Promise<boolean> {
   if (input.callback.data !== TELEGRAM_START_MENU_STUDY
     && input.callback.data !== TELEGRAM_START_MENU_ASSISTANT
-    && input.callback.data !== TELEGRAM_START_MENU_PREFERENCES) {
+    && input.callback.data !== TELEGRAM_START_MENU_PREFERENCES
+    && input.callback.data !== TELEGRAM_START_MENU_REWARDS) {
     return false
   }
   const callbackQueryId = telegramIdentifier(input.callback.id)
@@ -359,6 +376,45 @@ async function handleTelegramStartMenuCallback(input: {
       callback_query_id: callbackQueryId,
       text: "Send your question as a message in this chat.",
     }).catch(() => false)
+    return true
+  }
+
+  if (input.callback.data === TELEGRAM_START_MENU_REWARDS) {
+    const account = await resolveTelegramAccount({ env: input.env, telegramUserId })
+    const profile = account
+      ? await getProfileRepository(input.env).getProfileByUserId(account.userId).catch(() => null)
+      : null
+    const locale = resolveTelegramStartLocale({
+      profilePreferredLocale: profile?.preferred_locale,
+      telegramLanguageCode: input.callback.from?.language_code ?? null,
+    })
+    const copy = getTelegramCopy(locale)
+    const rewardsUrl = telegramRewardsUrl(input.env)
+    const summary = account
+      ? await getRewardsSummaryForUser({ env: input.env, userId: account.userId }).catch(() => null)
+      : null
+    const pendingCents = summary?.pending_verification.conditional_cents ?? 0
+    const balanceCents = summary?.balance_cents ?? 0
+    const money = (cents: number) => `$${(cents / 100).toFixed(2)}`
+    const text = !summary || (balanceCents <= 0 && pendingCents <= 0)
+      ? copy.rewards.empty
+      : pendingCents > 0
+        ? copy.rewards.pending({
+            balance: money(balanceCents),
+            expiresAt: telegramRewardDeadline(locale, summary.pending_verification.earliest_expires_at),
+            pending: money(pendingCents),
+          })
+        : copy.rewards.balance({ balance: money(balanceCents) })
+    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => false)
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: chatId,
+      text,
+      ...(rewardsUrl && (balanceCents > 0 || pendingCents > 0) ? {
+        reply_markup: {
+          inline_keyboard: [[{ text: copy.rewards.claim, web_app: { url: rewardsUrl } }]],
+        },
+      } : {}),
+    })
     return true
   }
 
@@ -619,7 +675,8 @@ async function handleCommunityStartMessage(env: Env, input: {
 
   const boardUrl = telegramCommunityParticipationUrl(env, community.community_id)
   const verifyUrl = telegramCommunityVerificationUrl(env, community.community_id)
-  if (!boardUrl || !verifyUrl) {
+  const rewardsUrl = telegramRewardsUrl(env)
+  if (!boardUrl || !verifyUrl || !rewardsUrl) {
     await safeSendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: "Pirate links are not configured for this bot.",
@@ -662,12 +719,12 @@ async function handleCommunityStartMessage(env: Env, input: {
   })
   await safeSendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: presentation.messageText,
+    text: input.showStartMenu ? copy.start.overview({ community: community.display_name }) : presentation.messageText,
     reply_markup: input.showStartMenu
       ? telegramCommunityStartMarkup({
-          action: { text: presentation.actionText, url: presentation.actionUrl },
           assistantEnabled: input.assistantEnabled === true,
           boardUrl,
+          copy,
           studyEnabled: isCommunityBot(input.bot)
             && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
         })

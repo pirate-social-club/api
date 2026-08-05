@@ -20,5 +20,7 @@ describe("telegram copy catalog", () => {
     expect(getTelegramCopy("ka").buttons.verifyToJoin).toBe("გაიარეთ ვერიფიკაცია")
     expect(getTelegramCopy("ka").start.linkRequired({ community: "🇬🇪" }))
       .toContain("დააკავშირეთ თქვენი Pirate ანგარიში")
+    expect(getTelegramCopy("ru").start.overview({ community: "Music" }))
+      .toContain("Бесплатно учите тексты песен")
   })
 })

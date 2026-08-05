@@ -3,7 +3,7 @@ import { nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { rowValue } from "../sql-row"
 
-export const STUDY_HELPER_LANGUAGES = ["en", "zh", "ar", "ka"] as const
+export const STUDY_HELPER_LANGUAGES = ["en", "zh", "ar", "ka", "ru"] as const
 export const STUDY_DELIVERY_MODES = ["audio", "text", "both"] as const
 
 export type StudyHelperLanguage = typeof STUDY_HELPER_LANGUAGES[number]

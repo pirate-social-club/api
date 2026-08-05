@@ -871,6 +871,29 @@ describe("post study service", () => {
     })
   })
 
+  test("allows a learner to read their own streak for a public song without membership", async () => {
+    await seedSongPost()
+    await exec("DELETE FROM community_memberships WHERE user_id = ?1", [LEARNER_ID])
+
+    const summary = await getPostStreakSummary({
+      client: client!,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+      userId: LEARNER_ID,
+      userRepository: {} as never,
+    })
+    expect(summary).not.toBeNull()
+
+    await exec("UPDATE posts SET access_mode = 'locked' WHERE post_id = ?1", [POST_ID])
+    expect(await getPostStreakSummary({
+      client: client!,
+      postId: POST_ID,
+      profileRepository: profileRepository as never,
+      userId: LEARNER_ID,
+      userRepository: {} as never,
+    })).toBeNull()
+  })
+
   test("revalidates stale local ElevenLabs study capability from the control plane", async () => {
     await exec(`
       UPDATE communities

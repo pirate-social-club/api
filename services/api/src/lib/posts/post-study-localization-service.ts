@@ -47,6 +47,7 @@ const SUPPORTED_STUDY_TARGET_LANGUAGES = new Set([
   "ja",
   "ko",
   "pt",
+  "ru",
   "zh",
 ])
 

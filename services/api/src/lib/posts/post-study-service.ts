@@ -1457,12 +1457,14 @@ export async function getPostStreakSummary(input: {
   if (!input.userId) return null
   const post = await getStudyPostById(input.client, input.postId)
   if (!post || post.post_type !== "song" || post.status !== "published") return null
-  try {
-    await requireMemberAccess(input.client, post.community_id, input.userId)
-  } catch (error) {
-    if (isMissingStreakTableError(error)) return null
-    if (error instanceof HttpError && error.status === 404) return null
-    throw error
+  if (post.access_mode === "locked") {
+    try {
+      await requireMemberAccess(input.client, post.community_id, input.userId)
+    } catch (error) {
+      if (isMissingStreakTableError(error)) return null
+      if (error instanceof HttpError && error.status === 404) return null
+      throw error
+    }
   }
   await requireAgeGateAccess({
     postAgeGatePolicy: post.age_gate_policy,

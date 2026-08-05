@@ -1071,14 +1071,15 @@ describe("community Telegram routes", () => {
       reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
       text?: string
     }
-    expect(sendBody.text).toBe("Welcome to Community Webhook Club. Link your Pirate account to verify and join.")
+    expect(sendBody.text).toContain("Study song lyrics for free")
+    expect(sendBody.text).not.toContain("verify")
     expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual(expect.objectContaining({
       callback_data: "menu:assistant",
       text: "💬 Ask the assistant",
     }))
   })
 
-  test("community bot bare /start falls back to join presentation when preview is disabled", async () => {
+  test("community bot bare /start keeps the product menu when preview is disabled", async () => {
     const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
     const telegramRequests = installTelegramApiMock(async (request) => {
       const method = request.url.split("/").at(-1)
@@ -1155,9 +1156,10 @@ describe("community Telegram routes", () => {
     expect(sendBody.text).toContain("Preview Disabled Club")
     expect(sendBody.text).not.toBe("Send a question to talk to this community assistant.")
     expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual({
-      text: "Verify to join",
-      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+      text: "🏆 Rewards",
+      callback_data: "menu:rewards",
     })
+    expect(sendBody.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Verify to join")).toBe(false)
   })
 
   test("public bot username endpoint exposes only the active bot username", async () => {
@@ -1407,7 +1409,7 @@ describe("community Telegram routes", () => {
     const returningRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(returningRequests).toHaveLength(2)
     const returningBody = await returningRequests[1]!.json() as { text?: string }
-    expect(returningBody.text).toBe("欢迎来到 Community Auto Join Club 🎵\n\n你想做什么？")
+    expect(returningBody.text).toContain("免费学习歌词")
   })
 
   test("community bot start rejects a join payload for another community", async () => {
