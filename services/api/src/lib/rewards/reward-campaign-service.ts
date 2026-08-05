@@ -40,7 +40,6 @@ import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { isLearnerVisibleRewardCampaign, learnerVisibleRewardCampaignSql } from "./reward-campaign-visibility"
-import { assertRewardProviderCompatibleWithCashout } from "./reward-provider-compatibility"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -440,23 +439,14 @@ async function selectCampaign(exec: Pick<Client | Transaction, "execute">, campa
   }))
 }
 
-async function requireCashoutCompatibleCampaign(
-  env: Env,
+async function requireCampaign(
   exec: Pick<Client | Transaction, "execute">,
   campaignId: string,
   lock = false,
 ): Promise<CampaignRow> {
   const campaign = await selectCampaign(exec, campaignId, lock)
   if (!campaign) throw notFoundError("Reward campaign not found")
-  assertRewardProviderCompatibleWithCashout({
-    env,
-    campaignProvider: requiredString(campaign, "reward_identity_provider"),
-  })
   return campaign
-}
-
-function fundingEffectNeedsCompatibilityCheck(row: FundingRow): boolean {
-  return ["quoted", "confirming"].includes(requiredString(row, "status"))
 }
 
 async function selectFunding(exec: Pick<Client | Transaction, "execute">, fundingId: string, lock = false): Promise<FundingRow | null> {
@@ -563,10 +553,6 @@ export async function createRewardCampaign(input: {
   const config = resolveRewardCampaignConfig(input.env)
   requireCampaignsEnabled(config)
   const body = validateCreateInput(input.body, config)
-  assertRewardProviderCompatibleWithCashout({
-    env: input.env,
-    campaignProvider: body.reward_identity_provider,
-  })
   if (config.postAllowlist && !config.postAllowlist.has(body.post)) {
     throw eligibilityFailed("Reward campaigns are not enabled for this post")
   }
@@ -805,12 +791,7 @@ export async function createRewardCampaignFundingQuote(input: {
     args: [input.userId, idempotencyKey],
   }))
   if (existing) {
-    let campaign: CampaignRow | null = null
-    if (fundingEffectNeedsCompatibilityCheck(existing)) {
-      campaign = await requireCashoutCompatibleCampaign(input.env, input.client, input.campaignId)
-    } else if (assertedProvider !== null) {
-      campaign = await selectCampaign(input.client, input.campaignId)
-    }
+    const campaign = assertedProvider !== null ? await selectCampaign(input.client, input.campaignId) : null
     if (assertedProvider !== null) {
       if (!campaign) throw notFoundError("Reward campaign not found")
       if (assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
@@ -836,12 +817,7 @@ export async function createRewardCampaignFundingQuote(input: {
       args: [input.userId, idempotencyKey],
     }))
     if (replay) {
-      let campaign: CampaignRow | null = null
-      if (fundingEffectNeedsCompatibilityCheck(replay)) {
-        campaign = await requireCashoutCompatibleCampaign(input.env, tx, input.campaignId, rowLocks)
-      } else if (assertedProvider !== null) {
-        campaign = await selectCampaign(tx, input.campaignId, rowLocks)
-      }
+      const campaign = assertedProvider !== null ? await selectCampaign(tx, input.campaignId, rowLocks) : null
       if (assertedProvider !== null) {
         if (!campaign) throw notFoundError("Reward campaign not found")
         if (assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
@@ -855,7 +831,7 @@ export async function createRewardCampaignFundingQuote(input: {
       return fundingResource(replay)
     }
 
-    const campaign = await requireCashoutCompatibleCampaign(input.env, tx, input.campaignId, rowLocks)
+    const campaign = await requireCampaign(tx, input.campaignId, rowLocks)
     if (assertedProvider !== null && assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
       throw conflictError("Funding provider assertion does not match the permanent song pool")
     }
@@ -1103,10 +1079,6 @@ export async function confirmRewardCampaignFunding(input: {
     if (status === "refunded") {
       throw codedConflictError(FUNDING_QUOTE_ALREADY_CLAIMED, "Funding quote was already refunded")
     }
-    assertRewardProviderCompatibleWithCashout({
-      env: input.env,
-      campaignProvider: requiredString(campaign, "reward_identity_provider"),
-    })
     if (existingTx && existingTx !== txHash) {
       throw codedConflictError(
         FUNDING_TRANSACTION_MISMATCH,

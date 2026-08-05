@@ -22,10 +22,6 @@ import { recoverRewardCampaignIncident } from "./reward-campaign-recovery"
 import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
 import { REWARD_SONG_POOL_REGISTER_SQL } from "./reward-campaign-service"
-import {
-  assertOpenRewardCampaignProvidersCompatible,
-  REWARD_IDENTITY_PROVIDER_INCOMPATIBLE,
-} from "./reward-provider-compatibility"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -611,15 +607,6 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       setControlPlanePostgresPoolFactoryForTests(null)
     }
   }
-
-  test("fails the open-campaign invariant after a cashout provider environment flip", async () => {
-    await withProductionPostgresClient(async (client) => {
-      await expect(assertOpenRewardCampaignProvidersCompatible({
-        env: PG_ENV,
-        client,
-      })).rejects.toThrow(REWARD_IDENTITY_PROVIDER_INCOMPATIBLE)
-    })
-  })
 
   async function removeCampaignTestPost(postId: string): Promise<void> {
     const db = connect(TEST_DB, 1)

@@ -12,7 +12,7 @@ import {
   initializePrimaryWalletIfNeeded,
   reconcileWalletAttachments,
 } from "../auth/auth-db-user-queries"
-import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
+import { resolveActiveSupportedRewardIdentity } from "../verification/unique-human-eligibility"
 import {
   operatorSigningCoordinatorName,
   type OperatorSettleRequest,
@@ -482,7 +482,7 @@ async function reserveCashoutEffect(input: {
       return { effect: submitted, availableBalanceCents: await currentBalanceCents(tx, input.userId) }
     }
 
-    if (!(await hasActiveUniqueHumanNullifier(tx, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)))) {
+    if (!(await resolveActiveSupportedRewardIdentity(tx, input.userId, Date.parse(input.nowUtc)))) {
       throw eligibilityFailed("Verify you are a unique human before cashing out rewards", {
         verification_state: "unverified",
       })
