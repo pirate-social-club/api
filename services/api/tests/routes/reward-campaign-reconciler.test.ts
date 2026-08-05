@@ -212,7 +212,7 @@ describe("reward campaign reconciler", () => {
         status: "pending_verification",
         outcome_reason: null,
       }],
-      cashout: { eligible: false, verification_state: "unverified", verification_provider: "self" },
+      cashout: { eligible: false, verification_state: "unverified", verification_provider: null },
     })
 
     await ctx.client.execute({
@@ -625,7 +625,7 @@ describe("reward campaign reconciler", () => {
         cashout: {
           eligible: false,
           verification_state: "unverified",
-          verification_provider: "self",
+          verification_provider: null,
         },
       })
       let checkpoint = await ctx.client.execute("SELECT last_shard_sequence FROM reward_qualification_checkpoints")
