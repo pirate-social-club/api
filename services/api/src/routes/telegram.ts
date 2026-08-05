@@ -51,7 +51,7 @@ import {
   verifyTelegramMiniAppInitData,
 } from "../lib/telegram/mini-app-auth"
 import { trackApiEvent } from "../lib/analytics/track"
-import { authError, badRequestError, HttpError, telegramStudyUnavailable } from "../lib/errors"
+import { authError, badRequestError, HttpError, notFoundError, telegramStudyUnavailable } from "../lib/errors"
 import { publicCommunityId } from "../lib/public-ids"
 import { getTelegramCopy } from "../lib/telegram/telegram-copy"
 import {
@@ -75,9 +75,15 @@ import {
   type TelegramWebhookMessage,
   type TelegramWebhookUpdate,
 } from "../lib/telegram/webhook-parsing"
-import { handleTelegramStudyVoiceMessage } from "../lib/telegram/study-voice-service"
+import {
+  handleTelegramStudyVoiceMessage,
+  transcribeTelegramStudyQuestionVoice,
+} from "../lib/telegram/study-voice-service"
 import { isTelegramStudyVoiceEnabled } from "../lib/telegram/study-voice-admission"
-import { answerPrivateStudyTutorQuestion } from "../lib/telegram/private-study-tutor-service"
+import {
+  answerPrivateStudyTutorQuestion,
+  getArmedPrivateStudyAskSession,
+} from "../lib/telegram/private-study-tutor-service"
 import {
   continueTelegramChatStudyAfterVoice,
   handleTelegramChatStudyCallback,
@@ -86,7 +92,7 @@ import {
 import { withBackgroundControlPlaneClients } from "../lib/runtime-deps"
 import {
   directAssistantFailureMessage,
-  getTelegramDirectAssistantPolicy,
+  getTelegramCommunityAssistantPolicy,
   maybeSendTelegramAssistantVoiceReply,
   maybeSendTelegramAssistantVoiceReplyForCommunity,
   safeSendTelegramMessage,
@@ -462,34 +468,18 @@ async function handleCommunityBotStartMessage(env: Env, input: {
   const legacyCommunityId = joinCommunityId ? null : parseCommunityStartPayload(startPayload)
   const requestedCommunityId = joinCommunityId ?? legacyCommunityId
   if (!startPayload) {
-    const policy = await getTelegramDirectAssistantPolicy({
+    // Start presentation is independent of the private study tutor toggle, and
+    // always shows the community welcome plus menu. The assistant remains
+    // reachable through its menu button rather than replacing the welcome.
+    const policy = await getTelegramCommunityAssistantPolicy({
       env,
       communityId: input.bot.communityId,
     }).catch(() => null)
-    if (policy?.telegramPreviewEnabled && policy.telegramPreviewDailyCap > 0) {
-      const locale = resolveTelegramStartLocale({
-        telegramLanguageCode: input.telegramLanguageCode,
-      })
-      await safeSendTelegramMessage(input.bot, {
-        chat_id: input.chatId,
-        text: getTelegramCopy(locale).privateAssistant.intro,
-        ...(telegramCommunityParticipationUrl(env, input.bot.communityId)
-          ? {
-              reply_markup: telegramCommunityStartMarkup({
-                assistantEnabled: true,
-                boardUrl: telegramCommunityParticipationUrl(env, input.bot.communityId)!,
-                studyEnabled: isTelegramStudyVoiceEnabled(env, input.bot.communityId),
-              }),
-            }
-          : {}),
-      })
-      return
-    }
     await handleCommunityStartMessage(env, {
       bot: input.bot,
       chatId: input.chatId,
       communityId: input.bot.communityId,
-      assistantEnabled: Boolean(policy),
+      assistantEnabled: Boolean(policy?.enabled),
       showStartMenu: true,
       telegramLanguageCode: input.telegramLanguageCode,
       telegramUserId: input.telegramUserId,
@@ -885,6 +875,70 @@ async function handleChatSharedMessage(env: Env, message: TelegramWebhookMessage
   }
 }
 
+/**
+ * Answers a question asked during an active study session. Returns false only
+ * when the learner has no active exercise, which is the single case where
+ * falling back to the community board assistant is appropriate. While an
+ * exercise is open every outcome is terminal, so a learner asking about the
+ * line in front of them is never answered with a join prompt.
+ */
+async function respondToPrivateStudyTutorQuestion(input: {
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  env: Env
+  question: string | null
+  telegramMessageId: number
+  telegramUserId: string
+}): Promise<boolean> {
+  const { bot, chatId, env } = input
+  const question = input.question?.trim()
+  if (!question) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: "I could not make out that question. Send it as text and I will explain.",
+      reply_parameters: { message_id: input.telegramMessageId },
+    })
+    return true
+  }
+  try {
+    const tutor = await answerPrivateStudyTutorQuestion({
+      bot,
+      env,
+      question,
+      telegramChatId: chatId,
+      telegramMessageId: input.telegramMessageId,
+      telegramUserId: input.telegramUserId,
+    })
+    if (tutor.kind === "no_session") {
+      return false
+    }
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: tutor.kind === "answered"
+        ? telegramText(`${tutor.disclosure}\n\n${tutor.answer}`)
+        : "The study tutor is not available in this community yet. Your exercise is still waiting for your answer.",
+      reply_parameters: { message_id: input.telegramMessageId },
+    })
+    return true
+  } catch (error) {
+    console.warn("[private-study-tutor] prompt failed", {
+      ...telegramRouteErrorLogFields(error),
+      communityId: bot.communityId,
+      telegramChatId: chatId,
+      telegramCommunityBotId: bot.id,
+      telegramUserId: input.telegramUserId,
+    })
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: error instanceof HttpError && error.status === 429
+        ? "The study tutor is rate limited right now. Try again in a minute."
+        : "The study tutor is unavailable right now. Your exercise is still waiting for your answer.",
+      reply_parameters: { message_id: input.telegramMessageId },
+    })
+    return true
+  }
+}
+
 async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMessage, bot: TelegramCommunityBotCredential): Promise<void> {
   const chatId = telegramIdentifier(message.chat?.id)
   const telegramUserId = telegramIdentifier(message.from?.id)
@@ -911,7 +965,7 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   })
   if (!account) {
     const previewPolicy = textPrompt
-      ? await getTelegramDirectAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
+      ? await getTelegramCommunityAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
       : null
     if (
       !textPrompt
@@ -947,7 +1001,7 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   })
   if (!canAccess) {
     const previewPolicy = textPrompt
-      ? await getTelegramDirectAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
+      ? await getTelegramCommunityAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
       : null
     if (
       !textPrompt
@@ -977,10 +1031,15 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   }
 
   try {
-    await getTelegramDirectAssistantPolicy({
+    // The board assistant depends on the community assistant being enabled, not
+    // on the private study tutor toggle.
+    const boardPolicy = await getTelegramCommunityAssistantPolicy({
       env,
       communityId: bot.communityId,
     })
+    if (!boardPolicy.enabled) {
+      throw notFoundError("Community assistant is not enabled")
+    }
     const prompt = textPrompt ?? await transcribeTelegramAssistantVoiceForCommunity({
       env,
       bot,
@@ -1257,16 +1316,49 @@ async function handleTelegramWebhookUpdate(
           return
         }
       }
+      // Ask mode is a one-shot promise that the next message is a question, so
+      // a spoken question must be diverted before it reaches grading. The
+      // pending voice intent is left intact: the exercise still needs an answer.
+      if (message.voice && chatId && telegramUserId && typeof message.message_id === "number") {
+        const askSession = await getArmedPrivateStudyAskSession({ bot, env, telegramUserId })
+        if (askSession) {
+          const spokenQuestion = await transcribeTelegramStudyQuestionVoice({
+            bot,
+            communityId: askSession.communityId,
+            env,
+            message,
+            postId: askSession.postId,
+            userId: askSession.userId,
+          }).catch(() => null)
+          if (await respondToPrivateStudyTutorQuestion({
+            bot,
+            chatId,
+            env,
+            question: spokenQuestion,
+            telegramMessageId: message.message_id,
+            telegramUserId,
+          })) {
+            return
+          }
+        }
+      }
       if (await handleTelegramStudyVoiceMessage({
         bot,
         env,
         message,
-        onChatStudyAttemptComplete: ({ chatId: completionChatId, chatStudySessionId, result, transcript }) =>
+        onChatStudyAttemptComplete: ({
+          chatId: completionChatId,
+          chatStudySessionId,
+          result,
+          telegramMessageId: voiceMessageId,
+          transcript,
+        }) =>
           continueTelegramChatStudyAfterVoice({
             bot,
             chatId: completionChatId,
             chatStudySessionId,
             env,
+            replyToMessageId: voiceMessageId,
             result,
             transcript,
           }),
@@ -1276,36 +1368,15 @@ async function handleTelegramWebhookUpdate(
       }
       const tutorQuestion = typeof message.text === "string" ? message.text.trim() : ""
       if (tutorQuestion && chatId && telegramUserId && typeof message.message_id === "number") {
-        try {
-          const tutor = await answerPrivateStudyTutorQuestion({
-            bot,
-            env,
-            question: tutorQuestion,
-            telegramChatId: chatId,
-            telegramMessageId: message.message_id,
-            telegramUserId,
-          })
-          if (tutor) {
-            await safeSendTelegramMessage(bot, {
-              chat_id: chatId,
-              text: telegramText(`${tutor.disclosure}\n\n${tutor.answer}`),
-            })
-            return
-          }
-        } catch (error) {
-          console.warn("[private-study-tutor] prompt failed", {
-            ...telegramRouteErrorLogFields(error),
-            communityId: bot.communityId,
-            telegramChatId: chatId,
-            telegramCommunityBotId: bot.id,
-            telegramUserId,
-          })
-          await safeSendTelegramMessage(bot, {
-            chat_id: chatId,
-            text: error instanceof HttpError && error.status === 429
-              ? "The study tutor is rate limited right now. Try again in a minute."
-              : "The study tutor is unavailable right now. Your exercise is still waiting for your voice answer.",
-          })
+        const handled = await respondToPrivateStudyTutorQuestion({
+          bot,
+          chatId,
+          env,
+          question: tutorQuestion,
+          telegramMessageId: message.message_id,
+          telegramUserId,
+        })
+        if (handled) {
           return
         }
       }

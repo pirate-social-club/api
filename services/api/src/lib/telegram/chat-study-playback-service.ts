@@ -31,6 +31,29 @@ export function telegramStudyPlaybackButton(sessionId: string, language: StudyHe
   }
 }
 
+const ASK_TUTOR_CALLBACK_PREFIX = "study-ask"
+
+export function telegramStudyAskTutorCallbackData(sessionId: string): string {
+  return `${ASK_TUTOR_CALLBACK_PREFIX}:${sessionId}`
+}
+
+export function parseTelegramStudyAskTutorCallback(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 64) return null
+  return value.match(/^study-ask:(tcs_[A-Za-z0-9_-]+)$/u)?.[1] ?? null
+}
+
+/**
+ * Explicit "this next message is a question" affordance. It exists so intent is
+ * never inferred from message content, which cannot work in a language app
+ * where the target line itself may be a question.
+ */
+export function telegramStudyAskTutorButton(sessionId: string, language: StudyHelperLanguage) {
+  return {
+    callback_data: telegramStudyAskTutorCallbackData(sessionId),
+    text: getTelegramStudyCopy(language).askAboutLine,
+  }
+}
+
 async function cachedFileId(input: {
   botId: string
   contentHash: string

@@ -48,9 +48,12 @@ import {
   upsertUserStudyPreference,
 } from "./study-preference-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
+import { armPrivateStudyAskMode } from "./private-study-tutor-service"
 import {
+  parseTelegramStudyAskTutorCallback,
   parseTelegramStudyPlaybackCallback,
   sendTelegramStudySongPlayback,
+  telegramStudyAskTutorButton,
 } from "./chat-study-playback-service"
 import {
   telegramIdentifier,
@@ -865,6 +868,7 @@ async function presentNextExercise(input: {
   chatId: string
   env: Env
   lastResult?: SongStudyAttemptResult
+  replyToMessageId?: number | null
   suppressIncorrectFeedback?: boolean
   session: ChatStudySession
   transcript?: string
@@ -879,10 +883,10 @@ async function presentNextExercise(input: {
     postId: input.session.postId,
     targetLanguage: input.session.targetLanguage,
   })
+  const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
+  const copy = getTelegramStudyCopy(language)
   let localizationNoticeSent = input.session.actionPayload.localizationNoticeSent === true
   if (study.translation_status === "processing" && !localizationNoticeSent) {
-    const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
-    const copy = getTelegramStudyCopy(language)
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: copy.pendingLocalization,
@@ -892,9 +896,12 @@ async function presentNextExercise(input: {
   }
   const exercise = study.access === "ready" ? eligibleExercise(study) : null
   if (input.lastResult && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
+    // Grading runs in a deferred task, so its reply can land after a later
+    // message. Anchoring it to the voice message keeps the thread unambiguous.
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: feedbackText({ result: input.lastResult, study, transcript: input.transcript }),
+      ...(input.replyToMessageId ? { reply_parameters: { message_id: input.replyToMessageId } } : {}),
     })
   }
   if (!exercise) {
@@ -929,6 +936,7 @@ async function presentNextExercise(input: {
             callback_data: callbackData(token, index),
             text: option.text.slice(0, 60),
           }]),
+          [telegramStudyAskTutorButton(input.session.id, language)],
         ],
       },
     })
@@ -1096,6 +1104,46 @@ export async function handleTelegramChatStudyCallback(input: {
   callback: TelegramWebhookCallbackQuery
   env: Env
 }): Promise<boolean> {
+  const askSessionId = parseTelegramStudyAskTutorCallback(input.callback.data)
+  if (askSessionId) {
+    const callbackQueryId = stringOrNull(input.callback.id)
+    const telegramUserId = telegramIdentifier(input.callback.from?.id)
+    const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+    if (!callbackQueryId || !telegramUserId || !chatId) return true
+    const result = await getControlPlaneClient(input.env).execute({
+      sql: `
+        SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
+               post_id, target_language, status, action_token, action_kind,
+               action_payload_json
+        FROM telegram_chat_study_sessions
+        WHERE chat_study_session_id = ?1
+          AND telegram_community_bot_id = ?2
+          AND telegram_user_id = ?3
+          AND status IN ('active', 'processing')
+          AND expires_at > ?4
+        LIMIT 1
+      `,
+      args: [askSessionId, input.bot.id, telegramUserId, nowIso()],
+    })
+    const session = parseSession(result.rows[0])
+    if (!session || session.communityId !== input.bot.communityId) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    // Arming never disturbs the exercise: the pending answer stays valid, and
+    // the flag is consumed by the next message whatever it turns out to be.
+    await armPrivateStudyAskMode({ env: input.env, sessionId: session.id })
+    const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: getTelegramStudyCopy(language).askPrompt,
+    }).catch(() => undefined)
+    await sendTelegramMessage(input.bot, {
+      chat_id: chatId,
+      text: getTelegramStudyCopy(language).askPrompt,
+    }).catch(() => undefined)
+    return true
+  }
   const playbackSessionId = parseTelegramStudyPlaybackCallback(input.callback.data)
   if (playbackSessionId) {
     const callbackQueryId = stringOrNull(input.callback.id)
@@ -1541,6 +1589,7 @@ export async function continueTelegramChatStudyAfterVoice(input: {
   chatId: string
   chatStudySessionId: string
   env: Env
+  replyToMessageId?: number | null
   result: SongStudyAttemptResult
   transcript: string
 }): Promise<void> {
@@ -1565,6 +1614,7 @@ export async function continueTelegramChatStudyAfterVoice(input: {
     chatId: input.chatId,
     env: input.env,
     lastResult: input.result,
+    replyToMessageId: input.replyToMessageId,
     session,
     transcript: input.transcript,
   })

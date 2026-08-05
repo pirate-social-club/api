@@ -24,6 +24,7 @@ import {
 } from "../communities/assistant-policy/speech-service"
 import { getCommunityAssistantVoicePolicyForCommunity } from "../communities/assistant-policy/service"
 import { getTelegramStudyCopy } from "./study-copy"
+import { telegramStudyAskTutorButton } from "./chat-study-playback-service"
 import { isStudyHelperLanguage, type StudyDeliveryMode } from "./study-preference-service"
 import {
   decryptActiveCommunityTelegramBotOrNull,
@@ -336,6 +337,13 @@ async function deliverTelegramStudyVoicePrompt(input: {
       const sent = await sendTelegramMessage(input.intent.bot, {
         chat_id: input.intent.telegramUserId,
         text: text.join("\n\n"),
+        ...(input.intent.chatStudySessionId
+          ? {
+            reply_markup: {
+              inline_keyboard: [[telegramStudyAskTutorButton(input.intent.chatStudySessionId, language)]],
+            },
+          }
+          : {}),
       })
       promptMessageId = sent.message_id
     }
@@ -922,6 +930,42 @@ async function consumeClaimedVoiceIntent(input: {
   }
 }
 
+/**
+ * Transcribes a voice message that the learner sent as a question rather than
+ * an answer. Deliberately does not touch the pending voice intent or its lease:
+ * the exercise is still open and its real answer must still be gradeable.
+ */
+export async function transcribeTelegramStudyQuestionVoice(input: {
+  bot: TelegramCommunityBotCredential
+  communityId: string
+  env: Env
+  message: TelegramWebhookMessage
+  postId: string
+  userId: string
+}): Promise<string | null> {
+  const voiceFileId = stringOrNull(input.message.voice?.file_id)
+  if (!voiceFileId) return null
+  const telegramFile = await getTelegramFile(input.bot, voiceFileId)
+  if (!telegramFile.file_path?.trim()) {
+    throw providerUnavailable("Telegram voice file is not available")
+  }
+  const download = await downloadTelegramFile(input.bot, telegramFile.file_path)
+  const mimeType = inferTelegramAudioMimeType({
+    explicitMimeType: input.message.voice?.mime_type ?? download.contentType ?? undefined,
+    fallback: "audio/ogg",
+    fileName: telegramFile.file_path,
+  })
+  const transcription = await transcribePostStudyAudio({
+    actor: { authType: "user", userId: input.userId },
+    communityId: input.communityId,
+    communityRepository: getCommunityRepository(input.env),
+    env: input.env,
+    file: new File([download.bytes], "telegram-study-question.oga", { type: mimeType }),
+    postId: input.postId,
+  })
+  return stringOrNull(transcription.text)
+}
+
 export async function handleTelegramStudyVoiceMessage(input: {
   bot: TelegramCommunityBotCredential
   env: Env
@@ -930,6 +974,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
     chatId: string
     chatStudySessionId: string
     result: SongStudyAttemptResult
+    telegramMessageId: number
     transcript: string
   }) => Promise<void>
   waitUntil?: (promise: Promise<void>) => void
@@ -1185,6 +1230,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
         chatId,
         chatStudySessionId: intent.chatStudySessionId,
         result,
+        telegramMessageId,
         transcript: transcriptText,
       }).catch(async (error) => {
         console.warn("[telegram-study] chat continuation failed", {

@@ -2843,8 +2843,9 @@ describe("community study routes", () => {
         telegramMessageId: 700,
         telegramUserId: "424242",
       })
-      expect(answer?.answer).toContain("introduces the clause")
-      expect(answer?.disclosure).toContain("community's configured AI provider")
+      expect(answer.kind).toBe("answered")
+      expect(answer.kind === "answered" && answer.answer).toContain("introduces the clause")
+      expect(answer.kind === "answered" && answer.disclosure).toContain("community's configured AI provider")
       const providerBody = providerBodies[0]
       expect(providerBody?.model).toBe("test/tutor-model")
       const systemMessage = providerBody?.messages?.find((message) => message.role === "system")?.content ?? ""
@@ -2871,6 +2872,58 @@ describe("community study routes", () => {
         assistant_message_ref: "provider-private-study-1", channel: "private_member",
         prompt: "[private_study_question_redacted]", status: "answered",
       })
+
+      const tutorBot = {
+        communityId, id: "tcb_private_study_tutor", token: botToken, userId: "998877",
+        username: "PrivateStudyTutorBot", webhookId: "tgb_private_study_tutor",
+        webhookSecret: "private-study-secret",
+      }
+
+      // A learner mid-multiple-choice must reach the tutor too; before this the
+      // session query only matched await_voice and silently fell through to the
+      // member-gated board assistant.
+      await ctx.client.execute({
+        sql: `UPDATE telegram_chat_study_sessions SET action_kind = 'answer_choice'
+              WHERE chat_study_session_id = 'tcs_private_study_tutor'`,
+        args: [],
+      })
+      const choiceAnswer = await answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it that and not which?",
+        telegramChatId: "424242", telegramMessageId: 701, telegramUserId: "424242",
+      })
+      expect(choiceAnswer.kind).toBe("answered")
+
+      // Song selection stays untutorable: there is no exercise to ground an answer in.
+      await ctx.client.execute({
+        sql: `UPDATE telegram_chat_study_sessions SET action_kind = 'select_song'
+              WHERE chat_study_session_id = 'tcs_private_study_tutor'`,
+        args: [],
+      })
+      expect((await answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it that?",
+        telegramChatId: "424242", telegramMessageId: 702, telegramUserId: "424242",
+      })).kind).toBe("no_session")
+
+      // With the tutor switched off the outcome is terminal, never `no_session`:
+      // callers must not fall back to the community board assistant.
+      await ctx.client.execute({
+        sql: `UPDATE telegram_chat_study_sessions SET action_kind = 'await_voice'
+              WHERE chat_study_session_id = 'tcs_private_study_tutor'`,
+        args: [],
+      })
+      const policyClient = createClient({ url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId) })
+      try {
+        await policyClient.execute({
+          sql: "UPDATE community_assistant_policy SET telegram_private_assistant_enabled = 0 WHERE community_id = ?1",
+          args: [communityId],
+        })
+      } finally {
+        policyClient.close()
+      }
+      expect((await answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it that?",
+        telegramChatId: "424242", telegramMessageId: 703, telegramUserId: "424242",
+      })).kind).toBe("unavailable")
     } finally {
       globalThis.fetch = originalFetch
     }

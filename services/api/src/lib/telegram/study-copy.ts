@@ -34,10 +34,13 @@ type StudyCopy = {
   buttonExpired: string
   alreadyHandled: string
   youSaid: string
+  askAboutLine: string
+  askPrompt: string
 }
 
 const COPY: Record<StudyHelperLanguage, StudyCopy> = {
   en: {
+    askAboutLine: "💬 Ask about this line", askPrompt: "Send your question about this line — text or voice. Your exercise stays open.",
     checkAgain: "Check again", chooseDelivery: "How should prompts be delivered?", chooseLanguage: "Choose your helper language:",
     chooseSong: "Choose a song to study:", complete: "Study complete", correct: "Correct", correctAnswer: "Correct answer", deliveryAudio: "Audio", deliveryBoth: "Audio + text",
     alreadyHandled: "That answer was already handled. Send /study if you need a new session.", buttonExpired: "This button expired. Send /study to continue.",
@@ -49,6 +52,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "Start again", studyUnavailable: "Study is not available here yet.", suggested: "Suggested", translationsReady: "Translations are ready.", youSaid: "You said",
   },
   zh: {
+    askAboutLine: "💬 询问这句", askPrompt: "发送你对这句的提问——文字或语音均可。练习仍在进行。",
     checkAgain: "再检查", chooseDelivery: "你希望如何接收练习提示？", chooseLanguage: "选择辅助语言：",
     chooseSong: "选择一首歌来学习：", complete: "学习完成", correct: "正确", correctAnswer: "正确答案", deliveryAudio: "音频", deliveryBoth: "音频和文字",
     alreadyHandled: "这个答案已经处理过了。如需新练习，请发送 /study。", buttonExpired: "此按钮已过期。请发送 /study 继续。",
@@ -60,6 +64,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", suggested: "推荐", translationsReady: "翻译已准备好。", youSaid: "你说的是",
   },
   ar: {
+    askAboutLine: "💬 اسأل عن هذا السطر", askPrompt: "أرسل سؤالك عن هذا السطر، نصًا أو صوتًا. التمرين ما زال مفتوحًا.",
     checkAgain: "تحقق مجددًا", chooseDelivery: "كيف تريد تلقي التمارين؟", chooseLanguage: "اختر لغة المساعدة:",
     chooseSong: "اختر أغنية للدراسة:", complete: "اكتملت الدراسة", correct: "صحيح", correctAnswer: "الإجابة الصحيحة", deliveryAudio: "صوت", deliveryBoth: "صوت ونص",
     alreadyHandled: "تمت معالجة هذه الإجابة بالفعل. أرسل /study لبدء جلسة جديدة.", buttonExpired: "انتهت صلاحية هذا الزر. أرسل /study للمتابعة.",
@@ -71,6 +76,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", suggested: "مقترح", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
   },
   ka: {
+    askAboutLine: "💬 იკითხე ამ სტრიქონზე", askPrompt: "გამოგზავნე შენი შეკითხვა ამ სტრიქონზე — ტექსტით ან ხმით. სავარჯიშო ღია რჩება.",
     checkAgain: "ხელახლა შემოწმება", chooseDelivery: "როგორ გსურთ სავარჯიშოების მიღება?", chooseLanguage: "აირჩიეთ დამხმარე ენა:",
     chooseSong: "აირჩიეთ სასწავლი სიმღერა:", complete: "სწავლა დასრულდა", correct: "სწორია", correctAnswer: "სწორი პასუხი", deliveryAudio: "აუდიო", deliveryBoth: "აუდიო და ტექსტი",
     alreadyHandled: "ეს პასუხი უკვე დამუშავდა. ახალი სესიისთვის გაგზავნეთ /study.", buttonExpired: "ამ ღილაკს ვადა გაუვიდა. გასაგრძელებლად გაგზავნეთ /study.",
