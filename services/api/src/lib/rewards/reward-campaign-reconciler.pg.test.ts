@@ -74,6 +74,10 @@ const SCHEDULE_REANCHOR_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0191_control_plane_reward_campaign_schedule_reanchor.sql",
   import.meta.url,
 )
+const TOPUP_BUDGET_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0192_control_plane_reward_campaign_topup_budget.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -569,6 +573,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     // Apply the canonical migration verbatim. Trigger constraints are neither
     // mirrored nor modified in this harness.
     await db.unsafe(await readFile(SCHEDULE_REANCHOR_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(TOPUP_BUDGET_MIGRATION_URL, "utf8"))
     await db.end()
   })
 
@@ -1444,6 +1449,63 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         WHERE reward_campaign_id = 'rcp_invariants_pg'
       `))
       expect(requestedMessage).toContain("reward campaign terms are immutable")
+    } finally {
+      await db.end()
+    }
+  })
+
+  test("canonical 0192 permits only confirmation-coupled permanent-pool budget growth", async () => {
+    const db = connect(TEST_DB, 1)
+    try {
+      await db.unsafe(`
+        INSERT INTO reward_campaigns (
+          reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+          community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+          status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+          budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+          refunded_cents, terms_version, terms_hash, starts_at, ends_at,
+          requested_starts_at, requested_ends_at, updated_at
+        ) SELECT 'rcp_topup_budget_pg', rewarder_user_id, 'create-topup-budget-pg',
+          community_id, 'pst_topup_budget_pg', 'sab_topup_budget_pg', song_owner_user_id,
+          'funding_confirming', eligible_activity, daily_reward_cents, reward_period_cap_cents,
+          150, 150, 0, 140, 60, 0, terms_version, 'terms-topup-budget-pg',
+          starts_at, ends_at, requested_starts_at, requested_ends_at, updated_at
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'
+      `)
+      const scheduleBefore = await db.unsafe(`
+        SELECT starts_at, ends_at, requested_starts_at, requested_ends_at
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_topup_budget_pg'
+      `)
+      await db.unsafe(`
+        UPDATE reward_campaigns
+        SET funded_cents = 300, budget_cents = 300, status = 'active'
+        WHERE reward_campaign_id = 'rcp_topup_budget_pg'
+      `)
+      const rows = await db.unsafe(`
+        SELECT status, budget_cents, funded_cents,
+          starts_at, ends_at, requested_starts_at, requested_ends_at
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_topup_budget_pg'
+      `)
+      expect(rows).toEqual([{
+        status: "active",
+        budget_cents: 300,
+        funded_cents: 300,
+        ...scheduleBefore[0],
+      }])
+
+      const independentGrowth = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns SET budget_cents = 301
+        WHERE reward_campaign_id = 'rcp_topup_budget_pg'
+      `))
+      expect(independentGrowth).toContain("reward campaign terms are immutable")
+
+      await db.unsafe(`UPDATE reward_campaigns SET status = 'funding_confirming' WHERE reward_campaign_id = 'rcp_topup_budget_pg'`)
+      const reduction = await postgresErrorMessage(() => db.unsafe(`
+        UPDATE reward_campaigns
+        SET funded_cents = 350, budget_cents = 299, status = 'active'
+        WHERE reward_campaign_id = 'rcp_topup_budget_pg'
+      `))
+      expect(reduction).toContain("reward campaign terms are immutable")
     } finally {
       await db.end()
     }
