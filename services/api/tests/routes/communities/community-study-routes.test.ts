@@ -205,6 +205,21 @@ async function seedReadyTranslationExercises(input: {
   }
 }
 
+async function policyClientReenable(
+  ctx: { communityDbRoot: string },
+  communityId: string,
+): Promise<void> {
+  const client = createClient({ url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId) })
+  try {
+    await client.execute({
+      sql: "UPDATE community_assistant_policy SET telegram_private_assistant_enabled = 1 WHERE community_id = ?1",
+      args: [communityId],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 describe("community study routes", () => {
   test("formats Telegram reward amounts without misleading trailing zeroes", () => {
     expect(formatUsdcCents(100)).toBe("1")
@@ -961,7 +976,7 @@ describe("community study routes", () => {
         sql: "SELECT status FROM telegram_chat_study_callback_deliveries WHERE callback_query_id = 'callback-localization-check'",
       })).rows).toHaveLength(1)
       const exercisePrompt = [...telegramBodies].reverse().find((body) =>
-        typeof body.text === "string" && body.text.includes("选择最佳翻译。")
+        typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
       const mcqDeliveryWindow = await ctx.client.execute({
@@ -1336,7 +1351,7 @@ describe("community study routes", () => {
         chatId: "454546", chatStudySessionId: String(mixIntent.rows[0]?.chat_study_session_id),
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
-      expect(telegramBodies.some((body) => typeof body.text === "string" && body.text.includes("选择最佳翻译。"))).toBe(true)
+      expect(telegramBodies.some((body) => typeof body.text === "string" && body.text.includes("选择译文"))).toBe(true)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1690,7 +1705,7 @@ describe("community study routes", () => {
       const audioForm = await audioRequests[0]!.clone().formData()
       expect(audioForm.get("voice")).toBeInstanceOf(File)
       expect((audioForm.get("voice") as File).type).toBe("audio/ogg")
-      expect(String(audioForm.get("caption"))).toBe("Say this:\n\nType a question, or send a voice answer.")
+      expect(String(audioForm.get("caption"))).toBe("Say this:")
 
       cachedAudio.clear()
       await createTelegramChatStudyVoiceIntent({
@@ -2896,10 +2911,10 @@ describe("community study routes", () => {
       expect(answer.kind).toBe("answered")
       expect(answer.kind === "answered" && answer.answer).toContain("introduces the clause")
       expect(answer.kind === "answered" && answer.answer).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
-      expect(answer.kind === "answered" && answer.disclosure).toContain("community's configured provider")
+      expect(answer.kind === "answered" && answer.disclosure).toContain("sent to this community's AI provider")
       const providerBody = providerBodies[0]
       expect(providerBody?.model).toBe("test/tutor-model")
-      expect(providerBody?.max_completion_tokens).toBe(160)
+      expect(providerBody?.max_completion_tokens).toBe(320)
       const systemMessage = providerBody?.messages?.find((message) => message.role === "system")?.content ?? ""
       const userMessage = providerBody?.messages?.find((message) => message.role === "user")?.content ?? ""
       expect(systemMessage).toContain("private language-study tutor")
@@ -2944,7 +2959,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       expect(tutorReply?.text).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
-      expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("▶️ Continue exercise")
+      expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("▶️ Continue")
       expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.callback_data).toBe("study-continue:tcs_private_study_tutor")
       const messagesBeforeContinue = telegramBodies.length
       expect(await handleTelegramChatStudyCallback({
@@ -2958,7 +2973,7 @@ describe("community study routes", () => {
         env: ctx.env,
       })).toBe(true)
       const continuedPrompt = telegramBodies.slice(messagesBeforeContinue).find((body) =>
-        typeof body.text === "string" && body.text.includes("Type a question, or send a voice answer.")
+        typeof body.text === "string" && body.text.includes("Say this:")
       )
       expect(continuedPrompt?.text).toContain(exercise!.reference_text ?? "")
       const stillActive = await ctx.client.execute(
@@ -3023,6 +3038,68 @@ describe("community study routes", () => {
         bot: tutorBot, env: ctx.env, question: "Why is it that?",
         telegramChatId: "424242", telegramMessageId: 703, telegramUserId: "424242",
       })).kind).toBe("unavailable")
+
+      // A provider that returns empty content is already retried by the client,
+      // so two empties in a row must surface as a failure rather than a third
+      // silent attempt. This is the shape seen in production.
+      await policyClientReenable(ctx, communityId)
+      const emptyAttempts: Array<Record<string, unknown>> = []
+      globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(requestInput, init)
+        if (request.url.startsWith("https://api.telegram.org/")) {
+          return Response.json({ ok: true, result: { message_id: 799 } })
+        }
+        emptyAttempts.push(await request.json() as Record<string, unknown>)
+        return Response.json({
+          id: "provider-private-study-empty",
+          choices: [{ finish_reason: "length", message: { content: "" } }],
+          usage: { completion_tokens: 320, completion_tokens_details: { reasoning_tokens: 320 }, prompt_tokens: 900, total_tokens: 1220 },
+        })
+      }) as typeof fetch
+      await expect(answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it that?",
+        telegramChatId: "424242", telegramMessageId: 704, telegramUserId: "424242",
+      })).rejects.toThrow(/response was empty/u)
+      expect(emptyAttempts).toHaveLength(2)
+
+      // Provider HTTP failures arrive as plain Errors, so they must be classified
+      // from structured detail rather than parsing the message. A 429 has to be
+      // recorded as rate limited, not as a generic failure.
+      const providerHttpCase = async (status: number, messageId: number) => {
+        await policyClientReenable(ctx, communityId)
+        // Clear the minute window so the internal 5/min limiter cannot pre-empt
+        // the provider failure under test and mask it as a rate limit.
+        await ctx.client.execute({
+          sql: "DELETE FROM telegram_assistant_events WHERE community_id = ?1 AND telegram_message_id <> ?2",
+          args: [communityId, messageId],
+        })
+        globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+          const request = new Request(requestInput, init)
+          if (request.url.startsWith("https://api.telegram.org/")) {
+            return Response.json({ ok: true, result: { message_id: 800 + status } })
+          }
+          return new Response("{\"error\":{\"message\":\"upstream detail\"}}", { status })
+        }) as typeof fetch
+        await expect(answerPrivateStudyTutorQuestion({
+          bot: tutorBot, env: ctx.env, question: "Why is it that?",
+          telegramChatId: "424242", telegramMessageId: messageId, telegramUserId: "424242",
+        })).rejects.toThrow()
+        const row = await ctx.client.execute({
+          sql: "SELECT status, error_message FROM telegram_assistant_events WHERE telegram_message_id = ?1",
+          args: [messageId],
+        })
+        return row.rows[0] as unknown as { error_message: string | null; status: string }
+      }
+
+      const rateLimitedRow = await providerHttpCase(429, 705)
+      expect(rateLimitedRow.status).toBe("rate_limited")
+      expect(rateLimitedRow.error_message).toBe("rate_limited")
+
+      const serverErrorRow = await providerHttpCase(500, 706)
+      expect(serverErrorRow.status).toBe("failed")
+      expect(serverErrorRow.error_message).toBe("http_error")
+      // The durable row must never retain provider-authored text.
+      expect(serverErrorRow.error_message).not.toContain("upstream detail")
     } finally {
       globalThis.fetch = originalFetch
     }

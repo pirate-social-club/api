@@ -981,7 +981,7 @@ async function presentNextExercise(input: {
     })
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${exercise.question}\n\n${exercise.prompt_text}\n\n${copy.exerciseMessageHint}`,
+      text: `${copy.chooseTranslation}\n\n${exercise.prompt_text}`,
       reply_markup: {
         inline_keyboard: [
           ...exercise.options.map((option, index) => [{
@@ -1189,7 +1189,7 @@ async function resendActiveTelegramStudyExercise(input: {
     if (!question || !promptText || optionTexts.length === 0) return false
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${question}\n\n${promptText}\n\n${copy.exerciseMessageHint}`,
+      text: `${copy.chooseTranslation}\n\n${promptText}`,
       reply_markup: {
         inline_keyboard: [
           ...optionTexts.map((text, index) => [{
@@ -1211,7 +1211,7 @@ async function resendActiveTelegramStudyExercise(input: {
     if (!exercise || exercise.post_id !== session.postId || !exercise.reference_text) return false
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${copy.sayThis}\n\n${exercise.reference_text}\n\n${copy.exerciseMessageHint}`,
+      text: `${copy.sayThis}\n\n${exercise.reference_text}`,
       reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
     })
     await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })

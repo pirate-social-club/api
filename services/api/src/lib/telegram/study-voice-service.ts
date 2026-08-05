@@ -324,7 +324,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const client = getControlPlaneClient(input.env)
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
-  const text = [copy.sayThis, input.intent.referenceText, copy.exerciseMessageHint]
+  const text = [copy.sayThis, input.intent.referenceText]
   const disclosure = copy.disclosure
   if (input.includeDisclosure) {
     text.push(disclosure)
@@ -355,8 +355,8 @@ async function deliverTelegramStudyVoicePrompt(input: {
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
           ...(input.intent.deliveryMode === "audio" ? {
             caption: input.includeDisclosure
-              ? `${copy.sayThis}\n\n${copy.exerciseMessageHint}\n\n${disclosure}`
-              : `${copy.sayThis}\n\n${copy.exerciseMessageHint}`,
+              ? `${copy.sayThis}\n\n${disclosure}`
+              : copy.sayThis,
           } : {}),
         })
         promptMessageId ??= sent.message_id

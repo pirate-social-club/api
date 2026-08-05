@@ -2,7 +2,12 @@ import type { Env } from "../../env"
 import { executeFirst } from "../db-helpers"
 import { HttpError, rateLimited } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import { requestOpenRouterChatCompletion } from "../openrouter-client"
+import {
+  isOpenRouterHttpFailure,
+  openRouterDiagnosticsFrom,
+  requestOpenRouterChatCompletion,
+  type OpenRouterDiagnostics,
+} from "../openrouter-client"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { decryptActiveCommunityOpenRouterKey } from "../communities/assistant-policy/credential-service"
@@ -19,6 +24,10 @@ const PRIVATE_STUDY_USER_MINUTE_CAP = 5
 const PRIVATE_STUDY_COMMUNITY_MINUTE_CAP = 120
 const PRIVATE_STUDY_WINDOW_MS = 60_000
 const PRIVATE_STUDY_TIMEOUT_MS = 30_000
+// Raised from 160 after production empty responses: models that emit reasoning
+// tokens can spend the whole budget before producing visible text. The 90-word
+// instruction, not this ceiling, is what keeps answers short.
+const PRIVATE_STUDY_MAX_COMPLETION_TOKENS = 320
 
 // Exercises the tutor can explain. `select_song` is excluded on purpose: there
 // is no current exercise to ground an answer in before a song is picked.
@@ -238,7 +247,7 @@ async function finishTutorEvent(input: {
   error?: unknown
   providerMessageId?: string | null
 }): Promise<void> {
-  const rateLimitedFailure = input.error instanceof HttpError && input.error.status === 429
+  const rateLimitedFailure = input.error ? privateStudyFailureKind(input.error) === "rate_limited" : false
   await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_assistant_events
@@ -252,7 +261,10 @@ async function finishTutorEvent(input: {
       input.eventId,
       input.error ? (rateLimitedFailure ? "rate_limited" : "failed") : "answered",
       input.providerMessageId ?? null,
-      input.error instanceof Error ? input.error.message : input.error ? String(input.error) : null,
+      // Classification only. The upstream message can embed up to 500 characters
+      // of provider response body, which may echo model output or the learner's
+      // question, and this row is durable.
+      input.error ? privateStudyFailureKind(input.error) : null,
       nowIso(),
     ],
   })
@@ -289,6 +301,30 @@ function parseFeedback(value: unknown): { missing: string[]; extra: string[] } {
 
 function providerMessageId(body: Record<string, unknown>): string | null {
   return stringOrNull(body.id)
+}
+
+function isOpenRouterDiagnosticsCarrier(error: unknown): error is { openRouterDiagnostics: OpenRouterDiagnostics } {
+  return Boolean(error) && typeof error === "object" && "openRouterDiagnostics" in (error as object)
+}
+
+/**
+ * Coarse, self-authored failure classification. Never derived from provider
+ * text, so it cannot carry model output or learner content into logs.
+ */
+function privateStudyFailureKind(error: unknown): "empty_response" | "rate_limited" | "http_error" | "unknown" {
+  if (isOpenRouterDiagnosticsCarrier(error)) return "empty_response"
+  // Provider HTTP failures are plain Errors, not our HttpError, so they must be
+  // classified from the structured detail the client attaches.
+  if (isOpenRouterHttpFailure(error)) {
+    return error.openRouterHttp.category === "rate_limited" ? "rate_limited" : "http_error"
+  }
+  if (error instanceof HttpError) return error.status === 429 ? "rate_limited" : "http_error"
+  return "unknown"
+}
+
+function privateStudyFailureStatus(error: unknown): number | null {
+  if (isOpenRouterHttpFailure(error)) return error.openRouterHttp.status
+  return error instanceof HttpError ? error.status : null
 }
 
 export async function answerPrivateStudyTutorQuestion(input: {
@@ -387,7 +423,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
           errorLabel: "private study tutor",
           timeoutMs: PRIVATE_STUDY_TIMEOUT_MS,
           body: {
-            max_completion_tokens: 160,
+            max_completion_tokens: PRIVATE_STUDY_MAX_COMPLETION_TOKENS,
             model: policy.selectedModelId,
             messages: [
               {
@@ -420,6 +456,7 @@ export async function answerPrivateStudyTutorQuestion(input: {
         communityId: session.communityId,
         durationMs: Date.now() - providerStartedAt,
         model: policy.selectedModelId,
+        ...openRouterDiagnosticsFrom(completion.body),
       })
       await finishTutorEvent({
         env: input.env,
@@ -439,6 +476,18 @@ export async function answerPrivateStudyTutorQuestion(input: {
       db.close()
     }
   } catch (error) {
+    // Deliberately no provider error text: an upstream message can echo model
+    // output or the learner's question. Only our own failure classification and
+    // allowlisted completion metadata are recorded.
+    console.warn("[private-study-tutor] provider failed", {
+      communityId: session.communityId,
+      errorName: error instanceof Error ? error.name : "unknown",
+      failureKind: privateStudyFailureKind(error),
+      httpStatus: privateStudyFailureStatus(error),
+      maxCompletionTokens: PRIVATE_STUDY_MAX_COMPLETION_TOKENS,
+      model: policy.selectedModelId,
+      ...(isOpenRouterDiagnosticsCarrier(error) ? error.openRouterDiagnostics : {}),
+    })
     await finishTutorEvent({ env: input.env, eventId, error }).catch(() => undefined)
     throw error
   }
