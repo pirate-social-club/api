@@ -84,13 +84,7 @@ anything:
 
 ## Current holds
 
-- **2026-08-05 07:30Z — `/root`, nationality-tier acceptance matrix.** Holding
-  the Web-pinned API `cadd083` while resuming the staging matrix on the
-  pre-existing, unpooled, published English fixture
-  `pst_9d2f7406c1f34021938611d685760f29` (four ready study units, shard
-  `community-d1-pool-0008-staging`). Scope: pool admission, then the
-  previously approved staged funding/qualification matrix. Do not deploy over
-  this hold or reuse the fixture for unrelated smokes.
+- None.
 
 ## Hold history
 
@@ -110,6 +104,18 @@ Keep entries short. Delete them once they are no longer useful context.
   publish code unconditionally requires Story registration for every song with
   an artifact bundle and deletes the post on registration failure; that is a
   resilience finding, not a matrix blocker while this fixture remains usable.
+
+- **2026-08-05** — Nationality-tier matrix resumed on recovered fixture
+  `pst_9d2f7406c1f34021938611d685760f29` under Web-pinned API `cadd083`.
+  Created the intended 48-hour, Self-pinned tiered pool
+  `rcp_b97d623b104140a5b1df0d8f13d2c2b1` with VNM=60 cents and USA=80 cents;
+  it remains `draft` with zero funded/reserved/credited cents. Funding stopped
+  before quote creation because the designated funder
+  `usr_6ec9e62347cc4ac29b19d9372116c7c5` has no wallet-attachment row or
+  primary pointer. No transfer, cashout, payout, or direct control-plane write
+  occurred. Resume only after that user completes the normal staging wallet
+  attachment flow using the controlled test EOA, then re-check the resolved
+  primary wallet before quoting.
 
 - **2026-08-05** — Nationality-tier acceptance hold began on Web-pinned API
   `cadd083`. The earlier 2026-08-04 attempt was not continued because its
