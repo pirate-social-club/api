@@ -1,0 +1,14 @@
+{
+  "name": "@pirate/song-preview-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@libsql/client": "0.17.2",
+    "@pirate/api-shared": "file:../shared",
+    "pg": "^8.16.3"
+  },
+  "overrides": {
+    "@libsql/core": "0.17.2"
+  }
+}
