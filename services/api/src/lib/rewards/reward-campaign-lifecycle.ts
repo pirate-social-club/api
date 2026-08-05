@@ -21,7 +21,7 @@ export async function advanceRewardCampaignLifecycle(input: {
     const canceledDrafts = await tx.execute({
       sql: `
         UPDATE reward_campaigns
-        SET status = 'canceled', canceled_at = COALESCE(canceled_at, ?1), updated_at = ?1
+        SET status = 'canceled', canceled_at = CAST(?1 AS TEXT), updated_at = ?1
         WHERE status = 'draft'
           AND created_at <= ?2
           AND funded_cents = 0
