@@ -31,30 +31,9 @@ export function telegramStudyPlaybackButton(sessionId: string, language: StudyHe
   }
 }
 
-const ASK_TUTOR_CALLBACK_PREFIX = "study-ask"
 const EXPLAIN_TUTOR_CALLBACK_PREFIX = "study-explain"
+const CONTINUE_TUTOR_CALLBACK_PREFIX = "study-continue"
 export type TelegramStudyExplanationKind = "grammar" | "meaning"
-
-export function telegramStudyAskTutorCallbackData(sessionId: string): string {
-  return `${ASK_TUTOR_CALLBACK_PREFIX}:${sessionId}`
-}
-
-export function parseTelegramStudyAskTutorCallback(value: unknown): string | null {
-  if (typeof value !== "string" || value.length > 64) return null
-  return value.match(/^study-ask:(tcs_[A-Za-z0-9_-]+)$/u)?.[1] ?? null
-}
-
-/**
- * Explicit "this next message is a question" affordance. It exists so intent is
- * never inferred from message content, which cannot work in a language app
- * where the target line itself may be a question.
- */
-export function telegramStudyAskTutorButton(sessionId: string, language: StudyHelperLanguage) {
-  return {
-    callback_data: telegramStudyAskTutorCallbackData(sessionId),
-    text: getTelegramStudyCopy(language).askAboutLine,
-  }
-}
 
 export function telegramStudyExplainTutorCallbackData(sessionId: string, kind: TelegramStudyExplanationKind): string {
   return `${EXPLAIN_TUTOR_CALLBACK_PREFIX}:${kind === "grammar" ? "g" : "m"}:${sessionId}`
@@ -74,8 +53,23 @@ export function telegramStudyTutorButtons(sessionId: string, language: StudyHelp
       { callback_data: telegramStudyExplainTutorCallbackData(sessionId, "meaning"), text: copy.explainMeaning },
       { callback_data: telegramStudyExplainTutorCallbackData(sessionId, "grammar"), text: copy.explainGrammar },
     ],
-    [telegramStudyAskTutorButton(sessionId, language)],
   ]
+}
+
+export function telegramStudyContinueTutorCallbackData(sessionId: string): string {
+  return `${CONTINUE_TUTOR_CALLBACK_PREFIX}:${sessionId}`
+}
+
+export function parseTelegramStudyContinueTutorCallback(value: unknown): string | null {
+  if (typeof value !== "string" || value.length > 64) return null
+  return value.match(/^study-continue:(tcs_[A-Za-z0-9_-]+)$/u)?.[1] ?? null
+}
+
+export function telegramStudyContinueTutorButton(sessionId: string, language: StudyHelperLanguage) {
+  return {
+    callback_data: telegramStudyContinueTutorCallbackData(sessionId),
+    text: getTelegramStudyCopy(language).continueExercise,
+  }
 }
 
 async function cachedFileId(input: {

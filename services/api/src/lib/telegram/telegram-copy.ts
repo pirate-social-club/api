@@ -21,6 +21,7 @@ type TelegramCopy = {
   }
   start: {
     alreadyJoined(input: TelegramStartCopyArgs): string
+    assistantHint: string
     fallback(input: TelegramStartCopyArgs): string
     gateFailed(input: TelegramStartCopyArgs): string
     joined(input: TelegramStartCopyArgs): string
@@ -33,9 +34,6 @@ type TelegramCopy = {
     verifyRequired(input: TelegramStartCopyArgs): string
   }
   menu: {
-    assistant: string
-    community: string
-    preferences: string
     rewards: string
     settings: string
     study: string
@@ -67,6 +65,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
     },
     start: {
       alreadyJoined: ({ community }) => `Welcome to ${community} 🎵\n\nStudy song lyrics for free. Some songs offer rewards for learning 🪙`,
+      assistantHint: "You can also message me directly with questions about this community.",
       fallback: ({ community }) => `Open ${community} in Pirate to continue.`,
       gateFailed: ({ community }) =>
         `Your Pirate account does not meet ${community}'s requirements yet. Open Pirate to review what is missing.`,
@@ -80,7 +79,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `Open ${community} in Pirate to sign in and continue.`,
       verifyRequired: ({ community }) => `Welcome to ${community}. Verify your Pirate account to join.`,
     },
-    menu: { assistant: "💬 Ask the assistant", community: "🌐 Open community", preferences: "Change language", rewards: "🪙 Rewards", settings: "Settings", study: "📚 Study songs" },
+    menu: { rewards: "🪙 Rewards", settings: "⚙️ Settings", study: "📚 Study songs" },
     rewards: {
       balance: ({ balance }) => `Available rewards: ${balance}.\n\nClaiming requires a wallet and a one-time unique-human check. You can keep studying without either.`,
       claim: "Claim rewards",
@@ -106,6 +105,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
     },
     start: {
       alreadyJoined: ({ community }) => `مرحبًا بك في ${community} 🎵\n\nتعلّم كلمات الأغاني مجانًا. بعض الأغاني تقدم مكافآت مقابل التعلم 🪙`,
+      assistantHint: "يمكنك أيضًا مراسلتي مباشرةً لطرح أسئلة عن هذا المجتمع.",
       fallback: ({ community }) => `افتح ${community} في Pirate للمتابعة.`,
       gateFailed: ({ community }) =>
         `حسابك في Pirate لا يستوفي متطلبات ${community} بعد. افتح Pirate لمعرفة ما ينقصك.`,
@@ -119,7 +119,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `افتح ${community} في Pirate لتسجيل الدخول والمتابعة.`,
       verifyRequired: ({ community }) => `مرحباً بك في ${community}. تحقق من حسابك في Pirate للانضمام.`,
     },
-    menu: { assistant: "💬 اسأل المساعد", community: "🌐 افتح المجتمع", preferences: "تغيير اللغة", rewards: "🪙 المكافآت", settings: "الإعدادات", study: "📚 تعلّم الأغاني" },
+    menu: { rewards: "🪙 المكافآت", settings: "⚙️ الإعدادات", study: "📚 تعلّم الأغاني" },
     rewards: {
       balance: ({ balance }) => `المكافآت المتاحة: ${balance}.\n\nيتطلب الاستلام محفظة وفحصًا لمرة واحدة للتأكد من أنك شخص فريد. يمكنك متابعة التعلم من دونهما.`,
       claim: "استلم المكافآت",
@@ -145,6 +145,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
     },
     start: {
       alreadyJoined: ({ community }) => `欢迎来到 ${community} 🎵\n\n免费学习歌词。部分歌曲提供学习奖励 🪙`,
+      assistantHint: "你也可以直接给我发消息，询问有关此社区的问题。",
       fallback: ({ community }) => `在 Pirate 中打开 ${community} 以继续。`,
       gateFailed: ({ community }) =>
         `你的 Pirate 账号暂未满足 ${community} 的要求。打开 Pirate 查看还需要完成什么。`,
@@ -158,7 +159,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `在 Pirate 中打开 ${community}，登录后继续。`,
       verifyRequired: ({ community }) => `欢迎来到 ${community}。验证你的 Pirate 账号以加入。`,
     },
-    menu: { assistant: "💬 询问助手", community: "🌐 打开社区", preferences: "更改语言", rewards: "🪙 奖励", settings: "设置", study: "📚 学习歌曲" },
+    menu: { rewards: "🪙 奖励", settings: "⚙️ 设置", study: "📚 学习歌曲" },
     rewards: {
       balance: ({ balance }) => `可用奖励：${balance}。\n\n领取时需要钱包和一次真人唯一性验证。无需这些也可以继续学习。`,
       claim: "领取奖励",
@@ -184,6 +185,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
     },
     start: {
       alreadyJoined: ({ community }) => `მოგესალმებით ${community}-ში 🎵\n\nუფასოდ ისწავლეთ სიმღერების ტექსტები. ზოგი სიმღერა სწავლისთვის ჯილდოს გთავაზობთ 🪙`,
+      assistantHint: "ამ თემის შესახებ კითხვებისთვის შეგიძლიათ პირდაპირ მომწეროთ.",
       fallback: ({ community }) => `გასაგრძელებლად გახსენით ${community} Pirate-ში.`,
       gateFailed: ({ community }) =>
         `თქვენი Pirate ანგარიში ჯერ არ აკმაყოფილებს ${community}-ის მოთხოვნებს. გახსენით Pirate და ნახეთ, რა არის დასასრულებელი.`,
@@ -197,7 +199,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `გასაგრძელებლად შედით Pirate-ში და გახსენით ${community}.`,
       verifyRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის გაიარეთ თქვენი Pirate ანგარიშის ვერიფიკაცია.`,
     },
-    menu: { assistant: "💬 ჰკითხეთ ასისტენტს", community: "🌐 თემის გახსნა", preferences: "ენის შეცვლა", rewards: "🪙 ჯილდოები", settings: "პარამეტრები", study: "📚 სიმღერების სწავლა" },
+    menu: { rewards: "🪙 ჯილდოები", settings: "⚙️ პარამეტრები", study: "📚 სიმღერების სწავლა" },
     rewards: {
       balance: ({ balance }) => `ხელმისაწვდომი ჯილდოები: ${balance}.\n\nმისაღებად საჭიროა საფულე და ერთჯერადი უნიკალური ადამიანის შემოწმება. სწავლა მათ გარეშეც შეგიძლიათ.`,
       claim: "ჯილდოების მიღება",
@@ -223,6 +225,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
     },
     start: {
       alreadyJoined: ({ community }) => `Добро пожаловать в ${community} 🎵\n\nИзучайте тексты песен бесплатно. За изучение некоторых песен можно получать награды 🪙`,
+      assistantHint: "Вы также можете написать мне напрямую с вопросами об этом сообществе.",
       fallback: ({ community }) => `Откройте ${community} в Pirate, чтобы продолжить.`,
       gateFailed: ({ community }) => `Ваш аккаунт Pirate пока не соответствует требованиям ${community}. Откройте Pirate, чтобы узнать подробности.`,
       joined: ({ community }) => `Вы вступили в ${community}.`,
@@ -234,7 +237,7 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `Откройте ${community} в Pirate, войдите в аккаунт и продолжите.`,
       verifyRequired: ({ community }) => `Добро пожаловать в ${community}. Подтвердите аккаунт Pirate, чтобы вступить.`,
     },
-    menu: { assistant: "💬 Спросить помощника", community: "🌐 Открыть сообщество", preferences: "Изменить язык", rewards: "🪙 Награды", settings: "Настройки", study: "📚 Учить песни" },
+    menu: { rewards: "🪙 Награды", settings: "⚙️ Настройки", study: "📚 Учить песни" },
     rewards: {
       balance: ({ balance }) => `Доступные награды: ${balance}.\n\nДля получения нужны кошелёк и одноразовая проверка уникальности. Продолжать учиться можно и без них.`,
       claim: "Получить награды",

@@ -1072,11 +1072,15 @@ describe("community Telegram routes", () => {
       text?: string
     }
     expect(sendBody.text).toContain("Study song lyrics for free")
+    expect(sendBody.text).toContain("message me directly")
     expect(sendBody.text).not.toContain("verify")
-    expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual(expect.objectContaining({
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).not.toContainEqual(expect.objectContaining({
       callback_data: "menu:assistant",
-      text: "💬 Ask the assistant",
     }))
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).toEqual([{
+      callback_data: "menu:rewards",
+      text: "🪙 Rewards",
+    }])
   })
 
   test("community bot bare /start keeps the product menu when preview is disabled", async () => {
