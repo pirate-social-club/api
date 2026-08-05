@@ -41,11 +41,15 @@ async function seedVerifiedHnsRoots(client: Client, now: string): Promise<void> 
       WHERE nv.family = 'hns'
         AND nv.status = 'verified'
         AND nv.club_attach_allowed = 1
-        AND nv.expires_at > ?1
+        -- Keep the predicate on its own bind parameter. PostgreSQL otherwise
+        -- has to infer one parameter both from these projected INSERT values
+        -- and from a TIMESTAMPTZ comparison, and rejects the statement with
+        -- "inconsistent types deduced for parameter $1".
+        AND nv.expires_at > ?2
         AND cnb.status = 'active'
       ON CONFLICT(normalized_root_label) DO NOTHING
     `,
-    args: [now],
+    args: [now, now],
   })
 }
 
