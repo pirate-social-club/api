@@ -679,7 +679,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:study")).toBe(true)
-      expect(welcomeMarkup.inline_keyboard?.flat().find((button) => button.callback_data === "menu:preferences")?.text).toBe("⚙️ Language")
+      expect(welcomeMarkup.inline_keyboard?.flat().find((button) => button.callback_data === "menu:preferences")?.text).toBe("Change language")
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:assistant")).toBe(false)
       const sessionsAfterStart = await ctx.client.execute(
         "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
@@ -697,7 +697,21 @@ describe("community study routes", () => {
         },
       })
       expect(menuRewards.status).toBe(200)
-      expect(telegramBodies.some((body) => body.text === "No rewards yet. Some songs pay crypto rewards as you learn. You can study without a wallet or verification.")).toBe(true)
+      expect(telegramBodies.some((body) => body.text === "Your rewards: 0.00 USDC\n\nNo songs currently offer rewards.")).toBe(true)
+
+      telegramBodies.length = 0
+      const menuLanguage = await webhook({
+        update_id: 5100,
+        callback_query: {
+          id: "menu-language-callback",
+          data: "menu:preferences",
+          from: { id: 454545, is_bot: false, language_code: "en" },
+          message: { chat: { id: 454545, type: "private" }, message_id: 600 },
+        },
+      })
+      expect(menuLanguage.status).toBe(200)
+      expect(telegramBodies.some((body) => body.text === "你的语言：")).toBe(true)
+      expect(telegramBodies.some((body) => body.text === "Study settings:")).toBe(false)
 
       const privateSongClient = createClient({
         url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
@@ -810,7 +824,7 @@ describe("community study routes", () => {
       const studyDeliveries = await ctx.client.execute(
         "SELECT status FROM telegram_chat_study_message_deliveries",
       )
-      expect(studyDeliveries.rows).toHaveLength(3)
+      expect(studyDeliveries.rows).toHaveLength(4)
       expect(studyDeliveries.rows.every((row) => row.status === "consumed")).toBe(true)
       const picker = telegramBodies.find((body) => body.text === "选择一首歌来学习：")
       expect(picker).toBeTruthy()
@@ -818,7 +832,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const songCallback = pickerMarkup.inline_keyboard?.[0]?.[0]?.callback_data
-      expect(pickerMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song · earn up to $0.75/day")
+      expect(pickerMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song · 每天最多赚取 0.75 USDC 🪙")
       expect(songCallback).toMatch(/^study:[a-f0-9]{18}:0$/)
       expect(songCallback!.length).toBeLessThanOrEqual(64)
       expect(songCallback).not.toContain("pst_")
@@ -946,6 +960,9 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
+      expect(answerButtons.find((button) => button.text === "含义")?.callback_data).toMatch(/^study-explain:m:tcs_/u)
+      expect(answerButtons.find((button) => button.text === "语法")?.callback_data).toMatch(/^study-explain:g:tcs_/u)
+      expect(answerButtons.find((button) => button.text === "提出问题")?.callback_data).toMatch(/^study-ask:tcs_/u)
       const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
       expect(replayButton).toBeUndefined()
       const historicalReplayData = `study-play:${String(selectingSession.rows[0]?.chat_study_session_id)}`
@@ -1151,11 +1168,11 @@ describe("community study routes", () => {
           from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 704 },
         },
       })
-      const languagePicker = telegramBodies.find((body) => body.text === "选择辅助语言：")
+      const languagePicker = telegramBodies.find((body) => body.text === "你的语言：")
       const languageButtons = (languagePicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "ქართული", "Русский"])
+      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "Русский", "ქართული"])
       await webhook({
         update_id: 5008,
         callback_query: {
@@ -1219,11 +1236,11 @@ describe("community study routes", () => {
         },
       })
       expect(firstRun.status).toBe(200)
-      const firstRunLanguagePicker = telegramBodies.find((body) => body.text === "选择辅助语言：")
+      const firstRunLanguagePicker = telegramBodies.find((body) => body.text === "你的语言：")
       const firstRunLanguageButtons = (firstRunLanguagePicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(firstRunLanguageButtons.map((button) => button.text)).toEqual(["中文 · 推荐", "English", "العربية", "ქართული", "Русский"])
+      expect(firstRunLanguageButtons.map((button) => button.text)).toEqual(["中文 · 推荐", "English", "العربية", "Русский", "ქართული"])
       await webhook({
         update_id: 5011,
         callback_query: {
@@ -2833,6 +2850,9 @@ describe("community study routes", () => {
     }> = []
     globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(requestInput, init)
+      if (request.url.startsWith("https://api.telegram.org/")) {
+        return Response.json({ ok: true, result: { message_id: 701 } })
+      }
       expect(request.url).toBe("https://openrouter.test/api/v1/chat/completions")
       providerBodies.push(await request.json() as (typeof providerBodies)[number])
       return Response.json({
@@ -2866,10 +2886,36 @@ describe("community study routes", () => {
       expect(userMessage).toContain('"missing":["one","for"]')
       expect(userMessage).toContain("Why is the grammar ‘that’ here?")
 
+      const tutorBot = {
+        communityId, id: "tcb_private_study_tutor", token: botToken, userId: "998877",
+        username: "PrivateStudyTutorBot", webhookId: "tgb_private_study_tutor",
+        webhookSecret: "private-study-secret",
+      }
+
       const active = await ctx.client.execute(
         "SELECT status, action_kind, action_token, current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = 'tcs_private_study_tutor'",
       )
       expect(active.rows[0]).toMatchObject({
+        action_kind: "await_voice", action_token: "voice-wait-token",
+        current_exercise_id: exercise!.id, status: "active",
+      })
+
+      const explanationHandled = await handleTelegramChatStudyCallback({
+        bot: tutorBot,
+        callback: {
+          id: "callback-private-study-grammar",
+          data: "study-explain:g:tcs_private_study_tutor",
+          from: { id: 424242, is_bot: false },
+          message: { chat: { id: 424242, type: "private" }, message_id: 700 },
+        },
+        env: ctx.env,
+      })
+      expect(explanationHandled).toBe(true)
+      expect(providerBodies.at(-1)?.messages?.find((message) => message.role === "user")?.content).toContain("Explain the grammar in this line.")
+      const stillActive = await ctx.client.execute(
+        "SELECT status, action_kind, action_token, current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = 'tcs_private_study_tutor'",
+      )
+      expect(stillActive.rows[0]).toMatchObject({
         action_kind: "await_voice", action_token: "voice-wait-token",
         current_exercise_id: exercise!.id, status: "active",
       })
@@ -2880,12 +2926,6 @@ describe("community study routes", () => {
         assistant_message_ref: "provider-private-study-1", channel: "private_member",
         prompt: "[private_study_question_redacted]", status: "answered",
       })
-
-      const tutorBot = {
-        communityId, id: "tcb_private_study_tutor", token: botToken, userId: "998877",
-        username: "PrivateStudyTutorBot", webhookId: "tgb_private_study_tutor",
-        webhookSecret: "private-study-secret",
-      }
 
       // A learner mid-multiple-choice must reach the tutor too; before this the
       // session query only matched await_voice and silently fell through to the

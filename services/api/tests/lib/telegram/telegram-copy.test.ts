@@ -7,7 +7,7 @@ describe("telegram copy catalog", () => {
     const copy = getTelegramCopy("en")
 
     expect(copy.start.alreadyJoined({ community: "Americans only 2" }))
-      .toBe("Welcome to Americans only 2 🎵\n\nWhat would you like to do?")
+      .toBe("Welcome to Americans only 2 🎵\n\nStudy song lyrics for free. Some songs offer rewards for learning 🪙")
     expect(copy.start.joined({ community: "Americans only 2" }))
       .toBe("You've joined \"Americans only 2\".")
     expect(copy.buttons.openCommunity).toBe("Open community")
@@ -21,6 +21,6 @@ describe("telegram copy catalog", () => {
     expect(getTelegramCopy("ka").start.linkRequired({ community: "🇬🇪" }))
       .toContain("დააკავშირეთ თქვენი Pirate ანგარიში")
     expect(getTelegramCopy("ru").start.overview({ community: "Music" }))
-      .toContain("Бесплатно учите тексты песен")
+      .toContain("Изучайте тексты песен бесплатно")
   })
 })
