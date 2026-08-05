@@ -3052,7 +3052,9 @@ describe("community study routes", () => {
       let heartbeat: (() => void) | null = null
       let heartbeatActive = false
       let clearedHeartbeat = false
-      let resolveProvider: ((response: Response) => void) | null = null
+      let resolveProvider: (response: Response) => void = () => {
+        throw new Error("provider resolver not initialized")
+      }
       let providerStartedResolve: (() => void) | null = null
       const providerStarted = new Promise<void>((resolve) => { providerStartedResolve = resolve })
       let typingActions = 0
@@ -3060,7 +3062,7 @@ describe("community study routes", () => {
         heartbeat = callback as () => void
         heartbeatActive = true
         return 4242 as unknown as ReturnType<typeof setInterval>
-      }) as typeof setInterval
+      }) as unknown as typeof setInterval
       globalThis.clearInterval = (() => {
         clearedHeartbeat = true
         heartbeatActive = false
@@ -3091,7 +3093,7 @@ describe("community study routes", () => {
         await Promise.resolve()
         expect(typingActions).toBe(2)
 
-        resolveProvider?.(Response.json({
+        resolveProvider(Response.json({
           id: "provider-private-study-typing",
           choices: [{ message: { content: "Everybody takes the singular verb wants." } }],
         }))
