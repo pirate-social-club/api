@@ -821,7 +821,7 @@ jobs:
         with:
           version: 0.41.0
           egress-rules: egress-rules.yaml
-          warn: true
+          warn: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
