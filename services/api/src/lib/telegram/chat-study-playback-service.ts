@@ -32,6 +32,8 @@ export function telegramStudyPlaybackButton(sessionId: string, language: StudyHe
 }
 
 const ASK_TUTOR_CALLBACK_PREFIX = "study-ask"
+const EXPLAIN_TUTOR_CALLBACK_PREFIX = "study-explain"
+export type TelegramStudyExplanationKind = "grammar" | "meaning"
 
 export function telegramStudyAskTutorCallbackData(sessionId: string): string {
   return `${ASK_TUTOR_CALLBACK_PREFIX}:${sessionId}`
@@ -52,6 +54,28 @@ export function telegramStudyAskTutorButton(sessionId: string, language: StudyHe
     callback_data: telegramStudyAskTutorCallbackData(sessionId),
     text: getTelegramStudyCopy(language).askAboutLine,
   }
+}
+
+export function telegramStudyExplainTutorCallbackData(sessionId: string, kind: TelegramStudyExplanationKind): string {
+  return `${EXPLAIN_TUTOR_CALLBACK_PREFIX}:${kind === "grammar" ? "g" : "m"}:${sessionId}`
+}
+
+export function parseTelegramStudyExplainTutorCallback(value: unknown): { kind: TelegramStudyExplanationKind; sessionId: string } | null {
+  if (typeof value !== "string" || value.length > 64) return null
+  const match = value.match(/^study-explain:([gm]):(tcs_[A-Za-z0-9_-]+)$/u)
+  if (!match) return null
+  return { kind: match[1] === "g" ? "grammar" : "meaning", sessionId: match[2]! }
+}
+
+export function telegramStudyTutorButtons(sessionId: string, language: StudyHelperLanguage) {
+  const copy = getTelegramStudyCopy(language)
+  return [
+    [
+      { callback_data: telegramStudyExplainTutorCallbackData(sessionId, "meaning"), text: copy.explainMeaning },
+      { callback_data: telegramStudyExplainTutorCallbackData(sessionId, "grammar"), text: copy.explainGrammar },
+    ],
+    [telegramStudyAskTutorButton(sessionId, language)],
+  ]
 }
 
 async function cachedFileId(input: {

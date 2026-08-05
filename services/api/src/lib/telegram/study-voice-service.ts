@@ -24,7 +24,7 @@ import {
 } from "../communities/assistant-policy/speech-service"
 import { getCommunityAssistantVoicePolicyForCommunity } from "../communities/assistant-policy/service"
 import { getTelegramStudyCopy } from "./study-copy"
-import { telegramStudyAskTutorButton } from "./chat-study-playback-service"
+import { telegramStudyTutorButtons } from "./chat-study-playback-service"
 import { isStudyHelperLanguage, type StudyDeliveryMode } from "./study-preference-service"
 import {
   decryptActiveCommunityTelegramBotOrNull,
@@ -340,7 +340,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
         ...(input.intent.chatStudySessionId
           ? {
             reply_markup: {
-              inline_keyboard: [[telegramStudyAskTutorButton(input.intent.chatStudySessionId, language)]],
+              inline_keyboard: telegramStudyTutorButtons(input.intent.chatStudySessionId, language),
             },
           }
           : {}),

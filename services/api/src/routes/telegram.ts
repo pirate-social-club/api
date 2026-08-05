@@ -86,6 +86,7 @@ import {
 } from "../lib/telegram/private-study-tutor-service"
 import {
   continueTelegramChatStudyAfterVoice,
+  getTelegramStudyRewardOpportunityCount,
   handleTelegramChatStudyCallback,
   startTelegramChatStudy,
 } from "../lib/telegram/chat-study-service"
@@ -114,6 +115,7 @@ const TELEGRAM_START_MENU_STUDY = "menu:study"
 const TELEGRAM_START_MENU_ASSISTANT = "menu:assistant"
 const TELEGRAM_START_MENU_PREFERENCES = "menu:preferences"
 const TELEGRAM_START_MENU_REWARDS = "menu:rewards"
+const TELEGRAM_START_MENU_SETTINGS = "menu:settings"
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
@@ -338,6 +340,7 @@ function telegramCommunityStartMarkup(input: {
   if (input.studyEnabled) {
     rows.push([{ text: input.copy.menu.study, callback_data: TELEGRAM_START_MENU_STUDY }])
     rows.push([{ text: input.copy.menu.preferences, callback_data: TELEGRAM_START_MENU_PREFERENCES }])
+    rows.push([{ text: input.copy.menu.settings, callback_data: TELEGRAM_START_MENU_SETTINGS }])
   }
   rows.push([{ text: input.copy.menu.rewards, callback_data: TELEGRAM_START_MENU_REWARDS }])
   if (input.assistantEnabled) {
@@ -364,7 +367,7 @@ async function handleTelegramStartMenuCallback(input: {
     && input.callback.data !== TELEGRAM_START_MENU_ASSISTANT
     && input.callback.data !== TELEGRAM_START_MENU_PREFERENCES
     && input.callback.data !== TELEGRAM_START_MENU_REWARDS) {
-    return false
+    if (input.callback.data !== TELEGRAM_START_MENU_SETTINGS) return false
   }
   const callbackQueryId = telegramIdentifier(input.callback.id)
   const chatId = telegramIdentifier(input.callback.message?.chat?.id)
@@ -390,13 +393,16 @@ async function handleTelegramStartMenuCallback(input: {
     })
     const copy = getTelegramCopy(locale)
     const rewardsUrl = telegramRewardsUrl(input.env)
-    const summary = account
-      ? await getRewardsSummaryForUser({ env: input.env, userId: account.userId }).catch(() => null)
-      : null
+    const [summary, opportunityCount] = account
+      ? await Promise.all([
+          getRewardsSummaryForUser({ env: input.env, userId: account.userId }).catch(() => null),
+          getTelegramStudyRewardOpportunityCount({ communityId: input.bot.communityId, env: input.env, userId: account.userId }).catch(() => 0),
+        ])
+      : [null, 0] as const
     const pendingCents = summary?.pending_verification.conditional_cents ?? 0
     const balanceCents = summary?.balance_cents ?? 0
-    const money = (cents: number) => `$${(cents / 100).toFixed(2)}`
-    const text = !summary || (balanceCents <= 0 && pendingCents <= 0)
+    const money = (cents: number) => `${(cents / 100).toFixed(2)} USDC`
+    const rewardSummary = !summary || (balanceCents <= 0 && pendingCents <= 0)
       ? copy.rewards.empty
       : pendingCents > 0
         ? copy.rewards.pending({
@@ -405,6 +411,7 @@ async function handleTelegramStartMenuCallback(input: {
             pending: money(pendingCents),
           })
         : copy.rewards.balance({ balance: money(balanceCents) })
+    const text = `${rewardSummary}\n\n${copy.rewards.opportunities({ count: opportunityCount })}`
     await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => false)
     await safeSendTelegramMessage(input.bot, {
       chat_id: chatId,
@@ -430,8 +437,9 @@ async function handleTelegramStartMenuCallback(input: {
     bot: input.bot,
     chatId,
     env: input.env,
-    forcePreferences: input.callback.data === TELEGRAM_START_MENU_PREFERENCES,
-    requestMessageId: input.callback.data === TELEGRAM_START_MENU_PREFERENCES
+    forceLanguage: input.callback.data === TELEGRAM_START_MENU_PREFERENCES,
+    forcePreferences: input.callback.data === TELEGRAM_START_MENU_SETTINGS,
+    requestMessageId: input.callback.data === TELEGRAM_START_MENU_PREFERENCES || input.callback.data === TELEGRAM_START_MENU_SETTINGS
       ? null
       : input.callback.message?.message_id ?? null,
     targetLanguage: telegramLanguageCode(input.callback.from?.language_code),

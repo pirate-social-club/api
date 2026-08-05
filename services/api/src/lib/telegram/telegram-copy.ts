@@ -37,12 +37,14 @@ type TelegramCopy = {
     community: string
     preferences: string
     rewards: string
+    settings: string
     study: string
   }
   rewards: {
     balance(input: { balance: string }): string
     claim: string
     empty: string
+    opportunities(input: { count: number }): string
     pending(input: TelegramRewardsPendingArgs): string
   }
   privateAssistant: {
@@ -64,13 +66,13 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "Verify to join",
     },
     start: {
-      alreadyJoined: ({ community }) => `Welcome to ${community} 🎵\n\nWhat would you like to do?`,
+      alreadyJoined: ({ community }) => `Welcome to ${community} 🎵\n\nStudy song lyrics for free. Some songs offer rewards for learning 🪙`,
       fallback: ({ community }) => `Open ${community} in Pirate to continue.`,
       gateFailed: ({ community }) =>
         `Your Pirate account does not meet ${community}'s requirements yet. Open Pirate to review what is missing.`,
       joined: ({ community }) => `You've joined "${community}".`,
       linkRequired: ({ community }) => `Welcome to ${community}. Link your Pirate account to verify and join.`,
-      overview: ({ community }) => `Welcome to ${community} 🎵\n\nStudy song lyrics for free, track your progress, and download songs when the artist makes them available. Some songs offer crypto rewards for learning.\n\nChoose what you'd like to do:`,
+      overview: ({ community }) => `Welcome to ${community} 🎵\n\nStudy song lyrics for free. Some songs offer rewards for learning 🪙`,
       pendingRequest: ({ community }) =>
         `Your request to join ${community} is pending. Open Pirate to check for updates.`,
       requestable: ({ community }) => `${community} reviews new members. Open Pirate to send your access request.`,
@@ -78,11 +80,12 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `Open ${community} in Pirate to sign in and continue.`,
       verifyRequired: ({ community }) => `Welcome to ${community}. Verify your Pirate account to join.`,
     },
-    menu: { assistant: "💬 Ask the assistant", community: "🌐 Open community", preferences: "⚙️ Language", rewards: "🏆 Rewards", study: "📚 Study songs" },
+    menu: { assistant: "💬 Ask the assistant", community: "🌐 Open community", preferences: "Change language", rewards: "🪙 Rewards", settings: "Settings", study: "📚 Study songs" },
     rewards: {
       balance: ({ balance }) => `Available rewards: ${balance}.\n\nClaiming requires a wallet and a one-time unique-human check. You can keep studying without either.`,
       claim: "Claim rewards",
-      empty: "No rewards yet. Some songs pay crypto rewards as you learn. You can study without a wallet or verification.",
+      empty: "Your rewards: 0.00 USDC",
+      opportunities: ({ count }) => count === 0 ? "No songs currently offer rewards." : `${count} ${count === 1 ? "song currently offers" : "songs currently offer"} rewards.`,
       pending: ({ balance, expiresAt, pending }) => `Available rewards: ${balance}\nPending rewards: ${pending}${expiresAt ? `\nKeep them before: ${expiresAt}` : ""}\n\nVerify once and connect a wallet when you're ready to keep and claim them. You can keep studying without either.`,
     },
     privateAssistant: {
@@ -102,13 +105,13 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "تحقق للانضمام",
     },
     start: {
-      alreadyJoined: ({ community }) => `مرحبًا بك في ${community} 🎵\n\nماذا تريد أن تفعل؟`,
+      alreadyJoined: ({ community }) => `مرحبًا بك في ${community} 🎵\n\nتعلّم كلمات الأغاني مجانًا. بعض الأغاني تقدم مكافآت مقابل التعلم 🪙`,
       fallback: ({ community }) => `افتح ${community} في Pirate للمتابعة.`,
       gateFailed: ({ community }) =>
         `حسابك في Pirate لا يستوفي متطلبات ${community} بعد. افتح Pirate لمعرفة ما ينقصك.`,
       joined: ({ community }) => `أنت في ${community}.`,
       linkRequired: ({ community }) => `مرحباً بك في ${community}. اربط حسابك في Pirate للتحقق والانضمام.`,
-      overview: ({ community }) => `مرحبًا بك في ${community} 🎵\n\nتعلّم كلمات الأغاني مجانًا، وتابع تقدمك، وحمّل الأغاني عندما يتيحها الفنان. بعض الأغاني تقدم مكافآت بالعملات المشفرة مقابل التعلم.\n\nاختر ما تريد فعله:`,
+      overview: ({ community }) => `مرحبًا بك في ${community} 🎵\n\nتعلّم كلمات الأغاني مجانًا. بعض الأغاني تقدم مكافآت مقابل التعلم 🪙`,
       pendingRequest: ({ community }) =>
         `طلبك للانضمام إلى ${community} قيد المراجعة. افتح Pirate للتحقق من التحديثات.`,
       requestable: ({ community }) => `يراجع ${community} الأعضاء الجدد. افتح Pirate لإرسال طلب الانضمام.`,
@@ -116,11 +119,12 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `افتح ${community} في Pirate لتسجيل الدخول والمتابعة.`,
       verifyRequired: ({ community }) => `مرحباً بك في ${community}. تحقق من حسابك في Pirate للانضمام.`,
     },
-    menu: { assistant: "💬 اسأل المساعد", community: "🌐 افتح المجتمع", preferences: "⚙️ اللغة", rewards: "🏆 المكافآت", study: "📚 تعلّم الأغاني" },
+    menu: { assistant: "💬 اسأل المساعد", community: "🌐 افتح المجتمع", preferences: "تغيير اللغة", rewards: "🪙 المكافآت", settings: "الإعدادات", study: "📚 تعلّم الأغاني" },
     rewards: {
       balance: ({ balance }) => `المكافآت المتاحة: ${balance}.\n\nيتطلب الاستلام محفظة وفحصًا لمرة واحدة للتأكد من أنك شخص فريد. يمكنك متابعة التعلم من دونهما.`,
       claim: "استلم المكافآت",
-      empty: "لا توجد مكافآت بعد. بعض الأغاني تقدم مكافآت بالعملات المشفرة أثناء التعلم. يمكنك التعلم دون محفظة أو تحقق.",
+      empty: "مكافآتك: 0.00 USDC",
+      opportunities: ({ count }) => count === 0 ? "لا توجد أغانٍ تقدم مكافآت حاليًا." : `${count} من الأغاني تقدم مكافآت حاليًا.`,
       pending: ({ balance, expiresAt, pending }) => `المكافآت المتاحة: ${balance}\nالمكافآت المعلقة: ${pending}${expiresAt ? `\nاحتفظ بها قبل: ${expiresAt}` : ""}\n\nتحقق مرة واحدة واربط محفظة عندما تكون مستعدًا للاحتفاظ بها واستلامها. يمكنك متابعة التعلم من دونهما.`,
     },
     privateAssistant: {
@@ -140,13 +144,13 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "验证并加入",
     },
     start: {
-      alreadyJoined: ({ community }) => `欢迎来到 ${community} 🎵\n\n你想做什么？`,
+      alreadyJoined: ({ community }) => `欢迎来到 ${community} 🎵\n\n免费学习歌词。部分歌曲提供学习奖励 🪙`,
       fallback: ({ community }) => `在 Pirate 中打开 ${community} 以继续。`,
       gateFailed: ({ community }) =>
         `你的 Pirate 账号暂未满足 ${community} 的要求。打开 Pirate 查看还需要完成什么。`,
       joined: ({ community }) => `你已加入 ${community}。`,
       linkRequired: ({ community }) => `欢迎来到 ${community}。关联你的 Pirate 账号以验证并加入。`,
-      overview: ({ community }) => `欢迎来到 ${community} 🎵\n\n免费学习歌词、跟踪进度，并在歌手允许时下载歌曲。部分歌曲会为学习提供加密货币奖励。\n\n请选择：`,
+      overview: ({ community }) => `欢迎来到 ${community} 🎵\n\n免费学习歌词。部分歌曲提供学习奖励 🪙`,
       pendingRequest: ({ community }) =>
         `你加入 ${community} 的申请正在审核中。打开 Pirate 查看更新。`,
       requestable: ({ community }) => `${community} 会审核新成员。打开 Pirate 发送加入申请。`,
@@ -154,11 +158,12 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `在 Pirate 中打开 ${community}，登录后继续。`,
       verifyRequired: ({ community }) => `欢迎来到 ${community}。验证你的 Pirate 账号以加入。`,
     },
-    menu: { assistant: "💬 询问助手", community: "🌐 打开社区", preferences: "⚙️ 语言", rewards: "🏆 奖励", study: "📚 学习歌曲" },
+    menu: { assistant: "💬 询问助手", community: "🌐 打开社区", preferences: "更改语言", rewards: "🪙 奖励", settings: "设置", study: "📚 学习歌曲" },
     rewards: {
       balance: ({ balance }) => `可用奖励：${balance}。\n\n领取时需要钱包和一次真人唯一性验证。无需这些也可以继续学习。`,
       claim: "领取奖励",
-      empty: "暂无奖励。部分歌曲会在你学习时提供加密货币奖励。学习无需钱包或验证。",
+      empty: "你的奖励：0.00 USDC",
+      opportunities: ({ count }) => count === 0 ? "目前没有歌曲提供奖励。" : `目前有 ${count} 首歌曲提供奖励。`,
       pending: ({ balance, expiresAt, pending }) => `可用奖励：${balance}\n待确认奖励：${pending}${expiresAt ? `\n请在此时间前保留：${expiresAt}` : ""}\n\n准备好保留和领取时，再完成一次验证并连接钱包。无需这些也可以继续学习。`,
     },
     privateAssistant: {
@@ -178,13 +183,13 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "გაიარეთ ვერიფიკაცია",
     },
     start: {
-      alreadyJoined: ({ community }) => `მოგესალმებით ${community}-ში 🎵\n\nრის გაკეთება გსურთ?`,
+      alreadyJoined: ({ community }) => `მოგესალმებით ${community}-ში 🎵\n\nუფასოდ ისწავლეთ სიმღერების ტექსტები. ზოგი სიმღერა სწავლისთვის ჯილდოს გთავაზობთ 🪙`,
       fallback: ({ community }) => `გასაგრძელებლად გახსენით ${community} Pirate-ში.`,
       gateFailed: ({ community }) =>
         `თქვენი Pirate ანგარიში ჯერ არ აკმაყოფილებს ${community}-ის მოთხოვნებს. გახსენით Pirate და ნახეთ, რა არის დასასრულებელი.`,
       joined: ({ community }) => `თქვენ ახლა ხართ ${community}-ში.`,
       linkRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის დააკავშირეთ თქვენი Pirate ანგარიში.`,
-      overview: ({ community }) => `მოგესალმებით ${community}-ში 🎵\n\nუფასოდ ისწავლეთ სიმღერების ტექსტები, აკონტროლეთ პროგრესი და ჩამოტვირთეთ სიმღერები, როცა შემსრულებელი ამის საშუალებას იძლევა. ზოგ სიმღერაზე სწავლისთვის კრიპტო ჯილდოა.\n\nაირჩიეთ მოქმედება:`,
+      overview: ({ community }) => `მოგესალმებით ${community}-ში 🎵\n\nუფასოდ ისწავლეთ სიმღერების ტექსტები. ზოგი სიმღერა სწავლისთვის ჯილდოს გთავაზობთ 🪙`,
       pendingRequest: ({ community }) =>
         `${community}-ში გაწევრიანების მოთხოვნა განხილვაშია. განახლებებისთვის გახსენით Pirate.`,
       requestable: ({ community }) => `${community} ახალ წევრებს ამოწმებს. მოთხოვნის გასაგზავნად გახსენით Pirate.`,
@@ -192,11 +197,12 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       signIn: ({ community }) => `გასაგრძელებლად შედით Pirate-ში და გახსენით ${community}.`,
       verifyRequired: ({ community }) => `მოგესალმებით ${community}-ში. გაწევრიანებისთვის გაიარეთ თქვენი Pirate ანგარიშის ვერიფიკაცია.`,
     },
-    menu: { assistant: "💬 ჰკითხეთ ასისტენტს", community: "🌐 თემის გახსნა", preferences: "⚙️ ენა", rewards: "🏆 ჯილდოები", study: "📚 სიმღერების სწავლა" },
+    menu: { assistant: "💬 ჰკითხეთ ასისტენტს", community: "🌐 თემის გახსნა", preferences: "ენის შეცვლა", rewards: "🪙 ჯილდოები", settings: "პარამეტრები", study: "📚 სიმღერების სწავლა" },
     rewards: {
       balance: ({ balance }) => `ხელმისაწვდომი ჯილდოები: ${balance}.\n\nმისაღებად საჭიროა საფულე და ერთჯერადი უნიკალური ადამიანის შემოწმება. სწავლა მათ გარეშეც შეგიძლიათ.`,
       claim: "ჯილდოების მიღება",
-      empty: "ჯილდო ჯერ არ გაქვთ. ზოგი სიმღერა სწავლისას კრიპტო ჯილდოს გასცემს. სწავლას საფულე ან ვერიფიკაცია არ სჭირდება.",
+      empty: "თქვენი ჯილდოები: 0.00 USDC",
+      opportunities: ({ count }) => count === 0 ? "ამჟამად არც ერთი სიმღერა არ გთავაზობთ ჯილდოს." : `${count} სიმღერა ამჟამად ჯილდოს გთავაზობთ.`,
       pending: ({ balance, expiresAt, pending }) => `ხელმისაწვდომი ჯილდოები: ${balance}\nმოლოდინში: ${pending}${expiresAt ? `\nშეინარჩუნეთ ამ დრომდე: ${expiresAt}` : ""}\n\nროცა მზად იქნებით, ერთხელ გაიარეთ შემოწმება და დააკავშირეთ საფულე. სწავლა მათ გარეშეც შეგიძლიათ.`,
     },
     privateAssistant: {
@@ -216,23 +222,24 @@ const TELEGRAM_COPY: Record<RuntimeUiLocaleCode, TelegramCopy> = {
       verifyToJoin: "Подтвердить и вступить",
     },
     start: {
-      alreadyJoined: ({ community }) => `Добро пожаловать в ${community} 🎵\n\nЧто вы хотите сделать?`,
+      alreadyJoined: ({ community }) => `Добро пожаловать в ${community} 🎵\n\nИзучайте тексты песен бесплатно. За изучение некоторых песен можно получать награды 🪙`,
       fallback: ({ community }) => `Откройте ${community} в Pirate, чтобы продолжить.`,
       gateFailed: ({ community }) => `Ваш аккаунт Pirate пока не соответствует требованиям ${community}. Откройте Pirate, чтобы узнать подробности.`,
       joined: ({ community }) => `Вы вступили в ${community}.`,
       linkRequired: ({ community }) => `Добро пожаловать в ${community}. Привяжите аккаунт Pirate, чтобы подтвердить его и вступить.`,
-      overview: ({ community }) => `Добро пожаловать в ${community} 🎵\n\nБесплатно учите тексты песен, следите за прогрессом и скачивайте песни, когда это разрешает исполнитель. За изучение некоторых песен можно получать криптовалютные награды.\n\nВыберите действие:`,
+      overview: ({ community }) => `Добро пожаловать в ${community} 🎵\n\nИзучайте тексты песен бесплатно. За изучение некоторых песен можно получать награды 🪙`,
       pendingRequest: ({ community }) => `Ваша заявка на вступление в ${community} рассматривается. Откройте Pirate, чтобы проверить обновления.`,
       requestable: ({ community }) => `${community} проверяет новых участников. Откройте Pirate, чтобы отправить заявку.`,
       requestSent: ({ community }) => `Заявка на вступление в ${community} отправлена. После одобрения вы сможете войти.`,
       signIn: ({ community }) => `Откройте ${community} в Pirate, войдите в аккаунт и продолжите.`,
       verifyRequired: ({ community }) => `Добро пожаловать в ${community}. Подтвердите аккаунт Pirate, чтобы вступить.`,
     },
-    menu: { assistant: "💬 Спросить помощника", community: "🌐 Открыть сообщество", preferences: "⚙️ Язык", rewards: "🏆 Награды", study: "📚 Учить песни" },
+    menu: { assistant: "💬 Спросить помощника", community: "🌐 Открыть сообщество", preferences: "Изменить язык", rewards: "🪙 Награды", settings: "Настройки", study: "📚 Учить песни" },
     rewards: {
       balance: ({ balance }) => `Доступные награды: ${balance}.\n\nДля получения нужны кошелёк и одноразовая проверка уникальности. Продолжать учиться можно и без них.`,
       claim: "Получить награды",
-      empty: "Наград пока нет. За изучение некоторых песен начисляются криптовалютные награды. Для обучения не нужны кошелёк или проверка.",
+      empty: "Ваши награды: 0.00 USDC",
+      opportunities: ({ count }) => count === 0 ? "Сейчас ни одна песня не предлагает награды." : `Сейчас награды предлагают ${count} ${count === 1 ? "песня" : "песен"}.`,
       pending: ({ balance, expiresAt, pending }) => `Доступные награды: ${balance}\nОжидающие награды: ${pending}${expiresAt ? `\nСохраните их до: ${expiresAt}` : ""}\n\nКогда будете готовы сохранить и получить их, один раз пройдите проверку и подключите кошелёк. Продолжать учиться можно и без них.`,
     },
     privateAssistant: {

@@ -1156,7 +1156,7 @@ describe("community Telegram routes", () => {
     expect(sendBody.text).toContain("Preview Disabled Club")
     expect(sendBody.text).not.toBe("Send a question to talk to this community assistant.")
     expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual({
-      text: "🏆 Rewards",
+      text: "🪙 Rewards",
       callback_data: "menu:rewards",
     })
     expect(sendBody.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Verify to join")).toBe(false)
