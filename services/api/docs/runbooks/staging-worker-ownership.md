@@ -84,12 +84,14 @@ anything:
 
 ## Current holds
 
-- **2026-08-04, Codex nationality-tier acceptance** — holding the shared
-  staging Worker on Web-pinned API `50a514739` while exercising the manual
-  Self/ZKPassport tier-accounting acceptance matrix, including the Base
-  Sepolia cashout/reconciliation leg. No Worker deploy is planned; evidence
-  is invalid if the served API SHA changes. Window: 2026-08-04 until the
-  matrix completes or this hold is explicitly released.
+- **2026-08-05, Codex nationality-tier acceptance (restart)** — holding the
+  shared staging Worker on Web-pinned API `cadd083` while exercising a fresh
+  manual Self/ZKPassport tier-accounting acceptance matrix, including the Base
+  Sepolia cashout/reconciliation leg. The prior 2026-08-04 attempt is not
+  continued: its expected Worker SHA `50a514739` was superseded and its test
+  pools' windows elapsed before qualification. No Worker deploy is planned;
+  evidence is valid only while the served API SHA remains `cadd083`. Window:
+  2026-08-05 until the matrix completes or this hold is explicitly released.
 
 ## Hold history
 
