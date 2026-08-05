@@ -41,7 +41,7 @@ export async function advanceRewardCampaignLifecycle(input: {
     const ended = await tx.execute({
       sql: `
         UPDATE reward_campaigns
-        SET status = 'ended', ended_at = COALESCE(ended_at, ?1), updated_at = ?1
+        SET status = 'ended', ended_at = COALESCE(ended_at, CAST(?1 AS TEXT)), updated_at = ?1
         WHERE status IN ('scheduled', 'active', 'paused', 'exhausted')
           AND ends_at <= ?1
         RETURNING reward_campaign_id
@@ -62,7 +62,7 @@ export async function advanceRewardCampaignLifecycle(input: {
     const activated = await tx.execute({
       sql: `
         UPDATE reward_campaigns
-        SET status = 'active', activated_at = COALESCE(activated_at, ?1), updated_at = ?1
+        SET status = 'active', activated_at = COALESCE(activated_at, CAST(?1 AS TEXT)), updated_at = ?1
         WHERE status = 'scheduled'
           AND starts_at <= ?1
           AND ends_at > ?1
