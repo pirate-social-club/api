@@ -1472,16 +1472,26 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           starts_at, ends_at, requested_starts_at, requested_ends_at, updated_at
         FROM reward_campaigns WHERE reward_campaign_id = 'rcp_invariants_pg'
       `)
+      const scheduleBefore = await db.unsafe(`
+        SELECT starts_at, ends_at, requested_starts_at, requested_ends_at
+        FROM reward_campaigns WHERE reward_campaign_id = 'rcp_topup_budget_pg'
+      `)
       await db.unsafe(`
         UPDATE reward_campaigns
         SET funded_cents = 300, budget_cents = 300, status = 'active'
         WHERE reward_campaign_id = 'rcp_topup_budget_pg'
       `)
       const rows = await db.unsafe(`
-        SELECT status, budget_cents, funded_cents, starts_at = requested_starts_at AS schedule_unchanged
+        SELECT status, budget_cents, funded_cents,
+          starts_at, ends_at, requested_starts_at, requested_ends_at
         FROM reward_campaigns WHERE reward_campaign_id = 'rcp_topup_budget_pg'
       `)
-      expect(rows).toEqual([{ status: "active", budget_cents: 300, funded_cents: 300, schedule_unchanged: true }])
+      expect(rows).toEqual([{
+        status: "active",
+        budget_cents: 300,
+        funded_cents: 300,
+        ...scheduleBefore[0],
+      }])
 
       const independentGrowth = await postgresErrorMessage(() => db.unsafe(`
         UPDATE reward_campaigns SET budget_cents = 301
