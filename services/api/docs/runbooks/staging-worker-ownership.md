@@ -84,18 +84,24 @@ anything:
 
 ## Current holds
 
-- **2026-08-05, Codex nationality-tier acceptance (restart)** — holding the
-  shared staging Worker on Web-pinned API `cadd083` while exercising a fresh
-  manual Self/ZKPassport tier-accounting acceptance matrix, including the Base
-  Sepolia cashout/reconciliation leg. The prior 2026-08-04 attempt is not
-  continued: its expected Worker SHA `50a514739` was superseded and its test
-  pools' windows elapsed before qualification. No Worker deploy is planned;
-  evidence is valid only while the served API SHA remains `cadd083`. Window:
-  2026-08-05 until the matrix completes or this hold is explicitly released.
+- None.
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
+
+- **2026-08-05** — Nationality-tier acceptance restart on Web-pinned API
+  `cadd083` is blocked at fresh-song publication; hold released. A fresh active
+  staging community and ready bundle `sab_272e3b289c1e42708b265ae9bf005f9e`
+  were created through normal APIs, but two bounded publish attempts returned
+  retryable `story_royalty_registration_failed` 502s and their posts/assets
+  were automatically cleaned up. No reward campaign, quote, transfer, or
+  reward-chain action occurred. Evidence and request IDs: api#1085.
+
+- **2026-08-05** — Nationality-tier acceptance hold began on Web-pinned API
+  `cadd083`. The earlier 2026-08-04 attempt was not continued because its
+  expected Worker SHA `50a514739` was superseded and its test pools' windows
+  elapsed before qualification.
 
 - **2026-08-03** — Nationality shadow validation completed on Web-pinned API
   `6241fb92c`. Two genuine historical staging qualification events produced
