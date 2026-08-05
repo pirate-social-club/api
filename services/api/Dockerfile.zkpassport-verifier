@@ -4,7 +4,7 @@ FROM oven/bun:1.3.10
 
 WORKDIR /app/services/api
 
-COPY zkpassport-verifier-runtime/package.json zkpassport-verifier-runtime/bun.lock ./
+COPY zkpassport-verifier-runtime/package.json zkpassport-verifier-runtime/bun.lock zkpassport-verifier-runtime/bunfig.toml ./
 RUN bun install --frozen-lockfile --production
 
 COPY api/scripts ./scripts

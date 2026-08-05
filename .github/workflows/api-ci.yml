@@ -17,8 +17,10 @@ on:
       - "services/dance-grader/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
+      - "services/song-preview-runtime/**"
       - "services/story-controlled-inclusion-harness/**"
       - "services/zkpassport-verifier-container/**"
+      - "services/zkpassport-verifier-runtime/**"
   merge_group:
     types: [checks_requested]
   push:
@@ -39,8 +41,10 @@ on:
       - "services/dance-grader/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
+      - "services/song-preview-runtime/**"
       - "services/story-controlled-inclusion-harness/**"
       - "services/zkpassport-verifier-container/**"
+      - "services/zkpassport-verifier-runtime/**"
   workflow_dispatch:
     inputs:
       core_sha:
@@ -471,7 +475,9 @@ jobs:
           bun-version: 1.3.10
 
       - name: Run repo hygiene checks
-        run: node scripts/check-repo-hygiene.mjs
+        run: |
+          node scripts/check-repo-hygiene.mjs
+          bun test scripts/check-repo-hygiene.dockerfiles.test.mjs
 
       - name: Install shared dependencies
         working-directory: services/shared
@@ -602,6 +608,14 @@ jobs:
       - name: Test song preview container
         working-directory: services/song-preview-container
         run: bun run test
+
+      - name: Install song preview runtime dependencies
+        working-directory: services/song-preview-runtime
+        run: bun install --frozen-lockfile --production
+
+      - name: Audit song preview runtime dependencies
+        working-directory: services/song-preview-runtime
+        run: bun audit --audit-level=high
 
       - name: Install API dependencies
         working-directory: services/api

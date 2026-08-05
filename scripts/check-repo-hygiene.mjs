@@ -100,18 +100,76 @@ function checkRouteCoverageMap() {
   return { label: "route-coverage-map", failures };
 }
 
-const checks = [checkStaleMarkers(), checkRouteCoverageMap()];
-const failures = checks.filter((check) => check.failures.length > 0);
+// Regression guard for the production runtime images: every bun install in a
+// RUN instruction must consume the committed lockfile, and the lockfile must
+// never be deleted. Scope is deliberately narrow: complete RUN instructions
+// are reconstructed (continuation lines joined, comments ignored) and shell
+// segments split on &&/||/;/|, so `bun install`, `bun i` and option prefixes
+// like `bun --cwd <dir> install` are all recognized. Environment-prefixed
+// invocations such as `CI=true bun install` are out of scope.
+export function checkRuntimeImageDockerfileContent(file, source) {
+  const failures = [];
+  const instructions = [];
+  let continuation = "";
 
-if (failures.length === 0) {
-  console.log("repo hygiene passed");
-  for (const check of checks) console.log(`- ${check.label}`);
-  process.exit(0);
+  source.split("\n").forEach((rawLine, index) => {
+    if (!continuation && rawLine.trimStart().startsWith("#")) return;
+    if (rawLine.endsWith("\\")) {
+      continuation += `${rawLine.slice(0, -1)} `;
+      return;
+    }
+    const line = continuation + rawLine;
+    continuation = "";
+    instructions.push({ line, lineNumber: index + 1 });
+  });
+  if (continuation) instructions.push({ line: continuation, lineNumber: source.split("\n").length });
+
+  for (const { line, lineNumber } of instructions) {
+    if (!/^\s*RUN\s/u.test(line)) continue;
+    const segments = line.replace(/^\s*RUN\s+/u, "").split(/&&|\|\||[;|]/u);
+    for (const segment of segments) {
+      const tokens = segment.trim().split(/\s+/u).filter(Boolean);
+      if (tokens.includes("rm") && tokens.some((token) => token.includes("bun.lock"))) {
+        failures.push(`${file}:${lineNumber}: deletes bun.lock`);
+      }
+      if (tokens[0] === "bun" && (tokens.includes("install") || tokens.includes("i"))) {
+        if (!tokens.includes("--frozen-lockfile")) {
+          failures.push(`${file}:${lineNumber}: bun install without --frozen-lockfile`);
+        }
+      }
+    }
+  }
+
+  return failures;
 }
 
-console.error("repo hygiene failed");
-for (const check of failures) {
-  console.error(`- ${check.label}`);
-  for (const failure of check.failures) console.error(`  ${failure}`);
+function checkRuntimeImageDockerfiles() {
+  const dockerfiles = [
+    "services/api/Dockerfile.song-preview",
+    "services/api/Dockerfile.zkpassport-verifier",
+  ];
+  const failures = dockerfiles.flatMap((file) =>
+    checkRuntimeImageDockerfileContent(file, fs.readFileSync(path.join(repoRoot, file), "utf8")));
+
+  return { label: "runtime-image-dockerfiles", failures };
 }
-process.exit(1);
+
+const isMain = process.argv[1] != null && path.resolve(process.argv[1]) === __filename;
+
+if (isMain) {
+  const checks = [checkStaleMarkers(), checkRouteCoverageMap(), checkRuntimeImageDockerfiles()];
+  const failures = checks.filter((check) => check.failures.length > 0);
+
+  if (failures.length === 0) {
+    console.log("repo hygiene passed");
+    for (const check of checks) console.log(`- ${check.label}`);
+    process.exit(0);
+  }
+
+  console.error("repo hygiene failed");
+  for (const check of failures) {
+    console.error(`- ${check.label}`);
+    for (const failure of check.failures) console.error(`  ${failure}`);
+  }
+  process.exit(1);
+}
