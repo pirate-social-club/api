@@ -84,7 +84,13 @@ anything:
 
 ## Current holds
 
-- None.
+- **2026-08-05 07:30Z — `/root`, nationality-tier acceptance matrix.** Holding
+  the Web-pinned API `cadd083` while resuming the staging matrix on the
+  pre-existing, unpooled, published English fixture
+  `pst_9d2f7406c1f34021938611d685760f29` (four ready study units, shard
+  `community-d1-pool-0008-staging`). Scope: pool admission, then the
+  previously approved staged funding/qualification matrix. Do not deploy over
+  this hold or reuse the fixture for unrelated smokes.
 
 ## Hold history
 
@@ -97,6 +103,13 @@ Keep entries short. Delete them once they are no longer useful context.
   retryable `story_royalty_registration_failed` 502s and their posts/assets
   were automatically cleaned up. No reward campaign, quote, transfer, or
   reward-chain action occurred. Evidence and request IDs: api#1085.
+
+- **2026-08-05** — The Story-registration failure was reclassified after a
+  read-only historical-fixture audit: the published English four-unit fixture
+  `pst_9d2f7406c1f34021938611d685760f29` remains unpooled and usable. Current
+  publish code unconditionally requires Story registration for every song with
+  an artifact bundle and deletes the post on registration failure; that is a
+  resilience finding, not a matrix blocker while this fixture remains usable.
 
 - **2026-08-05** — Nationality-tier acceptance hold began on Web-pinned API
   `cadd083`. The earlier 2026-08-04 attempt was not continued because its
