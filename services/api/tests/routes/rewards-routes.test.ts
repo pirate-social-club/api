@@ -386,13 +386,40 @@ describe("rewards routes", () => {
     expect(replay.status).toBe(200)
     expect(await json(replay)).toMatchObject({ id: campaign.id, status: "canceled" })
 
+    const reusedCreateKey = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-first" })),
+    }, ctx.env)
+    expect(reusedCreateKey.status).toBe(201)
+    expect(await json(reusedCreateKey)).toMatchObject({ id: campaign.id, status: "canceled" })
+    expect((await ctx.client.execute({
+      sql: "SELECT reward_campaign_id FROM reward_song_pools WHERE post_id = ?1",
+      args: ["pst_reward_campaign_song"],
+    })).rows).toEqual([])
+
     const replacement = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
       body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-replacement" })),
     }, ctx.env)
     expect(replacement.status).toBe(201)
-    expect((await json(replacement) as { id: string }).id).not.toBe(campaign.id)
+    const replacementCampaign = await json(replacement) as { id: string }
+    expect(replacementCampaign.id).not.toBe(campaign.id)
+
+    const replacementCanceled = await app.request(`http://pirate.test/reward_campaigns/${replacementCampaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(replacementCanceled.status).toBe(200)
+
+    const strangerReplacement = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(stranger.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-stranger-replacement" })),
+    }, ctx.env)
+    expect(strangerReplacement.status).toBe(201)
+    expect((await json(strangerReplacement) as { id: string }).id).not.toBe(replacementCampaign.id)
   })
 
   test("refuses cancellation once funding has started or completed", async () => {

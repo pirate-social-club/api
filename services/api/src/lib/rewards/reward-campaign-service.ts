@@ -65,13 +65,16 @@ const POOL_EXISTS = "pool_exists"
 // preserves the requested duration but starts a fresh effective window.
 export const LATE_FUNDING_ACCEPTANCE_GRACE_SECONDS = 5 * 60
 
-export const REWARD_SONG_POOL_REGISTER_SQL = `
+export function rewardSongPoolRegisterSql(postgres: boolean): string {
+  const timestamp = postgres ? "CAST(?4 AS TIMESTAMPTZ)" : "CAST(?4 AS TEXT)"
+  return `
   INSERT INTO reward_song_pools (
     community_id, post_id, reward_campaign_id, created_at, updated_at
-  ) VALUES (?1, ?2, ?3, ?4, ?4)
+  ) VALUES (?1, ?2, ?3, ${timestamp}, ${timestamp})
   ON CONFLICT (community_id, post_id) DO NOTHING
   RETURNING reward_campaign_id
 `
+}
 
 export type RewardCampaignTarget = {
   communityId: string
@@ -627,7 +630,11 @@ export async function createRewardCampaign(input: {
     throw eligibilityFailed("Reward campaigns are not enabled for this post")
   }
   const now = input.now ?? nowIso()
-  await advanceRewardCampaignLifecycle({ client: input.client, now })
+  await advanceRewardCampaignLifecycle({
+    client: input.client,
+    now,
+    postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+  })
   const target = await input.resolveTarget(body.community, body.post)
   if (target.communityId !== body.community || target.postId !== body.post) {
     throw badRequestError("Campaign target resolution mismatch")
@@ -706,7 +713,9 @@ export async function createRewardCampaign(input: {
         ],
       })
       const registered = queryResultRow(await executeFirst(tx, {
-        sql: REWARD_SONG_POOL_REGISTER_SQL,
+        sql: rewardSongPoolRegisterSql(
+          isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+        ),
         args: [target.communityId, target.postId, campaignId, now],
       }))
       if (!registered || requiredString(registered, "reward_campaign_id") !== campaignId) {
