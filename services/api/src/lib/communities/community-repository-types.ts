@@ -8,6 +8,7 @@ import type {
   JobRow,
 } from "../auth/auth-db-rows"
 import type { Post } from "../../types"
+import type { DelegationResponseProjection } from "@pirate/hns-delegation"
 
 interface CommunityRepositoryLifecycle {
   close?(): void | Promise<void>
@@ -45,6 +46,7 @@ export type CommunityNamespaceAttachmentRow = {
   family: "hns" | "spaces"
   normalizedRootLabel: string
   verificationStatus: "verified" | "stale" | "expired" | "disputed"
+  delegation: DelegationResponseProjection | null
 }
 
 export interface CommunityNamespaceReadRepository {

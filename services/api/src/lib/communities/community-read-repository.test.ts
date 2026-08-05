@@ -27,6 +27,30 @@ async function setup() {
       pirate_web_routing_allowed INTEGER
     )
   `)
+  await client.execute(`
+    CREATE TABLE hns_root_delegation_state (
+      normalized_root_label TEXT PRIMARY KEY,
+      rollover_state TEXT NOT NULL,
+      pending_evidence_kind TEXT,
+      authority_redundancy_ok INTEGER,
+      authority_redundancy_evidence_class TEXT,
+      last_redundancy_observation_at TEXT,
+      canonical_routing_eligible INTEGER NOT NULL DEFAULT 0,
+      routing_hard_denied INTEGER NOT NULL DEFAULT 0,
+      last_parent_observation_id TEXT
+    )
+  `)
+  await client.execute(`
+    CREATE TABLE hns_root_parent_observations (
+      parent_observation_id TEXT PRIMARY KEY,
+      normalized_root_label TEXT NOT NULL,
+      observed_delegation_security TEXT,
+      parent_ds_matches_live_dnskey INTEGER,
+      authoritative_dnssec_valid INTEGER,
+      observed_at TEXT,
+      earliest_rrsig_expires_at TEXT
+    )
+  `)
   return client
 }
 
@@ -58,13 +82,17 @@ async function insertHns(client: Awaited<ReturnType<typeof setup>>, input: {
 }
 
 describe("listCommunityNamespaceAttachments", () => {
-  test("does not report a historical HNS verification as verified when routing is unavailable", async () => {
+  test("keeps ownership verified while routing observation is unavailable", async () => {
     const client = await setup()
     await insertHns(client, { id: "nv_stale", authority: 0, routing: 0 })
 
     const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
 
-    expect(rows[0]?.verificationStatus).toBe("stale")
+    expect(rows[0]?.verificationStatus).toBe("verified")
+    expect(rows[0]?.delegation).toMatchObject({
+      delegation_security: "unknown",
+      pirate_web_routing_allowed: false,
+    })
     client.close()
   })
 
@@ -75,6 +103,7 @@ describe("listCommunityNamespaceAttachments", () => {
     const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
 
     expect(rows[0]?.verificationStatus).toBe("verified")
+    expect(rows[0]?.delegation?.pirate_web_routing_allowed).toBe(false)
     client.close()
   })
 

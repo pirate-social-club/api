@@ -94,8 +94,9 @@ function publicNamespaceSelectSql(
     ${useRootDelegationState ? ROOT_DELEGATION_JOIN_SQL : ""}
     WHERE nv.family = 'hns'
       AND nv.status = 'verified'
-      AND nv.pirate_dns_authority_verified = 1
-      ${useRootDelegationState ? "" : "AND nv.pirate_web_routing_allowed = 1"}
+      ${useRootDelegationState
+        ? ""
+        : "AND nv.pirate_dns_authority_verified = 1 AND nv.pirate_web_routing_allowed = 1"}
       AND nv.expires_at > ?1
       AND c.status = 'active'
       AND c.provisioning_state = 'active'
