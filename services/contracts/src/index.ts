@@ -4653,6 +4653,7 @@ export const apiRoutes = {
   rewardCampaigns: "/reward_campaigns",
   rewardSongPolicies: (communityId: string, postId: string) => `/reward_song_policies/${communityId}/${postId}`,
   rewardCampaign: (campaignId: string) => `/reward_campaigns/${campaignId}`,
+  rewardCampaignCancel: (campaignId: string) => `/reward_campaigns/${campaignId}/cancel`,
   rewardCampaignCapabilities: "/reward_campaign_capabilities",
   publicRewardCampaign: (campaignId: string) => `/public/reward_campaigns/${campaignId}`,
   publicRewardCampaigns: "/public/reward_campaigns",

@@ -16,6 +16,7 @@ import { verifyPrivyAccessProof } from "../lib/auth/privy-auth"
 import { cashOutRewards, getRewardCashoutForUser } from "../lib/rewards/reward-cashout-service"
 import { getRewardsSummaryForUser } from "../lib/rewards/reward-read-service"
 import {
+  cancelRewardCampaignDraft,
   confirmRewardCampaignFunding,
   createRewardCampaign,
   createRewardCampaignFundingQuote,
@@ -283,6 +284,17 @@ rewards.get("/reward_campaigns/:campaignId", async (c) => {
     campaignId: c.req.param("campaignId"),
     userId: actor.userId,
     canModerateCommunity: (communityId) => canModerateCommunity(c.env, communityId, actor.userId),
+  })
+  return c.json(result, 200, { "cache-control": "no-store" })
+})
+
+rewards.post("/reward_campaigns/:campaignId/cancel", async (c) => {
+  const actor = c.get("actor")
+  const result = await cancelRewardCampaignDraft({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    userId: actor.userId,
+    campaignId: c.req.param("campaignId"),
   })
   return c.json(result, 200, { "cache-control": "no-store" })
 })

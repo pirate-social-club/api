@@ -449,6 +449,76 @@ async function requireCampaign(
   return campaign
 }
 
+export async function cancelRewardCampaignDraft(input: {
+  env: Env
+  client: Client
+  userId: string
+  campaignId: string
+  now?: string
+}): Promise<RewardCampaign> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const campaignId = nonEmpty(input.campaignId, "campaign_id")
+  const now = input.now ?? nowIso()
+  if (!Number.isFinite(Date.parse(now))) throw badRequestError("now is invalid")
+  const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
+
+  return withTransaction(input.client, "write", async (tx) => {
+    const campaign = await requireCampaign(tx, campaignId, rowLocks)
+    if (requiredString(campaign, "rewarder_user_id") !== input.userId) {
+      throw notFoundError("Reward campaign not found")
+    }
+    const status = requiredString(campaign, "status") as RewardCampaignStatus
+    if (status === "canceled") return campaignResource(campaign)
+    if (status !== "draft") {
+      throw conflictError("Only an unfunded draft reward campaign can be canceled")
+    }
+
+    const funding = await executeFirst(tx, {
+      sql: "SELECT reward_campaign_funding_effect_id FROM reward_campaign_funding_effects WHERE reward_campaign_id = ?1 LIMIT 1",
+      args: [campaignId],
+    })
+    if (
+      funding
+      || integer(rowValue(campaign, "funded_cents")) !== 0
+      || integer(rowValue(campaign, "reserved_cents")) !== 0
+      || integer(rowValue(campaign, "credited_cents")) !== 0
+      || integer(rowValue(campaign, "paid_cents")) !== 0
+      || integer(rowValue(campaign, "refunded_cents")) !== 0
+    ) {
+      throw conflictError("A funded or funding-in-progress reward campaign cannot be canceled")
+    }
+
+    const canceled = queryResultRow(await executeFirst(tx, {
+      sql: `
+        UPDATE reward_campaigns
+        SET status = 'canceled', canceled_at = ?2, updated_at = ?2
+        WHERE reward_campaign_id = ?1
+          AND status = 'draft'
+          AND funded_cents = 0
+          AND reserved_cents = 0
+          AND credited_cents = 0
+          AND paid_cents = 0
+          AND refunded_cents = 0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM reward_campaign_funding_effects AS funding
+            WHERE funding.reward_campaign_id = reward_campaigns.reward_campaign_id
+          )
+        RETURNING ${CAMPAIGN_COLUMNS}
+      `,
+      args: [campaignId, now],
+    }))
+    if (!canceled) {
+      throw conflictError("A funded or funding-in-progress reward campaign cannot be canceled")
+    }
+    await tx.execute({
+      sql: "DELETE FROM reward_song_pools WHERE reward_campaign_id = ?1",
+      args: [campaignId],
+    })
+    return campaignResource(canceled)
+  })
+}
+
 async function selectFunding(exec: Pick<Client | Transaction, "execute">, fundingId: string, lock = false): Promise<FundingRow | null> {
   return queryResultRow(await executeFirst(exec, {
     sql: `SELECT ${FUNDING_COLUMNS} FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1${lock ? " FOR UPDATE" : ""}`,

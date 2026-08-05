@@ -82,6 +82,7 @@ describe("reward campaign reconciler", () => {
 
     expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now })).toEqual({
       activated_campaigns: 1,
+      canceled_draft_campaigns: 0,
       ended_campaigns: 2,
     })
     const rows = await ctx.client.execute(`
@@ -95,6 +96,95 @@ describe("reward campaign reconciler", () => {
       { reward_campaign_id: "rcp_elapsed", status: "ended", activated_at: null, ended_at: now },
       { reward_campaign_id: "rcp_future", status: "scheduled", activated_at: null, ended_at: null },
       { reward_campaign_id: "rcp_paused_elapsed", status: "ended", activated_at: null, ended_at: now },
+    ])
+  })
+
+  test("expires untouched drafts after 24 hours and releases only their pool slots", async () => {
+    const ctx = await createRouteTestContext(env())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "campaign-draft-expiry-user")
+    const now = "2026-07-10T12:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, membership_mode,
+          status, provisioning_state, transfer_state, created_at, updated_at
+        ) VALUES ('cmt_campaign_draft_expiry', ?1, 'Draft expiry', 'open', 'active', 'active', 'none', ?2, ?2)
+      `,
+      args: [session.userId, now],
+    })
+    for (const campaign of [
+      { id: "rcp_stale_draft", post: "pst_stale_draft", created: "2026-07-09T12:00:00.000Z" },
+      { id: "rcp_recent_draft", post: "pst_recent_draft", created: "2026-07-09T12:00:00.001Z" },
+      { id: "rcp_stale_with_quote", post: "pst_stale_with_quote", created: "2026-07-09T11:00:00.000Z" },
+    ]) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_campaigns (
+            reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+            community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+            status, eligible_activity, min_score_bps, daily_reward_cents,
+            milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+            budget_cents, funded_cents, terms_hash, starts_at, ends_at,
+            created_at, updated_at
+          ) VALUES (?1, ?2, ?1, 'cmt_campaign_draft_expiry', ?3, ?4, ?2,
+            'draft', 'study', 7000, 40, 0, 0, 40, 100, 0, ?1,
+            '2026-07-10T13:00:00.000Z', '2026-07-12T13:00:00.000Z', ?5, ?5)
+        `,
+        args: [campaign.id, session.userId, campaign.post, `sab_${campaign.post}`, campaign.created],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_song_pools (
+            community_id, post_id, reward_campaign_id, created_at, updated_at
+          ) VALUES ('cmt_campaign_draft_expiry', ?1, ?2, ?3, ?3)
+        `,
+        args: [campaign.post, campaign.id, campaign.created],
+      })
+    }
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_campaign_funding_effects (
+          reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+          idempotency_key, chain_id, token_address, expected_amount_cents,
+          expected_amount_atomic, sender_address, treasury_address, status,
+          expires_at, created_at, updated_at
+        ) VALUES (
+          'rcf_stale_with_quote', 'rcp_stale_with_quote', ?1, 'stale-with-quote',
+          84532, '0x1000000000000000000000000000000000000001', 100, '1000000',
+          '0x3000000000000000000000000000000000000003',
+          '0x2000000000000000000000000000000000000002', 'quoted',
+          '2026-07-09T11:15:00.000Z', '2026-07-09T11:00:00.000Z', '2026-07-09T11:00:00.000Z'
+        )
+      `,
+      args: [session.userId],
+    })
+
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now })).toEqual({
+      activated_campaigns: 0,
+      canceled_draft_campaigns: 1,
+      ended_campaigns: 0,
+    })
+    const campaigns = await ctx.client.execute(`
+      SELECT reward_campaign_id, status, canceled_at
+      FROM reward_campaigns
+      WHERE community_id = 'cmt_campaign_draft_expiry'
+      ORDER BY reward_campaign_id
+    `)
+    expect(campaigns.rows).toEqual([
+      { reward_campaign_id: "rcp_recent_draft", status: "draft", canceled_at: null },
+      { reward_campaign_id: "rcp_stale_draft", status: "canceled", canceled_at: now },
+      { reward_campaign_id: "rcp_stale_with_quote", status: "draft", canceled_at: null },
+    ])
+    const pools = await ctx.client.execute(`
+      SELECT reward_campaign_id
+      FROM reward_song_pools
+      WHERE community_id = 'cmt_campaign_draft_expiry'
+      ORDER BY reward_campaign_id
+    `)
+    expect(pools.rows).toEqual([
+      { reward_campaign_id: "rcp_recent_draft" },
+      { reward_campaign_id: "rcp_stale_with_quote" },
     ])
   })
 
