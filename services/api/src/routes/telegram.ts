@@ -77,13 +77,12 @@ import {
 } from "../lib/telegram/webhook-parsing"
 import {
   handleTelegramStudyVoiceMessage,
-  transcribeTelegramStudyQuestionVoice,
 } from "../lib/telegram/study-voice-service"
 import { isTelegramStudyVoiceEnabled } from "../lib/telegram/study-voice-admission"
 import {
   answerPrivateStudyTutorQuestion,
-  getArmedPrivateStudyAskSession,
 } from "../lib/telegram/private-study-tutor-service"
+import { telegramStudyContinueTutorButton } from "../lib/telegram/chat-study-playback-service"
 import {
   continueTelegramChatStudyAfterVoice,
   getTelegramStudyRewardOpportunityCount,
@@ -112,8 +111,6 @@ import { getRewardsSummaryForUser } from "../lib/rewards/reward-read-service"
 const telegram = new Hono<{ Bindings: Env }>()
 
 const TELEGRAM_START_MENU_STUDY = "menu:study"
-const TELEGRAM_START_MENU_ASSISTANT = "menu:assistant"
-const TELEGRAM_START_MENU_PREFERENCES = "menu:preferences"
 const TELEGRAM_START_MENU_REWARDS = "menu:rewards"
 const TELEGRAM_START_MENU_SETTINGS = "menu:settings"
 
@@ -331,22 +328,17 @@ function telegramMiniAppLauncherMarkup(url: string): unknown {
 }
 
 function telegramCommunityStartMarkup(input: {
-  assistantEnabled: boolean
-  boardUrl: string
   copy: ReturnType<typeof getTelegramCopy>
   studyEnabled: boolean
 }): unknown {
   const rows: Array<Array<Record<string, unknown>>> = []
   if (input.studyEnabled) {
     rows.push([{ text: input.copy.menu.study, callback_data: TELEGRAM_START_MENU_STUDY }])
-    rows.push([{ text: input.copy.menu.preferences, callback_data: TELEGRAM_START_MENU_PREFERENCES }])
-    rows.push([{ text: input.copy.menu.settings, callback_data: TELEGRAM_START_MENU_SETTINGS }])
   }
   rows.push([{ text: input.copy.menu.rewards, callback_data: TELEGRAM_START_MENU_REWARDS }])
-  if (input.assistantEnabled) {
-    rows.push([{ text: input.copy.menu.assistant, callback_data: TELEGRAM_START_MENU_ASSISTANT }])
+  if (input.studyEnabled) {
+    rows.push([{ text: input.copy.menu.settings, callback_data: TELEGRAM_START_MENU_SETTINGS }])
   }
-  rows.push([{ text: input.copy.menu.community, web_app: { url: input.boardUrl } }])
   return {
     inline_keyboard: rows,
   }
@@ -364,8 +356,6 @@ async function handleTelegramStartMenuCallback(input: {
   env: Env
 }): Promise<boolean> {
   if (input.callback.data !== TELEGRAM_START_MENU_STUDY
-    && input.callback.data !== TELEGRAM_START_MENU_ASSISTANT
-    && input.callback.data !== TELEGRAM_START_MENU_PREFERENCES
     && input.callback.data !== TELEGRAM_START_MENU_REWARDS) {
     if (input.callback.data !== TELEGRAM_START_MENU_SETTINGS) return false
   }
@@ -373,14 +363,12 @@ async function handleTelegramStartMenuCallback(input: {
   const chatId = telegramIdentifier(input.callback.message?.chat?.id)
   const telegramUserId = telegramIdentifier(input.callback.from?.id)
   if (!callbackQueryId || !chatId || !telegramUserId) return true
-
-  if (input.callback.data === TELEGRAM_START_MENU_ASSISTANT) {
-    await answerTelegramCallbackQuery(input.bot, {
-      callback_query_id: callbackQueryId,
-      text: "Send your question as a message in this chat.",
-    }).catch(() => false)
-    return true
-  }
+  console.info("[telegram-start-menu] callback", {
+    callbackData: input.callback.data,
+    communityId: input.bot.communityId,
+    messageId: input.callback.message?.message_id ?? null,
+    telegramUserId,
+  })
 
   if (input.callback.data === TELEGRAM_START_MENU_REWARDS) {
     const account = await resolveTelegramAccount({ env: input.env, telegramUserId })
@@ -437,9 +425,8 @@ async function handleTelegramStartMenuCallback(input: {
     bot: input.bot,
     chatId,
     env: input.env,
-    forceLanguage: input.callback.data === TELEGRAM_START_MENU_PREFERENCES,
     forcePreferences: input.callback.data === TELEGRAM_START_MENU_SETTINGS,
-    requestMessageId: input.callback.data === TELEGRAM_START_MENU_PREFERENCES || input.callback.data === TELEGRAM_START_MENU_SETTINGS
+    requestMessageId: input.callback.data === TELEGRAM_START_MENU_SETTINGS
       ? null
       : input.callback.message?.message_id ?? null,
     targetLanguage: telegramLanguageCode(input.callback.from?.language_code),
@@ -727,11 +714,14 @@ async function handleCommunityStartMessage(env: Env, input: {
   })
   await safeSendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: input.showStartMenu ? copy.start.overview({ community: community.display_name }) : presentation.messageText,
+    text: input.showStartMenu
+      ? [
+          copy.start.overview({ community: community.display_name }),
+          input.assistantEnabled === true ? copy.start.assistantHint : null,
+        ].filter((value): value is string => Boolean(value)).join("\n\n")
+      : presentation.messageText,
     reply_markup: input.showStartMenu
       ? telegramCommunityStartMarkup({
-          assistantEnabled: input.assistantEnabled === true,
-          boardUrl,
           copy,
           studyEnabled: isCommunityBot(input.bot)
             && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
@@ -980,9 +970,14 @@ async function respondToPrivateStudyTutorQuestion(input: {
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
       text: tutor.kind === "answered"
-        ? telegramText(`${tutor.disclosure}\n\n${tutor.answer}`)
+        ? telegramText(tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer)
         : "The study tutor is not available in this community yet. Your exercise is still waiting for your answer.",
       reply_parameters: { message_id: input.telegramMessageId },
+      ...(tutor.kind === "answered" ? {
+        reply_markup: {
+          inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
+        },
+      } : {}),
     })
     return true
   } catch (error) {
@@ -1379,32 +1374,6 @@ async function handleTelegramWebhookUpdate(
             await handle()
           }
           return
-        }
-      }
-      // Ask mode is a one-shot promise that the next message is a question, so
-      // a spoken question must be diverted before it reaches grading. The
-      // pending voice intent is left intact: the exercise still needs an answer.
-      if (message.voice && chatId && telegramUserId && typeof message.message_id === "number") {
-        const askSession = await getArmedPrivateStudyAskSession({ bot, env, telegramUserId })
-        if (askSession) {
-          const spokenQuestion = await transcribeTelegramStudyQuestionVoice({
-            bot,
-            communityId: askSession.communityId,
-            env,
-            message,
-            postId: askSession.postId,
-            userId: askSession.userId,
-          }).catch(() => null)
-          if (await respondToPrivateStudyTutorQuestion({
-            bot,
-            chatId,
-            env,
-            question: spokenQuestion,
-            telegramMessageId: message.message_id,
-            telegramUserId,
-          })) {
-            return
-          }
         }
       }
       if (await handleTelegramStudyVoiceMessage({

@@ -195,6 +195,16 @@ export function sendTelegramMessage(
   return callTelegramBotApi(bot, "sendMessage", body)
 }
 
+export function sendTelegramChatAction(
+  bot: Env | TelegramBotCredential,
+  body: {
+    action: "typing"
+    chat_id: number | string
+  },
+): Promise<boolean> {
+  return callTelegramBotApi(bot, "sendChatAction", body)
+}
+
 export function answerTelegramCallbackQuery(
   bot: Env | TelegramBotCredential,
   body: {

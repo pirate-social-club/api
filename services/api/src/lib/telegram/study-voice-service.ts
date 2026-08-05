@@ -324,7 +324,7 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const client = getControlPlaneClient(input.env)
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
-  const text = [copy.sayThis, input.intent.referenceText]
+  const text = [copy.sayThis, input.intent.referenceText, copy.exerciseMessageHint]
   const disclosure = copy.disclosure
   if (input.includeDisclosure) {
     text.push(disclosure)
@@ -353,7 +353,11 @@ async function deliverTelegramStudyVoicePrompt(input: {
         const sent = await sendTelegramVoice(input.intent.bot, {
           chat_id: input.intent.telegramUserId,
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
-          ...(input.intent.deliveryMode === "audio" ? { caption: input.includeDisclosure ? `${copy.sayThis}\n\n${disclosure}` : copy.sayThis } : {}),
+          ...(input.intent.deliveryMode === "audio" ? {
+            caption: input.includeDisclosure
+              ? `${copy.sayThis}\n\n${copy.exerciseMessageHint}\n\n${disclosure}`
+              : `${copy.sayThis}\n\n${copy.exerciseMessageHint}`,
+          } : {}),
         })
         promptMessageId ??= sent.message_id
       } catch (error) {
@@ -596,6 +600,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
   telegramUserId: string
   deliveryMode?: StudyDeliveryMode
   localizationNoticeSent?: boolean
+  tutorDisclosureShown?: boolean
 }): Promise<TelegramStudyVoiceIntentResource> {
   const intent = await prepareTelegramStudyVoiceIntent(input)
   const client = getControlPlaneClient(input.env)
@@ -635,7 +640,12 @@ export async function createTelegramChatStudyVoiceIntent(input: {
       args: [
         input.chatStudySessionId,
         input.nextActionToken,
-        JSON.stringify({ deliveryMode: input.deliveryMode ?? "text", exerciseId: input.exerciseId, localizationNoticeSent: input.localizationNoticeSent === true }),
+        JSON.stringify({
+          deliveryMode: input.deliveryMode ?? "text",
+          exerciseId: input.exerciseId,
+          localizationNoticeSent: input.localizationNoticeSent === true,
+          ...(input.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
+        }),
         intent.studySessionId,
         input.exerciseId,
         nowIso(),
@@ -928,42 +938,6 @@ async function consumeClaimedVoiceIntent(input: {
   } finally {
     tx.close()
   }
-}
-
-/**
- * Transcribes a voice message that the learner sent as a question rather than
- * an answer. Deliberately does not touch the pending voice intent or its lease:
- * the exercise is still open and its real answer must still be gradeable.
- */
-export async function transcribeTelegramStudyQuestionVoice(input: {
-  bot: TelegramCommunityBotCredential
-  communityId: string
-  env: Env
-  message: TelegramWebhookMessage
-  postId: string
-  userId: string
-}): Promise<string | null> {
-  const voiceFileId = stringOrNull(input.message.voice?.file_id)
-  if (!voiceFileId) return null
-  const telegramFile = await getTelegramFile(input.bot, voiceFileId)
-  if (!telegramFile.file_path?.trim()) {
-    throw providerUnavailable("Telegram voice file is not available")
-  }
-  const download = await downloadTelegramFile(input.bot, telegramFile.file_path)
-  const mimeType = inferTelegramAudioMimeType({
-    explicitMimeType: input.message.voice?.mime_type ?? download.contentType ?? undefined,
-    fallback: "audio/ogg",
-    fileName: telegramFile.file_path,
-  })
-  const transcription = await transcribePostStudyAudio({
-    actor: { authType: "user", userId: input.userId },
-    communityId: input.communityId,
-    communityRepository: getCommunityRepository(input.env),
-    env: input.env,
-    file: new File([download.bytes], "telegram-study-question.oga", { type: mimeType }),
-    postId: input.postId,
-  })
-  return stringOrNull(transcription.text)
 }
 
 export async function handleTelegramStudyVoiceMessage(input: {

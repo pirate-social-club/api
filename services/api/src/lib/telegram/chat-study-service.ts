@@ -10,6 +10,7 @@ import {
   type SongStudyAttemptResult,
   type SongStudyPayload,
 } from "../posts/post-study-service"
+import { getExerciseForAttempt } from "../posts/post-study-attempt-store"
 import type { StudyPost } from "../posts/post-study-access"
 import {
   isSameLanguageStudyPair,
@@ -48,12 +49,13 @@ import {
   upsertUserStudyPreference,
 } from "./study-preference-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
-import { answerPrivateStudyTutorQuestion, armPrivateStudyAskMode } from "./private-study-tutor-service"
+import { answerPrivateStudyTutorQuestion } from "./private-study-tutor-service"
 import {
-  parseTelegramStudyAskTutorCallback,
+  parseTelegramStudyContinueTutorCallback,
   parseTelegramStudyPlaybackCallback,
   sendTelegramStudySongPlayback,
   parseTelegramStudyExplainTutorCallback,
+  telegramStudyContinueTutorButton,
   telegramStudyTutorButtons,
 } from "./chat-study-playback-service"
 import {
@@ -186,9 +188,8 @@ export function telegramStudySongSelectionIndex(page: number, pageIndex: number)
   return page * CHAT_STUDY_SONG_PAGE_SIZE + pageIndex
 }
 
-function formatUsdcCents(cents: number): string {
-  const dollars = cents / 100
-  return Number.isInteger(dollars) ? dollars.toFixed(0) : dollars.toFixed(2)
+export function formatUsdcCents(cents: number): string {
+  return (cents / 100).toFixed(2).replace(/\.0+$/u, "").replace(/(\.\d*[1-9])0+$/u, "$1")
 }
 
 function songButtonText(song: ReadySong, language: StudyHelperLanguage): string {
@@ -763,11 +764,13 @@ export async function startTelegramChatStudy(input: {
     })
     : "claimed"
   if (deliveryClaim === "consumed") {
-    await sendTelegramMessage(input.bot, {
-      chat_id: input.chatId,
-      text: "That study menu was already used. Send /study to choose a song again.",
+    console.info("[telegram-study] replaying consumed start action", {
+      communityId: input.bot.communityId,
+      forceLanguage: input.forceLanguage === true,
+      forcePreferences: input.forcePreferences === true,
+      telegramUserId: input.telegramUserId,
     })
-    return true
+    return runTelegramChatStudyStart(input)
   }
   if (deliveryClaim === "processing") return true
   try {
@@ -808,6 +811,10 @@ async function updateSessionAction(input: {
   const token = actionToken()
   const updatedAt = nowIso()
   const expiresAt = new Date(Date.parse(updatedAt) + CHAT_STUDY_TTL_MS).toISOString()
+  const actionPayload = {
+    ...input.actionPayload,
+    ...(input.session.actionPayload.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
+  }
   const updated = await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_chat_study_sessions
@@ -829,7 +836,7 @@ async function updateSessionAction(input: {
       input.status ?? "active",
       token,
       input.actionKind,
-      JSON.stringify(input.actionPayload),
+      JSON.stringify(actionPayload),
       input.studySessionId ?? null,
       input.exerciseId ?? null,
       input.promptMessageId ?? null,
@@ -841,7 +848,7 @@ async function updateSessionAction(input: {
     throw new Error("Telegram study session is no longer active")
   }
   input.session.actionKind = input.actionKind
-  input.session.actionPayload = input.actionPayload
+  input.session.actionPayload = actionPayload
   input.session.actionToken = token
   input.session.status = input.status ?? "active"
   return token
@@ -974,7 +981,7 @@ async function presentNextExercise(input: {
     })
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${exercise.question}\n\n${exercise.prompt_text}`,
+      text: `${exercise.question}\n\n${exercise.prompt_text}\n\n${copy.exerciseMessageHint}`,
       reply_markup: {
         inline_keyboard: [
           ...exercise.options.map((option, index) => [{
@@ -1002,12 +1009,14 @@ async function presentNextExercise(input: {
     telegramUserId: input.session.telegramUserId,
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
+    tutorDisclosureShown: input.session.actionPayload.tutorDisclosureShown === true,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     exerciseId: exercise.id,
     localizationNoticeSent,
+    ...(input.session.actionPayload.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
   }
   input.session.actionToken = nextToken
   input.session.status = "active"
@@ -1144,11 +1153,118 @@ async function releaseSessionAction(input: {
   })
 }
 
+async function resendActiveTelegramStudyExercise(input: {
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  env: Env
+  sessionId: string
+  telegramUserId: string
+}): Promise<boolean> {
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
+             post_id, target_language, status, action_token, action_kind,
+             action_payload_json
+      FROM telegram_chat_study_sessions
+      WHERE chat_study_session_id = ?1
+        AND telegram_community_bot_id = ?2
+        AND telegram_user_id = ?3
+        AND status = 'active'
+        AND action_kind IN ('answer_choice', 'await_voice')
+        AND expires_at > ?4
+      LIMIT 1
+    `,
+    args: [input.sessionId, input.bot.id, input.telegramUserId, nowIso()],
+  })
+  const session = parseSession(result.rows[0])
+  if (!session || session.communityId !== input.bot.communityId || !session.postId) return false
+  const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
+  const copy = getTelegramStudyCopy(language)
+  if (session.actionKind === "answer_choice") {
+    const optionTexts = Array.isArray(session.actionPayload.optionTexts)
+      ? session.actionPayload.optionTexts.map(String)
+      : []
+    const question = stringOrNull(session.actionPayload.question)
+    const promptText = stringOrNull(session.actionPayload.promptText)
+    if (!question || !promptText || optionTexts.length === 0) return false
+    const sent = await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: `${question}\n\n${promptText}\n\n${copy.exerciseMessageHint}`,
+      reply_markup: {
+        inline_keyboard: [
+          ...optionTexts.map((text, index) => [{
+            callback_data: callbackData(session.actionToken, index),
+            text: text.slice(0, 60),
+          }]),
+          ...telegramStudyTutorButtons(session.id, language),
+        ],
+      },
+    })
+    await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
+    return true
+  }
+  const exerciseId = stringOrNull(session.actionPayload.exerciseId)
+  if (!exerciseId) return false
+  const db = await openCommunityReadClient(input.env, getCommunityRepository(input.env), session.communityId)
+  try {
+    const exercise = await getExerciseForAttempt(db.client, exerciseId)
+    if (!exercise || exercise.post_id !== session.postId || !exercise.reference_text) return false
+    const sent = await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: `${copy.sayThis}\n\n${exercise.reference_text}\n\n${copy.exerciseMessageHint}`,
+      reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
+    })
+    await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
+    return true
+  } finally {
+    db.close()
+  }
+}
+
 export async function handleTelegramChatStudyCallback(input: {
   bot: TelegramCommunityBotCredential
   callback: TelegramWebhookCallbackQuery
   env: Env
 }): Promise<boolean> {
+  const continueSessionId = parseTelegramStudyContinueTutorCallback(input.callback.data)
+  if (continueSessionId) {
+    const callbackQueryId = stringOrNull(input.callback.id)
+    const telegramUserId = telegramIdentifier(input.callback.from?.id)
+    const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+    if (!callbackQueryId || !telegramUserId || !chatId) return true
+    if (!await claimCallback({
+      bot: input.bot,
+      callbackQueryId,
+      env: input.env,
+      sessionId: continueSessionId,
+    })) {
+      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+      return true
+    }
+    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
+    try {
+      const resumed = await resendActiveTelegramStudyExercise({
+        bot: input.bot,
+        chatId,
+        env: input.env,
+        sessionId: continueSessionId,
+        telegramUserId,
+      })
+      if (!resumed) {
+        await runTelegramChatStudyStart({
+          bot: input.bot,
+          chatId,
+          env: input.env,
+          telegramUserId,
+        })
+      }
+      await finishCallback({ callbackQueryId, env: input.env })
+    } catch (error) {
+      await finishCallback({ callbackQueryId, env: input.env, error }).catch(() => undefined)
+      throw error
+    }
+    return true
+  }
   const explanation = parseTelegramStudyExplainTutorCallback(input.callback.data)
   if (explanation) {
     const callbackQueryId = stringOrNull(input.callback.id)
@@ -1182,53 +1298,19 @@ export async function handleTelegramChatStudyCallback(input: {
         telegramUserId,
       })
       if (tutor.kind === "answered") {
-        await sendTelegramMessage(input.bot, { chat_id: chatId, text: `${tutor.disclosure}\n\n${tutor.answer}` })
+        await sendTelegramMessage(input.bot, {
+          chat_id: chatId,
+          text: tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer,
+          reply_markup: {
+            inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
+          },
+        })
       } else if (tutor.kind === "unavailable") {
         await sendTelegramMessage(input.bot, { chat_id: chatId, text: copy.tutorUnavailable })
       }
     } catch {
       await sendTelegramMessage(input.bot, { chat_id: chatId, text: copy.tutorUnavailable }).catch(() => undefined)
     }
-    return true
-  }
-  const askSessionId = parseTelegramStudyAskTutorCallback(input.callback.data)
-  if (askSessionId) {
-    const callbackQueryId = stringOrNull(input.callback.id)
-    const telegramUserId = telegramIdentifier(input.callback.from?.id)
-    const chatId = telegramIdentifier(input.callback.message?.chat?.id)
-    if (!callbackQueryId || !telegramUserId || !chatId) return true
-    const result = await getControlPlaneClient(input.env).execute({
-      sql: `
-        SELECT chat_study_session_id, telegram_user_id, user_id, community_id,
-               post_id, target_language, status, action_token, action_kind,
-               action_payload_json
-        FROM telegram_chat_study_sessions
-        WHERE chat_study_session_id = ?1
-          AND telegram_community_bot_id = ?2
-          AND telegram_user_id = ?3
-          AND status IN ('active', 'processing')
-          AND expires_at > ?4
-        LIMIT 1
-      `,
-      args: [askSessionId, input.bot.id, telegramUserId, nowIso()],
-    })
-    const session = parseSession(result.rows[0])
-    if (!session || session.communityId !== input.bot.communityId) {
-      await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => undefined)
-      return true
-    }
-    // Arming never disturbs the exercise: the pending answer stays valid, and
-    // the flag is consumed by the next message whatever it turns out to be.
-    await armPrivateStudyAskMode({ env: input.env, sessionId: session.id })
-    const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
-    await answerTelegramCallbackQuery(input.bot, {
-      callback_query_id: callbackQueryId,
-      text: getTelegramStudyCopy(language).askPrompt,
-    }).catch(() => undefined)
-    await sendTelegramMessage(input.bot, {
-      chat_id: chatId,
-      text: getTelegramStudyCopy(language).askPrompt,
-    }).catch(() => undefined)
     return true
   }
   const playbackSessionId = parseTelegramStudyPlaybackCallback(input.callback.data)

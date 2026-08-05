@@ -12,6 +12,7 @@ import { encryptCredentialSecret } from "../../../src/lib/crypto/credential-secr
 import {
   batchReadyPostIds,
   continueTelegramChatStudyAfterVoice,
+  formatUsdcCents,
   handleTelegramChatStudyCallback,
   telegramStudySongSelectionIndex,
 } from "../../../src/lib/telegram/chat-study-service"
@@ -205,6 +206,12 @@ async function seedReadyTranslationExercises(input: {
 }
 
 describe("community study routes", () => {
+  test("formats Telegram reward amounts without misleading trailing zeroes", () => {
+    expect(formatUsdcCents(100)).toBe("1")
+    expect(formatUsdcCents(50)).toBe("0.5")
+    expect(formatUsdcCents(75)).toBe("0.75")
+  })
+
   test("localizes the Telegram song playback button in every study locale", () => {
     const expected = {
       en: "🎵 Play song",
@@ -676,11 +683,13 @@ describe("community study routes", () => {
       expect(telegramBodies.some((body) => body.text === "选择一首歌来学习：")).toBe(false)
       const welcome = telegramBodies.find((body) => typeof body.text === "string")
       const welcomeMarkup = welcome?.reply_markup as {
-        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string; web_app?: unknown }>>
       }
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:study")).toBe(true)
-      expect(welcomeMarkup.inline_keyboard?.flat().find((button) => button.callback_data === "menu:preferences")?.text).toBe("Change language")
+      expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:preferences")).toBe(false)
       expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.callback_data === "menu:assistant")).toBe(false)
+      expect(welcomeMarkup.inline_keyboard?.flat().some((button) => button.web_app)).toBe(false)
+      expect(welcomeMarkup.inline_keyboard?.flat().at(-1)?.text).toBe("⚙️ Settings")
       const sessionsAfterStart = await ctx.client.execute(
         "SELECT chat_study_session_id FROM telegram_chat_study_sessions",
       )
@@ -704,14 +713,18 @@ describe("community study routes", () => {
         update_id: 5100,
         callback_query: {
           id: "menu-language-callback",
-          data: "menu:preferences",
+          data: "menu:settings",
           from: { id: 454545, is_bot: false, language_code: "en" },
           message: { chat: { id: 454545, type: "private" }, message_id: 600 },
         },
       })
       expect(menuLanguage.status).toBe(200)
-      expect(telegramBodies.some((body) => body.text === "你的语言：")).toBe(true)
-      expect(telegramBodies.some((body) => body.text === "Study settings:")).toBe(false)
+      expect(telegramBodies.some((body) => body.text === "学习设置：")).toBe(true)
+      const settingsMessage = telegramBodies.find((body) => body.text === "学习设置：")
+      const settingsMarkup = settingsMessage?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }
+      expect(settingsMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("🌐 更改语言")
 
       const privateSongClient = createClient({
         url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
@@ -749,7 +762,7 @@ describe("community study routes", () => {
       })
       expect(repeatedMenuStudy.status).toBe(200)
       await new Promise((resolve) => setTimeout(resolve, 20))
-      expect(telegramBodies.some((body) => body.text === "That study menu was already used. Send /study to choose a song again.")).toBe(true)
+      expect(telegramBodies.some((body) => body.text === "这个社区还没有可学习的歌曲。")).toBe(true)
 
       const publicSongClient = createClient({
         url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
@@ -832,7 +845,7 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const songCallback = pickerMarkup.inline_keyboard?.[0]?.[0]?.callback_data
-      expect(pickerMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song · 每天最多赚取 0.75 USDC 🪙")
+      expect(pickerMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song · 0.75 $USDC/天")
       expect(songCallback).toMatch(/^study:[a-f0-9]{18}:0$/)
       expect(songCallback!.length).toBeLessThanOrEqual(64)
       expect(songCallback).not.toContain("pst_")
@@ -962,7 +975,7 @@ describe("community study routes", () => {
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
       expect(answerButtons.find((button) => button.text === "含义")?.callback_data).toMatch(/^study-explain:m:tcs_/u)
       expect(answerButtons.find((button) => button.text === "语法")?.callback_data).toMatch(/^study-explain:g:tcs_/u)
-      expect(answerButtons.find((button) => button.text === "提出问题")?.callback_data).toMatch(/^study-ask:tcs_/u)
+      expect(answerButtons.some((button) => button.callback_data?.startsWith("study-ask:"))).toBe(false)
       const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
       expect(replayButton).toBeUndefined()
       const historicalReplayData = `study-play:${String(selectingSession.rows[0]?.chat_study_session_id)}`
@@ -1160,7 +1173,7 @@ describe("community study routes", () => {
       const settingsButtons = (settingsMenu?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(settingsButtons.map((button) => button.text)).toEqual(["⚙️ 语言", "🔊 提示格式"])
+      expect(settingsButtons.map((button) => button.text)).toEqual(["🌐 更改语言", "🔊 提示格式"])
       await webhook({
         update_id: 5007,
         callback_query: {
@@ -1677,7 +1690,7 @@ describe("community study routes", () => {
       const audioForm = await audioRequests[0]!.clone().formData()
       expect(audioForm.get("voice")).toBeInstanceOf(File)
       expect((audioForm.get("voice") as File).type).toBe("audio/ogg")
-      expect(String(audioForm.get("caption"))).toBe("Say this:")
+      expect(String(audioForm.get("caption"))).toBe("Say this:\n\nType a question, or send a voice answer.")
 
       cachedAudio.clear()
       await createTelegramChatStudyVoiceIntent({
@@ -2811,9 +2824,15 @@ describe("community study routes", () => {
             ) VALUES (
               'tcs_private_study_tutor', 'tcb_private_study_tutor', '424242',
               ?1, ?2, 'pst_study_route_song', 'en', 'active', 'voice-wait-token',
-              'await_voice', '{}', ?3, '2099-01-01T00:00:00.000Z', ?4, ?4
+              'await_voice', ?4, ?3, '2099-01-01T00:00:00.000Z', ?5, ?5
             )`,
-      args: [session.userId, communityId, exercise!.id, now],
+      args: [
+        session.userId,
+        communityId,
+        exercise!.id,
+        JSON.stringify({ deliveryMode: "text", exerciseId: exercise!.id }),
+        now,
+      ],
     })
     const communityClient = createClient({ url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId) })
     await communityClient.execute({
@@ -2844,20 +2863,23 @@ describe("community study routes", () => {
     communityClient.close()
 
     const originalFetch = globalThis.fetch
+    const telegramBodies: Array<Record<string, unknown>> = []
     const providerBodies: Array<{
+      max_completion_tokens?: number
       messages?: Array<{ role?: string; content?: string }>
       model?: string
     }> = []
     globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
       const request = new Request(requestInput, init)
       if (request.url.startsWith("https://api.telegram.org/")) {
+        telegramBodies.push(await request.json() as Record<string, unknown>)
         return Response.json({ ok: true, result: { message_id: 701 } })
       }
       expect(request.url).toBe("https://openrouter.test/api/v1/chat/completions")
       providerBodies.push(await request.json() as (typeof providerBodies)[number])
       return Response.json({
         id: "provider-private-study-1",
-        choices: [{ message: { content: "Use ‘that’ here because it introduces the clause." } }],
+        choices: [{ message: { content: "## Grammar\n- Use **‘that’** here because it introduces the clause.\n- `That` sounds natural." } }],
       })
     }) as typeof fetch
     try {
@@ -2873,9 +2895,11 @@ describe("community study routes", () => {
       })
       expect(answer.kind).toBe("answered")
       expect(answer.kind === "answered" && answer.answer).toContain("introduces the clause")
-      expect(answer.kind === "answered" && answer.disclosure).toContain("community's configured AI provider")
+      expect(answer.kind === "answered" && answer.answer).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
+      expect(answer.kind === "answered" && answer.disclosure).toContain("community's configured provider")
       const providerBody = providerBodies[0]
       expect(providerBody?.model).toBe("test/tutor-model")
+      expect(providerBody?.max_completion_tokens).toBe(160)
       const systemMessage = providerBody?.messages?.find((message) => message.role === "system")?.content ?? ""
       const userMessage = providerBody?.messages?.find((message) => message.role === "user")?.content ?? ""
       expect(systemMessage).toContain("private language-study tutor")
@@ -2912,13 +2936,39 @@ describe("community study routes", () => {
       })
       expect(explanationHandled).toBe(true)
       expect(providerBodies.at(-1)?.messages?.find((message) => message.role === "user")?.content).toContain("Explain the grammar in this line.")
+      const tutorReply = [...telegramBodies].reverse().find((body) => typeof body.text === "string") as {
+        reply_markup?: unknown
+        text?: string
+      }
+      const tutorReplyMarkup = tutorReply?.reply_markup as {
+        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+      }
+      expect(tutorReply?.text).toBe("Grammar Use ‘that’ here because it introduces the clause. That sounds natural.")
+      expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("▶️ Continue exercise")
+      expect(tutorReplyMarkup.inline_keyboard?.[0]?.[0]?.callback_data).toBe("study-continue:tcs_private_study_tutor")
+      const messagesBeforeContinue = telegramBodies.length
+      expect(await handleTelegramChatStudyCallback({
+        bot: tutorBot,
+        callback: {
+          id: "callback-private-study-continue",
+          data: "study-continue:tcs_private_study_tutor",
+          from: { id: 424242, is_bot: false },
+          message: { chat: { id: 424242, type: "private" }, message_id: 701 },
+        },
+        env: ctx.env,
+      })).toBe(true)
+      const continuedPrompt = telegramBodies.slice(messagesBeforeContinue).find((body) =>
+        typeof body.text === "string" && body.text.includes("Type a question, or send a voice answer.")
+      )
+      expect(continuedPrompt?.text).toContain(exercise!.reference_text ?? "")
       const stillActive = await ctx.client.execute(
-        "SELECT status, action_kind, action_token, current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = 'tcs_private_study_tutor'",
+        "SELECT status, action_kind, action_token, current_exercise_id, action_payload_json FROM telegram_chat_study_sessions WHERE chat_study_session_id = 'tcs_private_study_tutor'",
       )
       expect(stillActive.rows[0]).toMatchObject({
         action_kind: "await_voice", action_token: "voice-wait-token",
         current_exercise_id: exercise!.id, status: "active",
       })
+      expect(JSON.parse(String(stillActive.rows[0]?.action_payload_json))).toMatchObject({ tutorDisclosureShown: true })
       const event = await ctx.client.execute(
         "SELECT channel, status, assistant_message_ref, prompt FROM telegram_assistant_events WHERE telegram_message_id = 700",
       )
@@ -2940,6 +2990,7 @@ describe("community study routes", () => {
         telegramChatId: "424242", telegramMessageId: 701, telegramUserId: "424242",
       })
       expect(choiceAnswer.kind).toBe("answered")
+      expect(choiceAnswer.kind === "answered" && choiceAnswer.disclosure).toBeNull()
 
       // Song selection stays untutorable: there is no exercise to ground an answer in.
       await ctx.client.execute({

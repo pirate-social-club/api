@@ -35,19 +35,20 @@ type StudyCopy = {
   buttonExpired: string
   alreadyHandled: string
   youSaid: string
-  askAboutLine: string
-  askPrompt: string
+  continueExercise: string
+  exerciseMessageHint: string
   explainGrammar: string
   explainMeaning: string
   grammarQuestion: string
   meaningQuestion: string
+  tutorDisclosure: string
   rewardPerDay(input: { amount: string }): string
 }
 
 const COPY: Record<StudyHelperLanguage, StudyCopy> = {
   en: {
-    askAboutLine: "Ask a question", askPrompt: "Send your question as text or voice.",
-    explainGrammar: "Grammar", explainMeaning: "Meaning", grammarQuestion: "Explain the grammar in this line.", meaningQuestion: "Explain what this line means.", rewardPerDay: ({ amount }) => `Earn up to ${amount} USDC per day 🪙`,
+    continueExercise: "▶️ Continue exercise", exerciseMessageHint: "Type a question, or send a voice answer.",
+    explainGrammar: "Grammar", explainMeaning: "Meaning", grammarQuestion: "Explain the grammar in this line.", meaningQuestion: "Explain what this line means.", tutorDisclosure: "AI response provided through this community's configured provider.", rewardPerDay: ({ amount }) => `${amount} $USDC/day`,
     checkAgain: "Check again", chooseDelivery: "How should prompts be delivered?", chooseLanguage: "Your language:",
     chooseSong: "Choose a song to study:", complete: "Study complete", correct: "Correct", correctAnswer: "Correct answer", deliveryAudio: "Audio", deliveryBoth: "Audio + text",
     alreadyHandled: "That answer was already handled. Send /study if you need a new session.", buttonExpired: "This button expired. Send /study to continue.",
@@ -55,12 +56,12 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "This study exercise expired.", extra: "Extra", lineWas: "The line was", labelSeparator: ":", missing: "Missing",
     noSongs: "No songs are ready to study in this community yet.", notQuite: "Try again", nothingDetected: "(nothing detected)",
     pendingLocalization: "Translations are being prepared. Voice practice is ready now.", playSong: "🎵 Play song", processingError: "I couldn't process that answer. Send /study to restart.", sayThis: "Say this:",
-    settingsLanguage: "⚙️ Language", settingsPromptFormat: "🔊 Prompt format", settingsTitle: "Study settings:",
+    settingsLanguage: "🌐 Change language", settingsPromptFormat: "🔊 Prompt format", settingsTitle: "Study settings:",
     startAgain: "Start again", studyUnavailable: "Study is not available here yet.", tutorUnavailable: "The study tutor is unavailable right now. Your exercise is still open.", suggested: "Suggested", translationsReady: "Translations are ready.", youSaid: "You said",
   },
   zh: {
-    askAboutLine: "提出问题", askPrompt: "请用文字或语音发送问题。",
-    explainGrammar: "语法", explainMeaning: "含义", grammarQuestion: "解释这句的语法。", meaningQuestion: "解释这句话的意思。", rewardPerDay: ({ amount }) => `每天最多赚取 ${amount} USDC 🪙`,
+    continueExercise: "▶️ 继续练习", exerciseMessageHint: "输入问题，或发送语音回答。",
+    explainGrammar: "语法", explainMeaning: "含义", grammarQuestion: "解释这句的语法。", meaningQuestion: "解释这句话的意思。", tutorDisclosure: "AI 回复由此社区配置的服务提供商处理。", rewardPerDay: ({ amount }) => `${amount} $USDC/天`,
     checkAgain: "再检查", chooseDelivery: "你希望如何接收练习提示？", chooseLanguage: "你的语言：",
     chooseSong: "选择一首歌来学习：", complete: "学习完成", correct: "正确", correctAnswer: "正确答案", deliveryAudio: "音频", deliveryBoth: "音频和文字",
     alreadyHandled: "这个答案已经处理过了。如需新练习，请发送 /study。", buttonExpired: "此按钮已过期。请发送 /study 继续。",
@@ -68,12 +69,12 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "此学习练习已过期。", extra: "多说", lineWas: "原句是", labelSeparator: "：", missing: "漏说",
     noSongs: "这个社区还没有可学习的歌曲。", notQuite: "再试一次", nothingDetected: "（未检测到语音）",
     pendingLocalization: "翻译正在准备中。现在可以先进行语音练习。", playSong: "🎵 播放歌曲", processingError: "无法处理这个答案。请发送 /study 重新开始。", sayThis: "请说：",
-    settingsLanguage: "⚙️ 语言", settingsPromptFormat: "🔊 提示格式", settingsTitle: "学习设置：",
+    settingsLanguage: "🌐 更改语言", settingsPromptFormat: "🔊 提示格式", settingsTitle: "学习设置：",
     startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", tutorUnavailable: "学习助手暂时不可用。练习仍在进行。", suggested: "推荐", translationsReady: "翻译已准备好。", youSaid: "你说的是",
   },
   ar: {
-    askAboutLine: "اطرح سؤالًا", askPrompt: "أرسل سؤالك نصًا أو صوتًا.",
-    explainGrammar: "القواعد", explainMeaning: "المعنى", grammarQuestion: "اشرح قواعد هذا السطر.", meaningQuestion: "اشرح معنى هذا السطر.", rewardPerDay: ({ amount }) => `اربح حتى ${amount} USDC يوميًا 🪙`,
+    continueExercise: "▶️ متابعة التمرين", exerciseMessageHint: "اكتب سؤالًا، أو أرسل إجابة صوتية.",
+    explainGrammar: "القواعد", explainMeaning: "المعنى", grammarQuestion: "اشرح قواعد هذا السطر.", meaningQuestion: "اشرح معنى هذا السطر.", tutorDisclosure: "تُقدَّم إجابة الذكاء الاصطناعي عبر المزوّد الذي اختاره هذا المجتمع.", rewardPerDay: ({ amount }) => `${amount} $USDC/يوم`,
     checkAgain: "تحقق مجددًا", chooseDelivery: "كيف تريد تلقي التمارين؟", chooseLanguage: "لغتك:",
     chooseSong: "اختر أغنية للدراسة:", complete: "اكتملت الدراسة", correct: "صحيح", correctAnswer: "الإجابة الصحيحة", deliveryAudio: "صوت", deliveryBoth: "صوت ونص",
     alreadyHandled: "تمت معالجة هذه الإجابة بالفعل. أرسل /study لبدء جلسة جديدة.", buttonExpired: "انتهت صلاحية هذا الزر. أرسل /study للمتابعة.",
@@ -81,12 +82,12 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "انتهت صلاحية هذا التمرين.", extra: "إضافي", lineWas: "كان السطر", labelSeparator: ":", missing: "ناقص",
     noSongs: "لا توجد أغانٍ جاهزة للدراسة في هذا المجتمع بعد.", notQuite: "حاول مرة أخرى", nothingDetected: "(لم يتم اكتشاف شيء)",
     pendingLocalization: "يجري إعداد الترجمات. التدريب الصوتي متاح الآن.", playSong: "🎵 تشغيل الأغنية", processingError: "تعذر معالجة الإجابة. أرسل /study للبدء مجددًا.", sayThis: "قل هذا:",
-    settingsLanguage: "⚙️ اللغة", settingsPromptFormat: "🔊 تنسيق التمرين", settingsTitle: "إعدادات الدراسة:",
+    settingsLanguage: "🌐 تغيير اللغة", settingsPromptFormat: "🔊 تنسيق التمرين", settingsTitle: "إعدادات الدراسة:",
     startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", tutorUnavailable: "مساعد الدراسة غير متاح الآن. التمرين ما زال مفتوحًا.", suggested: "مقترح", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
   },
   ka: {
-    askAboutLine: "დასვით კითხვა", askPrompt: "გამოგზავნეთ კითხვა ტექსტით ან ხმით.",
-    explainGrammar: "გრამატიკა", explainMeaning: "მნიშვნელობა", grammarQuestion: "ამიხსენი ამ სტრიქონის გრამატიკა.", meaningQuestion: "ამიხსენი, რას ნიშნავს ეს სტრიქონი.", rewardPerDay: ({ amount }) => `გამოიმუშავეთ დღეში ${amount} USDC-მდე 🪙`,
+    continueExercise: "▶️ სავარჯიშოს გაგრძელება", exerciseMessageHint: "დაწერეთ კითხვა ან გაგზავნეთ ხმოვანი პასუხი.",
+    explainGrammar: "გრამატიკა", explainMeaning: "მნიშვნელობა", grammarQuestion: "ამიხსენი ამ სტრიქონის გრამატიკა.", meaningQuestion: "ამიხსენი, რას ნიშნავს ეს სტრიქონი.", tutorDisclosure: "AI პასუხს ამ თემის მიერ არჩეული პროვაიდერი ამუშავებს.", rewardPerDay: ({ amount }) => `${amount} $USDC/დღე`,
     checkAgain: "ხელახლა შემოწმება", chooseDelivery: "როგორ გსურთ სავარჯიშოების მიღება?", chooseLanguage: "თქვენი ენა:",
     chooseSong: "აირჩიეთ სასწავლი სიმღერა:", complete: "სწავლა დასრულდა", correct: "სწორია", correctAnswer: "სწორი პასუხი", deliveryAudio: "აუდიო", deliveryBoth: "აუდიო და ტექსტი",
     alreadyHandled: "ეს პასუხი უკვე დამუშავდა. ახალი სესიისთვის გაგზავნეთ /study.", buttonExpired: "ამ ღილაკს ვადა გაუვიდა. გასაგრძელებლად გაგზავნეთ /study.",
@@ -94,12 +95,12 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "ამ სავარჯიშოს ვადა გაუვიდა.", extra: "ზედმეტი", lineWas: "სტრიქონი იყო", labelSeparator: ":", missing: "აკლია",
     noSongs: "ამ თემში სასწავლად მზად სიმღერები ჯერ არ არის.", notQuite: "კიდევ სცადეთ", nothingDetected: "(ვერაფერი დაფიქსირდა)",
     pendingLocalization: "თარგმანები მზადდება. ხმოვანი ვარჯიში უკვე შეგიძლიათ.", playSong: "🎵 სიმღერის დაკვრა", processingError: "პასუხი ვერ დამუშავდა. თავიდან დასაწყებად გაგზავნეთ /study.", sayThis: "თქვით:",
-    settingsLanguage: "⚙️ ენა", settingsPromptFormat: "🔊 მინიშნების ფორმატი", settingsTitle: "სწავლის პარამეტრები:",
+    settingsLanguage: "🌐 ენის შეცვლა", settingsPromptFormat: "🔊 მინიშნების ფორმატი", settingsTitle: "სწავლის პარამეტრები:",
     startAgain: "თავიდან დაწყება", studyUnavailable: "სწავლა აქ ჯერ ხელმისაწვდომი არ არის.", tutorUnavailable: "სასწავლო ასისტენტი ამჟამად მიუწვდომელია. სავარჯიშო ღია რჩება.", suggested: "რეკომენდებული", translationsReady: "თარგმანები მზადაა.", youSaid: "თქვენ თქვით",
   },
   ru: {
-    askAboutLine: "Задать вопрос", askPrompt: "Отправьте вопрос текстом или голосом.",
-    explainGrammar: "Грамматика", explainMeaning: "Значение", grammarQuestion: "Объясни грамматику этой строки.", meaningQuestion: "Объясни, что означает эта строка.", rewardPerDay: ({ amount }) => `Получайте до ${amount} USDC в день 🪙`,
+    continueExercise: "▶️ Продолжить упражнение", exerciseMessageHint: "Напишите вопрос или отправьте голосовой ответ.",
+    explainGrammar: "Грамматика", explainMeaning: "Значение", grammarQuestion: "Объясни грамматику этой строки.", meaningQuestion: "Объясни, что означает эта строка.", tutorDisclosure: "Ответ ИИ предоставляется через выбранного этим сообществом провайдера.", rewardPerDay: ({ amount }) => `${amount} $USDC/день`,
     checkAgain: "Проверить снова", chooseDelivery: "Как показывать задания?", chooseLanguage: "Ваш язык:",
     chooseSong: "Выберите песню для изучения:", complete: "Урок завершён", correct: "Верно", correctAnswer: "Правильный ответ", deliveryAudio: "Аудио", deliveryBoth: "Аудио + текст",
     alreadyHandled: "Этот ответ уже обработан. Отправьте /study, чтобы начать новый урок.", buttonExpired: "Срок действия кнопки истёк. Отправьте /study, чтобы продолжить.",
@@ -107,7 +108,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     exerciseExpired: "Срок действия упражнения истёк.", extra: "Лишнее", lineWas: "Строка", labelSeparator: ":", missing: "Пропущено",
     noSongs: "В этом сообществе пока нет готовых для изучения песен.", notQuite: "Попробуйте ещё раз", nothingDetected: "(ничего не распознано)",
     pendingLocalization: "Переводы готовятся. Голосовые упражнения уже доступны.", playSong: "🎵 Воспроизвести песню", processingError: "Не удалось обработать ответ. Отправьте /study, чтобы начать заново.", sayThis: "Произнесите:",
-    settingsLanguage: "⚙️ Язык", settingsPromptFormat: "🔊 Формат задания", settingsTitle: "Настройки обучения:",
+    settingsLanguage: "🌐 Изменить язык", settingsPromptFormat: "🔊 Формат задания", settingsTitle: "Настройки обучения:",
     startAgain: "Начать заново", studyUnavailable: "Обучение здесь пока недоступно.", tutorUnavailable: "Учебный помощник сейчас недоступен. Упражнение остаётся открытым.", suggested: "Рекомендуется", translationsReady: "Переводы готовы.", youSaid: "Вы сказали",
   },
 }

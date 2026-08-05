@@ -8,9 +8,11 @@ describe("telegram copy catalog", () => {
 
     expect(copy.start.alreadyJoined({ community: "Americans only 2" }))
       .toBe("Welcome to Americans only 2 🎵\n\nStudy song lyrics for free. Some songs offer rewards for learning 🪙")
+    expect(copy.start.assistantHint).toContain("message me directly")
     expect(copy.start.joined({ community: "Americans only 2" }))
       .toBe("You've joined \"Americans only 2\".")
     expect(copy.buttons.openCommunity).toBe("Open community")
+    expect(copy.menu.settings).toBe("⚙️ Settings")
   })
 
   test("provides localized start copy", () => {
