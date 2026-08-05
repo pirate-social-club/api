@@ -11,6 +11,7 @@ describe("telegram locale helpers", () => {
     expect(resolveRuntimeUiLocale("ar")).toBe("ar")
     expect(resolveRuntimeUiLocale("zh-CN")).toBe("zh")
     expect(resolveRuntimeUiLocale("ka-GE")).toBe("ka")
+    expect(resolveRuntimeUiLocale("ru-RU")).toBe("ru")
   })
 
   test("ignores unsupported and pseudo locales at runtime", () => {

@@ -686,6 +686,19 @@ describe("community study routes", () => {
       )
       expect(sessionsAfterStart.rows).toHaveLength(0)
 
+      telegramBodies.length = 0
+      const menuRewards = await webhook({
+        update_id: 5099,
+        callback_query: {
+          id: "menu-rewards-callback",
+          data: "menu:rewards",
+          from: { id: 454545, is_bot: false, language_code: "en" },
+          message: { chat: { id: 454545, type: "private" }, message_id: 600 },
+        },
+      })
+      expect(menuRewards.status).toBe(200)
+      expect(telegramBodies.some((body) => body.text === "No rewards yet. Some songs pay crypto rewards as you learn. You can study without a wallet or verification.")).toBe(true)
+
       const privateSongClient = createClient({
         url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
       })
@@ -1142,7 +1155,7 @@ describe("community study routes", () => {
       const languageButtons = (languagePicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "ქართული"])
+      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "ქართული", "Русский"])
       await webhook({
         update_id: 5008,
         callback_query: {
@@ -1210,7 +1223,7 @@ describe("community study routes", () => {
       const firstRunLanguageButtons = (firstRunLanguagePicker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }).inline_keyboard?.flat() ?? []
-      expect(firstRunLanguageButtons.map((button) => button.text)).toEqual(["中文 · 推荐", "English", "العربية", "ქართული"])
+      expect(firstRunLanguageButtons.map((button) => button.text)).toEqual(["中文 · 推荐", "English", "العربية", "ქართული", "Русский"])
       await webhook({
         update_id: 5011,
         callback_query: {
@@ -1776,11 +1789,7 @@ describe("community study routes", () => {
           ? await request.clone().json() as { text?: string }
           : {}
       ))
-      expect(reveal.some((body) =>
-        body.text?.includes(`The line was: “${exercise!.reference_text}”`)
-        && body.text.includes("You said: “wrong words”")
-        && !body.text.includes("Missing:")
-      )).toBe(true)
+      expect(reveal.some((body) => body.text === `Try again: “${exercise!.reference_text}”`)).toBe(true)
       const requestsBeforeEmptyTranscript = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
         bot: {
@@ -1812,8 +1821,7 @@ describe("community study routes", () => {
         ),
       )
       expect(emptyTranscriptMessages.some((body) =>
-        body.text?.includes("You said: “(nothing detected)”")
-        && !body.text.includes("Missing:")
+        body.text === `Try again: “${exercise!.reference_text}”`
       )).toBe(true)
       await ctx.client.execute("DELETE FROM telegram_study_voice_intents")
       await ctx.client.execute("DELETE FROM telegram_chat_study_sessions")

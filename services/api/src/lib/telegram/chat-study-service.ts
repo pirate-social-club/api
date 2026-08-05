@@ -820,7 +820,7 @@ function feedbackText(input: {
   if (input.transcript !== undefined) {
     const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
     if (attempted?.type === "say_it_back") {
-      return `${copy.notQuite}\n\n${copy.lineWas}${copy.labelSeparator} “${attempted.reference_text}”\n${copy.youSaid}${copy.labelSeparator} “${input.transcript || copy.nothingDetected}”`
+      return `${copy.notQuite}${copy.labelSeparator} “${attempted.reference_text}”`
     }
   }
   const details = [
