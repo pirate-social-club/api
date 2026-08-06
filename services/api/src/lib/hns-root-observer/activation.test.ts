@@ -81,6 +81,22 @@ describe("activateHnsRootRouting", () => {
     expect(client.rolledBack).toBe(true)
   })
 
+  test("rejects three healthy observations produced by a retry burst", async () => {
+    const client = new ActivationClient()
+    client.observations = [0, 1, 2].map((index) => ({
+      ...healthyObservation(index),
+      observed_at: `2026-08-06T17:59:${String(index * 10).padStart(2, "0")}.000Z`,
+    }))
+
+    await expect(activateHnsRootRouting(client, {
+      rootLabel: "xn--pokmon-dva",
+      operatorActorId: "operator_hns",
+      reason: "test",
+      now: NOW,
+    })).rejects.toThrow("must span at least ten minutes")
+    expect(client.rolledBack).toBe(true)
+  })
+
   test("fails closed when the root is hard-denied", async () => {
     const client = new ActivationClient()
     client.state.routing_hard_denied = 1

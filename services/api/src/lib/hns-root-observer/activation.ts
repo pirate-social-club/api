@@ -7,6 +7,7 @@ import { assertHnsRootLabel, normalizeHnsRootLabel } from "../verification/hns-v
 const REQUIRED_HEALTHY_CYCLES = 3
 const MAX_OBSERVATION_AGE_MS = 15 * 60 * 1000
 const MIN_RRSIG_REMAINING_MS = 30 * 60 * 1000
+const MIN_OBSERVATION_SPREAD_MS = 10 * 60 * 1000
 
 export type HnsRootActivationResult = {
   normalizedRootLabel: string
@@ -23,7 +24,7 @@ function requiredText(row: QueryResultRow, key: string): string {
   return value
 }
 
-function assertHealthyCycle(row: QueryResultRow, nowMs: number): string {
+function assertHealthyCycle(row: QueryResultRow, nowMs: number): { id: string; observedAt: number } {
   if (
     row.outcome !== "succeeded"
     || row.observed_delegation_security !== "secure"
@@ -41,7 +42,7 @@ function assertHealthyCycle(row: QueryResultRow, nowMs: number): string {
   if (!Number.isFinite(rrsigExpiresAt) || rrsigExpiresAt - nowMs <= MIN_RRSIG_REMAINING_MS) {
     throw verificationRequired("The HNS DNSSEC signatures are too close to expiry for activation")
   }
-  return requiredText(row, "parent_observation_id")
+  return { id: requiredText(row, "parent_observation_id"), observedAt }
 }
 
 export async function activateHnsRootRouting(
@@ -92,7 +93,12 @@ export async function activateHnsRootRouting(
     if (observations.rows.length !== REQUIRED_HEALTHY_CYCLES) {
       throw verificationRequired("Three HNS observer cycles are required before activation")
     }
-    const evidenceObservationIds = observations.rows.map((row) => assertHealthyCycle(row, nowMs))
+    const healthyCycles = observations.rows.map((row) => assertHealthyCycle(row, nowMs))
+    const observationTimes = healthyCycles.map((cycle) => cycle.observedAt)
+    if (Math.max(...observationTimes) - Math.min(...observationTimes) < MIN_OBSERVATION_SPREAD_MS) {
+      throw verificationRequired("Three HNS observer cycles must span at least ten minutes")
+    }
+    const evidenceObservationIds = healthyCycles.map((cycle) => cycle.id)
     const alreadyActive = Number(state.canonical_routing_eligible) === 1
     if (alreadyActive) {
       return {
@@ -126,6 +132,7 @@ export async function activateHnsRootRouting(
       metadata: {
         reason,
         required_healthy_cycles: REQUIRED_HEALTHY_CYCLES,
+        minimum_observation_spread_ms: MIN_OBSERVATION_SPREAD_MS,
         evidence_parent_observation_ids: evidenceObservationIds,
         redundancy_policy: "report_only",
       },
