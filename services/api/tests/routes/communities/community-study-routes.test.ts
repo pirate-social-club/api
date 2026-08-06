@@ -982,6 +982,7 @@ describe("community study routes", () => {
         typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
+      expect(exercisePrompt?.text).toStartWith("1/2 · ")
       const mcqDeliveryWindow = await ctx.client.execute({
         sql: "SELECT expires_at FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1099,6 +1100,7 @@ describe("community study routes", () => {
       const secondPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string" && body.text.includes("Line two for route study")
       )
+      expect(secondPrompt?.text).toStartWith("2/2 · ")
       const secondMarkup = secondPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1133,6 +1135,7 @@ describe("community study routes", () => {
         && body.text.includes("Line two for route study")
         && typeof body.reply_markup === "object"
       )
+      expect(retryPrompt?.text).toStartWith("2/2 · ")
       const retryMarkup = retryPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1337,7 +1340,9 @@ describe("community study routes", () => {
         callback_query: { id: "callback-mix-song", data: mixSongCallback,
           from: { id: 454546, is_bot: false }, message: { chat: { id: 454546, type: "private" }, message_id: 708 } },
       })
-      expect(telegramBodies.some((body) => typeof body.text === "string" && body.text.startsWith("请说：\n\n"))).toBe(true)
+      expect(telegramBodies.some((body) =>
+        typeof body.text === "string" && body.text.startsWith("1/4 · 请说：\n\n")
+      )).toBe(true)
       const mixIntent = await ctx.client.execute({
         sql: `SELECT chat_study_session_id, exercise_id, study_session_id, attempt_number
               FROM telegram_study_voice_intents WHERE telegram_user_id = '454546' AND status = 'pending' LIMIT 1`,
@@ -1356,7 +1361,12 @@ describe("community study routes", () => {
         chatId: "454546", chatStudySessionId: String(mixIntent.rows[0]?.chat_study_session_id),
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
-      expect(telegramBodies.some((body) => typeof body.text === "string" && body.text.includes("选择译文"))).toBe(true)
+      expect(telegramBodies.some((body) =>
+        typeof body.text === "string" && body.text.startsWith("2/4 · 请说：\n\n")
+      )).toBe(true)
+      expect(telegramBodies.some((body) =>
+        typeof body.text === "string" && body.text.startsWith("2/4 · 选择译文：")
+      )).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
     }

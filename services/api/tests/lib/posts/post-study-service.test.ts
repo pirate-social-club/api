@@ -990,14 +990,14 @@ describe("post study service", () => {
     })
     expect(payload.exercises.map((exercise) => `${exercise.line_id}:${exercise.type}`)).toEqual([
       "line_001:say_it_back",
-      "line_001:translation_choice",
       "line_002:say_it_back",
-      "line_002:translation_choice",
       "line_003:say_it_back",
-      "line_003:translation_choice",
       "line_004:say_it_back",
-      "line_004:translation_choice",
       "line_005:say_it_back",
+      "line_001:translation_choice",
+      "line_002:translation_choice",
+      "line_003:translation_choice",
+      "line_004:translation_choice",
       "line_005:translation_choice",
     ])
   })
@@ -3541,8 +3541,8 @@ describe("post study service", () => {
     expect(payload.exercise_count).toBe(4)
     expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
       "say_it_back",
-      "translation_choice",
       "say_it_back",
+      "translation_choice",
       "translation_choice",
     ])
     const choice = payload.exercises.find((exercise) => exercise.type === "translation_choice")
@@ -3640,8 +3640,8 @@ describe("post study service", () => {
     expect(payload.access).toBe("ready")
     expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
       "say_it_back",
-      "translation_choice",
       "say_it_back",
+      "translation_choice",
     ])
     const statusRows = await client!.execute(`
       SELECT status, COUNT(*) AS count
@@ -3735,8 +3735,8 @@ describe("post study service", () => {
     expect(payload.access).toBe("ready")
     expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
       "say_it_back",
-      "translation_choice",
       "say_it_back",
+      "translation_choice",
     ])
   })
 

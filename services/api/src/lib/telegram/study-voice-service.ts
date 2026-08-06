@@ -320,11 +320,13 @@ async function deliverTelegramStudyVoicePrompt(input: {
   env: Env
   includeDisclosure: boolean
   intent: PreparedTelegramStudyVoiceIntent
+  progressLabel?: string | null
 }): Promise<void> {
   const client = getControlPlaneClient(input.env)
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
-  const text = [copy.sayThis, input.intent.referenceText]
+  const instruction = input.progressLabel ? `${input.progressLabel} · ${copy.sayThis}` : copy.sayThis
+  const text = [instruction, input.intent.referenceText]
   const disclosure = copy.disclosure
   if (input.includeDisclosure) {
     text.push(disclosure)
@@ -355,8 +357,8 @@ async function deliverTelegramStudyVoicePrompt(input: {
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
           ...(input.intent.deliveryMode === "audio" ? {
             caption: input.includeDisclosure
-              ? `${copy.sayThis}\n\n${disclosure}`
-              : copy.sayThis,
+              ? `${instruction}\n\n${disclosure}`
+              : instruction,
           } : {}),
         })
         promptMessageId ??= sent.message_id
@@ -600,6 +602,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
   telegramUserId: string
   deliveryMode?: StudyDeliveryMode
   localizationNoticeSent?: boolean
+  progressLabel?: string | null
 }): Promise<TelegramStudyVoiceIntentResource> {
   const intent = await prepareTelegramStudyVoiceIntent(input)
   const client = getControlPlaneClient(input.env)
@@ -643,6 +646,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
           deliveryMode: input.deliveryMode ?? "text",
           exerciseId: input.exerciseId,
           localizationNoticeSent: input.localizationNoticeSent === true,
+          ...(input.progressLabel ? { progressLabel: input.progressLabel } : {}),
         }),
         intent.studySessionId,
         input.exerciseId,
@@ -671,6 +675,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
     env: input.env,
     includeDisclosure,
     intent,
+    progressLabel: input.progressLabel,
   })
   return intentResource(intent)
 }
