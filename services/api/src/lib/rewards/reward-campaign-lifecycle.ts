@@ -18,6 +18,11 @@ export async function advanceRewardCampaignLifecycle(input: {
   client: Client
   now: string
   postgres: boolean
+  activeSettlementAsset: {
+    chainId: number
+    tokenAddress: string
+    treasuryAddress: string
+  }
 }): Promise<RewardCampaignLifecycleSummary> {
   const nowMs = Date.parse(input.now)
   if (!Number.isFinite(nowMs)) throw new Error("Reward campaign lifecycle timestamp is invalid")
@@ -25,6 +30,30 @@ export async function advanceRewardCampaignLifecycle(input: {
   const nowExpression = input.postgres ? "CAST(?1 AS TIMESTAMPTZ)" : "CAST(?1 AS TEXT)"
 
   return withTransaction(input.client, "write", async (tx) => {
+    // A retired-chain declaration removes the deliberately recoverable path
+    // for an expired but timely current-chain deposit. Never infer that this
+    // collision is safe: fail closed until an operator corrects the policy.
+    const activeRetirement = await tx.execute({
+      sql: `
+        SELECT reward_funding_asset_retirement_id
+        FROM reward_funding_asset_retirements
+        WHERE chain_id = ?1
+          AND token_address = ?2
+          AND treasury_address = ?3
+        LIMIT 1
+      `,
+      args: [
+        input.activeSettlementAsset.chainId,
+        input.activeSettlementAsset.tokenAddress.toLowerCase(),
+        input.activeSettlementAsset.treasuryAddress.toLowerCase(),
+      ],
+    })
+    if (activeRetirement.rows.length > 0) {
+      throw new Error(
+        `Active reward settlement asset is declared retired: ${requiredString(activeRetirement.rows[0], "reward_funding_asset_retirement_id")}`,
+      )
+    }
+
     const anomalousEffects = await tx.execute({
       sql: `
         SELECT

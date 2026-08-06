@@ -30,6 +30,11 @@ if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
 }
 const RUN = Boolean(ADMIN_URL)
 const TEST_DB = "reward_campaign_credit_test"
+const ACTIVE_SETTLEMENT_ASSET = {
+  chainId: 8453,
+  tokenAddress: "0x1000000000000000000000000000000000000001",
+  treasuryAddress: "0x2000000000000000000000000000000000000002",
+}
 const INVARIANTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0136_control_plane_reward_campaign_enable_invariants.sql",
   import.meta.url,
@@ -80,6 +85,10 @@ const TOPUP_BUDGET_MIGRATION_URL = new URL(
 )
 const FUNDING_RETIREMENTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0195_control_plane_reward_funding_retirements.sql",
+  import.meta.url,
+)
+const FUNDING_RETIREMENT_HARDENING_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0196_control_plane_reward_funding_retirement_hardening.sql",
   import.meta.url,
 )
 const NOW = "2026-07-10T12:00:00.000Z"
@@ -321,6 +330,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       );
     `)
     await db.unsafe(await readFile(FUNDING_RETIREMENTS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(FUNDING_RETIREMENT_HARDENING_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(NATIONALITY_TIERS_MIGRATION_URL, "utf8"))
     // Legacy campaign fixtures in this broad harness predate tier terms and
@@ -772,7 +782,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           now: NOW,
         })).rejects.toMatchObject({ status: 409 })
 
-        expect(await advanceRewardCampaignLifecycle({ client, now: NOW, postgres: true })).toEqual({
+        expect(await advanceRewardCampaignLifecycle({ client, now: NOW, postgres: true, activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET })).toEqual({
           activated_campaigns: 0,
           canceled_draft_campaigns: 1,
           canceled_retired_funding_campaigns: 0,
@@ -858,11 +868,13 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           client,
           now: lifecycleNow,
           postgres: true,
+          activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET,
         })),
         withProductionPostgresClient((client) => advanceRewardCampaignLifecycle({
           client,
           now: lifecycleNow,
           postgres: true,
+          activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET,
         })),
       ])
       expect(results.reduce((sum, result) => sum + result.canceled_retired_funding_campaigns, 0)).toBe(1)
@@ -895,15 +907,18 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           quote_expires_at: "2026-07-30T12:00:00.000Z",
           canceled_at: lifecycleNow,
         }])
+        await expect(client.execute({
+          sql: `UPDATE reward_retired_funding_cancellations SET canceled_at = ?1 WHERE reward_campaign_funding_effect_id = ?2`,
+          args: ["2026-08-06T13:00:00.000Z", effectId],
+        })).rejects.toThrow("reward funding retirement audit records are immutable")
+        await expect(client.execute({
+          sql: `UPDATE reward_funding_asset_retirements SET authorized_by = 'other' WHERE reward_funding_asset_retirement_id = ?1`,
+          args: ["rfr_base_sepolia_rewards_20260730"],
+        })).rejects.toThrow("reward funding retirement audit records are immutable")
       })
     } finally {
-      const cleanupDb = connect(TEST_DB, 1)
-      await cleanupDb.unsafe(`DELETE FROM reward_retired_funding_cancellations WHERE reward_campaign_id = $1`, [campaignId])
-      await cleanupDb.unsafe(`DELETE FROM reward_funding_retirement_anomalies WHERE reward_campaign_id = $1`, [campaignId])
-      await cleanupDb.unsafe(`DELETE FROM reward_campaign_funding_effects WHERE reward_campaign_id = $1`, [campaignId])
-      await cleanupDb.unsafe(`DELETE FROM reward_song_pools WHERE reward_campaign_id = $1`, [campaignId])
-      await cleanupDb.unsafe(`DELETE FROM reward_campaigns WHERE reward_campaign_id = $1`, [campaignId])
-      await cleanupDb.end()
+      // Retirement evidence is deliberately immutable and remains until this
+      // isolated test database is dropped by the suite teardown.
     }
   })
 

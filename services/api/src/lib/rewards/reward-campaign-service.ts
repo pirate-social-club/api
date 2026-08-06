@@ -643,6 +643,7 @@ export async function createRewardCampaign(input: {
     client: input.client,
     now,
     postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+    activeSettlementAsset: config,
   })
   const target = await input.resolveTarget(body.community, body.post)
   if (target.communityId !== body.community || target.postId !== body.post) {
