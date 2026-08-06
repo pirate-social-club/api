@@ -30,7 +30,7 @@ export async function advanceRewardCampaignLifecycle(input: {
   const nowExpression = input.postgres ? "CAST(?1 AS TIMESTAMPTZ)" : "CAST(?1 AS TEXT)"
 
   return withTransaction(input.client, "write", async (tx) => {
-    // A retired-chain declaration removes the deliberately recoverable path
+    // A retirement declaration removes the deliberately recoverable path
     // for an expired but timely current-chain deposit. Never infer that this
     // collision is safe: fail closed until an operator corrects the policy.
     const activeRetirement = await tx.execute({
