@@ -202,6 +202,9 @@ describe("HNS root observer cron", () => {
       expect((await database.client.execute(`
         SELECT COUNT(*) AS count FROM hns_root_redundancy_observations WHERE outcome = 'failed'
       `)).rows[0]?.count).toBe(1)
+      expect((await database.client.execute(`
+        SELECT raw_response_json FROM hns_root_parent_observations WHERE outcome = 'failed'
+      `)).rows[0]?.raw_response_json).toBe(JSON.stringify({ error: "unavailable" }))
     } finally {
       await database.cleanup()
     }

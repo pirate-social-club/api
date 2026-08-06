@@ -312,16 +312,18 @@ async function persistFailedObservation(
   rootLabel: string,
   now: string,
   failureCode: string,
+  failureDetail: string | null,
 ): Promise<void> {
+  const rawResponse = failureDetail == null ? null : JSON.stringify({ error: failureDetail })
   await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: `
         INSERT INTO hns_root_parent_observations (
           parent_observation_id, normalized_root_label, outcome, provider,
-          failure_code, observed_at, created_at
-        ) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?5)
+          failure_code, raw_response_json, observed_at, created_at
+        ) VALUES (?1, ?2, 'failed', ?3, ?4, ?5, ?6, ?6)
       `,
-      args: [observationId("hrp"), rootLabel, OBSERVATION_PROVIDER, failureCode, now],
+      args: [observationId("hrp"), rootLabel, OBSERVATION_PROVIDER, failureCode, rawResponse, now],
     })
     await tx.execute({
       sql: `
@@ -350,6 +352,12 @@ function failureCode(error: unknown): string {
   if (message.includes("timed out")) return "verifier_timeout"
   if (message.includes("not configured")) return "verifier_not_configured"
   return "verifier_observation_failed"
+}
+
+function failureDetail(error: unknown): string | null {
+  if (!(error instanceof Error)) return null
+  const message = error.message.trim()
+  return message ? message.slice(0, 512) : null
 }
 
 function dsIdentity(ds: {
@@ -441,7 +449,13 @@ export async function observeDueHnsRoots(
       await persistSuccessfulObservation(client, observation, attemptedAt)
       succeeded += 1
     } catch (error) {
-      await persistFailedObservation(client, rootLabel, attemptedAt, failureCode(error))
+      await persistFailedObservation(
+        client,
+        rootLabel,
+        attemptedAt,
+        failureCode(error),
+        failureDetail(error),
+      )
       failed += 1
     }
   }
