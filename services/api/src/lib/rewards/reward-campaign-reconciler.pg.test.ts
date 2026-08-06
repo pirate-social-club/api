@@ -1086,6 +1086,22 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
 
   test("uses the permanent pool provider and fails closed for another provider", async () => {
     const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
+      'rib_provider_mismatch_pg', 'usr_reward_pg', 'idn_reward_pg',
+      'active', $1, NULL
+    )`, [NOW])
+    await seed.unsafe(`INSERT INTO user_attestations VALUES (
+      'att_provider_mismatch_pg', 'usr_reward_pg', NULL, 'self',
+      'nationality', 'nationality', 'accepted',
+      '{"nationality":"CAN"}'::jsonb, $1, NULL, 'idn_reward_pg'
+    )`, [NOW])
+    await seed.unsafe(`INSERT INTO reward_qualification_events (
+      reward_qualification_event_id, user_id, community_id, post_id,
+      activity, qualified_at, reward_period_key, source_event_id, status,
+      created_at, updated_at
+    ) VALUES ('rqe_provider_mismatch_pg', 'usr_reward_pg', 'cmt_reward_pg',
+      'pst_provider_mismatch_pg', 'study', $1, '2026-07-10',
+      'rqe_provider_mismatch_pg', 'pending', $1, $1)`, [NOW])
     await seed.unsafe(`
       INSERT INTO reward_campaigns (
         reward_campaign_id, rewarder_user_id, creation_idempotency_key,
@@ -1094,13 +1110,15 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         daily_reward_cents, milestone_7_cents, milestone_30_cents,
         reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
         credited_cents, paid_cents, refunded_cents, terms_version, terms_hash,
-        starts_at, ends_at, updated_at
+        starts_at, ends_at, updated_at, default_amount_cents, max_claim_cents,
+        payout_tiers_json
       ) VALUES (
         'rcp_provider_mismatch_pg', 'usr_reward_pg', 'provider-mismatch-pg',
         'cmt_reward_pg', 'pst_provider_mismatch_pg', 'sab_provider_mismatch_pg',
         'usr_reward_pg', 'zkpassport', 'active', 'study', 7000, 40, 0, 0,
         40, 100, 100, 0, 0, 0, 0, 4, 'provider-mismatch-terms',
-        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1
+        '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1,
+        40, 70, '[{"nationalities":["JPN"],"amount_cents":70}]'::jsonb
       )
     `, [NOW])
     await seed.unsafe(`
@@ -1115,7 +1133,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     try {
       await withProductionPostgresClient(async (client) => {
         const result = await creditRewardCampaignQualification({
-          env: PG_ENV,
+          env: { ...PG_ENV, REWARDS_IDENTITY_PROVIDER: "self" },
           client,
           now: NOW,
           candidate: {
@@ -1136,9 +1154,18 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
             (SELECT COUNT(*)::int FROM reward_campaign_reservations
               WHERE reward_campaign_id = 'rcp_provider_mismatch_pg') AS reservations,
             (SELECT COUNT(*)::int FROM reward_events
-              WHERE reward_campaign_id = 'rcp_provider_mismatch_pg') AS events
+              WHERE reward_campaign_id = 'rcp_provider_mismatch_pg') AS events,
+            (SELECT outcome FROM reward_nationality_decisions
+              WHERE reward_qualification_event_id = 'rqe_provider_mismatch_pg') AS outcome,
+            (SELECT retryability FROM reward_nationality_decisions
+              WHERE reward_qualification_event_id = 'rqe_provider_mismatch_pg') AS retryability
         `)
-        expect(accounting.rows[0]).toEqual({ reservations: 0, events: 0 })
+        expect(accounting.rows[0]).toEqual({
+          reservations: 0,
+          events: 0,
+          outcome: "identity_document_not_selected",
+          retryability: "retryable",
+        })
       })
     } finally {
       await removeCampaignTestPost("pst_provider_mismatch_pg")

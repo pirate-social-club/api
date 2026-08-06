@@ -635,7 +635,11 @@ export async function creditRewardCampaignQualification(input: {
       exposureAmountCents: holdsExposure ? maxClaim : null,
       now: projectionNow,
     })
-    shadowContext.value = { campaignId, evaluatedAt: projectionNow }
+    // Tiered campaigns persist the decision made under their immutable provider
+    // inside this transaction. The legacy env-provider shadow evaluator is only
+    // for uniform pools; allowing it to run here can overwrite a retryable
+    // per-pool decision with evidence from a different provider.
+    if (!tiered) shadowContext.value = { campaignId, evaluatedAt: projectionNow }
     if (tiered && tierDecision?.retryability !== "resolved") {
       if (!pendingQualificationId) {
         throw new Error("tiered reward pending qualification projection is missing")
