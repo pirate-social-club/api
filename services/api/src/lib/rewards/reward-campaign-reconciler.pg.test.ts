@@ -1168,6 +1168,18 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         })
       })
     } finally {
+      await withProductionPostgresClient(async (client) => {
+        await client.execute(`DELETE FROM reward_nationality_decisions
+          WHERE reward_campaign_id = 'rcp_provider_mismatch_pg'`)
+        await client.execute(`DELETE FROM reward_pending_qualifications
+          WHERE reward_campaign_id = 'rcp_provider_mismatch_pg'`)
+        await client.execute(`DELETE FROM reward_qualification_events
+          WHERE reward_qualification_event_id = 'rqe_provider_mismatch_pg'`)
+        await client.execute(`DELETE FROM user_attestations
+          WHERE user_attestation_id = 'att_provider_mismatch_pg'`)
+        await client.execute(`DELETE FROM reward_identity_bindings
+          WHERE reward_identity_binding_id = 'rib_provider_mismatch_pg'`)
+      })
       await removeCampaignTestPost("pst_provider_mismatch_pg")
     }
   })
