@@ -84,16 +84,18 @@ anything:
 
 ## Current holds
 
-- **2026-08-06, Codex rewards expiry acceptance** — holding the shared staging
-  Worker for an API `440ae3101` deployment and the final pending-expiry matrix
-  proof. Acceptance target: `rpq_c2e226a3…` remains expired while its phantom
-  70-cent funding exposure is deleted and stays absent across several
-  reconciler passes. Production is out of scope. Window: 2026-08-06 until the
-  proof completes or this hold is explicitly released.
+None.
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
+
+- **2026-08-06** — Rewards pending-expiry acceptance passed on API
+  `62cb3fca5` (main fix `440ae3101`). One pre-deploy reconciler invocation
+  recreated the expired fixture's 70-cent exposure after deployment; the fixed
+  worker deleted it on its next pass, then four consecutive one-minute samples
+  stayed at zero exposure with no reservation or credit. Staging was left on
+  `62cb3fca5`; production was untouched.
 
 - **2026-08-03** — Nationality shadow validation completed on Web-pinned API
   `6241fb92c`. Two genuine historical staging qualification events produced
