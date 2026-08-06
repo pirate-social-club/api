@@ -437,6 +437,8 @@ export async function completeNamespaceVerificationSession(
         return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
       }
 
+      // A verifier outage is still progress-pending; it must not turn a
+      // resource that already matched into a terminal import failure.
       let authority
       try {
         authority = await observeHnsRootAuthority(env, {
