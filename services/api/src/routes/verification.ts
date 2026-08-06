@@ -457,6 +457,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions/:names
   const actor = c.get("actor")
   const body = (await c.req.json<{
     restart_challenge?: boolean | null
+    acknowledged_resource_replacement?: boolean | null
   }>().catch(() => null)) ?? null
   const repo = getControlPlaneVerificationRepository(c.env)
   const namespaceVerificationSessionId = decodePublicNamespaceVerificationSessionId(c.req.param("namespaceVerificationSessionId"))
@@ -465,6 +466,7 @@ authenticatedNamespaceVerification.post("/namespace-verification-sessions/:names
       namespaceVerificationSessionId,
       userId: actor.userId,
       restartChallenge: body?.restart_challenge ?? null,
+      acknowledgedResourceReplacement: body?.acknowledged_resource_replacement ?? null,
     })
     if (!result) {
       throw notFoundError("Namespace verification session not found")

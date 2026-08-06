@@ -19,11 +19,32 @@ class PlatformManagedZoneBootstrapClient implements Client {
       throw new Error("namespace verification start must not require user verification capabilities")
     }
 
+    if (sql.includes("INSERT INTO hns_import_session_locks")) {
+      const args = typeof statement === "string" ? [] : (statement.args ?? [])
+      expect(args[0]).toBe("clawitzer")
+      return {
+        rows: [{ namespace_verification_session_id: args[1] }],
+        rowsAffected: 1,
+      }
+    }
+
+    if (sql.includes("DELETE FROM hns_import_session_locks")) {
+      return { rows: [], rowsAffected: 1 }
+    }
+
     if (sql.includes("INSERT INTO namespace_verification_sessions")) {
       this.insertAttempts += 1
       const args = typeof statement === "string" ? [] : (statement.args ?? [])
-      expect(args[5]).toBe("challenge_required")
+      expect(args[5]).toBe("dns_setup_required")
       expect(args[6]).toBe("dns_txt")
+      expect(JSON.parse(String(args[7]))).toMatchObject({
+        kind: "hns_import",
+        publish_plan: {
+          version: "hns_import_publish_v1",
+          replacement_semantics: "complete_resource",
+          acknowledgement_required: true,
+        },
+      })
       expect(typeof args[8]).toBe("string")
       expect(typeof args[9]).toBe("string")
       return { rows: [], rowsAffected: 1 }
@@ -38,12 +59,15 @@ class PlatformManagedZoneBootstrapClient implements Client {
           family: "hns",
           submitted_root_label: "clawitzer",
           normalized_root_label: "clawitzer",
-          status: "challenge_required",
+          status: "dns_setup_required",
           challenge_kind: "dns_txt",
-          challenge_payload_json: null,
+          challenge_payload_json: JSON.stringify({
+            kind: "hns_import",
+            publish_plan: { version: "hns_import_publish_v1" },
+          }),
           challenge_host: "clawitzer",
           challenge_txt_value: "pirate-verification=nvs_test",
-          setup_nameservers_json: JSON.stringify(["ns1.pirate."]),
+          setup_nameservers_json: JSON.stringify(["ns1.pirate.", "ns2.pirate."]),
           challenge_expires_at: "2026-04-28T00:00:00.000Z",
           root_exists: 1,
           root_control_verified: 1,
@@ -126,7 +150,7 @@ describe("startNamespaceVerificationSession", () => {
     expect(client.insertAttempts).toBe(0)
   })
 
-  test("starts HNS sessions with nameserver and TXT records before delegation is detected", async () => {
+  test("provisions a signed zone and returns one complete owner UPDATE before delegation", async () => {
     const calls: string[] = []
     globalThis.fetch = mockFetch(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
@@ -134,12 +158,12 @@ describe("startNamespaceVerificationSession", () => {
 
       if (url.includes("/inspect-public?") && calls.filter((entry) => entry.includes("/inspect-public?")).length === 1) {
         return new Response(JSON.stringify({
-          root_exists: null,
+          root_exists: true,
           root_control_verified: null,
-          expiry_horizon_sufficient: null,
+          expiry_horizon_sufficient: true,
           routing_enabled: null,
           pirate_dns_authority_verified: false,
-          nameservers: ["ns1.pirate."],
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
           observation_provider: "web3dns_json_doh",
           failure_reason: "zone_not_provisioned",
           control_class: null,
@@ -147,6 +171,47 @@ describe("startNamespaceVerificationSession", () => {
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.includes("/observe-root-parent?")) {
+        return Response.json({
+          root_label: "clawitzer",
+          zone_name: "clawitzer.",
+          provider: "hsd_json_rpc",
+          observed_at: "2026-04-27T00:00:00.000Z",
+          chain_anchor: {
+            network: "main",
+            height: 1_000,
+            block_hash: "ab".repeat(32),
+            median_time: 1_700_000_000,
+          },
+          parent: {
+            raw_records: [
+              { type: "SYNTH4", address: "192.0.2.44" },
+              { type: "TXT", txt: ["owner=", "alice"] },
+            ],
+            nameservers: [],
+            ds_records: [],
+            glue4: [],
+            glue6: [],
+          },
+        })
+      }
+
+      if (url.endsWith("/publish-txt") && init?.method === "POST") {
+        return Response.json({
+          root_label: "clawitzer",
+          zone_name: "clawitzer.",
+          challenge_name: "_pirate.clawitzer.",
+          challenge_txt_value: "pirate-verification=nvs_test",
+          zone_created: true,
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: [
+            `49194 13 2 ${"05".repeat(32)}`,
+            `49194 13 4 ${"15".repeat(48)}`,
+          ],
+          observation_provider: "powerdns_api",
         })
       }
 
@@ -165,10 +230,18 @@ describe("startNamespaceVerificationSession", () => {
     })
 
     expect(client.insertAttempts).toBe(1)
-    expect(session.status).toBe("challenge_required")
+    expect(session.status).toBe("dns_setup_required")
     expect(session.challenge_host).toBe("clawitzer")
     expect(session.challenge_txt_value).toBe("pirate-verification=nvs_test")
-    expect(session.setup_nameservers).toEqual(["ns1.pirate."])
-    expect(calls).toEqual(["GET https://verifier.pirate.sc/hns/inspect-public?root_label=clawitzer"])
+    expect(session.setup_nameservers).toEqual(["ns1.pirate.", "ns2.pirate."])
+    expect(session.challenge_payload).toMatchObject({
+      kind: "hns_import",
+      publish_plan: { version: "hns_import_publish_v1" },
+    })
+    expect(calls).toEqual([
+      "GET https://verifier.pirate.sc/hns/inspect-public?root_label=clawitzer",
+      "GET https://verifier.pirate.sc/hns/observe-root-parent?root_label=clawitzer",
+      "POST https://verifier.pirate.sc/hns/publish-txt",
+    ])
   })
 })
