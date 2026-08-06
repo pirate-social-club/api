@@ -988,8 +988,10 @@ describe("community study routes", () => {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
       const answerButtons = answerMarkup.inline_keyboard?.flat() ?? []
-      expect(answerButtons.find((button) => button.text === "含义")?.callback_data).toMatch(/^study-explain:m:tcs_/u)
-      expect(answerButtons.find((button) => button.text === "语法")?.callback_data).toMatch(/^study-explain:g:tcs_/u)
+      // Tutor shortcuts are deliberately absent on translation choices: Meaning
+      // would hand over the answer, and the line was already explainable on the
+      // say-it-back exercise that precedes it. Typed questions still reach the tutor.
+      expect(answerButtons.some((button) => button.callback_data?.startsWith("study-explain:"))).toBe(false)
       expect(answerButtons.some((button) => button.callback_data?.startsWith("study-ask:"))).toBe(false)
       const replayButton = answerButtons.find((button) => button.text === getTelegramStudyCopy("zh").playSong)
       expect(replayButton).toBeUndefined()
@@ -3038,6 +3040,74 @@ describe("community study routes", () => {
         bot: tutorBot, env: ctx.env, question: "Why is it that?",
         telegramChatId: "424242", telegramMessageId: 703, telegramUserId: "424242",
       })).kind).toBe("unavailable")
+
+      // Telegram clears a typing indicator after about five seconds. Keep the
+      // heartbeat alive while the provider is pending, then stop it promptly
+      // when the response settles. Use a deterministic fake scheduler rather
+      // than waiting four real seconds in the route suite.
+      await policyClientReenable(ctx, communityId)
+      const fetchBeforeTypingHeartbeat = globalThis.fetch
+      const setIntervalBeforeTypingHeartbeat = globalThis.setInterval
+      const clearIntervalBeforeTypingHeartbeat = globalThis.clearInterval
+      let heartbeat: (() => void) | null = null
+      let heartbeatActive = false
+      let clearedHeartbeat = false
+      let resolveProvider: (response: Response) => void = () => {
+        throw new Error("provider resolver not initialized")
+      }
+      let providerStartedResolve: (() => void) | null = null
+      const providerStarted = new Promise<void>((resolve) => { providerStartedResolve = resolve })
+      let typingActions = 0
+      globalThis.setInterval = ((callback: TimerHandler) => {
+        heartbeat = callback as () => void
+        heartbeatActive = true
+        return 4242 as unknown as ReturnType<typeof setInterval>
+      }) as unknown as typeof setInterval
+      globalThis.clearInterval = (() => {
+        clearedHeartbeat = true
+        heartbeatActive = false
+      }) as typeof clearInterval
+      globalThis.fetch = ((requestInput: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(requestInput, init)
+        if (request.url.startsWith("https://api.telegram.org/")) {
+          typingActions += 1
+          return Promise.resolve(Response.json({ ok: true, result: true }))
+        }
+        providerStartedResolve?.()
+        return new Promise<Response>((resolve) => { resolveProvider = resolve })
+      }) as typeof fetch
+      try {
+        const tickHeartbeat = () => {
+          if (heartbeatActive) heartbeat?.()
+        }
+        const pendingTutorAnswer = answerPrivateStudyTutorQuestion({
+          bot: tutorBot, env: ctx.env, question: "Explain this grammar.",
+          telegramChatId: "424242", telegramMessageId: 707, telegramUserId: "424242",
+        })
+        await providerStarted
+        await Promise.resolve()
+        expect(typingActions).toBe(1)
+        expect(heartbeat).not.toBeNull()
+
+        tickHeartbeat()
+        await Promise.resolve()
+        expect(typingActions).toBe(2)
+
+        resolveProvider(Response.json({
+          id: "provider-private-study-typing",
+          choices: [{ message: { content: "Everybody takes the singular verb wants." } }],
+        }))
+        expect((await pendingTutorAnswer).kind).toBe("answered")
+        expect(clearedHeartbeat).toBe(true)
+
+        tickHeartbeat()
+        await Promise.resolve()
+        expect(typingActions).toBe(2)
+      } finally {
+        globalThis.fetch = fetchBeforeTypingHeartbeat
+        globalThis.setInterval = setIntervalBeforeTypingHeartbeat
+        globalThis.clearInterval = clearIntervalBeforeTypingHeartbeat
+      }
 
       // A provider that returns empty content is already retried by the client,
       // so two empties in a row must surface as a failure rather than a third
