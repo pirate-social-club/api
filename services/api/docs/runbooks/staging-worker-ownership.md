@@ -84,12 +84,12 @@ anything:
 
 ## Current holds
 
-- **2026-08-04, Codex nationality-tier acceptance** — holding the shared
-  staging Worker on Web-pinned API `50a514739` while exercising the manual
-  Self/ZKPassport tier-accounting acceptance matrix, including the Base
-  Sepolia cashout/reconciliation leg. No Worker deploy is planned; evidence
-  is invalid if the served API SHA changes. Window: 2026-08-04 until the
-  matrix completes or this hold is explicitly released.
+- **2026-08-06, Codex rewards expiry acceptance** — holding the shared staging
+  Worker for an API `440ae3101` deployment and the final pending-expiry matrix
+  proof. Acceptance target: `rpq_c2e226a3…` remains expired while its phantom
+  70-cent funding exposure is deleted and stays absent across several
+  reconciler passes. Production is out of scope. Window: 2026-08-06 until the
+  proof completes or this hold is explicitly released.
 
 ## Hold history
 
