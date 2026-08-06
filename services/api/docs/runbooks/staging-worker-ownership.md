@@ -84,16 +84,18 @@ anything:
 
 ## Current holds
 
-- **2026-08-04, Codex nationality-tier acceptance** — holding the shared
-  staging Worker on Web-pinned API `50a514739` while exercising the manual
-  Self/ZKPassport tier-accounting acceptance matrix, including the Base
-  Sepolia cashout/reconciliation leg. No Worker deploy is planned; evidence
-  is invalid if the served API SHA changes. Window: 2026-08-04 until the
-  matrix completes or this hold is explicitly released.
+None.
 
 ## Hold history
 
 Keep entries short. Delete them once they are no longer useful context.
+
+- **2026-08-06** — Rewards pending-expiry acceptance passed on API
+  `62cb3fca5` (main fix `440ae3101`). One pre-deploy reconciler invocation
+  recreated the expired fixture's 70-cent exposure after deployment; the fixed
+  worker deleted it on its next pass, then four consecutive one-minute samples
+  stayed at zero exposure with no reservation or credit. Staging was left on
+  `62cb3fca5`; production was untouched.
 
 - **2026-08-03** — Nationality shadow validation completed on Web-pinned API
   `6241fb92c`. Two genuine historical staging qualification events produced
