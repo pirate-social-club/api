@@ -477,6 +477,59 @@ describe("rewards routes", () => {
     expect(pool.rows).toEqual([{ reward_campaign_id: campaign.id }])
   }, 30_000)
 
+  test("allows cancellation after every funding effect is terminal or expired", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-terminal-owner")
+    await addWallet(ctx, owner.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, owner.userId)
+
+    const createAndQuote = async (suffix: string) => {
+      const created = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+        body: JSON.stringify(campaignBody({ idempotency_key: `draft-cancel-${suffix}` })),
+      }, ctx.env)
+      const campaign = await json(created) as { id: string }
+      const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+        method: "POST",
+        headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100000, idempotency_key: `draft-cancel-${suffix}-quote` }),
+      }, ctx.env)
+      return { campaign, quote: await json(quoted) as { id: string } }
+    }
+
+    const failed = await createAndQuote("failed")
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET status = 'failed' WHERE reward_campaign_funding_effect_id = ?1",
+      args: [failed.quote.id],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'draft' WHERE reward_campaign_id = ?1",
+      args: [failed.campaign.id],
+    })
+    const failedCancel = await app.request(`http://pirate.test/reward_campaigns/${failed.campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(failedCancel.status).toBe(200)
+
+    const expired = await createAndQuote("expired")
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [expired.quote.id, "2020-01-01T00:00:00.000Z"],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'draft' WHERE reward_campaign_id = ?1",
+      args: [expired.campaign.id],
+    })
+    const expiredCancel = await app.request(`http://pirate.test/reward_campaigns/${expired.campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(expiredCancel.status).toBe(200)
+  })
+
   test("does not advertise or quote campaign funding without a usable settlement signer", async () => {
     const ctx = await createRouteTestContext({
       ...campaignEnv(),
@@ -1277,6 +1330,101 @@ describe("rewards routes", () => {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
     expect(await json(funded)).toMatchObject({ status: "active", funded_cents: 100000 })
+  })
+
+  test("does not reopen an expired quote from a retired settlement chain", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-retired-chain-quote")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "retired-chain-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "retired-chain-quote" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+    await ctx.client.execute({
+      sql: `UPDATE reward_campaign_funding_effects
+        SET chain_id = 8453, expires_at = '2020-01-01T00:00:00.000Z'
+        WHERE reward_campaign_funding_effect_id = ?1`,
+      args: [quote.id],
+    })
+    let verifierCalled = false
+    setBookingPaymentVerifierForTests(async () => {
+      verifierCalled = true
+      throw new Error("retired quote must not reach receipt verification")
+    })
+    const response = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"d".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(409)
+    expect(verifierCalled).toBe(false)
+    const effect = await ctx.client.execute({
+      sql: "SELECT status, tx_hash FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
+      args: [quote.id],
+    })
+    expect(effect.rows[0]).toEqual({ status: "quoted", tx_hash: null })
+  })
+
+  test("does not confirm a quote after its campaign has ended", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-ended-campaign-quote")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "ended-campaign-confirm" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "ended-campaign-quote" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    let verifierCalled = false
+    setBookingPaymentVerifierForTests(async () => {
+      verifierCalled = true
+      throw new Error("ended campaign must not reach receipt verification")
+    })
+    const response = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"e".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(409)
+    expect(verifierCalled).toBe(false)
+    const state = await ctx.client.execute({
+      sql: `SELECT c.status AS campaign_status, f.status AS funding_status, f.tx_hash
+        FROM reward_campaigns c
+        JOIN reward_campaign_funding_effects f ON f.reward_campaign_id = c.reward_campaign_id
+        WHERE f.reward_campaign_funding_effect_id = ?1`,
+      args: [quote.id],
+    })
+    expect(state.rows[0]).toEqual({ campaign_status: "ended", funding_status: "quoted", tx_hash: null })
   })
 
   test("a narrowly late transfer re-acquires its slot and receives a fresh campaign window", async () => {

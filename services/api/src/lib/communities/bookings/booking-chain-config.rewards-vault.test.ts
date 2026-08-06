@@ -4,6 +4,7 @@ import type { Env } from "../../../env"
 import {
   assertRewardsCampaignTreasuryMatchesSettlementOperator,
   resolveRewardsSettlementOperatorAddress,
+  resolveRewardsSettlementRpcUrlForChain,
 } from "./booking-chain-config"
 
 const RAW_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
@@ -36,5 +37,16 @@ describe("rewards vault custody/signer split", () => {
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: PKP,
       REWARDS_TREASURY_VAULT_ADDRESS: PKP,
     }))).toThrow("must be distinct")
+  })
+
+  test("resolves historical funding RPCs from the persisted chain", () => {
+    const configured = env({
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "8453",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://current-mainnet.example",
+      BASE_MAINNET_RPC_URL: "https://base-mainnet.example",
+      BASE_SEPOLIA_RPC_URL: "https://base-sepolia.example",
+    })
+    expect(resolveRewardsSettlementRpcUrlForChain(configured, 8453)).toBe("https://current-mainnet.example")
+    expect(resolveRewardsSettlementRpcUrlForChain(configured, 84532)).toBe("https://base-sepolia.example")
   })
 })

@@ -30,6 +30,7 @@ import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 import {
   assertRewardsCampaignAndSettlementChainsMatch,
   resolveRewardsSettlementChainId,
+  resolveRewardsSettlementRpcUrlForChain,
 } from "../communities/bookings/booking-chain-config"
 import {
   assertContributionWithinRefundPolicy,
@@ -477,8 +478,12 @@ export async function cancelRewardCampaignDraft(input: {
     }
 
     const funding = await executeFirst(tx, {
-      sql: "SELECT reward_campaign_funding_effect_id FROM reward_campaign_funding_effects WHERE reward_campaign_id = ?1 LIMIT 1",
-      args: [campaignId],
+      sql: `SELECT reward_campaign_funding_effect_id
+            FROM reward_campaign_funding_effects
+            WHERE reward_campaign_id = ?1
+              AND NOT (status IN ('failed', 'refunded') OR (status = 'quoted' AND expires_at <= ?2))
+            LIMIT 1`,
+      args: [campaignId, now],
     })
     if (
       funding
@@ -506,6 +511,10 @@ export async function cancelRewardCampaignDraft(input: {
             SELECT 1
             FROM reward_campaign_funding_effects AS funding
             WHERE funding.reward_campaign_id = reward_campaigns.reward_campaign_id
+              AND NOT (
+                funding.status IN ('failed', 'refunded')
+                OR (funding.status = 'quoted' AND funding.expires_at <= ?2)
+              )
           )
         RETURNING ${CAMPAIGN_COLUMNS}
       `,
@@ -1158,6 +1167,29 @@ export async function confirmRewardCampaignFunding(input: {
     if (status === "refunded") {
       throw codedConflictError(FUNDING_QUOTE_ALREADY_CLAIMED, "Funding quote was already refunded")
     }
+    const campaignStatus = requiredString(campaign, "status") as RewardCampaignStatus
+    if (![
+      "draft",
+      "funding_quoted",
+      "funding_confirming",
+      "scheduled",
+      "active",
+      "exhausted",
+    ].includes(campaignStatus)) {
+      throw conflictError("Reward pool is not accepting contributions")
+    }
+    // A current-chain transfer may be verified after its quote expires: its
+    // receipt can prove that it reached the treasury before the deadline.
+    // Do not reopen a lapsed quote from a retired settlement chain, though.
+    // Those effects are deliberately isolated after a cutover and must not
+    // become either current-chain budget or a current-chain refund liability.
+    const effectChainId = integer(rowValue(effect, "chain_id"))
+    if (
+      effectChainId !== config.chainId
+      && Date.parse(requiredString(effect, "expires_at")) <= Date.parse(now)
+    ) {
+      throw conflictError("Expired funding quote belongs to a retired settlement chain")
+    }
     if (existingTx && existingTx !== txHash) {
       throw codedConflictError(
         FUNDING_TRANSACTION_MISMATCH,
@@ -1216,15 +1248,16 @@ export async function confirmRewardCampaignFunding(input: {
     amountAtomic: BigInt(requiredString(claimed, "expected_amount_atomic")),
     senderAddress: requiredString(claimed, "sender_address"),
   }
+  const fundingRpcUrl = resolveRewardsSettlementRpcUrlForChain(input.env, expected.chainId)
   const verification = input.verify
-    ? await input.verify(expected, txHash, config.rpcUrl)
+    ? await input.verify(expected, txHash, fundingRpcUrl)
     : await classifyBookingPaymentReceipt({
       env: input.env,
       fundingTxRef: txHash,
       expected,
-      rpcUrl: config.rpcUrl,
+      rpcUrl: fundingRpcUrl,
       finality: {
-        expectedChainId: config.chainId,
+        expectedChainId: expected.chainId,
         fallbackConfirmations: 30,
         preferSafeBlock: true,
       },

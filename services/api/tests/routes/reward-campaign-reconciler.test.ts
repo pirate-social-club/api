@@ -162,7 +162,7 @@ describe("reward campaign reconciler", () => {
 
     expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
       activated_campaigns: 0,
-      canceled_draft_campaigns: 1,
+      canceled_draft_campaigns: 2,
       ended_campaigns: 0,
     })
     const campaigns = await ctx.client.execute(`
@@ -174,7 +174,7 @@ describe("reward campaign reconciler", () => {
     expect(campaigns.rows).toEqual([
       { reward_campaign_id: "rcp_recent_draft", status: "draft", canceled_at: null },
       { reward_campaign_id: "rcp_stale_draft", status: "canceled", canceled_at: now },
-      { reward_campaign_id: "rcp_stale_with_quote", status: "draft", canceled_at: null },
+      { reward_campaign_id: "rcp_stale_with_quote", status: "canceled", canceled_at: now },
     ])
     const pools = await ctx.client.execute(`
       SELECT reward_campaign_id
@@ -184,7 +184,6 @@ describe("reward campaign reconciler", () => {
     `)
     expect(pools.rows).toEqual([
       { reward_campaign_id: "rcp_recent_draft" },
-      { reward_campaign_id: "rcp_stale_with_quote" },
     ])
   })
 

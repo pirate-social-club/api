@@ -118,12 +118,13 @@ export function resolveRewardsSettlementUsdcTokenAddress(env: Env): string {
   return resolveSettlementUsdcTokenAddress(env, "rewards")
 }
 
-function resolveSettlementRpcUrl(env: Env, kind: SettlementOperatorKind): string {
+function resolveSettlementRpcUrl(env: Env, kind: SettlementOperatorKind, requestedChainId?: number): string {
   const names = envNames(kind)
+  const configuredChainId = resolveSettlementChainId(env, kind)
+  const chainId = requestedChainId ?? configuredChainId
   const explicit = String(env[names.rpcUrl] || "").trim()
-  if (explicit) return explicit
+  if (explicit && chainId === configuredChainId) return explicit
 
-  const chainId = resolveSettlementChainId(env, kind)
   if (chainId === BASE_MAINNET_CHAIN_ID) {
     const baseMainnetRpc = String(env.BASE_MAINNET_RPC_URL || "").trim()
     if (baseMainnetRpc) return baseMainnetRpc
@@ -142,6 +143,10 @@ export function resolveBookingSettlementRpcUrl(env: Env): string {
 
 export function resolveRewardsSettlementRpcUrl(env: Env): string {
   return resolveSettlementRpcUrl(env, "rewards")
+}
+
+export function resolveRewardsSettlementRpcUrlForChain(env: Env, chainId: number): string {
+  return resolveSettlementRpcUrl(env, "rewards", chainId)
 }
 
 function resolveSettlementOperatorPrivateKey(env: Env, kind: SettlementOperatorKind): string {

@@ -307,7 +307,8 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
         tx_hash TEXT, status TEXT NOT NULL, chain_id INTEGER NOT NULL DEFAULT 84532,
         expected_amount_cents INTEGER NOT NULL,
-        confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT
+        confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT,
+        expires_at TIMESTAMPTZ NOT NULL DEFAULT '2099-01-01T00:00:00.000Z'
       );
     `)
     await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
@@ -726,6 +727,13 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         ('cmt_reward_pg', 'pst_expired_draft_pg', 'rcp_expired_draft_pg', $1, $1),
         ('cmt_reward_pg', 'pst_recent_draft_pg', 'rcp_recent_draft_pg', $1, $1)
     `, [NOW])
+    await seed.unsafe(`INSERT INTO reward_campaign_funding_effects (
+      reward_campaign_funding_effect_id, reward_campaign_id, status,
+      expected_amount_cents, expires_at
+    ) VALUES (
+      'rcf_expired_draft_failed_pg', 'rcp_expired_draft_pg',
+      'failed', 100, '2026-07-09T13:00:00.000Z'
+    )`)
     await seed.end()
 
     try {
@@ -1064,6 +1072,31 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         FROM reward_pending_qualifications p
         WHERE p.status = 'expired' AND p.reward_campaign_id = 'rcp_pending_tier_pg'`)
       expect(expired.rows[0]).toEqual({ status: "expired", exposure_rows: "0" })
+      const expiredEvent = await client.execute(`SELECT q.reward_qualification_event_id,
+        q.user_id, q.qualified_at, q.reward_period_key
+        FROM reward_pending_qualifications p
+        JOIN reward_qualification_events q
+          ON q.reward_qualification_event_id = p.reward_qualification_event_id
+        WHERE p.status = 'expired' AND p.reward_campaign_id = 'rcp_pending_tier_pg'
+        LIMIT 1`)
+      const event = expiredEvent.rows[0]!
+      const replay = await creditRewardCampaignQualification({
+        env: PG_ENV, client, now: NOW,
+        candidate: {
+          eventId: String(event.reward_qualification_event_id),
+          userId: String(event.user_id),
+          communityId: "cmt_reward_pg", postId: "pst_pending_tier_pg",
+          artifactBundleId: "sab_pending_tier_pg", activity: "study",
+          qualifiedAt: String(event.qualified_at),
+          periodKey: String(event.reward_period_key),
+          policyVersion: "study-completed-set-v1",
+        },
+      })
+      expect(replay).toEqual({ result: "expired", amountCents: 0 })
+      const replayedExposure = await client.execute(`SELECT COUNT(*) AS count
+        FROM reward_pending_qualification_funding_exposures
+        WHERE reward_campaign_id = 'rcp_pending_tier_pg'`)
+      expect(Number(replayedExposure.rows[0]?.count)).toBe(0)
       await client.execute({
         sql: `INSERT INTO reward_pending_qualification_funding_exposures (
           reward_pending_qualification_id, reward_campaign_id,
@@ -1181,6 +1214,128 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           WHERE reward_identity_binding_id = 'rib_provider_mismatch_pg'`)
       })
       await removeCampaignTestPost("pst_provider_mismatch_pg")
+    }
+  })
+
+  test("fails closed when accepted nationality evidence conflicts for the selected identity", async () => {
+    const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`INSERT INTO users VALUES (
+      'usr_evidence_conflict_pg',
+      '{"unique_human":{"state":"verified","provider":"zkpassport","mechanism":"passport","verified_at":"2026-07-10T12:00:00.000Z"}}'
+    )`)
+    await seed.unsafe(`INSERT INTO identity_nullifiers VALUES (
+      'idn_evidence_conflict_pg', 'usr_evidence_conflict_pg', 'zkpassport',
+      'passport', 'evidence-conflict-nullifier', 'active', $1
+    )`, [NOW])
+    await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
+      'rib_evidence_conflict_pg', 'usr_evidence_conflict_pg',
+      'idn_evidence_conflict_pg', 'active', $1, NULL
+    )`, [NOW])
+    for (const [suffix, nationality] of [["jpn", "JPN"], ["usa", "USA"]] as const) {
+      await seed.unsafe(`INSERT INTO user_attestations VALUES (
+        $1, 'usr_evidence_conflict_pg', NULL, 'zkpassport',
+        'nationality', 'nationality', 'accepted', $2::jsonb,
+        $3, NULL, 'idn_evidence_conflict_pg'
+      )`, [`att_evidence_conflict_${suffix}_pg`, JSON.stringify({ nationality }), NOW])
+    }
+    await seed.unsafe(`INSERT INTO reward_qualification_events (
+      reward_qualification_event_id, user_id, community_id, post_id,
+      activity, qualified_at, reward_period_key, source_event_id, status,
+      created_at, updated_at
+    ) VALUES (
+      'rqe_evidence_conflict_pg', 'usr_evidence_conflict_pg', 'cmt_reward_pg',
+      'pst_evidence_conflict_pg', 'study', $1, '2026-07-10',
+      'rqe_evidence_conflict_pg', 'pending', $1, $1
+    )`, [NOW])
+    await seed.unsafe(`INSERT INTO reward_campaigns (
+      reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+      community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+      reward_identity_provider, status, eligible_activity, min_score_bps,
+      daily_reward_cents, milestone_7_cents, milestone_30_cents,
+      reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
+      credited_cents, paid_cents, refunded_cents, terms_version, terms_hash,
+      starts_at, ends_at, updated_at, default_amount_cents, max_claim_cents,
+      payout_tiers_json
+    ) VALUES (
+      'rcp_evidence_conflict_pg', 'usr_reward_pg', 'evidence-conflict-pg',
+      'cmt_reward_pg', 'pst_evidence_conflict_pg', 'sab_evidence_conflict_pg',
+      'usr_reward_pg', 'zkpassport', 'active', 'study', 7000, 40, 0, 0,
+      40, 100, 100, 0, 0, 0, 0, 4, 'evidence-conflict-terms',
+      '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1,
+      40, 70, '[{"nationalities":["JPN"],"amount_cents":70}]'::jsonb
+    )`, [NOW])
+    await seed.unsafe(`INSERT INTO reward_campaign_funding_effects (
+      reward_campaign_funding_effect_id, reward_campaign_id, status,
+      expected_amount_cents, confirmed_at
+    ) VALUES (
+      'rcf_evidence_conflict_pg', 'rcp_evidence_conflict_pg',
+      'confirmed', 100, $1
+    )`, [NOW])
+    await seed.unsafe(`INSERT INTO reward_song_pools (
+      community_id, post_id, reward_campaign_id, created_at, updated_at
+    ) VALUES (
+      'cmt_reward_pg', 'pst_evidence_conflict_pg',
+      'rcp_evidence_conflict_pg', $1, $1
+    )`, [NOW])
+    await seed.end()
+
+    try {
+      await withProductionPostgresClient(async (client) => {
+        const result = await creditRewardCampaignQualification({
+          env: PG_ENV,
+          client,
+          now: NOW,
+          candidate: {
+            eventId: "rqe_evidence_conflict_pg",
+            userId: "usr_evidence_conflict_pg",
+            communityId: "cmt_reward_pg",
+            postId: "pst_evidence_conflict_pg",
+            artifactBundleId: "sab_evidence_conflict_pg",
+            activity: "study",
+            qualifiedAt: NOW,
+            periodKey: "2026-07-10",
+            policyVersion: "study-completed-set-v1",
+          },
+        })
+        expect(result).toEqual({ result: "identity", amountCents: 0 })
+        const accounting = await client.execute(`SELECT
+          (SELECT COUNT(*)::int FROM reward_campaign_reservations
+            WHERE reward_campaign_id = 'rcp_evidence_conflict_pg') AS reservations,
+          (SELECT COUNT(*)::int FROM reward_events
+            WHERE reward_campaign_id = 'rcp_evidence_conflict_pg') AS events,
+          (SELECT COUNT(*)::int FROM reward_identity_binding_enforcements
+            WHERE reward_campaign_id = 'rcp_evidence_conflict_pg') AS enforcements,
+          (SELECT outcome FROM reward_nationality_decisions
+            WHERE reward_qualification_event_id = 'rqe_evidence_conflict_pg') AS outcome,
+          (SELECT retryability FROM reward_nationality_decisions
+            WHERE reward_qualification_event_id = 'rqe_evidence_conflict_pg') AS retryability
+        `)
+        expect(accounting.rows[0]).toEqual({
+          reservations: 0,
+          events: 0,
+          enforcements: 0,
+          outcome: "identity_evidence_conflict",
+          retryability: "terminal",
+        })
+      })
+    } finally {
+      await withProductionPostgresClient(async (client) => {
+        await client.execute(`DELETE FROM reward_nationality_decisions
+          WHERE reward_campaign_id = 'rcp_evidence_conflict_pg'`)
+        await client.execute(`DELETE FROM reward_pending_qualifications
+          WHERE reward_campaign_id = 'rcp_evidence_conflict_pg'`)
+        await client.execute(`DELETE FROM reward_qualification_events
+          WHERE reward_qualification_event_id = 'rqe_evidence_conflict_pg'`)
+        await client.execute(`DELETE FROM user_attestations
+          WHERE user_id = 'usr_evidence_conflict_pg'`)
+        await client.execute(`DELETE FROM reward_identity_bindings
+          WHERE reward_identity_binding_id = 'rib_evidence_conflict_pg'`)
+        await client.execute(`DELETE FROM identity_nullifiers
+          WHERE identity_nullifier_id = 'idn_evidence_conflict_pg'`)
+        await client.execute(`DELETE FROM users
+          WHERE user_id = 'usr_evidence_conflict_pg'`)
+      })
+      await removeCampaignTestPost("pst_evidence_conflict_pg")
     }
   })
 
