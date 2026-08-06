@@ -35,6 +35,10 @@ export async function advanceRewardCampaignLifecycle(input: {
             SELECT 1
             FROM reward_campaign_funding_effects AS funding
             WHERE funding.reward_campaign_id = reward_campaigns.reward_campaign_id
+              AND NOT (
+                funding.status IN ('failed', 'refunded')
+                OR (funding.status = 'quoted' AND funding.expires_at <= ${nowExpression})
+              )
           )
         RETURNING reward_campaign_id
       `,

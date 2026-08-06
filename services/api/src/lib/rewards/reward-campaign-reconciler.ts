@@ -635,6 +635,21 @@ export async function creditRewardCampaignQualification(input: {
       exposureAmountCents: holdsExposure ? maxClaim : null,
       now: projectionNow,
     })
+    if (pendingQualificationId) {
+      const pendingProjection = await executeFirst(tx, {
+        sql: `SELECT status FROM reward_pending_qualifications
+          WHERE reward_pending_qualification_id = ?1`,
+        args: [pendingQualificationId],
+      })
+      const pendingStatus = text(pendingProjection as QueryResultRow, "status")
+      // Qualification events remain eligible for subsequent reconciliation
+      // passes. Never recreate lot exposure after the projection has reached a
+      // terminal state in an earlier pass.
+      if (pendingStatus === "expired") return { result: "expired", amountCents: 0 }
+      if (pendingStatus === "ineligible" || pendingStatus === "credited") {
+        return { result: "identity", amountCents: 0 }
+      }
+    }
     // Tiered campaigns persist the decision made under their immutable provider
     // inside this transaction. The legacy env-provider shadow evaluator is only
     // for uniform pools; allowing it to run here can overwrite a retryable
