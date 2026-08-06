@@ -48,7 +48,7 @@ permissions:
 jobs:
   required-contracts:
     name: Required staging API contracts
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # Must exceed the sum of the step ceilings that can realistically run, and in
     # particular must leave room after the multipart step's 20min ceiling for the
     # Playwright report upload below. A job that hits THIS ceiling is killed
