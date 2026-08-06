@@ -78,6 +78,10 @@ const TOPUP_BUDGET_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0192_control_plane_reward_campaign_topup_budget.sql",
   import.meta.url,
 )
+const FUNDING_RETIREMENTS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0195_control_plane_reward_funding_retirements.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -305,12 +309,18 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(`
       CREATE TABLE reward_campaign_funding_effects (
         reward_campaign_funding_effect_id TEXT PRIMARY KEY, reward_campaign_id TEXT NOT NULL,
+        funder_user_id TEXT NOT NULL DEFAULT 'usr_reward_pg',
         tx_hash TEXT, status TEXT NOT NULL, chain_id INTEGER NOT NULL DEFAULT 84532,
-        expected_amount_cents INTEGER NOT NULL,
+        token_address TEXT NOT NULL DEFAULT '0x1000000000000000000000000000000000000001',
+        expected_amount_cents INTEGER NOT NULL, expected_amount_atomic TEXT NOT NULL DEFAULT '1000000',
+        received_amount_atomic TEXT, sender_address TEXT NOT NULL DEFAULT '0x3000000000000000000000000000000000000003',
+        treasury_address TEXT NOT NULL DEFAULT '0x2000000000000000000000000000000000000002',
         confirmed_block_number BIGINT, confirmed_block_hash TEXT, confirmed_at TEXT,
-        expires_at TIMESTAMPTZ NOT NULL DEFAULT '2099-01-01T00:00:00.000Z'
+        expires_at TIMESTAMPTZ NOT NULL DEFAULT '2099-01-01T00:00:00.000Z',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `)
+    await db.unsafe(await readFile(FUNDING_RETIREMENTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(NATIONALITY_TIERS_MIGRATION_URL, "utf8"))
     // Legacy campaign fixtures in this broad harness predate tier terms and
@@ -765,6 +775,9 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         expect(await advanceRewardCampaignLifecycle({ client, now: NOW, postgres: true })).toEqual({
           activated_campaigns: 0,
           canceled_draft_campaigns: 1,
+          canceled_retired_funding_campaigns: 0,
+          audited_retired_funding_effects: 0,
+          retirement_policy_anomalies: 0,
           ended_campaigns: 0,
         })
         const state = await client.execute(`
@@ -789,6 +802,108 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       })
     } finally {
       for (const postId of postIds) await removeCampaignTestPost(postId)
+    }
+  })
+
+  test("concurrently releases an explicitly retired funding quote once with durable audit evidence", async () => {
+    const campaignId = "rcp_retired_funding_pg"
+    const effectId = "rcf_retired_funding_pg"
+    const postId = "pst_retired_funding_pg"
+    const lifecycleNow = "2026-08-06T12:00:00.000Z"
+    const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, min_score_bps, daily_reward_cents,
+        milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at,
+        created_at, updated_at
+      ) VALUES (
+        $1, 'usr_reward_pg', 'retired-funding-pg', 'cmt_reward_pg', $2,
+        'sab_retired_funding_pg', 'usr_reward_pg', 'funding_quoted', 'study',
+        7000, 40, 0, 0, 40, 1000, 0, 0, 0, 0, 0, 4,
+        'retired-funding-terms', '2026-08-07T00:00:00.000Z',
+        '2026-08-14T00:00:00.000Z', '2026-07-29T00:00:00.000Z',
+        '2026-07-29T00:00:00.000Z'
+      )
+    `, [campaignId, postId])
+    await seed.unsafe(`
+      INSERT INTO reward_song_pools (
+        community_id, post_id, reward_campaign_id, created_at, updated_at
+      ) VALUES (
+        'cmt_reward_pg', $2, $1, '2026-07-29T00:00:00.000Z',
+        '2026-07-29T00:00:00.000Z'
+      )
+    `, [campaignId, postId])
+    await seed.unsafe(`
+      INSERT INTO reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+        chain_id, token_address, expected_amount_cents, expected_amount_atomic,
+        sender_address, treasury_address, status, expires_at, created_at
+      ) VALUES (
+        $2, $1, 'usr_reward_pg', 84532,
+        '0x036cbd53842c5426634e7929541ec2318f3dcf7e', 1000, '10000000',
+        '0x3000000000000000000000000000000000000003',
+        '0xc74e72ce521674bcaea66c99874fe9d5984e12be', 'quoted',
+        '2026-07-30T12:00:00.000Z', '2026-07-29T12:00:00.000Z'
+      )
+    `, [campaignId, effectId])
+    await seed.end()
+
+    try {
+      const results = await Promise.all([
+        withProductionPostgresClient((client) => advanceRewardCampaignLifecycle({
+          client,
+          now: lifecycleNow,
+          postgres: true,
+        })),
+        withProductionPostgresClient((client) => advanceRewardCampaignLifecycle({
+          client,
+          now: lifecycleNow,
+          postgres: true,
+        })),
+      ])
+      expect(results.reduce((sum, result) => sum + result.canceled_retired_funding_campaigns, 0)).toBe(1)
+      expect(results.reduce((sum, result) => sum + result.audited_retired_funding_effects, 0)).toBe(1)
+
+      await withProductionPostgresClient(async (client) => {
+        expect((await client.execute({
+          sql: `SELECT status, canceled_at FROM reward_campaigns WHERE reward_campaign_id = ?1`,
+          args: [campaignId],
+        })).rows).toEqual([{ status: "canceled", canceled_at: lifecycleNow }])
+        expect((await client.execute({
+          sql: `SELECT 1 AS present FROM reward_song_pools WHERE reward_campaign_id = ?1`,
+          args: [campaignId],
+        })).rows).toEqual([])
+        expect((await client.execute({
+          sql: `
+            SELECT reward_campaign_funding_effect_id, reward_campaign_id,
+              expected_amount_cents, chain_id, quote_created_at, quote_expires_at,
+              canceled_at
+            FROM reward_retired_funding_cancellations
+            WHERE reward_campaign_funding_effect_id = ?1
+          `,
+          args: [effectId],
+        })).rows).toEqual([{
+          reward_campaign_funding_effect_id: effectId,
+          reward_campaign_id: campaignId,
+          expected_amount_cents: 1000,
+          chain_id: 84532,
+          quote_created_at: "2026-07-29T12:00:00.000Z",
+          quote_expires_at: "2026-07-30T12:00:00.000Z",
+          canceled_at: lifecycleNow,
+        }])
+      })
+    } finally {
+      const cleanupDb = connect(TEST_DB, 1)
+      await cleanupDb.unsafe(`DELETE FROM reward_retired_funding_cancellations WHERE reward_campaign_id = $1`, [campaignId])
+      await cleanupDb.unsafe(`DELETE FROM reward_funding_retirement_anomalies WHERE reward_campaign_id = $1`, [campaignId])
+      await cleanupDb.unsafe(`DELETE FROM reward_campaign_funding_effects WHERE reward_campaign_id = $1`, [campaignId])
+      await cleanupDb.unsafe(`DELETE FROM reward_song_pools WHERE reward_campaign_id = $1`, [campaignId])
+      await cleanupDb.unsafe(`DELETE FROM reward_campaigns WHERE reward_campaign_id = $1`, [campaignId])
+      await cleanupDb.end()
     }
   })
 
