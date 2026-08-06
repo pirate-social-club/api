@@ -369,7 +369,7 @@ jobs:
     name: top-level-tests (${{ matrix.shard }}/4)
     needs: [ci-provenance, ci-inputs]
     if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -701,7 +701,7 @@ jobs:
     name: route-tests (${{ matrix.shard }}/8)
     needs: [ci-provenance, ci-inputs]
     if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
