@@ -39,6 +39,8 @@ async function seedVerifiedHnsRoots(client: Client, now: string): Promise<void> 
       FROM namespace_verifications nv
       JOIN community_namespace_bindings cnb
         ON cnb.namespace_verification_id = nv.namespace_verification_id
+      JOIN communities community
+        ON community.community_id = cnb.community_id
       WHERE nv.family = 'hns'
         AND nv.status = 'verified'
         AND nv.club_attach_allowed = 1
@@ -46,6 +48,7 @@ async function seedVerifiedHnsRoots(client: Client, now: string): Promise<void> 
         -- resolves it as text in the projection but as TIMESTAMPTZ here.
         AND nv.expires_at > ?1
         AND cnb.status = 'active'
+        AND community.status = 'active'
       ON CONFLICT(normalized_root_label) DO NOTHING
     `,
     args: [now],
@@ -422,19 +425,36 @@ export async function observeDueHnsRoots(
   const dueBefore = new Date(now.getTime() - intervalSeconds * 1_000).toISOString()
   const due = await client.execute({
     sql: `
-      SELECT normalized_root_label
-      FROM hns_root_delegation_state
-      WHERE last_parent_observation_attempt_at IS NULL
+      SELECT state.normalized_root_label
+      FROM hns_root_delegation_state AS state
+      WHERE EXISTS (
+        SELECT 1
+        FROM namespace_verifications nv
+        JOIN community_namespace_bindings cnb
+          ON cnb.namespace_verification_id = nv.namespace_verification_id
+        JOIN communities community
+          ON community.community_id = cnb.community_id
+        WHERE nv.normalized_root_label = state.normalized_root_label
+          AND nv.family = 'hns'
+          AND nv.status = 'verified'
+          AND nv.club_attach_allowed = 1
+          AND nv.expires_at > ?2
+          AND cnb.status = 'active'
+          AND community.status = 'active'
+      )
+        AND (
+          state.last_parent_observation_attempt_at IS NULL
          OR last_redundancy_observation_attempt_at IS NULL
          OR last_parent_observation_attempt_at <= ?1
          OR last_redundancy_observation_attempt_at <= ?1
+        )
       ORDER BY
-        (last_parent_observation_attempt_at IS NOT NULL),
-        last_parent_observation_attempt_at,
-        normalized_root_label
-      LIMIT ?2
+        (state.last_parent_observation_attempt_at IS NOT NULL),
+        state.last_parent_observation_attempt_at,
+        state.normalized_root_label
+      LIMIT ?3
     `,
-    args: [dueBefore, batchSize],
+    args: [dueBefore, now.toISOString(), batchSize],
   })
 
   let succeeded = 0
