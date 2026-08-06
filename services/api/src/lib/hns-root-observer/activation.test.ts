@@ -27,6 +27,7 @@ class ActivationClient implements Client, Transaction {
     if (typeof statement === "string") throw new Error("expected structured SQL")
     this.statements.push(statement)
     if (statement.sql.includes("FROM hns_root_delegation_state")) return { rows: [this.state] }
+    if (statement.sql.includes("FROM namespace_verifications AS verification")) return { rows: [{ attached: 1 }] }
     if (statement.sql.includes("FROM hns_root_parent_observations")) return { rows: this.observations }
     if (statement.sql.includes("UPDATE hns_root_delegation_state")) {
       if (this.state.canonical_routing_eligible === 1 || this.state.routing_hard_denied === 1) {
@@ -107,6 +108,23 @@ describe("activateHnsRootRouting", () => {
       reason: "test",
       now: NOW,
     })).rejects.toMatchObject({ status: 409, code: "conflict" })
+  })
+
+  test("requires an active verified community attachment", async () => {
+    const client = new ActivationClient()
+    const execute = client.execute.bind(client)
+    client.execute = async (statement) => {
+      const sql = typeof statement === "string" ? statement : statement.sql
+      if (sql.includes("FROM namespace_verifications AS verification")) return { rows: [] }
+      return execute(statement)
+    }
+
+    await expect(activateHnsRootRouting(client, {
+      rootLabel: "xn--pokmon-dva",
+      operatorActorId: "operator_hns",
+      reason: "test",
+      now: NOW,
+    })).rejects.toThrow("not attached to an active community")
   })
 
   test("is idempotent without writing a second audit event", async () => {

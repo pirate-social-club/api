@@ -78,6 +78,28 @@ export async function activateHnsRootRouting(
       throw conflictError("HNS root is hard-denied for routing")
     }
 
+    const attachment = await tx.execute({
+      sql: `
+        SELECT 1 AS attached
+        FROM namespace_verifications AS verification
+        JOIN community_namespace_bindings AS binding
+          ON binding.namespace_verification_id = verification.namespace_verification_id
+        JOIN communities AS community
+          ON community.community_id = binding.community_id
+        WHERE verification.family = 'hns'
+          AND verification.normalized_root_label = ?1
+          AND verification.status = 'verified'
+          AND verification.expires_at > ?2
+          AND binding.status = 'active'
+          AND community.status = 'active'
+        LIMIT 1
+      `,
+      args: [normalizedRootLabel, now],
+    })
+    if (attachment.rows.length !== 1) {
+      throw verificationRequired("HNS root is not attached to an active community")
+    }
+
     const observations = await tx.execute({
       sql: `
         SELECT parent_observation_id, outcome, observed_delegation_security,
