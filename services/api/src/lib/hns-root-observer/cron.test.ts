@@ -68,6 +68,54 @@ async function seedRoot(client: Awaited<ReturnType<typeof createControlPlaneTest
   const now = "2026-07-23T10:00:00.000Z"
   await client.execute({
     sql: `
+      INSERT INTO users (
+        user_id, verification_state, verification_capabilities_json, created_at, updated_at
+      ) VALUES ('usr_pirate', 'verified', '[]', ?1, ?1)
+    `,
+    args: [now],
+  })
+  await client.execute({
+    sql: `
+      INSERT INTO communities (
+        community_id, creator_user_id, display_name, membership_mode, status,
+        provisioning_state, transfer_state, created_at, updated_at
+      ) VALUES ('cmt_pirate', 'usr_pirate', 'Pirate', 'open', 'active',
+        'active', 'none', ?1, ?1)
+    `,
+    args: [now],
+  })
+  await client.execute({
+    sql: `
+      INSERT INTO namespace_verification_sessions (
+        namespace_verification_session_id, namespace_verification_id, user_id, family,
+        submitted_root_label, normalized_root_label, status, expires_at, created_at, updated_at
+      ) VALUES ('nvs_pirate', 'nv_pirate', 'usr_pirate', 'hns', 'pirate', 'pirate',
+        'verified', '2026-08-23T10:00:00.000Z', ?1, ?1)
+    `,
+    args: [now],
+  })
+  await client.execute({
+    sql: `
+      INSERT INTO namespace_verifications (
+        namespace_verification_id, source_namespace_verification_session_id, user_id, family,
+        normalized_root_label, status, root_exists, club_attach_allowed, accepted_at,
+        expires_at, created_at, updated_at
+      ) VALUES ('nv_pirate', 'nvs_pirate', 'usr_pirate', 'hns', 'pirate', 'verified',
+        1, 1, ?1, '2026-08-23T10:00:00.000Z', ?1, ?1)
+    `,
+    args: [now],
+  })
+  await client.execute({
+    sql: `
+      INSERT INTO community_namespace_bindings (
+        community_namespace_binding_id, community_id, namespace_verification_id,
+        namespace_role, status, created_at, updated_at
+      ) VALUES ('cnb_pirate', 'cmt_pirate', 'nv_pirate', 'primary', 'active', ?1, ?1)
+    `,
+    args: [now],
+  })
+  await client.execute({
+    sql: `
       INSERT INTO hns_root_issued_keysets (
         issued_keyset_id, normalized_root_label, activated_at, retired_at, created_at, updated_at
       ) VALUES ('hks_pirate', 'pirate', ?1, NULL, ?1, ?1)
@@ -94,6 +142,30 @@ async function seedRoot(client: Awaited<ReturnType<typeof createControlPlaneTest
 }
 
 describe("HNS root observer cron", () => {
+  test("skips an archived community's historical root state", async () => {
+    const database = await createControlPlaneTestClient({ includeAllMigrations: true })
+    try {
+      await seedRoot(database.client)
+      await database.client.execute({
+        sql: "UPDATE communities SET status = 'archived' WHERE community_id = 'cmt_pirate'",
+      })
+      const env = {
+        ENVIRONMENT: "test",
+        HNS_ROOT_OBSERVER_ENABLED: "true",
+        HNS_VERIFIER_BASE_URL: "https://verifier.example/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "secret",
+      } as Env
+
+      expect(await observeDueHnsRoots(
+        database.client,
+        env,
+        new Date("2026-07-23T10:05:00.000Z"),
+      )).toEqual({ attempted: 0, succeeded: 0, failed: 0 })
+    } finally {
+      await database.cleanup()
+    }
+  })
+
   test("accepts a verifier timestamp produced after the request starts", async () => {
     const database = await createControlPlaneTestClient({ includeAllMigrations: true })
     try {
