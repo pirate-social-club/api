@@ -94,6 +94,30 @@ async function seedRoot(client: Awaited<ReturnType<typeof createControlPlaneTest
 }
 
 describe("HNS root observer cron", () => {
+  test("accepts a verifier timestamp produced after the request starts", async () => {
+    const database = await createControlPlaneTestClient({ includeAllMigrations: true })
+    try {
+      await seedRoot(database.client)
+      globalThis.fetch = (async () => Response.json(
+        observation("2026-07-23T10:05:01.000Z"),
+      )) as typeof fetch
+      const env = {
+        ENVIRONMENT: "test",
+        HNS_ROOT_OBSERVER_ENABLED: "true",
+        HNS_VERIFIER_BASE_URL: "https://verifier.example/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "secret",
+      } as Env
+
+      expect(await observeDueHnsRoots(
+        database.client,
+        env,
+        new Date("2026-07-23T10:05:00.000Z"),
+      )).toEqual({ attempted: 1, succeeded: 1, failed: 0 })
+    } finally {
+      await database.cleanup()
+    }
+  })
+
   test("persists both successful observation families in one root transaction", async () => {
     const database = await createControlPlaneTestClient({ includeAllMigrations: true })
     try {
