@@ -445,7 +445,8 @@ export async function observeDueHnsRoots(
     const attemptedAt = now.toISOString()
     try {
       const observation = await observeHnsRootAuthority(env, { rootLabel })
-      validateObservation(rootLabel, observation, new Date(attemptedAt))
+      const receivedAt = new Date()
+      validateObservation(rootLabel, observation, receivedAt)
       await persistSuccessfulObservation(client, observation, attemptedAt)
       succeeded += 1
     } catch (error) {
