@@ -4,6 +4,7 @@ import type { StudyExerciseRow } from "./post-study-attempt-store"
 import {
   ensureStudySession,
   getStudySessionSummary,
+  interleaveStudySessionCandidates,
   recordStudySessionPresentation as recordStudySessionPresentationRaw,
   requireStudySessionForAttempt,
 } from "./post-study-session-service"
@@ -114,6 +115,39 @@ describe("server-owned study sessions", () => {
     expect(final?.summary.first_pass_correct_count).toBe(7)
     expect(final?.summary.qualified).toBe(true)
     expect(final?.summary.presentation_count).toBe(13)
+  })
+
+  test("separates exercise types for the same lyric inside the fixed session snapshot", () => {
+    const candidates = [
+      { ...exercise(0), id: "line_0_say", line_id: "line_0", exercise_type: "say_it_back" as const },
+      { ...exercise(0), id: "line_0_translation", line_id: "line_0" },
+      { ...exercise(1), id: "line_1_say", line_id: "line_1", exercise_type: "say_it_back" as const },
+      { ...exercise(1), id: "line_1_translation", line_id: "line_1" },
+      { ...exercise(2), id: "line_2_say", line_id: "line_2", exercise_type: "say_it_back" as const },
+      { ...exercise(2), id: "line_2_translation", line_id: "line_2" },
+    ]
+
+    expect(interleaveStudySessionCandidates(candidates).map((candidate) => candidate.id)).toEqual([
+      "line_0_say", "line_1_say", "line_2_say",
+      "line_0_translation", "line_1_translation", "line_2_translation",
+    ])
+  })
+
+  test("serves every unseen card before returning an incorrect card", async () => {
+    const created = await createSession(3)
+    const sessionId = created.summary.id!
+    expect(created.exercises.map((entry) => entry.row.id)).toEqual(["ex_0", "ex_1", "ex_2"])
+
+    await recordStudySessionPresentation({
+      client,
+      exerciseId: "ex_0",
+      now: "2026-07-20T10:01:00.000Z",
+      outcome: "incorrect",
+      sessionId,
+    })
+    const resumed = await createSession(3, "2026-07-20T10:02:00.000Z")
+
+    expect(resumed.exercises.map((entry) => entry.row.id)).toEqual(["ex_1", "ex_2", "ex_0"])
   })
 
   test("stops a ten-card struggling lesson at twenty presentations without qualifying", async () => {

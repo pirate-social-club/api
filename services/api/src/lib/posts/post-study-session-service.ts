@@ -68,6 +68,34 @@ function expiresAt(now: string): string {
   return new Date((Number.isFinite(base) ? base : Date.now()) + STUDY_SESSION_TTL_MS).toISOString()
 }
 
+/**
+ * The exercise query deliberately decides which cards enter the lesson. Once
+ * that ten-card snapshot is fixed, spread multiple exercise types for the same
+ * lyric across the lesson instead of serving them back-to-back.
+ */
+export function interleaveStudySessionCandidates(candidates: StudyExerciseRow[]): StudyExerciseRow[] {
+  const byLine = new Map<string, StudyExerciseRow[]>()
+  for (const candidate of candidates) {
+    const line = byLine.get(candidate.line_id)
+    if (line) line.push(candidate)
+    else byLine.set(candidate.line_id, [candidate])
+  }
+  const ordered: StudyExerciseRow[] = []
+  let depth = 0
+  while (ordered.length < candidates.length) {
+    let added = false
+    for (const line of byLine.values()) {
+      const candidate = line[depth]
+      if (!candidate) continue
+      ordered.push(candidate)
+      added = true
+    }
+    if (!added) break
+    depth += 1
+  }
+  return ordered
+}
+
 function mapSummary(row: SessionRow, dueCount: number, totalUnits: number): StudySessionSummary {
   return {
     completed_exercise_count: Number(row.completed_exercise_count ?? 0),
@@ -184,7 +212,9 @@ export async function ensureStudySession(input: {
   await expireStaleSession(input)
   let session = await activeSession(input)
   if (!session) {
-    const candidates = input.candidates.slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT)
+    const candidates = interleaveStudySessionCandidates(
+      input.candidates.slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT),
+    )
     if (candidates.length === 0) {
       return {
         exercises: [],
@@ -244,7 +274,7 @@ export async function ensureStudySession(input: {
   const sessionId = readString(session.id) ?? ""
   const exerciseRows = await input.client.execute({
     sql: `
-      SELECT exercise_id, presentation_count, first_outcome, mastered
+      SELECT exercise_id, ordinal, presentation_count, first_outcome, mastered
       FROM song_study_session_exercise
       WHERE session_id = ?1
       ORDER BY ordinal ASC
@@ -256,6 +286,7 @@ export async function ensureStudySession(input: {
     const row = candidatesById.get(readString(state.exercise_id) ?? "")
     if (!row) return []
     return [{
+      ordinal: Number(state.ordinal ?? 0),
       progress: {
         firstOutcome: asOutcome(state.first_outcome),
         mastered: Number(state.mastered ?? 0) === 1,
@@ -263,7 +294,16 @@ export async function ensureStudySession(input: {
       },
       row,
     }]
-  })
+  }).sort((left, right) => {
+    // Every distinct card gets a first presentation before any miss returns.
+    // Once all cards have been seen, lower-presentation cards return first and
+    // the immutable session ordinal keeps the order deterministic.
+    const leftSeen = left.progress.presentationCount > 0 ? 1 : 0
+    const rightSeen = right.progress.presentationCount > 0 ? 1 : 0
+    return leftSeen - rightSeen
+      || left.progress.presentationCount - right.progress.presentationCount
+      || left.ordinal - right.ordinal
+  }).map(({ ordinal: _ordinal, ...entry }) => entry)
   // Two ways an active session ends up with nothing attemptable: every card was spent
   // without being mastered, or the exercises it points at were regenerated and no
   // longer resolve against `available` (the flatMap above drops those). Both leave the

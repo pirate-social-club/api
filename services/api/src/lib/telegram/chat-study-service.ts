@@ -860,6 +860,21 @@ function eligibleExercise(study: SongStudyPayload): SongStudyPayload["exercises"
   ) ?? null
 }
 
+function exerciseProgressLabel(
+  study: SongStudyPayload,
+  exercise: SongStudyPayload["exercises"][number],
+): string | null {
+  const total = study.session?.served_count ?? 0
+  if (total <= 0) return null
+  const encountered = study.session?.completed_exercise_count ?? 0
+  const position = Math.min(total, encountered + (exercise.presentation_count === 0 ? 1 : 0))
+  return `${Math.max(1, position)}/${total}`
+}
+
+function progressHeading(progressLabel: string | null, heading: string): string {
+  return progressLabel ? `${progressLabel} · ${heading}` : heading
+}
+
 function feedbackText(input: {
   result: SongStudyAttemptResult
   study: SongStudyPayload
@@ -960,6 +975,7 @@ async function presentNextExercise(input: {
     await sendCompletion({ ...input, result: input.lastResult, study })
     return
   }
+  const progressLabel = exerciseProgressLabel(study, exercise)
   if (exercise.type === "translation_choice") {
     const token = await updateSessionAction({
       actionKind: "answer_choice",
@@ -973,6 +989,7 @@ async function presentNextExercise(input: {
         sessionId: study.session?.id,
         deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
         localizationNoticeSent,
+        progressLabel,
       },
       env: input.env,
       exerciseId: exercise.id,
@@ -981,7 +998,7 @@ async function presentNextExercise(input: {
     })
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${copy.chooseTranslation}\n\n${exercise.prompt_text}`,
+      text: `${progressHeading(progressLabel, copy.chooseTranslation)}\n\n${exercise.prompt_text}`,
       reply_markup: {
         inline_keyboard: [
           ...exercise.options.map((option, index) => [{
@@ -1008,12 +1025,14 @@ async function presentNextExercise(input: {
     telegramUserId: input.session.telegramUserId,
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
+    progressLabel,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     exerciseId: exercise.id,
     localizationNoticeSent,
+    progressLabel,
   }
   input.session.actionToken = nextToken
   input.session.status = "active"
@@ -1183,10 +1202,11 @@ async function resendActiveTelegramStudyExercise(input: {
       : []
     const question = stringOrNull(session.actionPayload.question)
     const promptText = stringOrNull(session.actionPayload.promptText)
+    const progressLabel = stringOrNull(session.actionPayload.progressLabel)
     if (!question || !promptText || optionTexts.length === 0) return false
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${copy.chooseTranslation}\n\n${promptText}`,
+      text: `${progressHeading(progressLabel, copy.chooseTranslation)}\n\n${promptText}`,
       reply_markup: {
         inline_keyboard: [
           ...optionTexts.map((text, index) => [{
@@ -1200,6 +1220,7 @@ async function resendActiveTelegramStudyExercise(input: {
     return true
   }
   const exerciseId = stringOrNull(session.actionPayload.exerciseId)
+  const progressLabel = stringOrNull(session.actionPayload.progressLabel)
   if (!exerciseId) return false
   const db = await openCommunityReadClient(input.env, getCommunityRepository(input.env), session.communityId)
   try {
@@ -1207,7 +1228,7 @@ async function resendActiveTelegramStudyExercise(input: {
     if (!exercise || exercise.post_id !== session.postId || !exercise.reference_text) return false
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${copy.sayThis}\n\n${exercise.reference_text}`,
+      text: `${progressHeading(progressLabel, copy.sayThis)}\n\n${exercise.reference_text}`,
       reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
     })
     await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
