@@ -30,6 +30,10 @@ const PRIVATE_STUDY_TIMEOUT_MS = 30_000
 const PRIVATE_STUDY_MAX_COMPLETION_TOKENS = 320
 const TYPING_REFRESH_MS = 4_000
 
+// Bump only when the disclosure's data-use meaning materially changes. Copy
+// edits deliberately do not make learners see it again.
+const TUTOR_DISCLOSURE_VERSION = 1
+
 // Exercises the tutor can explain. `select_song` is excluded on purpose: there
 // is no current exercise to ground an answer in before a song is picked.
 const TUTORABLE_ACTION_KINDS = ["await_voice", "answer_choice"] as const
@@ -46,8 +50,15 @@ type ActivePrivateStudySession = {
 export type PrivateStudyTutorAnswer = {
   answer: string
   disclosure: string | null
+  disclosureReceipt: TutorDisclosureReceipt | null
   language: StudyHelperLanguage
   sessionId: string
+}
+
+export type TutorDisclosureReceipt = {
+  communityId: string
+  userId: string
+  version: number
 }
 
 /**
@@ -63,21 +74,6 @@ export type PrivateStudyTutorOutcome =
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
-}
-
-function parseActionPayload(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>
-  }
-  if (typeof value !== "string" || !value.trim()) return {}
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
 }
 
 export function plainTelegramTutorText(value: string): string {
@@ -97,35 +93,44 @@ export function plainTelegramTutorText(value: string): string {
   return words.length <= 90 ? plain : `${words.slice(0, 90).join(" ")}…`
 }
 
-async function claimTutorDisclosure(input: { env: Env; sessionId: string }): Promise<boolean> {
-  const tx = await getControlPlaneClient(input.env).transaction("write")
-  try {
-    const row = await executeFirst(tx, {
-      sql: "SELECT action_payload_json FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1 LIMIT 1",
-      args: [input.sessionId],
-    }) as Record<string, unknown> | null
-    if (!row) {
-      await tx.rollback()
-      return false
-    }
-    const payload = parseActionPayload(row.action_payload_json)
-    if (payload.tutorDisclosureShown === true) {
-      await tx.rollback()
-      return false
-    }
-    payload.tutorDisclosureShown = true
-    await tx.execute({
-      sql: "UPDATE telegram_chat_study_sessions SET action_payload_json = ?1, updated_at = ?2 WHERE chat_study_session_id = ?3",
-      args: [JSON.stringify(payload), nowIso(), input.sessionId],
-    })
-    await tx.commit()
-    return true
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
+async function claimTutorDisclosure(input: {
+  communityId: string
+  env: Env
+  userId: string
+}): Promise<TutorDisclosureReceipt | null> {
+  const receipt: TutorDisclosureReceipt = {
+    communityId: input.communityId,
+    userId: input.userId,
+    version: TUTOR_DISCLOSURE_VERSION,
   }
+  const inserted = await getControlPlaneClient(input.env).execute({
+    sql: `
+      INSERT INTO telegram_tutor_disclosure_receipts (
+        user_id, community_id, disclosure_version, shown_at
+      ) VALUES (?1, ?2, ?3, ?4)
+      ON CONFLICT (user_id, community_id, disclosure_version) DO NOTHING
+    `,
+    args: [receipt.userId, receipt.communityId, receipt.version, nowIso()],
+  })
+  return (inserted.rowsAffected ?? 0) === 1 ? receipt : null
+}
+
+// A receipt is claimed immediately before the caller sends the combined
+// disclosure-and-answer message. If Telegram rejects delivery, delete that
+// claim so a later answer can still disclose the provider data flow.
+export async function releaseTutorDisclosureReceipt(input: {
+  env: Env
+  receipt: TutorDisclosureReceipt
+}): Promise<void> {
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      DELETE FROM telegram_tutor_disclosure_receipts
+      WHERE user_id = ?1
+        AND community_id = ?2
+        AND disclosure_version = ?3
+    `,
+    args: [input.receipt.userId, input.receipt.communityId, input.receipt.version],
+  })
 }
 
 async function loadActivePrivateStudySession(input: {
@@ -483,11 +488,16 @@ export async function answerPrivateStudyTutorQuestion(input: {
         providerMessageId: providerMessageId(completion.body),
       })
       const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
-      const showDisclosure = await claimTutorDisclosure({ env: input.env, sessionId: session.id })
+      const disclosureReceipt = await claimTutorDisclosure({
+        communityId: session.communityId,
+        env: input.env,
+        userId: session.userId,
+      })
       return {
         kind: "answered",
         answer: plainTelegramTutorText(completion.content),
-        disclosure: showDisclosure ? getTelegramStudyCopy(language).tutorDisclosure : null,
+        disclosure: disclosureReceipt ? getTelegramStudyCopy(language).tutorDisclosure : null,
+        disclosureReceipt,
         language,
         sessionId: session.id,
       }

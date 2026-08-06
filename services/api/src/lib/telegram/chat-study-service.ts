@@ -49,7 +49,10 @@ import {
   upsertUserStudyPreference,
 } from "./study-preference-service"
 import { isTelegramStudyVoiceEnabled } from "./study-voice-admission"
-import { answerPrivateStudyTutorQuestion } from "./private-study-tutor-service"
+import {
+  answerPrivateStudyTutorQuestion,
+  releaseTutorDisclosureReceipt,
+} from "./private-study-tutor-service"
 import {
   parseTelegramStudyContinueTutorCallback,
   parseTelegramStudyPlaybackCallback,
@@ -811,10 +814,7 @@ async function updateSessionAction(input: {
   const token = actionToken()
   const updatedAt = nowIso()
   const expiresAt = new Date(Date.parse(updatedAt) + CHAT_STUDY_TTL_MS).toISOString()
-  const actionPayload = {
-    ...input.actionPayload,
-    ...(input.session.actionPayload.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
-  }
+  const actionPayload = input.actionPayload
   const updated = await getControlPlaneClient(input.env).execute({
     sql: `
       UPDATE telegram_chat_study_sessions
@@ -1008,14 +1008,12 @@ async function presentNextExercise(input: {
     telegramUserId: input.session.telegramUserId,
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
-    tutorDisclosureShown: input.session.actionPayload.tutorDisclosureShown === true,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     exerciseId: exercise.id,
     localizationNoticeSent,
-    ...(input.session.actionPayload.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
   }
   input.session.actionToken = nextToken
   input.session.status = "active"
@@ -1296,13 +1294,21 @@ export async function handleTelegramChatStudyCallback(input: {
         telegramUserId,
       })
       if (tutor.kind === "answered") {
-        await sendTelegramMessage(input.bot, {
-          chat_id: chatId,
-          text: tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer,
-          reply_markup: {
-            inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
-          },
-        })
+        try {
+          await sendTelegramMessage(input.bot, {
+            chat_id: chatId,
+            text: tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer,
+            reply_markup: {
+              inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
+            },
+          })
+        } catch (error) {
+          if (tutor.disclosureReceipt) {
+            await releaseTutorDisclosureReceipt({ env: input.env, receipt: tutor.disclosureReceipt })
+              .catch(() => undefined)
+          }
+          throw error
+        }
       } else if (tutor.kind === "unavailable") {
         await sendTelegramMessage(input.bot, { chat_id: chatId, text: copy.tutorUnavailable })
       }
