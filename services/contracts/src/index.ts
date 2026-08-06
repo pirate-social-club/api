@@ -1612,6 +1612,7 @@ export type StartNamespaceVerificationSessionRequest = {
 
 export type CompleteNamespaceVerificationSessionRequest = {
   restart_challenge?: boolean | null;
+  acknowledged_resource_replacement?: boolean | null;
 };
 
 export type CreateSongArtifactUploadRequest = {
@@ -2267,6 +2268,7 @@ export type SongStudyPayload = {
   exercise_count: number;
   exercises: Array<SongStudyExercise>;
   session?: SongStudySessionSummary;
+  lesson?: SongStudyLessonState;
   study_pack_version?: number;
   generated_at?: number;
   locked_reason?: SongStudyLockedReason;
@@ -2412,12 +2414,43 @@ export type SongStudyExercise = ({
   first_outcome: "correct" | "incorrect" | "revealed" | null;
 });
 
+export type SongStudyRenderSafeExercise = SongStudyExercise;
+
+export type SongStudyLessonNext = {
+  exercise_id: string;
+  type: "say_it_back" | "translation_choice";
+  is_reappearance: boolean;
+  presentation_number: number;
+  attempts_this_appearance: number;
+  retry_in_place: boolean;
+  prompt: SongStudyRenderSafeExercise;
+};
+
+export type SongStudyLessonState = {
+  session_revision: number;
+  resolved_count: number;
+  total_count: number;
+  completion_reason: "all_resolved" | "presentation_budget" | null;
+  serving_index: number;
+  next: SongStudyLessonNext | null;
+};
+
+export type SongStudyRevisionConflict = {
+  code: "study_session_revision_conflict";
+  message: string;
+  retryable: false;
+  details: {
+    lesson: SongStudyLessonState;
+  };
+};
+
 export type SongStudyAttemptRequest = {
   idempotency_key: string;
   session_id: string;
   exercise_id: string;
   type: "say_it_back" | "translation_choice";
   attempt_number: number;
+  session_revision?: number;
   selected_option_id?: string;
   transcript?: string;
   timezone?: string;
@@ -2426,7 +2459,7 @@ export type SongStudyAttemptRequest = {
 export type SongStudyAttemptResult = {
   object: "song_study_attempt_result";
   exercise_id: string;
-  outcome: "correct" | "incorrect" | "revealed";
+  outcome: "correct" | "incorrect" | "revealed" | "ungradable";
   attempts_remaining: number;
   correct_option_id?: string;
   feedback?: {
@@ -2436,6 +2469,7 @@ export type SongStudyAttemptResult = {
   };
   next_review_hint?: "again" | "hard" | "good" | "easy";
   session?: SongStudySessionSummary;
+  lesson?: SongStudyLessonState;
   study_progress?: {
     study_attempt_count: number;
     study_correct_count: number;
@@ -4382,8 +4416,11 @@ type SongStudySessionSummary = {
   max_presentations: number;
   presentation_count: number;
   completed_exercise_count: number;
+  resolved_exercise_count: number;
   first_pass_correct_count: number;
   mastered_exercise_count: number;
+  session_revision: number;
+  completion_reason: "all_resolved" | "presentation_budget" | null;
   qualified: boolean;
   next_due_at?: number;
 };

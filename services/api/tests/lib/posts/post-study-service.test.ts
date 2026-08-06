@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
-import type { ShardQueryResult, ShardResult, ShardRpc, ShardSqlStatement } from "@pirate/api-shared"
+import {
+  isWriteAllowedStatement,
+  type ShardQueryResult,
+  type ShardResult,
+  type ShardRpc,
+  type ShardSqlStatement,
+} from "@pirate/api-shared"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -99,6 +105,8 @@ const profileRepository = {
 let rootDir: string | null = null
 let client: Client | null = null
 let controlClient: Client | null = null
+let observedBatchWriteSql: string[] = []
+let beforeNextStudyResponseBatch: (() => Promise<void>) | null = null
 
 function env(overrides: Partial<Env> = {}): Env {
   if (!rootDir) throw new Error("test root not initialized")
@@ -305,11 +313,27 @@ function makeLocalCommunityShard(): ShardRpc {
       statements: ShardSqlStatement[]
     }): Promise<ShardResult<ShardQueryResult[]>> {
       if (!client) throw new Error("test db not initialized")
-      const results: ShardQueryResult[] = []
       for (const statement of input.statements) {
-        results.push(await client.execute({ sql: statement.sql, args: (statement.args ?? []) as never[] }))
+        if (!isWriteAllowedStatement(statement.sql)) {
+          return {
+            ok: false,
+            code: "shard_write_not_allowed",
+            message: `Statement rejected by shard write guard: ${statement.sql}`,
+          }
+        }
       }
-      return { ok: true, value: results }
+      if (beforeNextStudyResponseBatch
+        && input.statements.some((statement) => /INSERT INTO song_study_attempt_response/iu.test(statement.sql))) {
+        const hook = beforeNextStudyResponseBatch
+        beforeNextStudyResponseBatch = null
+        await hook()
+      }
+      const statements = input.statements.map((statement) => ({
+        sql: statement.sql,
+        args: (statement.args ?? []) as never[],
+      }))
+      observedBatchWriteSql.push(...statements.map((statement) => statement.sql.trim()))
+      return { ok: true, value: await client.batch(statements, "write") }
     },
   } as ShardRpc
 }
@@ -474,6 +498,18 @@ async function applyStudyMigration(): Promise<void> {
   if (sessionTables.rows.length <= 0) {
     const path = fileURLToPath(
       new URL("../../../test-fixtures/db/community-template/migrations/1142_song_study_sessions.sql", import.meta.url),
+    )
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
+  const sessionColumns = await client.execute("PRAGMA table_info(song_study_session)")
+  if (!sessionColumns.rows.some((row) => String(row.name) === "session_revision")) {
+    const path = fileURLToPath(
+      new URL("../../../test-fixtures/db/community-template/migrations/1151_song_study_orchestration_v2.sql", import.meta.url),
     )
     const raw = await readFile(path, "utf8")
     for (const statement of splitSqlStatements(raw)) {
@@ -824,6 +860,8 @@ async function createEmptyCredentialEnv(): Promise<Env> {
 }
 
 beforeEach(async () => {
+  beforeNextStudyResponseBatch = null
+  observedBatchWriteSql = []
   rootDir = await mkdtemp(join(tmpdir(), "pirate-study-"))
   await mkdir(rootDir, { recursive: true })
   controlClient = createClient({ url: `file:${join(rootDir, "control-plane.db")}` })
@@ -1295,7 +1333,7 @@ describe("post study service", () => {
     expect(payload.exercises.some((exercise) => exercise.type === "translation_choice")).toBe(true)
   })
 
-  test("records attempts server-side and replays idempotent retries without double-writing", async () => {
+  test("commits the attempt write plan through BufferingD1WriteTransaction without buffered reads", async () => {
     await seedSongPost()
     await seedReadyPack()
 
@@ -1337,6 +1375,363 @@ describe("post study service", () => {
 
     const count = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
     expect(Number(count.rows[0]?.count ?? 0)).toBe(1)
+    expect(observedBatchWriteSql.length).toBeGreaterThan(0)
+    expect(observedBatchWriteSql.every((sql) => isWriteAllowedStatement(sql))).toBe(true)
+  })
+
+  test("revision-absent clients replay one logical presentation under a different key", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const current = payload.exercises[0]!
+    const body = {
+      attempt_number: 1,
+      exercise_id: current.id,
+      session_id: payload.session!.id!,
+      ...(current.type === "say_it_back"
+        ? { transcript: current.reference_text, type: "say_it_back" as const }
+        : { selected_option_id: "opt_a", type: "translation_choice" as const }),
+    }
+    const submit = (idempotencyKey: string) => submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...body, idempotency_key: idempotencyKey },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    const first = await submit("legacy-logical-a")
+    const replay = await submit("legacy-logical-b")
+    expect(replay).toMatchObject({
+      attempts_remaining: first.attempts_remaining,
+      exercise_id: first.exercise_id,
+      lesson: first.lesson,
+      outcome: first.outcome,
+      session: {
+        completed_exercise_count: first.session!.completed_exercise_count,
+        presentation_count: first.session!.presentation_count,
+        session_revision: first.session!.session_revision,
+      },
+    })
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(1)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_review_state")).rows[0]?.count)).toBe(1)
+  })
+
+  test("concurrent revision-absent logical duplicates commit one attempt", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const current = payload.exercises[0]!
+    const body = {
+      attempt_number: 1,
+      exercise_id: current.id,
+      session_id: payload.session!.id!,
+      ...(current.type === "say_it_back"
+        ? { transcript: current.reference_text, type: "say_it_back" as const }
+        : { selected_option_id: "opt_a", type: "translation_choice" as const }),
+    }
+    const submit = (idempotencyKey: string) => submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...body, idempotency_key: idempotencyKey },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    const [left, right] = await Promise.all([submit("legacy-race-a"), submit("legacy-race-b")])
+    expect(right).toMatchObject({
+      attempts_remaining: left.attempts_remaining,
+      exercise_id: left.exercise_id,
+      lesson: left.lesson,
+      outcome: left.outcome,
+      session: {
+        completed_exercise_count: left.session!.completed_exercise_count,
+        presentation_count: left.session!.presentation_count,
+        session_revision: left.session!.session_revision,
+      },
+    })
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(1)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_review_state")).rows[0]?.count)).toBe(1)
+  })
+
+  test("feature-gated ungradable voice grants one durable free re-record per appearance", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const exercise = payload.exercises.find((candidate) => candidate.type === "say_it_back")!
+    const base = {
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_UNGRADABLE_RERECORD_ENABLED: "true" }),
+      postId: POST_ID,
+    }
+    const firstInput = {
+      ...base,
+      body: {
+        attempt_number: 1,
+        exercise_id: exercise.id,
+        idempotency_key: "voice-ungradable-1",
+        session_id: payload.session!.id!,
+        session_revision: payload.session!.session_revision,
+        transcript: "testing one two three",
+        type: "say_it_back",
+      },
+    }
+    const first = await submitPostStudyAttempt(firstInput)
+    const replay = await submitPostStudyAttempt(firstInput)
+    expect(first).toMatchObject({
+      attempts_remaining: 3,
+      outcome: "ungradable",
+      lesson: {
+        resolved_count: 0,
+        session_revision: 1,
+        next: { exercise_id: exercise.id, presentation_number: 1, retry_in_place: true },
+      },
+      session: { presentation_count: 0 },
+    })
+    expect(replay).toEqual(first)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(0)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_ungradable_receipt")).rows[0]?.count)).toBe(1)
+
+    const spent = await submitPostStudyAttempt({
+      ...base,
+      body: {
+        ...firstInput.body,
+        idempotency_key: "voice-ungradable-2",
+        session_revision: first.lesson!.session_revision,
+      },
+    })
+    expect(spent).toMatchObject({ outcome: "incorrect", lesson: { session_revision: 2 } })
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(1)
+    expect(observedBatchWriteSql.every((sql) => /^(?:INSERT|UPDATE|DELETE)\b/iu.test(sql))).toBe(true)
+  })
+
+  test("different keys at one revision commit once and stale replay stays idempotent", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const current = payload.exercises[0]!
+    const baseBody = {
+      attempt_number: 1,
+      exercise_id: current.id,
+      session_id: payload.session!.id!,
+      session_revision: payload.session!.session_revision,
+      ...(current.type === "say_it_back"
+        ? { transcript: current.reference_text, type: "say_it_back" as const }
+        : { selected_option_id: "opt_a", type: "translation_choice" as const }),
+    } as const
+    const submit = (key: string) => submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...baseBody, idempotency_key: key },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    const raced = await Promise.allSettled([submit("revision-race-a"), submit("revision-race-b")])
+    const successes = raced.filter((result) => result.status === "fulfilled")
+    const failures = raced.filter((result) => result.status === "rejected") as PromiseRejectedResult[]
+    expect(successes).toHaveLength(1)
+    expect(failures).toHaveLength(1)
+    expect(failures[0]?.reason).toMatchObject({
+      code: "study_session_revision_conflict",
+      details: { lesson: { session_revision: 1 } },
+      status: 409,
+    })
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(1)
+
+    const winner = (successes[0] as PromiseFulfilledResult<Awaited<ReturnType<typeof submit>>>).value
+    const winnerKey = raced[0]?.status === "fulfilled" ? "revision-race-a" : "revision-race-b"
+    const loserKey = winnerKey === "revision-race-a" ? "revision-race-b" : "revision-race-a"
+    const replay = await submit(winnerKey)
+    expect(replay).toEqual(winner)
+    await expect(submit(loserKey)).rejects.toMatchObject({
+      code: "study_session_revision_conflict",
+      details: { lesson: { session_revision: 1 } },
+      status: 409,
+    })
+  })
+
+  test("stale revision returns the authoritative lesson before presentation validation", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const current = payload.exercises[0]!
+    const baseBody = {
+      attempt_number: 1,
+      exercise_id: current.id,
+      session_id: payload.session!.id!,
+      session_revision: payload.session!.session_revision,
+      ...(current.type === "say_it_back"
+        ? { transcript: current.reference_text, type: "say_it_back" as const }
+        : { selected_option_id: "opt_a", type: "translation_choice" as const }),
+    }
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...baseBody, idempotency_key: "stale-advance" },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    await expect(submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...baseBody, idempotency_key: "stale-after-advance" },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })).rejects.toMatchObject({
+      code: "study_session_revision_conflict",
+      details: { lesson: { session_revision: 1 } },
+      status: 409,
+    })
+  })
+
+  test("session deletion during stale-conflict persistence returns the typed conflict instead of an FK failure", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const current = payload.exercises[0]!
+    const baseBody = {
+      attempt_number: 1,
+      exercise_id: current.id,
+      session_id: payload.session!.id!,
+      session_revision: payload.session!.session_revision,
+      ...(current.type === "say_it_back"
+        ? { transcript: current.reference_text, type: "say_it_back" as const }
+        : { selected_option_id: "opt_a", type: "translation_choice" as const }),
+    }
+    await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...baseBody, idempotency_key: "delete-race-advance" },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    beforeNextStudyResponseBatch = async () => {
+      await client!.execute({ sql: "DELETE FROM song_study_session WHERE id = ?1", args: [payload.session!.id!] })
+    }
+    await expect(submitPostStudyAttempt({
+      actor: learnerActor,
+      body: { ...baseBody, idempotency_key: "delete-race-stale" },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })).rejects.toMatchObject({ code: "study_session_revision_conflict", status: 409 })
+    expect(Number((await client!.execute({
+      sql: "SELECT COUNT(*) AS count FROM song_study_session WHERE id = ?1",
+      args: [payload.session!.id!],
+    })).rows[0]?.count)).toBe(0)
+  })
+
+  test("concurrent replay finalizes a pending completed response once and returns the immutable winner", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    await completeQualifyingStudySession({ env: attemptEnv, idempotencyPrefix: "pending-finalize" })
+    const row = (await client!.execute({
+      sql: `SELECT session_id FROM song_study_attempt_response WHERE user_id = ?1 AND idempotency_key = ?2`,
+      args: [LEARNER_ID, "pending-finalize-2"],
+    })).rows[0]!
+    await client!.execute({
+      sql: `
+        UPDATE song_study_attempt_response
+        SET response_status = 'pending',
+            response_json = json_remove(response_json, '$.study_progress'),
+            materialization_context_json = ?3
+        WHERE user_id = ?1 AND idempotency_key = ?2
+      `,
+      args: [
+        LEARNER_ID,
+        "pending-finalize-2",
+        JSON.stringify({ completed_at: "2026-01-02T23:59:59.000Z", study_timezone: "UTC" }),
+      ],
+    })
+    await client!.execute({
+      sql: "DELETE FROM song_engagement_days WHERE user_id = ?1 AND post_id = ?2",
+      args: [LEARNER_ID, POST_ID],
+    })
+    await client!.execute({
+      sql: "DELETE FROM song_streaks WHERE user_id = ?1 AND post_id = ?2",
+      args: [LEARNER_ID, POST_ID],
+    })
+    const replayInput = {
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: "stu:stu_2:say_it_back:en",
+        idempotency_key: "pending-finalize-2",
+        session_id: String(row.session_id),
+        transcript: "Hold me close until the morning",
+        type: "say_it_back" as const,
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: attemptEnv,
+      postId: POST_ID,
+    }
+    const [left, right] = await Promise.all([
+      submitPostStudyAttemptRaw(replayInput),
+      submitPostStudyAttemptRaw(replayInput),
+    ])
+    expect(left).toEqual(right)
+    expect(left.study_progress).toMatchObject({ qualified_today: true, study_correct_count: 3 })
+    const finalized = (await client!.execute({
+      sql: `SELECT response_status, response_json FROM song_study_attempt_response WHERE user_id = ?1 AND idempotency_key = ?2`,
+      args: [LEARNER_ID, "pending-finalize-2"],
+    })).rows[0]!
+    expect(finalized.response_status).toBe("final")
+    expect(JSON.parse(String(finalized.response_json))).toEqual(left)
+    expect((await client!.execute({
+      sql: `SELECT activity_date FROM song_engagement_days WHERE user_id = ?1 AND post_id = ?2`,
+      args: [LEARNER_ID, POST_ID],
+    })).rows[0]?.activity_date).toBe("2026-01-02")
   })
 
   test("allows public study attempts without probing community membership", async () => {

@@ -4076,6 +4076,15 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongStudyRevisionConflict"
+                }
+              }
+            }
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_study_attempts"
@@ -10094,6 +10103,10 @@ const spec = {
           "restart_challenge": {
             "type": "boolean",
             "nullable": true
+          },
+          "acknowledged_resource_replacement": {
+            "type": "boolean",
+            "nullable": true
           }
         }
       },
@@ -15062,6 +15075,9 @@ const spec = {
           "session": {
             "$ref": "#/components/schemas/SongStudySessionSummary"
           },
+          "lesson": {
+            "$ref": "#/components/schemas/SongStudyLessonState"
+          },
           "study_pack_version": {
             "type": "integer"
           },
@@ -15107,6 +15123,10 @@ const spec = {
           "attempt_number": {
             "type": "integer"
           },
+          "session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
           "selected_option_id": {
             "type": "string"
           },
@@ -15142,7 +15162,8 @@ const spec = {
             "enum": [
               "correct",
               "incorrect",
-              "revealed"
+              "revealed",
+              "ungradable"
             ]
           },
           "attempts_remaining": {
@@ -15187,6 +15208,9 @@ const spec = {
           "session": {
             "$ref": "#/components/schemas/SongStudySessionSummary"
           },
+          "lesson": {
+            "$ref": "#/components/schemas/SongStudyLessonState"
+          },
           "study_progress": {
             "type": "object",
             "properties": {
@@ -15216,6 +15240,45 @@ const spec = {
               "qualified_today",
               "current_streak"
             ],
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyRevisionConflict": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "study_session_revision_conflict"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "details": {
+            "type": "object",
+            "required": [
+              "lesson"
+            ],
+            "properties": {
+              "lesson": {
+                "$ref": "#/components/schemas/SongStudyLessonState"
+              }
+            },
             "additionalProperties": false
           }
         },
@@ -21559,9 +21622,12 @@ const spec = {
           "max_presentations",
           "presentation_count",
           "completed_exercise_count",
+          "resolved_exercise_count",
+          "completion_reason",
           "first_pass_correct_count",
           "mastered_exercise_count",
-          "qualified"
+          "qualified",
+          "session_revision"
         ],
         "properties": {
           "id": {
@@ -21596,13 +21662,31 @@ const spec = {
             "type": "integer"
           },
           "completed_exercise_count": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
+          },
+          "resolved_exercise_count": {
+            "type": "integer",
+            "minimum": 0
           },
           "first_pass_correct_count": {
             "type": "integer"
           },
           "mastered_exercise_count": {
-            "type": "integer"
+            "type": "integer",
+            "minimum": 0
+          },
+          "session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completion_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "all_resolved",
+              "presentation_budget"
+            ]
           },
           "qualified": {
             "type": "boolean"
@@ -21610,6 +21694,52 @@ const spec = {
           "next_due_at": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyLessonState": {
+        "type": "object",
+        "required": [
+          "session_revision",
+          "resolved_count",
+          "total_count",
+          "completion_reason",
+          "serving_index",
+          "next"
+        ],
+        "properties": {
+          "session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resolved_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completion_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "all_resolved",
+              "presentation_budget"
+            ]
+          },
+          "serving_index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "next": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SongStudyLessonNext"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -25600,6 +25730,48 @@ const spec = {
         },
         "additionalProperties": false
       },
+      "SongStudyLessonNext": {
+        "type": "object",
+        "required": [
+          "exercise_id",
+          "type",
+          "is_reappearance",
+          "presentation_number",
+          "attempts_this_appearance",
+          "retry_in_place",
+          "prompt"
+        ],
+        "properties": {
+          "exercise_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "say_it_back",
+              "translation_choice"
+            ]
+          },
+          "is_reappearance": {
+            "type": "boolean"
+          },
+          "presentation_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "attempts_this_appearance": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retry_in_place": {
+            "type": "boolean"
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/SongStudyRenderSafeExercise"
+          }
+        },
+        "additionalProperties": false
+      },
       "SongStreakLeaderboardIdentity": {
         "type": "object",
         "required": [
@@ -27179,6 +27351,13 @@ const spec = {
             }
           }
         }
+      },
+      "SongStudyRenderSafeExercise": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SongStudyExercise"
+          }
+        ]
       },
       "NotificationEventType": {
         "type": "string",

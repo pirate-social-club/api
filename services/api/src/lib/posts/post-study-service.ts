@@ -2,7 +2,7 @@ import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import type { Env } from "../../env"
 import type { SongFeatureCapabilityReason } from "../../types"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
-import { badRequestError, conflictError, HttpError, notFoundError } from "../errors"
+import { badRequestError, codedConflictError, conflictError, HttpError, notFoundError } from "../errors"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
 import type { Client, ReadClient } from "../sql-client"
@@ -35,14 +35,29 @@ import { getUserRepository } from "../auth/repositories"
 import { getNextDueAt, listExercises } from "./post-study-exercise-query"
 import {
   ensureStudySession,
+  applyPlannedStudyTransition,
+  getStudyLessonTransitionState,
   getStudySessionSummary,
-  recordStudySessionPresentation,
+  loadStudyTransitionSessionState,
   requireStudySessionForAttempt,
   STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
   STUDY_SESSION_MAX_CARD_PRESENTATIONS,
   type StudySessionExerciseProgress,
   type StudySessionSummary,
 } from "./post-study-session-service"
+import {
+  getStudyAttemptResponseSnapshot,
+  finalizeStudyAttemptResponseSnapshot,
+  buildStudyResponseSnapshotCasStatement,
+  hasUngradableReceipt,
+  recordOwnedUngradableReceipt,
+  studyAttemptRequestFingerprint,
+} from "./post-study-orchestration-store"
+import {
+  hasStudyRevisionConflict,
+  planGradedStudyTransition,
+  planUngradableStudyTransition,
+} from "./post-study-transition-planner"
 import { canGenerateStudyTranslations } from "./post-study-generation-provider"
 import { requireMemberAccess } from "./post-access"
 import { publicCommunityId, publicPostId } from "../public-ids"
@@ -171,6 +186,7 @@ export type SongStudyPayload = {
   exercises: SongStudyExercise[]
   generated_at?: number
   locked_reason?: "purchase_required" | "membership_required" | "age_required"
+  lesson?: SongStudyLessonState
   object: "song_study_payload"
   post_id: string
   session?: SongStudySessionSummary
@@ -187,6 +203,7 @@ export type SongStudyAttemptRequest = {
   exercise_id?: unknown
   idempotency_key?: unknown
   session_id?: unknown
+  session_revision?: unknown
   selected_option_id?: unknown
   timezone?: unknown
   transcript?: unknown
@@ -204,9 +221,27 @@ export type SongStudyAttemptResult = {
   }
   next_review_hint?: FsrsRating
   object: "song_study_attempt_result"
-  outcome: AttemptOutcome
+  lesson?: SongStudyLessonState
+  outcome: AttemptOutcome | "ungradable"
   session?: SongStudySessionSummary
   study_progress?: SongStudyAttemptProgress
+}
+
+type SongStudyLessonState = {
+  completion_reason: "all_resolved" | "presentation_budget" | null
+  next: null | {
+    attempts_this_appearance: number
+    exercise_id: string
+    is_reappearance: boolean
+    presentation_number: number
+    prompt: SongStudyExercise
+    retry_in_place: boolean
+    type: ExerciseType
+  }
+  resolved_count: number
+  serving_index: number
+  session_revision: number
+  total_count: number
 }
 
 type SongStudyAttemptProgress = {
@@ -277,6 +312,14 @@ function readAttemptNumber(value: unknown): number {
   return value
 }
 
+function readOptionalSessionRevision(value: unknown): number | undefined {
+  if (value == null) return undefined
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw badRequestError("session_revision must be a non-negative integer")
+  }
+  return value
+}
+
 function publicTitle(post: StudyPost): string {
   return post.song_title || post.title || "Untitled song"
 }
@@ -289,6 +332,10 @@ function toUnixSeconds(value: string | null): number | undefined {
 
 function dueReviewServingEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_DUE_REVIEW_SERVING_ENABLED, false)
+}
+
+function ungradableRerecordEnabled(env: Env): boolean {
+  return envFlag(env.SONG_STUDY_UNGRADABLE_RERECORD_ENABLED, false)
 }
 
 function studyStreakWritesEnabled(env: Env): boolean {
@@ -606,7 +653,15 @@ function orderOptionsForLearner(options: Array<{ id: string; text: string }>, se
 function toExercise(
   row: StudyExerciseRow,
   learnerSeed: string,
-  progress: StudySessionExerciseProgress = { firstOutcome: null, mastered: false, presentationCount: 0 },
+  progress: StudySessionExerciseProgress = {
+    appearanceAttemptCount: 0,
+    appearanceOrdinal: 0,
+    firstOutcome: null,
+    lastServedIndex: null,
+    lessonResolved: false,
+    mastered: false,
+    presentationCount: 0,
+  },
 ): SongStudyExercise {
   if (row.exercise_type === "translation_choice") {
     return {
@@ -636,6 +691,112 @@ function toExercise(
     translation_text: row.translation_text,
     type: "say_it_back",
   }
+}
+
+async function buildStudyLessonState(input: {
+  client: ReadClient
+  sessionId: string
+  userId: string
+}): Promise<SongStudyLessonState> {
+  const state = await getStudyLessonTransitionState(input.client, input.sessionId)
+  if (!state) throw new Error("Study session disappeared while projecting orchestration")
+  return await renderStudyLessonState({ client: input.client, state, userId: input.userId })
+}
+
+async function renderStudyLessonState(input: {
+  client: ReadClient
+  state: import("./post-study-session-service").StudyLessonTransitionState
+  userId: string
+}): Promise<SongStudyLessonState> {
+  const state = input.state
+  const nextExercise = state.next
+    ? await getExerciseForAttempt(input.client, state.next.exerciseId)
+    : null
+  return {
+    completion_reason: state.completionReason,
+    next: state.next && nextExercise ? {
+      attempts_this_appearance: state.next.appearanceAttemptCount,
+      exercise_id: state.next.exerciseId,
+      is_reappearance: state.next.isReappearance,
+      presentation_number: state.next.presentationNumber,
+      prompt: toExercise(nextExercise, input.userId, {
+        appearanceAttemptCount: state.next.appearanceAttemptCount,
+        appearanceOrdinal: 0,
+        firstOutcome: null,
+        lastServedIndex: null,
+        lessonResolved: false,
+        mastered: false,
+        presentationCount: state.next.presentationNumber - 1,
+      }),
+      retry_in_place: state.next.retryInPlace,
+      type: nextExercise.exercise_type,
+    } : null,
+    resolved_count: state.resolvedCount,
+    serving_index: state.servingIndex,
+    session_revision: state.sessionRevision,
+    total_count: state.totalCount,
+  }
+}
+
+async function persistStudyRevisionConflictSnapshot(input: {
+  client: Client
+  exerciseId: string
+  idempotencyKey: string
+  now: string
+  postId: string
+  requestFingerprint: string
+  sessionId: string
+  userId: string
+}): Promise<SongStudyLessonState> {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const state = await loadStudyTransitionSessionState({
+      client: input.client,
+      now: input.now,
+      postId: input.postId,
+      sessionId: input.sessionId,
+      userId: input.userId,
+    })
+    const lesson = await buildStudyLessonState({
+      client: input.client,
+      sessionId: input.sessionId,
+      userId: input.userId,
+    })
+    const snapshotExerciseId = state.exercises.find((candidate) => candidate.exerciseId === state.currentExerciseId)?.exerciseId
+      ?? state.exercises.find((candidate) => candidate.exerciseId === input.exerciseId)?.exerciseId
+      ?? state.exercises[0]?.exerciseId
+    // A session can be retired between the stale pre-read and this persistence
+    // step. With no surviving child row there is no FK-safe place to retain the
+    // conflict snapshot; return the authoritative typed lesson deliberately.
+    if (!snapshotExerciseId) return lesson
+    const commitToken = makeId("src")
+    await withTransaction(input.client, "write", async (tx) => {
+      await tx.execute(buildStudyResponseSnapshotCasStatement({
+        commitToken,
+        exerciseId: snapshotExerciseId,
+        expectedRevision: state.sessionRevision,
+        httpStatus: 409,
+        idempotencyKey: input.idempotencyKey,
+        now: input.now,
+        requestFingerprint: input.requestFingerprint,
+        response: { lesson },
+        resultKind: "revision_conflict",
+        sessionId: input.sessionId,
+        userId: input.userId,
+      }))
+    })
+    const stored = await getStudyAttemptResponseSnapshot<{ lesson: SongStudyLessonState }>({
+      client: input.client,
+      idempotencyKey: input.idempotencyKey,
+      userId: input.userId,
+    })
+    if (stored) {
+      if (stored.requestFingerprint !== input.requestFingerprint) {
+        throw conflictError("idempotency_key was reused with a different study attempt payload")
+      }
+      return stored.response.lesson
+    }
+  }
+  throw conflictError("Study session changed while recording the revision conflict")
 }
 
 function basePayload(input: {
@@ -780,11 +941,15 @@ export async function getPostStudyPayload(input: {
       ...studySession.summary,
       ...(nextDueAtSeconds ? { next_due_at: nextDueAtSeconds } : {}),
     }
+    const lesson = session.id
+      ? await buildStudyLessonState({ client: db.client, sessionId: session.id, userId: input.actor.userId })
+      : undefined
     if (exercises.length === 0) {
       if (canonicalExerciseRows.length > 0) {
         return {
           ...basePayload({ access: "ready", post, targetLanguage }),
           generated_at: toUnixSeconds(pack?.generated_at ?? null),
+          ...(lesson ? { lesson } : {}),
           session,
           source_language: pack?.source_language ?? post.source_language,
           study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
@@ -809,6 +974,7 @@ export async function getPostStudyPayload(input: {
       exercise_count: exercises.length,
       exercises,
       generated_at: toUnixSeconds(pack?.generated_at ?? null),
+      ...(lesson ? { lesson } : {}),
       session,
       source_language: pack?.source_language ?? post.source_language,
       study_pack_version: pack?.study_pack_version ?? STUDY_UNIT_GENERATION_VERSION,
@@ -926,6 +1092,7 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
 function resultFromAttempt(
   row: StudyAttemptRow,
   exercise: { correct_option_id: string | null; exercise_type: ExerciseType; max_attempts: number },
+  lesson: SongStudyLessonState,
   session?: StudySessionSummary,
 ): SongStudyAttemptResult {
   const feedback = row.feedback_json ? JSON.parse(row.feedback_json) as SongStudyAttemptResult["feedback"] : undefined
@@ -937,6 +1104,7 @@ function resultFromAttempt(
     exercise_id: row.exercise_id,
     ...(feedback ? { feedback } : {}),
     ...(row.fsrs_rating ? { next_review_hint: row.fsrs_rating } : {}),
+    lesson,
     object: "song_study_attempt_result",
     outcome: row.outcome,
     ...(session ? { session } : {}),
@@ -1080,6 +1248,16 @@ export async function submitPostStudyAttempt(input: {
     throw badRequestError("type must be say_it_back or translation_choice")
   }
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
+  const sessionRevision = readOptionalSessionRevision(input.body.session_revision)
+  const requestFingerprint = studyAttemptRequestFingerprint({
+    attemptNumber,
+    exerciseId,
+    selectedOptionId: readString(input.body.selected_option_id),
+    sessionId,
+    sessionRevision: sessionRevision ?? null,
+    transcript: readString(input.body.transcript),
+    type,
+  })
   // The streak day boundary belongs to the learner: prefer the device's IANA
   // timezone from the client; fall back to the edge-derived one from the route.
   const requestTimezone = readString(input.body.timezone)
@@ -1096,7 +1274,6 @@ export async function submitPostStudyAttempt(input: {
   let timingExerciseType: ExerciseType | undefined
   let timingStreakWritesEnabled = false
   let resultForTiming: SongStudyAttemptResult | undefined
-  let studyProgress: SongStudyAttemptProgress | undefined
   const openClientStartedAt = performance.now()
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   openClientMs = elapsedMs(openClientStartedAt)
@@ -1109,10 +1286,14 @@ export async function submitPostStudyAttempt(input: {
     const rewardQualificationWritesEnabled = envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
       && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false)
     timingStreakWritesEnabled = streakWritesEnabled
-    const persistCompletedSession = async (summary: StudySessionSummary) => {
+    const persistCompletedSession = async (
+      summary: StudySessionSummary,
+      materialization?: { completed_at: string; study_timezone: string | null },
+    ) => {
       if (summary.status !== "completed" || !summary.id) return
-      const completedAt = nowIso()
+      const completedAt = materialization?.completed_at ?? nowIso()
       const completedSessionId = summary.id
+      const frozenTimezone = materialization?.study_timezone ?? timezoneCandidate
       // Pin/expiry resolution reads existing streak state, so it runs BEFORE
       // the write tx (buffered D1 txs cannot read). The tx itself is then pure
       // writes: day upsert + streak materialization + column apply, committed
@@ -1127,7 +1308,7 @@ export async function submitPostStudyAttempt(input: {
           communityId: input.communityId,
           now: completedAt,
           postId: input.postId,
-          timezoneCandidate,
+          timezoneCandidate: frozenTimezone,
           userId: input.actor.userId,
         })
       }
@@ -1138,7 +1319,7 @@ export async function submitPostStudyAttempt(input: {
           now: completedAt,
           postId: input.postId,
           qualified: summary.qualified,
-          timezoneCandidate,
+          timezoneCandidate: frozenTimezone,
           userId: input.actor.userId,
         })
         : null
@@ -1173,9 +1354,98 @@ export async function submitPostStudyAttempt(input: {
       })
     }
 
+    const finalizeResponse = async (
+      snapshot: Awaited<ReturnType<typeof getStudyAttemptResponseSnapshot<SongStudyAttemptResult>>>,
+    ): Promise<SongStudyAttemptResult> => {
+      if (!snapshot) throw new Error("Study response snapshot disappeared")
+      if (snapshot.requestFingerprint !== requestFingerprint) {
+        throw conflictError("idempotency_key was reused with a different study attempt payload")
+      }
+      if (snapshot.responseStatus === "final") return snapshot.response
+      const summary = snapshot.response.session
+      if (!summary || summary.status !== "completed") {
+        throw new Error("Only a completed graded response may remain pending")
+      }
+      await persistCompletedSession(summary, snapshot.materializationContext ?? undefined)
+      let finalResponse = snapshot.response
+      if (streakWritesEnabled) {
+        const responsePost = await getStudyPostById(db.client, input.postId)
+        if (!responsePost) throw notFoundError("Post not found")
+        const finalizedSessionState = await loadStudyTransitionSessionState({
+          client: db.client,
+          now: snapshot.materializationContext?.completed_at ?? nowIso(),
+          postId: input.postId,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        const progress = await getStudyAttemptProgressSnapshot({
+          client: db.client,
+          includeSayItBack: true,
+          includeTranslation: !isSameLanguageStudyPair(responsePost.source_language, finalizedSessionState.targetLanguage),
+          now: snapshot.materializationContext?.completed_at ?? nowIso(),
+          postId: input.postId,
+          targetLanguage: finalizedSessionState.targetLanguage,
+          studyTimezone: snapshot.materializationContext?.study_timezone ?? input.studyTimezone,
+          userId: input.actor.userId,
+        })
+        finalResponse = { ...snapshot.response, ...(progress ? { study_progress: progress } : {}) }
+      }
+      await finalizeStudyAttemptResponseSnapshot({
+        client: db.client,
+        idempotencyKey,
+        response: finalResponse,
+        userId: input.actor.userId,
+      })
+      const winner = await getStudyAttemptResponseSnapshot<SongStudyAttemptResult>({
+        client: db.client,
+        idempotencyKey,
+        userId: input.actor.userId,
+      })
+      if (!winner || winner.responseStatus !== "final") {
+        throw new Error("Study response snapshot did not finalize")
+      }
+      return winner.response
+    }
+
+    const storedResponse = await getStudyAttemptResponseSnapshot<SongStudyAttemptResult | { lesson: SongStudyLessonState }>({
+      client: db.client,
+      idempotencyKey,
+      userId: input.actor.userId,
+    })
+    if (storedResponse) {
+      if (storedResponse.requestFingerprint !== requestFingerprint) {
+        throw conflictError("idempotency_key was reused with a different study attempt payload")
+      }
+      timingOutcome = "idempotent_retry"
+      if (storedResponse.httpStatus === 409) {
+        const lesson = storedResponse.response.lesson
+        throw codedConflictError(
+          "study_session_revision_conflict",
+          "Study session orchestration has advanced",
+          { lesson },
+        )
+      }
+      resultForTiming = await finalizeResponse(storedResponse as Awaited<ReturnType<
+        typeof getStudyAttemptResponseSnapshot<SongStudyAttemptResult>
+      >>)
+      return resultForTiming
+    }
+
     const existing = await getAttemptByIdempotencyKey(db.client, input.actor.userId, idempotencyKey)
     const existingExercise = existing ? await getExerciseForAttempt(db.client, existing.exercise_id) : null
     if (existing && existingExercise) {
+      const exactSnapshot = await getStudyAttemptResponseSnapshot<SongStudyAttemptResult>({
+        client: db.client,
+        idempotencyKey,
+        userId: input.actor.userId,
+      })
+      if (exactSnapshot) {
+        if (exactSnapshot.requestFingerprint !== requestFingerprint) {
+          throw conflictError("idempotency_key was reused with a different study attempt payload")
+        }
+        resultForTiming = await finalizeResponse(exactSnapshot)
+        return resultForTiming
+      }
       assertEquivalentIdempotentRetry({
         attemptNumber,
         body: input.body,
@@ -1189,7 +1459,13 @@ export async function submitPostStudyAttempt(input: {
         ? await getStudySessionSummary(db.client, existing.study_session_id)
         : undefined
       if (retrySession) await persistCompletedSession(retrySession)
-      resultForTiming = resultFromAttempt(existing, existingExercise, retrySession)
+      if (!existing.study_session_id) throw conflictError("Legacy study attempt has no session orchestration")
+      const retryLesson = await buildStudyLessonState({
+        client: db.client,
+        sessionId: existing.study_session_id,
+        userId: input.actor.userId,
+      })
+      resultForTiming = resultFromAttempt(existing, existingExercise, retryLesson, retrySession)
       return resultForTiming
     }
 
@@ -1204,6 +1480,35 @@ export async function submitPostStudyAttempt(input: {
       ? await getExerciseForAttempt(db.client, existingPresentation.exercise_id)
       : null
     if (existingPresentation && existingPresentationExercise) {
+      const exactSnapshot = await getStudyAttemptResponseSnapshot<SongStudyAttemptResult>({
+        client: db.client,
+        idempotencyKey,
+        userId: input.actor.userId,
+      })
+      if (exactSnapshot) {
+        if (exactSnapshot.requestFingerprint !== requestFingerprint) {
+          throw conflictError("idempotency_key was reused with a different study attempt payload")
+        }
+        resultForTiming = await finalizeResponse(exactSnapshot)
+        return resultForTiming
+      }
+      if (sessionRevision != null) {
+        const lesson = await persistStudyRevisionConflictSnapshot({
+          client: db.client,
+          exerciseId,
+          idempotencyKey,
+          now: nowIso(),
+          postId: input.postId,
+          requestFingerprint,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        throw codedConflictError(
+          "study_session_revision_conflict",
+          "Study session orchestration has advanced",
+          { lesson },
+        )
+      }
       assertEquivalentIdempotentRetry({
         attemptNumber,
         body: input.body,
@@ -1215,9 +1520,11 @@ export async function submitPostStudyAttempt(input: {
       timingExerciseType = existingPresentationExercise.exercise_type
       const retrySession = await getStudySessionSummary(db.client, sessionId)
       if (retrySession) await persistCompletedSession(retrySession)
+      const retryLesson = await buildStudyLessonState({ client: db.client, sessionId, userId: input.actor.userId })
       resultForTiming = resultFromAttempt(
         existingPresentation,
         existingPresentationExercise,
+        retryLesson,
         retrySession,
       )
       return resultForTiming
@@ -1239,7 +1546,33 @@ export async function submitPostStudyAttempt(input: {
       throw notFoundError("Study exercise not found")
     }
     const now = nowIso()
-    const studySession = await requireStudySessionForAttempt({
+    if (sessionRevision != null) {
+      const authoritative = await loadStudyTransitionSessionState({
+        client: db.client,
+        now,
+        postId: input.postId,
+        sessionId,
+        userId: input.actor.userId,
+      })
+      if (hasStudyRevisionConflict({ exerciseId, expectedRevision: sessionRevision, session: authoritative })) {
+        const lesson = await persistStudyRevisionConflictSnapshot({
+          client: db.client,
+          exerciseId,
+          idempotencyKey,
+          now,
+          postId: input.postId,
+          requestFingerprint,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        throw codedConflictError(
+          "study_session_revision_conflict",
+          "Study session orchestration has advanced",
+          { lesson },
+        )
+      }
+    }
+    await requireStudySessionForAttempt({
       attemptNumber,
       client: db.client,
       exerciseId,
@@ -1282,6 +1615,7 @@ export async function submitPostStudyAttempt(input: {
     let transcript: string | null = null
     let feedback: SongStudyAttemptResult["feedback"] | undefined
     let rating: FsrsRating | null = null
+    let voiceOverlap = 1
     if (type === "translation_choice") {
       selectedOptionId = readRequiredString(input.body.selected_option_id, "selected_option_id")
       if (readString(input.body.transcript)) throw badRequestError("transcript is only valid for say_it_back")
@@ -1299,6 +1633,7 @@ export async function submitPostStudyAttempt(input: {
       correct = grade.correct
       feedback = grade.feedback
       rating = grade.rating
+      voiceOverlap = grade.overlap
     }
     const outcome: AttemptOutcome = correct
       ? "correct"
@@ -1307,8 +1642,99 @@ export async function submitPostStudyAttempt(input: {
     const attemptsRemaining = Math.max(0, STUDY_SESSION_MAX_CARD_PRESENTATIONS - attemptNumber)
     const writeTxStartedAt = performance.now()
     const attemptId = makeId("sta")
-    await withTransaction(db.client, "write", async (tx) => {
-      await tx.execute({
+    let committed: { result: SongStudyAttemptResult; session: StudySessionSummary } | null = null
+    for (let casAttempt = 0; casAttempt < 3 && !committed; casAttempt += 1) {
+      const state = await loadStudyTransitionSessionState({
+        client: db.client,
+        now,
+        postId: input.postId,
+        sessionId,
+        userId: input.actor.userId,
+      })
+      if (sessionRevision != null && hasStudyRevisionConflict({
+        exerciseId,
+        expectedRevision: sessionRevision,
+        session: state,
+      })) {
+        const lesson = await persistStudyRevisionConflictSnapshot({
+          client: db.client,
+          exerciseId,
+          idempotencyKey,
+          now,
+          postId: input.postId,
+          requestFingerprint,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        throw codedConflictError(
+          "study_session_revision_conflict",
+          "Study session orchestration has advanced",
+          { lesson },
+        )
+      }
+      const stateExercise = state.exercises.find((candidate) => candidate.exerciseId === exerciseId)
+      if (!stateExercise) throw notFoundError("Study session exercise not found")
+      const useUngradable = type === "say_it_back"
+        && !correct
+        && ungradableRerecordEnabled(input.env)
+        && voiceOverlap < 1 / 3
+        && !await hasUngradableReceipt({
+          appearanceOrdinal: stateExercise.appearanceOrdinal,
+          client: db.client,
+          exerciseId,
+          sessionId,
+        })
+      const plan = useUngradable
+        ? planUngradableStudyTransition({ exerciseId, session: state })
+        : planGradedStudyTransition({ attemptNumber, exerciseId, exerciseType: type, outcome, session: state })
+      const lesson = await renderStudyLessonState({ client: db.client, state: plan.lesson, userId: input.actor.userId })
+      const result: SongStudyAttemptResult = {
+        attempts_remaining: useUngradable
+          ? Math.max(0, STUDY_SESSION_MAX_CARD_PRESENTATIONS - stateExercise.presentationCount)
+          : attemptsRemaining,
+        ...(!useUngradable && type === "translation_choice" && exercise.correct_option_id
+          ? { correct_option_id: exercise.correct_option_id }
+          : {}),
+        exercise_id: exercise.id,
+        ...(feedback ? { feedback } : {}),
+        lesson,
+        ...(!useUngradable ? { next_review_hint: rating ?? undefined } : {}),
+        object: "song_study_attempt_result",
+        outcome: useUngradable ? "ungradable" : outcome,
+        session: plan.session,
+      }
+      const commitToken = makeId("src")
+      try {
+        await withTransaction(db.client, "write", async (tx) => {
+        await tx.execute(buildStudyResponseSnapshotCasStatement({
+          commitToken,
+          exerciseId,
+          expectedRevision: state.sessionRevision,
+          idempotencyKey,
+          materializationContext: !useUngradable && plan.session.status === "completed"
+            ? { completed_at: now, study_timezone: timezoneCandidate ?? null }
+            : null,
+          now,
+          requestFingerprint,
+          response: result,
+          responseStatus: !useUngradable && plan.session.status === "completed" ? "pending" : "final",
+          resultKind: useUngradable ? "ungradable" : "graded",
+          sessionId,
+          userId: input.actor.userId,
+        }))
+        if (useUngradable) {
+          await recordOwnedUngradableReceipt({
+            appearanceOrdinal: stateExercise.appearanceOrdinal,
+            client: tx,
+            commitToken,
+            exerciseId,
+            idempotencyKey,
+            now,
+            sessionId,
+            userId: input.actor.userId,
+          })
+        } else {
+          await tx.execute({
         sql: `
           INSERT INTO song_study_attempt (
             id, user_id, post_id, exercise_id, line_id, exercise_type,
@@ -1316,8 +1742,11 @@ export async function submitPostStudyAttempt(input: {
             selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at,
             study_session_id, presentation_number
           )
-          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?9)
-          ON CONFLICT DO NOTHING
+          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?9
+          WHERE EXISTS (
+            SELECT 1 FROM song_study_attempt_response r
+            WHERE r.user_id = ?2 AND r.idempotency_key = ?10 AND r.commit_token = ?18
+          )
         `,
         args: [
           attemptId,
@@ -1337,9 +1766,10 @@ export async function submitPostStudyAttempt(input: {
           rating,
           now,
           sessionId,
+          commitToken,
         ],
       })
-      await upsertReviewState({
+          await upsertReviewState({
         attemptId,
         client: tx,
         existing: existingReviewState,
@@ -1348,15 +1778,101 @@ export async function submitPostStudyAttempt(input: {
         rating,
         userId: input.actor.userId,
       })
-      await recordStudySessionPresentation({
-        attemptId,
-        client: tx,
-        exerciseId,
-        now,
-        outcome,
-        sessionId,
+        }
+        await applyPlannedStudyTransition({
+          client: tx,
+          commitToken,
+          expectedRevision: state.sessionRevision,
+          idempotencyKey,
+          now,
+          plan,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const legacyPresentationRace = sessionRevision == null
+          && /(?:UNIQUE constraint failed|constraint failed).*song_study_attempt/iu.test(message)
+        if (!legacyPresentationRace) throw error
+      }
+      const stored = await getStudyAttemptResponseSnapshot<SongStudyAttemptResult>({
+        client: db.client,
+        idempotencyKey,
+        userId: input.actor.userId,
       })
-    })
+      if (stored) {
+        if (stored.requestFingerprint !== requestFingerprint) {
+          throw conflictError("idempotency_key was reused with a different study attempt payload")
+        }
+        if (stored.httpStatus === 409) {
+          throw codedConflictError(
+            "study_session_revision_conflict",
+            "Study session orchestration has advanced",
+            { lesson: (stored.response as unknown as { lesson: SongStudyLessonState }).lesson },
+          )
+        }
+        const finalized = await finalizeResponse(stored)
+        committed = { result: finalized, session: finalized.session ?? plan.session }
+      } else if (sessionRevision != null) {
+        const conflictLesson = await persistStudyRevisionConflictSnapshot({
+          client: db.client,
+          exerciseId,
+          idempotencyKey,
+          now,
+          postId: input.postId,
+          requestFingerprint,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        throw codedConflictError(
+          "study_session_revision_conflict",
+          "Study session orchestration has advanced",
+          { lesson: conflictLesson },
+        )
+      } else {
+        // A deployed revision-absent client may race another harmless retry of
+        // the same logical presentation under a different key. The unique
+        // presentation row is the durable winner; replay it without touching
+        // FSRS, counters, rewards, or the orchestration revision again.
+        const logicalWinner = await getAttemptBySessionPresentation({
+          attemptNumber,
+          client: db.client,
+          exerciseId,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        if (logicalWinner) {
+          assertEquivalentIdempotentRetry({
+            attemptNumber,
+            body: input.body,
+            existing: logicalWinner,
+            exerciseId,
+            type,
+          })
+          const retrySession = await getStudySessionSummary(db.client, sessionId)
+          if (!retrySession) throw notFoundError("Study session not found")
+          await persistCompletedSession(retrySession)
+          const retryLesson = await buildStudyLessonState({
+            client: db.client,
+            sessionId,
+            userId: input.actor.userId,
+          })
+          committed = {
+            result: resultFromAttempt(logicalWinner, exercise, retryLesson, retrySession),
+            session: retrySession,
+          }
+        }
+      }
+    }
+    if (!committed) throw conflictError("Study session changed while recording the attempt")
+    resultForTiming = committed.result
+
+    if (resultForTiming.outcome === "ungradable") {
+      timingOutcome = "ungradable"
+      writeTxMs = elapsedMs(writeTxStartedAt)
+      return resultForTiming
+    }
     const storedAttempt = await getAttemptBySessionPresentation({
       attemptNumber,
       client: db.client,
@@ -1365,49 +1881,8 @@ export async function submitPostStudyAttempt(input: {
       userId: input.actor.userId,
     })
     if (!storedAttempt) throw conflictError("Study presentation has already been recorded")
-    if (storedAttempt.id !== attemptId) {
-      assertEquivalentIdempotentRetry({ attemptNumber, body: input.body, existing: storedAttempt, exerciseId, type })
-      timingOutcome = "logical_retry"
-      const retrySession = await getStudySessionSummary(db.client, sessionId)
-      if (retrySession) await persistCompletedSession(retrySession)
-      resultForTiming = resultFromAttempt(
-        storedAttempt,
-        exercise,
-        retrySession,
-      )
-      return resultForTiming
-    }
-    const sessionSummary = await getStudySessionSummary(db.client, sessionId)
-    if (!sessionSummary) throw new Error("Study session disappeared after recording progress")
-    await persistCompletedSession(sessionSummary)
-    const fsrsRating = rating
     writeTxMs = elapsedMs(writeTxStartedAt)
-    if (streakWritesEnabled && sessionSummary.status === "completed") {
-      studyProgress = await getStudyAttemptProgressSnapshot({
-        client: db.client,
-        includeSayItBack: true,
-        includeTranslation: !isSameLanguageStudyPair(post.source_language, studySession.targetLanguage),
-        now,
-        postId: input.postId,
-        targetLanguage: studySession.targetLanguage,
-        studyTimezone: input.studyTimezone,
-        userId: input.actor.userId,
-      })
-    }
     timingOutcome = outcome
-    resultForTiming = {
-      attempts_remaining: attemptsRemaining,
-      ...(type === "translation_choice" && exercise.correct_option_id
-        ? { correct_option_id: exercise.correct_option_id }
-        : {}),
-      exercise_id: exercise.id,
-      ...(feedback ? { feedback } : {}),
-      next_review_hint: fsrsRating,
-      object: "song_study_attempt_result",
-      outcome,
-      session: sessionSummary,
-      ...(studyProgress ? { study_progress: studyProgress } : {}),
-    }
     return resultForTiming
   } finally {
     const closeClientStartedAt = performance.now()

@@ -41,13 +41,17 @@ describe("server-owned study sessions", () => {
         presentation_count INTEGER DEFAULT 0, completed_exercise_count INTEGER DEFAULT 0,
         first_pass_correct_count INTEGER DEFAULT 0, mastered_exercise_count INTEGER DEFAULT 0,
         qualified INTEGER DEFAULT 0, created_at TEXT, expires_at TEXT,
-        completed_at TEXT, updated_at TEXT
+        completed_at TEXT, updated_at TEXT, session_revision INTEGER DEFAULT 0,
+        current_exercise_id TEXT, completion_reason TEXT
       );
       CREATE UNIQUE INDEX active_session ON song_study_session(user_id, post_id, target_language) WHERE status = 'active';
       CREATE TABLE song_study_session_exercise (
         session_id TEXT, exercise_id TEXT, ordinal INTEGER,
         presentation_count INTEGER DEFAULT 0, first_outcome TEXT, last_outcome TEXT,
-        mastered INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT,
+        mastered INTEGER DEFAULT 0, appearance_ordinal INTEGER DEFAULT 0,
+        appearance_attempt_count INTEGER DEFAULT 0, qualifies_for_reward INTEGER DEFAULT 1,
+        lesson_resolved INTEGER DEFAULT 0, last_served_index INTEGER,
+        created_at TEXT, updated_at TEXT,
         PRIMARY KEY (session_id, exercise_id)
       );
       CREATE TABLE song_study_attempt (id TEXT PRIMARY KEY);

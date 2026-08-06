@@ -14,6 +14,8 @@ export type StudyExerciseRow = {
   max_attempts: number
   options_json: string | null
   prompt_text: string
+  /** Immutable session-creation policy snapshot; current shipped types default to true. */
+  qualifies_for_reward?: boolean
   question: string | null
   reference_text: string | null
   review_language: string

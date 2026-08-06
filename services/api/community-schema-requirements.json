@@ -47,7 +47,8 @@
     "1146_dance_attempt_reason_contract.sql",
     "1147_dance_attempt_upload_invalid_reason.sql",
     "1149_song_streak_owner_timezone.sql",
-    "1150_moderation_content_rating_audit.sql"
+    "1150_moderation_content_rating_audit.sql",
+    "1151_song_study_orchestration_v2.sql"
   ],
   "features": {},
   "transitional": {
