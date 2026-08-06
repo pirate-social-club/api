@@ -2983,7 +2983,14 @@ describe("community study routes", () => {
         action_kind: "await_voice", action_token: "voice-wait-token",
         current_exercise_id: exercise!.id, status: "active",
       })
-      expect(JSON.parse(String(stillActive.rows[0]?.action_payload_json))).toMatchObject({ tutorDisclosureShown: true })
+      // The disclosure receipt is durable per learner and community, not per
+      // session, so nothing about it is written into the replaceable payload.
+      expect(JSON.parse(String(stillActive.rows[0]?.action_payload_json))).not.toHaveProperty("tutorDisclosureShown")
+      const receipts = await ctx.client.execute({
+        sql: "SELECT disclosure_version FROM telegram_tutor_disclosure_receipts WHERE user_id = ?1 AND community_id = ?2",
+        args: [session.userId, communityId],
+      })
+      expect(receipts.rows).toHaveLength(1)
       const event = await ctx.client.execute(
         "SELECT channel, status, assistant_message_ref, prompt FROM telegram_assistant_events WHERE telegram_message_id = 700",
       )
@@ -3090,6 +3097,53 @@ describe("community study routes", () => {
         })
         return row.rows[0] as unknown as { error_message: string | null; status: string }
       }
+
+      // Replacing the session is what actually reproduced the production report:
+      // opening the song picker, changing language or starting a song mints a new
+      // tcs_ id. A session-scoped marker showed the disclosure again each time.
+      await ctx.client.execute({
+        sql: `UPDATE telegram_chat_study_sessions SET status = 'canceled' WHERE chat_study_session_id = 'tcs_private_study_tutor'`,
+        args: [],
+      })
+      await ctx.client.execute({
+        sql: `INSERT INTO telegram_chat_study_sessions (
+                chat_study_session_id, telegram_community_bot_id, telegram_user_id, user_id,
+                community_id, post_id, target_language, status, action_token, action_kind,
+                action_payload_json, current_exercise_id, expires_at, created_at, updated_at
+              ) VALUES (
+                'tcs_private_study_tutor_2', 'tcb_private_study_tutor', '424242', ?1,
+                ?2, 'pst_study_route_song', 'en', 'active', 'voice-wait-token-2',
+                'await_voice', '{}', ?3, '2099-01-01T00:00:00.000Z', ?4, ?4
+              )`,
+        args: [session.userId, communityId, exercise!.id, now],
+      })
+      await policyClientReenable(ctx, communityId)
+      await ctx.client.execute({
+        sql: "DELETE FROM telegram_assistant_events WHERE community_id = ?1",
+        args: [communityId],
+      })
+      globalThis.fetch = (async (requestInput: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(requestInput, init)
+        if (request.url.startsWith("https://api.telegram.org/")) {
+          return Response.json({ ok: true, result: { message_id: 720 } })
+        }
+        await request.json()
+        return Response.json({
+          id: "provider-private-study-rotated",
+          choices: [{ message: { content: "Everybody takes a singular verb." } }],
+        })
+      }) as typeof fetch
+      const afterRotation = await answerPrivateStudyTutorQuestion({
+        bot: tutorBot, env: ctx.env, question: "Why is it that?",
+        telegramChatId: "424242", telegramMessageId: 710, telegramUserId: "424242",
+      })
+      expect(afterRotation.kind).toBe("answered")
+      expect(afterRotation.kind === "answered" && afterRotation.disclosure).toBeNull()
+      const receiptsAfterRotation = await ctx.client.execute({
+        sql: "SELECT disclosure_version FROM telegram_tutor_disclosure_receipts WHERE user_id = ?1 AND community_id = ?2",
+        args: [session.userId, communityId],
+      })
+      expect(receiptsAfterRotation.rows).toHaveLength(1)
 
       const rateLimitedRow = await providerHttpCase(429, 705)
       expect(rateLimitedRow.status).toBe("rate_limited")

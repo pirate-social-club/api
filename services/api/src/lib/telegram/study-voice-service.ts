@@ -600,7 +600,6 @@ export async function createTelegramChatStudyVoiceIntent(input: {
   telegramUserId: string
   deliveryMode?: StudyDeliveryMode
   localizationNoticeSent?: boolean
-  tutorDisclosureShown?: boolean
 }): Promise<TelegramStudyVoiceIntentResource> {
   const intent = await prepareTelegramStudyVoiceIntent(input)
   const client = getControlPlaneClient(input.env)
@@ -644,7 +643,6 @@ export async function createTelegramChatStudyVoiceIntent(input: {
           deliveryMode: input.deliveryMode ?? "text",
           exerciseId: input.exerciseId,
           localizationNoticeSent: input.localizationNoticeSent === true,
-          ...(input.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
         }),
         intent.studySessionId,
         input.exerciseId,

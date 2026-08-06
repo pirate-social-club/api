@@ -813,7 +813,6 @@ async function updateSessionAction(input: {
   const expiresAt = new Date(Date.parse(updatedAt) + CHAT_STUDY_TTL_MS).toISOString()
   const actionPayload = {
     ...input.actionPayload,
-    ...(input.session.actionPayload.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
   }
   const updated = await getControlPlaneClient(input.env).execute({
     sql: `
@@ -1009,14 +1008,12 @@ async function presentNextExercise(input: {
     telegramUserId: input.session.telegramUserId,
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
-    tutorDisclosureShown: input.session.actionPayload.tutorDisclosureShown === true,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     exerciseId: exercise.id,
     localizationNoticeSent,
-    ...(input.session.actionPayload.tutorDisclosureShown === true ? { tutorDisclosureShown: true } : {}),
   }
   input.session.actionToken = nextToken
   input.session.status = "active"

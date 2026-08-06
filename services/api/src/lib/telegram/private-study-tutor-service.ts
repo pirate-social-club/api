@@ -64,20 +64,6 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
-function parseActionPayload(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>
-  }
-  if (typeof value !== "string" || !value.trim()) return {}
-  try {
-    const parsed = JSON.parse(value) as unknown
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {}
-  } catch {
-    return {}
-  }
-}
 
 export function plainTelegramTutorText(value: string): string {
   const plain = value
@@ -96,35 +82,40 @@ export function plainTelegramTutorText(value: string): string {
   return words.length <= 90 ? plain : `${words.slice(0, 90).join(" ")}…`
 }
 
-async function claimTutorDisclosure(input: { env: Env; sessionId: string }): Promise<boolean> {
-  const tx = await getControlPlaneClient(input.env).transaction("write")
-  try {
-    const row = await executeFirst(tx, {
-      sql: "SELECT action_payload_json FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1 LIMIT 1",
-      args: [input.sessionId],
-    }) as Record<string, unknown> | null
-    if (!row) {
-      await tx.rollback()
-      return false
-    }
-    const payload = parseActionPayload(row.action_payload_json)
-    if (payload.tutorDisclosureShown === true) {
-      await tx.rollback()
-      return false
-    }
-    payload.tutorDisclosureShown = true
-    await tx.execute({
-      sql: "UPDATE telegram_chat_study_sessions SET action_payload_json = ?1, updated_at = ?2 WHERE chat_study_session_id = ?3",
-      args: [JSON.stringify(payload), nowIso(), input.sessionId],
-    })
-    await tx.commit()
-    return true
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  } finally {
-    tx.close()
-  }
+/**
+ * Version of the disclosure's data-use statement. Bump only when that statement
+ * materially changes: every learner then sees the new text once, because the
+ * version is part of the receipt's primary key.
+ */
+const TUTOR_DISCLOSURE_VERSION = 1
+
+/**
+ * Claims the once-per-learner disclosure for a community.
+ *
+ * Deliberately not session-scoped. A chat study session is replaced whenever the
+ * learner opens the song picker, changes language, opens settings, or starts a
+ * song, so a session-scoped marker re-showed the disclosure constantly: one
+ * production tester had eight sessions in a day, two 32 seconds apart.
+ *
+ * The insert is the claim, so concurrent taps cannot both win and there is no
+ * select-then-update window.
+ */
+async function claimTutorDisclosure(input: {
+  communityId: string
+  env: Env
+  userId: string
+}): Promise<boolean> {
+  const claimed = await executeFirst(getControlPlaneClient(input.env), {
+    sql: `
+      INSERT INTO telegram_tutor_disclosure_receipts (
+        user_id, community_id, disclosure_version, shown_at
+      ) VALUES (?1, ?2, ?3, ?4)
+      ON CONFLICT (user_id, community_id, disclosure_version) DO NOTHING
+      RETURNING user_id
+    `,
+    args: [input.userId, input.communityId, TUTOR_DISCLOSURE_VERSION, nowIso()],
+  }) as Record<string, unknown> | null
+  return Boolean(claimed)
 }
 
 async function loadActivePrivateStudySession(input: {
@@ -464,7 +455,11 @@ export async function answerPrivateStudyTutorQuestion(input: {
         providerMessageId: providerMessageId(completion.body),
       })
       const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
-      const showDisclosure = await claimTutorDisclosure({ env: input.env, sessionId: session.id })
+      const showDisclosure = await claimTutorDisclosure({
+        communityId: session.communityId,
+        env: input.env,
+        userId: session.userId,
+      })
       return {
         kind: "answered",
         answer: plainTelegramTutorText(completion.content),
