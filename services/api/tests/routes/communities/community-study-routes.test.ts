@@ -25,7 +25,8 @@ import {
   createTelegramStudyVoiceIntent,
 } from "../../../src/lib/telegram/study-voice-service"
 import { telegramStudyPlaybackButton } from "../../../src/lib/telegram/chat-study-playback-service"
-import { getTelegramStudyCopy } from "../../../src/lib/telegram/study-copy"
+import { getTelegramStudyCopy, STUDY_LANGUAGE_BUTTONS } from "../../../src/lib/telegram/study-copy"
+import type { StudyHelperLanguage } from "../../../src/lib/telegram/study-preference-service"
 import {
   answerPrivateStudyTutorQuestion,
   releaseTutorDisclosureReceipt,
@@ -124,6 +125,7 @@ Line two for route study',
 async function seedReadyTranslationExercises(input: {
   communityDbRoot: string
   communityId: string
+  includeRussianPreferenceLocalization?: boolean
 }): Promise<void> {
   const client = createClient({
     url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
@@ -190,6 +192,31 @@ async function seedReadyTranslationExercises(input: {
           now,
         ],
       })
+      if (input.includeRussianPreferenceLocalization) {
+        const language = "ru"
+        await client.execute({
+          sql: `
+            INSERT INTO song_study_unit_localization (
+              id, unit_id, target_language, localization_version, status,
+              question, translation_text, options_json, correct_option_id,
+              explanation_text, max_attempts, generated_at, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, 5, 'ready', 'Choose the best translation.', ?4, ?5, ?6,
+                      'Server-owned explanation.', 1, ?7, ?7, ?7)
+          `,
+          args: [
+            `sul_chat_${language}_${index + 1}`,
+            unitId,
+            language,
+            `Correct translation ${index + 1}`,
+            JSON.stringify([
+              { id: `opt_chat_${language}_${index + 1}_correct`, text: `Correct translation ${index + 1}` },
+              { id: `opt_chat_${language}_${index + 1}_wrong`, text: `Incorrect translation ${index + 1}` },
+            ]),
+            `opt_chat_${language}_${index + 1}_correct`,
+            now,
+          ],
+        })
+      }
     }
     await client.execute({
       sql: `
@@ -203,6 +230,17 @@ async function seedReadyTranslationExercises(input: {
       `,
       args: [now],
     })
+    if (input.includeRussianPreferenceLocalization) {
+      await client.execute({
+        sql: `
+          INSERT INTO song_study_generation_run (
+            id, post_id, target_language, generation_version, status,
+            attempt_count, created_at, updated_at, completed_at
+          ) VALUES (?1, 'pst_study_route_song', ?2, 5, 'ready', 1, ?3, ?3, ?3)
+        `,
+        args: ["sgr_chat_ru", "ru", now],
+      })
+    }
   } finally {
     client.close()
   }
@@ -487,7 +525,11 @@ describe("community study routes", () => {
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "chat-native-study")
     await seedStudySong({ communityDbRoot: ctx.communityDbRoot, communityId })
-    await seedReadyTranslationExercises({ communityDbRoot: ctx.communityDbRoot, communityId })
+    await seedReadyTranslationExercises({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      includeRussianPreferenceLocalization: true,
+    })
     const now = "2026-06-29T08:00:00.000Z"
     await ctx.client.execute({
       sql: `
@@ -1182,45 +1224,82 @@ describe("community study routes", () => {
       await webhook(expiredCheckUpdate)
       expect(telegramBodies.slice(bodiesBeforeExpiredCheck).filter((body) => body.text === "此按钮已过期。请发送 /study 继续。")).toHaveLength(1)
 
-      telegramBodies.length = 0
-      const preferences = await webhook({
-        update_id: 5006,
-        message: {
-          chat: { id: 454545, type: "private" }, date: 1785499300,
-          from: { id: 454545, is_bot: false, language_code: "en" },
-          message_id: 620, text: "/preferences",
-        },
-      })
-      expect(preferences.status).toBe(200)
-      const settingsMenu = telegramBodies.find((body) => body.text === "学习设置：")
-      const settingsButtons = (settingsMenu?.reply_markup as {
-        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
-      }).inline_keyboard?.flat() ?? []
-      expect(settingsButtons.map((button) => button.text)).toEqual(["🌐 更改语言", "🔊 提示格式"])
-      await webhook({
-        update_id: 5007,
-        callback_query: {
-          id: "callback-preference-language-menu", data: settingsButtons[0]!.callback_data,
-          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 704 },
-        },
-      })
-      const languagePicker = telegramBodies.find((body) => body.text === "你的语言：")
-      const languageButtons = (languagePicker?.reply_markup as {
-        inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
-      }).inline_keyboard?.flat() ?? []
-      expect(languageButtons.map((button) => button.text)).toEqual(["English", "中文", "العربية", "Русский", "ქართული"])
-      await webhook({
-        update_id: 5008,
-        callback_query: {
-          id: "callback-preference-language", data: languageButtons[0]!.callback_data,
-          from: { id: 454545, is_bot: false }, message: { chat: { id: 454545, type: "private" }, message_id: 705 },
-        },
-      })
-      expect(telegramBodies.some((body) => body.text === "How should prompts be delivered?")).toBe(false)
-      expect((await ctx.client.execute({
-        sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
+      const preferenceLanguages = [
+        STUDY_LANGUAGE_BUTTONS.find(({ code }) => code === "ru")!,
+        ...STUDY_LANGUAGE_BUTTONS.filter(({ code }) => code !== "ru"),
+      ]
+      let currentHelperLanguage: StudyHelperLanguage = "zh"
+      for (const [index, targetLanguage] of preferenceLanguages.entries()) {
+        telegramBodies.length = 0
+        const preferences = await webhook({
+          update_id: 5100 + (index * 3),
+          message: {
+            chat: { id: 454545, type: "private" }, date: 1785499300 + index,
+            from: { id: 454545, is_bot: false, language_code: "en" },
+            message_id: 720 + index, text: "/preferences",
+          },
+        })
+        expect(preferences.status).toBe(200)
+        const currentCopy = getTelegramStudyCopy(currentHelperLanguage)
+        const settingsMenu = telegramBodies.find((body) => body.text === currentCopy.settingsTitle)
+        const settingsButtons = (settingsMenu?.reply_markup as {
+          inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+        }).inline_keyboard?.flat() ?? []
+        expect(settingsButtons.map((button) => button.text)).toEqual([
+          currentCopy.settingsLanguage,
+          currentCopy.settingsPromptFormat,
+        ])
+        await webhook({
+          update_id: 5101 + (index * 3),
+          callback_query: {
+            id: `callback-preference-language-menu-${targetLanguage.code}`,
+            data: settingsButtons[0]!.callback_data,
+            from: { id: 454545, is_bot: false },
+            message: { chat: { id: 454545, type: "private" }, message_id: 740 + index },
+          },
+        })
+        const languagePicker = telegramBodies.find((body) => body.text === currentCopy.chooseLanguage)
+        const languageButtons = (languagePicker?.reply_markup as {
+          inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
+        }).inline_keyboard?.flat() ?? []
+        expect(languageButtons.map((button) => button.text)).toEqual(STUDY_LANGUAGE_BUTTONS.map(({ label }) => label))
+        const languageButton = languageButtons.find((button) => button.text === targetLanguage.label)
+        const languageUpdate = {
+          update_id: 5102 + (index * 3),
+          callback_query: {
+            id: `callback-preference-language-${targetLanguage.code}`,
+            data: languageButton!.callback_data,
+            from: { id: 454545, is_bot: false },
+            message: { chat: { id: 454545, type: "private" }, message_id: 760 + index },
+          },
+        }
+        await webhook(languageUpdate)
+        const targetCopy = getTelegramStudyCopy(targetLanguage.code)
+        const localizedNextMessages = telegramBodies.filter((body) => (
+          body.text === targetCopy.chooseSong || body.text === targetCopy.noSongs
+        ))
+        expect(localizedNextMessages).toHaveLength(1)
+        if (targetLanguage.code === "ru") {
+          expect(localizedNextMessages[0]?.text).toBe(targetCopy.chooseSong)
+        }
+        expect(telegramBodies.some((body) => body.text === currentCopy.processingError)).toBe(false)
+        expect((await ctx.client.execute({
+          sql: "SELECT helper_language, delivery_mode FROM user_study_preferences WHERE user_id = ?1",
+          args: [session.userId],
+        })).rows[0]).toMatchObject({ helper_language: targetLanguage.code, delivery_mode: "text" })
+
+        const localizedNextMessageCount = localizedNextMessages.length
+        await webhook(languageUpdate)
+        expect(telegramBodies.filter((body) => (
+          body.text === targetCopy.chooseSong || body.text === targetCopy.noSongs
+        ))).toHaveLength(localizedNextMessageCount)
+        currentHelperLanguage = targetLanguage.code
+      }
+
+      await ctx.client.execute({
+        sql: "UPDATE user_study_preferences SET helper_language = 'en' WHERE user_id = ?1",
         args: [session.userId],
-      })).rows[0]).toMatchObject({ helper_language: "en", delivery_mode: "text" })
+      })
 
       await webhook({
         update_id: 5009,

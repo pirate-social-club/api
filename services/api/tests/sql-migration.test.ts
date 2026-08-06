@@ -5,6 +5,62 @@ import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("widens helper languages without losing existing SQLite preferences", async () => {
+    const database = new Database(":memory:")
+    const applyFixture = async (fileName: string) => {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+    }
+
+    try {
+      database.exec("PRAGMA foreign_keys = ON; CREATE TABLE users (user_id TEXT PRIMARY KEY);")
+      await applyFixture("0180_control_plane_user_study_preferences.sql")
+      for (const language of ["en", "zh", "ar", "ka"]) {
+        database.run("INSERT INTO users (user_id) VALUES (?)", [`usr_${language}`])
+        database.run(`
+          INSERT INTO user_study_preferences (
+            user_id, helper_language, delivery_mode, created_at, updated_at
+          ) VALUES (?, ?, 'both', '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z')
+        `, [`usr_${language}`, language])
+      }
+
+      await applyFixture("0194_control_plane_user_study_preferences_russian.sql")
+
+      expect(database.query(`
+        SELECT user_id, helper_language, delivery_mode, created_at, updated_at
+        FROM user_study_preferences
+        ORDER BY user_id
+      `).all()).toEqual([
+        { user_id: "usr_ar", helper_language: "ar", delivery_mode: "both", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z" },
+        { user_id: "usr_en", helper_language: "en", delivery_mode: "both", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z" },
+        { user_id: "usr_ka", helper_language: "ka", delivery_mode: "both", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z" },
+        { user_id: "usr_zh", helper_language: "zh", delivery_mode: "both", created_at: "2026-08-06T00:00:00.000Z", updated_at: "2026-08-06T00:00:00.000Z" },
+      ])
+
+      database.run("INSERT INTO users (user_id) VALUES ('usr_ru')")
+      database.run(`
+        INSERT INTO user_study_preferences (
+          user_id, helper_language, delivery_mode, created_at, updated_at
+        ) VALUES ('usr_ru', 'ru', 'text', '2026-08-06T00:00:00.000Z', '2026-08-06T00:00:00.000Z')
+      `)
+      database.run("UPDATE user_study_preferences SET helper_language = 'ru' WHERE user_id = 'usr_en'")
+      expect(database.query("SELECT helper_language FROM user_study_preferences WHERE user_id = 'usr_en'").get())
+        .toEqual({ helper_language: "ru" })
+      expect(() => database.run("UPDATE user_study_preferences SET helper_language = 'xx' WHERE user_id = 'usr_en'"))
+        .toThrow(/CHECK constraint failed.*helper_language/u)
+    } finally {
+      database.close()
+    }
+  })
+
   test("skips PostgreSQL column nullability changes for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       ALTER TABLE reward_campaign_monitor_state
