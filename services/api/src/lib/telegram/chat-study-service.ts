@@ -860,15 +860,13 @@ function eligibleExercise(study: SongStudyPayload): SongStudyPayload["exercises"
   ) ?? null
 }
 
-function exerciseProgressLabel(
-  study: SongStudyPayload,
-  exercise: SongStudyPayload["exercises"][number],
+export function telegramStudyExerciseProgressLabel(
+  session: SongStudyPayload["session"],
 ): string | null {
-  const total = study.session?.served_count ?? 0
+  const total = session?.served_count ?? 0
   if (total <= 0) return null
-  const encountered = study.session?.completed_exercise_count ?? 0
-  const position = Math.min(total, encountered + (exercise.presentation_count === 0 ? 1 : 0))
-  return `${Math.max(1, position)}/${total}`
+  const mastered = session?.mastered_exercise_count ?? 0
+  return `${Math.min(total, Math.max(0, mastered))}/${total}`
 }
 
 function progressHeading(progressLabel: string | null, heading: string): string {
@@ -884,17 +882,25 @@ function feedbackText(input: {
   const language = (isStudyHelperLanguage(input.study.target_language) ? input.study.target_language : "en")
   const copy = getTelegramStudyCopy(language)
   if (result.outcome === "correct") return copy.correct
-  if (input.transcript !== undefined) {
-    const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
-    if (attempted?.type === "say_it_back") {
-      return `${copy.notQuite}${copy.labelSeparator} “${attempted.reference_text}”`
-    }
-  }
+  const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
   const details = [
     result.feedback?.missing?.length ? `${copy.missing}${copy.labelSeparator} ${result.feedback.missing.join(", ")}` : null,
     result.feedback?.extra?.length ? `${copy.extra}${copy.labelSeparator} ${result.feedback.extra.join(", ")}` : null,
   ].filter((value): value is string => Boolean(value))
-  return [copy.notQuite, ...details].join("\n")
+  const retry = [
+    ...(result.attempts_remaining > 0 ? [copy.returnsLater] : []),
+    copy.attemptsRemaining({ count: result.attempts_remaining }),
+  ]
+  if (input.transcript !== undefined && attempted?.type === "say_it_back") {
+    return [
+      copy.notQuite,
+      `${copy.youSaid}${copy.labelSeparator} ${input.transcript.trim() || copy.nothingDetected}`,
+      `${copy.lineWas}${copy.labelSeparator} “${attempted.reference_text}”`,
+      ...details,
+      ...retry,
+    ].join("\n")
+  }
+  return [copy.notQuite, ...details, ...retry].join("\n")
 }
 
 async function sendCompletion(input: {
@@ -975,7 +981,7 @@ async function presentNextExercise(input: {
     await sendCompletion({ ...input, result: input.lastResult, study })
     return
   }
-  const progressLabel = exerciseProgressLabel(study, exercise)
+  const progressLabel = telegramStudyExerciseProgressLabel(study.session)
   if (exercise.type === "translation_choice") {
     const token = await updateSessionAction({
       actionKind: "answer_choice",
@@ -1749,10 +1755,13 @@ export async function handleTelegramChatStudyCallback(input: {
         const correction = result.outcome !== "correct" && correctText
           ? `\n✅ ${copy.correctAnswer}${copy.labelSeparator} ${correctText}`
           : ""
+        const retry = result.outcome !== "correct"
+          ? `\n${result.attempts_remaining > 0 ? `${copy.returnsLater}\n` : ""}${copy.attemptsRemaining({ count: result.attempts_remaining })}`
+          : ""
         await editTelegramMessageText(input.bot, {
           chat_id: chatId,
           message_id: callbackMessageId,
-          text: `${question}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}${correction}`,
+          text: `${question}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}${correction}${retry}`,
           reply_markup: { inline_keyboard: [] },
         }).catch(() => undefined)
       }

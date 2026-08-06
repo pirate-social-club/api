@@ -14,6 +14,7 @@ import {
   continueTelegramChatStudyAfterVoice,
   formatUsdcCents,
   handleTelegramChatStudyCallback,
+  telegramStudyExerciseProgressLabel,
   telegramStudySongSelectionIndex,
 } from "../../../src/lib/telegram/chat-study-service"
 import { resolvePostStudyCapability, submitPostStudyAttempt } from "../../../src/lib/posts/post-study-service"
@@ -40,6 +41,28 @@ afterEach(async () => {
     await cleanup()
     cleanup = null
   }
+})
+
+test("Telegram retry-phase progress tracks mastery instead of first-pass coverage", () => {
+  const session = {
+    completed_exercise_count: 10,
+    due_count: 0,
+    first_pass_correct_count: 1,
+    id: "sss_retry_progress",
+    mastered_exercise_count: 1,
+    max_presentations: 20,
+    next_due_at: undefined,
+    presentation_count: 10,
+    qualified: false,
+    required_correct_count: 7,
+    served_count: 10,
+    status: "active" as const,
+    total_units: 10,
+  }
+
+  expect(telegramStudyExerciseProgressLabel(session)).toBe("1/10")
+  expect(telegramStudyExerciseProgressLabel({ ...session, mastered_exercise_count: 2, presentation_count: 11 })).toBe("2/10")
+  expect(telegramStudyExerciseProgressLabel({ ...session, mastered_exercise_count: 99 })).toBe("10/10")
 })
 
 async function applyStudyMigration(client: Client): Promise<void> {
@@ -1024,7 +1047,7 @@ describe("community study routes", () => {
         typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
-      expect(exercisePrompt?.text).toStartWith("1/2 · ")
+      expect(exercisePrompt?.text).toStartWith("0/2 · ")
       const mcqDeliveryWindow = await ctx.client.execute({
         sql: "SELECT expires_at FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1142,7 +1165,7 @@ describe("community study routes", () => {
       const secondPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string" && body.text.includes("Line two for route study")
       )
-      expect(secondPrompt?.text).toStartWith("2/2 · ")
+      expect(secondPrompt?.text).toStartWith("1/2 · ")
       const secondMarkup = secondPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1168,6 +1191,8 @@ describe("community study routes", () => {
         typeof body.text === "string"
         && body.text.includes("❌ 错误翻译 2")
         && body.text.includes("✅ 正确答案： 正确翻译 2")
+        && body.text.includes("这句稍后会再次出现。")
+        && body.text.includes("还剩 2 次机会")
       )).toBe(true)
       expect(telegramBodies.slice(bodiesBeforeWrongAnswer).some((body) =>
         body.text === "Not quite."
@@ -1177,7 +1202,7 @@ describe("community study routes", () => {
         && body.text.includes("Line two for route study")
         && typeof body.reply_markup === "object"
       )
-      expect(retryPrompt?.text).toStartWith("2/2 · ")
+      expect(retryPrompt?.text).toStartWith("1/2 · ")
       const retryMarkup = retryPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1420,7 +1445,7 @@ describe("community study routes", () => {
           from: { id: 454546, is_bot: false }, message: { chat: { id: 454546, type: "private" }, message_id: 708 } },
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("1/4 · 请说：\n\n")
+        typeof body.text === "string" && body.text.startsWith("0/4 · 请说：\n\n")
       )).toBe(true)
       const mixIntent = await ctx.client.execute({
         sql: `SELECT chat_study_session_id, exercise_id, study_session_id, attempt_number
@@ -1441,10 +1466,10 @@ describe("community study routes", () => {
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("2/4 · 请说：\n\n")
+        typeof body.text === "string" && body.text.startsWith("1/4 · 请说：\n\n")
       )).toBe(true)
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("2/4 · 选择译文：")
+        typeof body.text === "string" && body.text.startsWith("1/4 · 选择译文：")
       )).toBe(false)
     } finally {
       globalThis.fetch = originalFetch
@@ -1915,7 +1940,7 @@ describe("community study routes", () => {
         chatStudySessionId: "tcs_audio",
         env: ctx.env,
         result: {
-          attempts_remaining: 1,
+          attempts_remaining: 2,
           exercise_id: exercise!.id,
           feedback: { extra: ["wrong"], matched: [], missing: ["line"] },
           object: "song_study_attempt_result",
@@ -1928,7 +1953,15 @@ describe("community study routes", () => {
           ? await request.clone().json() as { text?: string }
           : {}
       ))
-      expect(reveal.some((body) => body.text === `Try again: “${exercise!.reference_text}”`)).toBe(true)
+      expect(reveal.some((body) => body.text === [
+        "Not quite",
+        "You said: wrong words",
+        `The line was: “${exercise!.reference_text}”`,
+        "Missing: line",
+        "Extra: wrong",
+        "This line will come back later.",
+        "2 attempts left",
+      ].join("\n"))).toBe(true)
       const requestsBeforeEmptyTranscript = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
         bot: {
@@ -1959,9 +1992,46 @@ describe("community study routes", () => {
             : {}
         ),
       )
-      expect(emptyTranscriptMessages.some((body) =>
-        body.text === `Try again: “${exercise!.reference_text}”`
-      )).toBe(true)
+      expect(emptyTranscriptMessages.some((body) => body.text === [
+        "Not quite",
+        "You said: (nothing detected)",
+        `The line was: “${exercise!.reference_text}”`,
+        "Missing: line",
+        "This line will come back later.",
+        "1 attempt left",
+      ].join("\n"))).toBe(true)
+      const requestsBeforeExhaustedAttempt = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_audio",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 0,
+          exercise_id: exercise!.id,
+          feedback: { extra: [], matched: [], missing: ["line"] },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "wrong words",
+      })
+      const exhaustedMessages = await Promise.all(
+        telegramRequests.slice(requestsBeforeExhaustedAttempt).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {}
+        ),
+      )
+      const exhaustedFeedback = exhaustedMessages.find((body) => body.text?.includes("0 attempts left"))?.text ?? ""
+      expect(exhaustedFeedback).not.toContain("This line will come back later.")
       await ctx.client.execute("DELETE FROM telegram_study_voice_intents")
       await ctx.client.execute("DELETE FROM telegram_chat_study_sessions")
       telegramRequests.length = 0
