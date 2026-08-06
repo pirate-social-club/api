@@ -1472,11 +1472,16 @@ async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
       maxCredits: 500,
       outboxBatchSize: 500,
     })
+    if (summary.retirement_policy_anomalies > 0) {
+      console.error("[reward-campaigns] funding effects created after retirement cutoff", JSON.stringify(summary))
+    }
     if (summary.enabled && (
       summary.ingested_qualifications > 0
       || summary.credited_events > 0
       || summary.pending_verification > 0
       || summary.expired_pending > 0
+      || summary.canceled_retired_funding_campaigns > 0
+      || summary.retirement_policy_anomalies > 0
       || summary.skipped_budget > 0
       || summary.deferred_funding > 0
       || summary.skipped_expired > 0

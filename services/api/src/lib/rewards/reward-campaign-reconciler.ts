@@ -174,6 +174,9 @@ export type RewardCampaignReconciliationSummary = {
   credited_cents: number
   activated_campaigns: number
   canceled_draft_campaigns: number
+  canceled_retired_funding_campaigns: number
+  audited_retired_funding_effects: number
+  retirement_policy_anomalies: number
   ended_campaigns: number
   skipped_identity: number
   pending_verification: number
@@ -225,6 +228,9 @@ function emptySummary(enabled: boolean): RewardCampaignReconciliationSummary {
     credited_cents: 0,
     activated_campaigns: 0,
     canceled_draft_campaigns: 0,
+    canceled_retired_funding_campaigns: 0,
+    audited_retired_funding_effects: 0,
+    retirement_policy_anomalies: 0,
     ended_campaigns: 0,
     skipped_identity: 0,
     pending_verification: 0,
@@ -983,6 +989,9 @@ export async function reconcileRewardCampaigns(input: {
   })
   summary.activated_campaigns = lifecycle.activated_campaigns
   summary.canceled_draft_campaigns = lifecycle.canceled_draft_campaigns
+  summary.canceled_retired_funding_campaigns = lifecycle.canceled_retired_funding_campaigns
+  summary.audited_retired_funding_effects = lifecycle.audited_retired_funding_effects
+  summary.retirement_policy_anomalies = lifecycle.retirement_policy_anomalies
   summary.ended_campaigns = lifecycle.ended_campaigns
   const communityIds = selectScheduledCommunityJobPollIds(
     await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),

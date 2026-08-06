@@ -83,6 +83,9 @@ describe("reward campaign reconciler", () => {
     expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
       activated_campaigns: 1,
       canceled_draft_campaigns: 0,
+      canceled_retired_funding_campaigns: 0,
+      audited_retired_funding_effects: 0,
+      retirement_policy_anomalies: 0,
       ended_campaigns: 2,
     })
     const rows = await ctx.client.execute(`
@@ -163,6 +166,9 @@ describe("reward campaign reconciler", () => {
     expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
       activated_campaigns: 0,
       canceled_draft_campaigns: 2,
+      canceled_retired_funding_campaigns: 0,
+      audited_retired_funding_effects: 0,
+      retirement_policy_anomalies: 0,
       ended_campaigns: 0,
     })
     const campaigns = await ctx.client.execute(`
@@ -185,6 +191,172 @@ describe("reward campaign reconciler", () => {
     expect(pools.rows).toEqual([
       { reward_campaign_id: "rcp_recent_draft" },
     ])
+  })
+
+  test("cancels only fully unclaimed pre-cutoff quotes covered by an explicit asset retirement", async () => {
+    const ctx = await createRouteTestContext(env())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "retired-funding-lifecycle-user")
+    const now = "2026-08-06T12:00:00.000Z"
+    const retiredToken = "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+    const retiredTreasury = "0xc74e72ce521674bcaea66c99874fe9d5984e12be"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, membership_mode,
+          status, provisioning_state, transfer_state, created_at, updated_at
+        ) VALUES ('cmt_retired_funding', ?1, 'Retired funding', 'open', 'active', 'active', 'none', ?2, ?2)
+      `,
+      args: [session.userId, now],
+    })
+    for (const id of ["eligible", "claimed", "current_chain", "wrong_treasury", "post_cutoff"]) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_campaigns (
+            reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+            community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+            status, eligible_activity, min_score_bps, daily_reward_cents,
+            milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
+            budget_cents, funded_cents, terms_hash, starts_at, ends_at,
+            created_at, updated_at
+          ) VALUES (?1, ?2, ?1, 'cmt_retired_funding', ?3, ?4, ?2,
+            'funding_quoted', 'study', 7000, 40, 0, 0, 40, 1000, 0, ?1,
+            '2026-08-07T00:00:00.000Z', '2026-08-14T00:00:00.000Z',
+            '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z')
+        `,
+        args: [`rcp_retired_${id}`, session.userId, `pst_retired_${id}`, `sab_retired_${id}`],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_song_pools (
+            community_id, post_id, reward_campaign_id, created_at, updated_at
+          ) VALUES ('cmt_retired_funding', ?1, ?2, '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z')
+        `,
+        args: [`pst_retired_${id}`, `rcp_retired_${id}`],
+      })
+    }
+    for (const suffix of ["a", "b"]) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_campaign_funding_effects (
+            reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+            idempotency_key, chain_id, token_address, expected_amount_cents,
+            expected_amount_atomic, sender_address, treasury_address, status,
+            expires_at, created_at, updated_at
+          ) VALUES (?1, 'rcp_retired_eligible', ?2, ?1, 84532, ?3, 500, '5000000',
+            '0x3000000000000000000000000000000000000003', ?4, 'quoted',
+            '2026-07-30T12:00:00.000Z', '2026-07-29T12:00:00.000Z', '2026-07-29T12:00:00.000Z')
+        `,
+        args: [`rcf_retired_eligible_${suffix}`, session.userId, retiredToken, retiredTreasury],
+      })
+    }
+    for (const effect of [
+      { id: "claimed", chain: 84532, treasury: retiredTreasury, created: "2026-07-29T12:00:00.000Z", txHash: `0x${"1".repeat(64)}` },
+      { id: "current_chain", chain: 8453, treasury: "0xe2d03cb0678449e0cc1f1ed33e5c46102ec5ab86", created: "2026-07-29T12:00:00.000Z", txHash: null },
+      { id: "wrong_treasury", chain: 84532, treasury: "0x2000000000000000000000000000000000000002", created: "2026-07-29T12:00:00.000Z", txHash: null },
+      { id: "post_cutoff", chain: 84532, treasury: retiredTreasury, created: "2026-08-01T12:00:00.000Z", txHash: null },
+    ]) {
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_campaign_funding_effects (
+            reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+            idempotency_key, chain_id, token_address, expected_amount_cents,
+            expected_amount_atomic, sender_address, treasury_address, status,
+            tx_hash, expires_at, created_at, updated_at
+          ) VALUES (?1, ?2, ?3, ?1, ?4, ?5, 1000, '10000000',
+            '0x3000000000000000000000000000000000000003', ?6, 'quoted', ?7,
+            '2026-08-02T12:00:00.000Z', ?8, ?8)
+        `,
+        args: [
+          `rcf_retired_${effect.id}`,
+          `rcp_retired_${effect.id}`,
+          session.userId,
+          effect.chain,
+          retiredToken,
+          effect.treasury,
+          effect.txHash,
+          effect.created,
+        ],
+      })
+    }
+
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
+      activated_campaigns: 0,
+      canceled_draft_campaigns: 0,
+      canceled_retired_funding_campaigns: 1,
+      audited_retired_funding_effects: 2,
+      retirement_policy_anomalies: 1,
+      ended_campaigns: 0,
+    })
+    const state = await ctx.client.execute(`
+      SELECT campaign.reward_campaign_id, campaign.status,
+        EXISTS (
+          SELECT 1 FROM reward_song_pools AS pool
+          WHERE pool.reward_campaign_id = campaign.reward_campaign_id
+        ) AS holds_pool
+      FROM reward_campaigns AS campaign
+      WHERE campaign.community_id = 'cmt_retired_funding'
+      ORDER BY campaign.reward_campaign_id
+    `)
+    expect(state.rows).toEqual([
+      { reward_campaign_id: "rcp_retired_claimed", status: "funding_quoted", holds_pool: 1 },
+      { reward_campaign_id: "rcp_retired_current_chain", status: "funding_quoted", holds_pool: 1 },
+      { reward_campaign_id: "rcp_retired_eligible", status: "canceled", holds_pool: 0 },
+      { reward_campaign_id: "rcp_retired_post_cutoff", status: "funding_quoted", holds_pool: 1 },
+      { reward_campaign_id: "rcp_retired_wrong_treasury", status: "funding_quoted", holds_pool: 1 },
+    ])
+    const audits = await ctx.client.execute(`
+      SELECT reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
+        sender_address, expected_amount_cents, expected_amount_atomic, chain_id,
+        token_address, treasury_address, quote_created_at, quote_expires_at, canceled_at
+      FROM reward_retired_funding_cancellations
+      ORDER BY reward_campaign_funding_effect_id
+    `)
+    expect(audits.rows).toEqual([
+      {
+        reward_campaign_funding_effect_id: "rcf_retired_eligible_a",
+        reward_campaign_id: "rcp_retired_eligible",
+        funder_user_id: session.userId,
+        sender_address: "0x3000000000000000000000000000000000000003",
+        expected_amount_cents: 500,
+        expected_amount_atomic: "5000000",
+        chain_id: 84532,
+        token_address: retiredToken,
+        treasury_address: retiredTreasury,
+        quote_created_at: "2026-07-29T12:00:00.000Z",
+        quote_expires_at: "2026-07-30T12:00:00.000Z",
+        canceled_at: now,
+      },
+      {
+        reward_campaign_funding_effect_id: "rcf_retired_eligible_b",
+        reward_campaign_id: "rcp_retired_eligible",
+        funder_user_id: session.userId,
+        sender_address: "0x3000000000000000000000000000000000000003",
+        expected_amount_cents: 500,
+        expected_amount_atomic: "5000000",
+        chain_id: 84532,
+        token_address: retiredToken,
+        treasury_address: retiredTreasury,
+        quote_created_at: "2026-07-29T12:00:00.000Z",
+        quote_expires_at: "2026-07-30T12:00:00.000Z",
+        canceled_at: now,
+      },
+    ])
+    expect((await ctx.client.execute(`
+      SELECT anomaly_kind, effect_created_at, quote_cutoff_at, detected_at
+      FROM reward_funding_retirement_anomalies
+    `)).rows).toEqual([{
+      anomaly_kind: "quote_created_after_cutoff",
+      effect_created_at: "2026-08-01T12:00:00.000Z",
+      quote_cutoff_at: "2026-07-30T21:17:40.000Z",
+      detected_at: now,
+    }])
+
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toMatchObject({
+      canceled_retired_funding_campaigns: 0,
+      audited_retired_funding_effects: 0,
+      retirement_policy_anomalies: 0,
+    })
   })
 
   test("uses an exact seven-day qualified-at grace boundary across the UTC day", () => {
