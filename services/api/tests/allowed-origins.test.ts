@@ -29,6 +29,24 @@ describe("allowed origins", () => {
     })).toBeNull()
   })
 
+  test("allows imported HNS app origins for general CORS", () => {
+    expect(configuredCorsOrigin("https://app.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBe("https://app.dankmeme")
+    expect(configuredCorsOrigin("https://app.xn--pokmon-dva", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBe("https://app.xn--pokmon-dva")
+  })
+
+  test("does not treat arbitrary nested origins as imported HNS apps", () => {
+    expect(configuredCorsOrigin("https://www.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://app.dankmeme.example", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+  })
+
   test("rejects malformed or null karaoke origins", () => {
     const env = {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",

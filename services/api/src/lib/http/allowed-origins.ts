@@ -61,15 +61,26 @@ function isTrustedHnsWebOrigin(origin: string): boolean {
     return true
   }
 
-  return hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")
+  if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) {
+    return true
+  }
+
+  // Imported HNS roots use the dashboard-compatible app.<root> origin. The
+  // API remains the canonical HNS service, so these origins need the same
+  // CORS treatment as app.pirate without requiring one config entry per root.
+  const labels = hostname.split(".")
+  return labels.length === 2 && labels[0] === "app" && /^[a-z0-9-]+$/u.test(labels[1])
 }
 
-export function configuredCorsOrigin(origin: string, env: Pick<Env, "CORS_ALLOWED_ORIGINS">): string | null {
+export function configuredCorsOrigin(
+  origin: string,
+  env: Pick<Env, "CORS_ALLOWED_ORIGINS"> | undefined,
+): string | null {
   if (isTrustedHnsWebOrigin(origin)) {
     return origin
   }
 
-  const allowedOrigins = String(env.CORS_ALLOWED_ORIGINS || "")
+  const allowedOrigins = String(env?.CORS_ALLOWED_ORIGINS || "")
     .split(",")
     .map((allowedOrigin) => allowedOrigin.trim())
     .filter(Boolean)
