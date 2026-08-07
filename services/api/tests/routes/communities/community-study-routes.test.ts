@@ -48,6 +48,7 @@ test("Telegram orchestration feedback copy covers every helper language", () => 
     const copy = getTelegramStudyCopy(code)
     expect(copy.tryAgainNow).toBeTruthy()
     expect(copy.recordingNotCaught).toBeTruthy()
+    expect(copy.chooseTranslation).not.toBe("Choose the best translation.")
     expect(copy.attemptsRemaining({ count: 1 })).toBeTruthy()
     expect(copy.attemptsRemaining({ count: 0 })).toBeTruthy()
   }
@@ -140,6 +141,7 @@ Line two for route study',
 async function seedReadyTranslationExercises(input: {
   communityDbRoot: string
   communityId: string
+  additionalLanguages?: StudyHelperLanguage[]
   includeRussianPreferenceLocalization?: boolean
 }): Promise<void> {
   const client = createClient({
@@ -163,89 +165,46 @@ async function seedReadyTranslationExercises(input: {
       `,
       args: [now],
     })
+    const languages = [...new Set<string>([
+      "zh",
+      "es",
+      ...(input.includeRussianPreferenceLocalization ? ["ru" as const] : []),
+      ...(input.additionalLanguages ?? []),
+    ])]
     for (const [index, unitId] of ["stu_chat_1", "stu_chat_2"].entries()) {
-      await client.execute({
-        sql: `
-          INSERT INTO song_study_unit_localization (
-            id, unit_id, target_language, localization_version, status,
-            question, translation_text, options_json, correct_option_id,
-            explanation_text, max_attempts, generated_at, created_at, updated_at
-          ) VALUES (?1, ?2, 'es', 5, 'ready',
-                    'Choose the best translation.',
-                    ?3, ?4, ?5, 'Server-owned explanation.', 1, ?6, ?6, ?6)
-        `,
-        args: [
-          `sul_chat_${index + 1}`,
-          unitId,
-          `Traducción correcta ${index + 1}`,
-          JSON.stringify([
-            { id: `opt_chat_${index + 1}_correct`, text: `Traducción correcta ${index + 1}` },
-            { id: `opt_chat_${index + 1}_wrong`, text: `Traducción incorrecta ${index + 1}` },
-          ]),
-          `opt_chat_${index + 1}_correct`,
-          now,
-        ],
-      })
-      await client.execute({
-        sql: `
-          INSERT INTO song_study_unit_localization (
-            id, unit_id, target_language, localization_version, status,
-            question, translation_text, options_json, correct_option_id,
-            explanation_text, max_attempts, generated_at, created_at, updated_at
-          ) VALUES (?1, ?2, 'zh', 5, 'ready', '选择最佳翻译。', ?3, ?4, ?5,
-                    '服务器生成的解释。', 1, ?6, ?6, ?6)
-        `,
-        args: [
-          `sul_chat_zh_${index + 1}`,
-          unitId,
-          `正确翻译 ${index + 1}`,
-          JSON.stringify([
-            { id: `opt_chat_zh_${index + 1}_correct`, text: `正确翻译 ${index + 1}` },
-            { id: `opt_chat_zh_${index + 1}_wrong`, text: `错误翻译 ${index + 1}` },
-          ]),
-          `opt_chat_zh_${index + 1}_correct`,
-          now,
-        ],
-      })
-      if (input.includeRussianPreferenceLocalization) {
-        const language = "ru"
+      for (const language of languages) {
+        const localized = language === "zh"
+          ? { correct: `正确翻译 ${index + 1}`, wrong: `错误翻译 ${index + 1}`, explanation: "服务器生成的解释。" }
+          : language === "es"
+            ? { correct: `Traducción correcta ${index + 1}`, wrong: `Traducción incorrecta ${index + 1}`, explanation: "Server-owned explanation." }
+            : language === "ru"
+              ? { correct: `Правильный перевод ${index + 1}`, wrong: `Неправильный перевод ${index + 1}`, explanation: "Server-owned explanation." }
+              : { correct: `${language} correct translation ${index + 1}`, wrong: `${language} incorrect translation ${index + 1}`, explanation: "Server-owned explanation." }
         await client.execute({
           sql: `
             INSERT INTO song_study_unit_localization (
               id, unit_id, target_language, localization_version, status,
               question, translation_text, options_json, correct_option_id,
               explanation_text, max_attempts, generated_at, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, 5, 'ready', 'Choose the best translation.', ?4, ?5, ?6,
-                      'Server-owned explanation.', 1, ?7, ?7, ?7)
+            ) VALUES (?1, ?2, ?3, 5, 'ready', 'Choose the best translation.', ?4, ?5, ?6, ?7, 1, ?8, ?8, ?8)
           `,
           args: [
             `sul_chat_${language}_${index + 1}`,
             unitId,
             language,
-            `Correct translation ${index + 1}`,
+            localized.correct,
             JSON.stringify([
-              { id: `opt_chat_${language}_${index + 1}_correct`, text: `Correct translation ${index + 1}` },
-              { id: `opt_chat_${language}_${index + 1}_wrong`, text: `Incorrect translation ${index + 1}` },
+              { id: `opt_chat_${language}_${index + 1}_correct`, text: localized.correct },
+              { id: `opt_chat_${language}_${index + 1}_wrong`, text: localized.wrong },
             ]),
             `opt_chat_${language}_${index + 1}_correct`,
+            localized.explanation,
             now,
           ],
         })
       }
     }
-    await client.execute({
-      sql: `
-        INSERT INTO song_study_generation_run (
-          id, post_id, target_language, generation_version, status,
-          attempt_count, created_at, updated_at, completed_at
-        ) VALUES (
-          'sgr_chat_es', 'pst_study_route_song', 'es', 5, 'ready',
-          1, ?1, ?1, ?1
-        )
-      `,
-      args: [now],
-    })
-    if (input.includeRussianPreferenceLocalization) {
+    for (const language of languages) {
       await client.execute({
         sql: `
           INSERT INTO song_study_generation_run (
@@ -253,7 +212,7 @@ async function seedReadyTranslationExercises(input: {
             attempt_count, created_at, updated_at, completed_at
           ) VALUES (?1, 'pst_study_route_song', ?2, 5, 'ready', 1, ?3, ?3, ?3)
         `,
-        args: ["sgr_chat_ru", "ru", now],
+        args: [`sgr_chat_${language}`, language, now],
       })
     }
   } finally {
@@ -543,6 +502,7 @@ describe("community study routes", () => {
     await seedReadyTranslationExercises({
       communityDbRoot: ctx.communityDbRoot,
       communityId,
+      additionalLanguages: STUDY_LANGUAGE_BUTTONS.map(({ code }) => code),
       includeRussianPreferenceLocalization: true,
     })
     const now = "2026-06-29T08:00:00.000Z"
@@ -799,6 +759,7 @@ describe("community study routes", () => {
       const settingsMarkup = settingsMessage?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
+      expect(settingsMarkup.inline_keyboard?.every((row) => row.length === 1)).toBe(true)
       expect(settingsMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("🌐 更改语言")
 
       const privateSongClient = createClient({
@@ -919,6 +880,7 @@ describe("community study routes", () => {
       const pickerMarkup = picker?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
+      expect(pickerMarkup.inline_keyboard?.slice(0, -1).every((row) => row.length === 1)).toBe(true)
       const songCallback = pickerMarkup.inline_keyboard?.[0]?.[0]?.callback_data
       expect(pickerMarkup.inline_keyboard?.[0]?.[0]?.text).toBe("Route Song · 0.75 $USDC/天")
       expect(songCallback).toMatch(/^study:[a-f0-9]{18}:0$/)
@@ -1039,7 +1001,12 @@ describe("community study routes", () => {
         typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
-      expect(exercisePrompt?.text).toMatch(/^▱▱ 0\/2 · /u)
+      expect(exercisePrompt?.text).toMatch(/^▱{20}\n\n选择译文：\n\n/u)
+      const firstPresented = await ctx.client.execute({
+        sql: "SELECT current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
+        args: [selectingSession.rows[0]?.chat_study_session_id],
+      })
+      const firstExerciseId = String(firstPresented.rows[0]?.current_exercise_id)
       const mcqDeliveryWindow = await ctx.client.execute({
         sql: "SELECT expires_at FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1145,6 +1112,15 @@ describe("community study routes", () => {
       } finally {
         attemptsClient.close()
       }
+      const zhAnsweredEdit = [...telegramBodies].reverse().find((body) => {
+        const markup = body.reply_markup as { inline_keyboard?: unknown[] } | undefined
+        return typeof body.text === "string"
+          && body.text.startsWith(`${getTelegramStudyCopy("zh").chooseTranslation}\n\n`)
+          && Array.isArray(markup?.inline_keyboard)
+          && markup.inline_keyboard.length === 0
+      })
+      expect(zhAnsweredEdit).toBeTruthy()
+      expect(String(zhAnsweredEdit?.text)).not.toContain("Choose the best translation.")
       const callbacks = await ctx.client.execute({
         sql: `
           SELECT status
@@ -1157,7 +1133,15 @@ describe("community study routes", () => {
       const secondPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string" && body.text.includes("Line two for route study")
       )
-      expect(secondPrompt?.text).toMatch(/^▰▱ 1\/2 · /u)
+      expect(secondPrompt?.text).toMatch(/^▰{10}▱{10}\n\n选择译文：\n\n/u)
+      const secondPresented = await ctx.client.execute({
+        sql: "SELECT current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
+        args: [selectingSession.rows[0]?.chat_study_session_id],
+      })
+      const secondExerciseId = String(secondPresented.rows[0]?.current_exercise_id)
+      // A missed MCQ advances while unseen cards remain; it must not repeat the
+      // same exercise merely because the answer was wrong.
+      expect(secondExerciseId).not.toBe(firstExerciseId)
       const secondMarkup = secondPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1194,7 +1178,14 @@ describe("community study routes", () => {
         && body.text.includes("Line two for route study")
         && typeof body.reply_markup === "object"
       )
-      expect(retryPrompt?.text).toMatch(/^🔁 ▰▱ 1\/2 · /u)
+      expect(retryPrompt?.text).toMatch(/^🔁 ▰{10}▱{10}\n\n选择译文：\n\n/u)
+      const reappeared = await ctx.client.execute({
+        sql: "SELECT current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
+        args: [selectingSession.rows[0]?.chat_study_session_id],
+      })
+      // Once no unseen card remains, the missed MCQ may reappear; the marker
+      // distinguishes this deferred reappearance from an in-place voice retry.
+      expect(String(reappeared.rows[0]?.current_exercise_id)).toBe(secondExerciseId)
       const retryMarkup = retryPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1437,7 +1428,7 @@ describe("community study routes", () => {
           from: { id: 454546, is_bot: false }, message: { chat: { id: 454546, type: "private" }, message_id: 708 } },
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("▱▱▱▱ 0/4 · 请说：\n\n")
+        typeof body.text === "string" && body.text.startsWith(`${"▱".repeat(20)}\n\n请说：\n\n`)
       )).toBe(true)
       const mixIntent = await ctx.client.execute({
         sql: `SELECT chat_study_session_id, exercise_id, study_session_id, attempt_number
@@ -1458,7 +1449,7 @@ describe("community study routes", () => {
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("▰▱▱▱ 1/4 · 请说：\n\n")
+        typeof body.text === "string" && body.text.startsWith(`${"▰".repeat(5)}${"▱".repeat(15)}\n\n请说：\n\n`)
       )).toBe(true)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string" && body.text.startsWith("1/4 · 选择译文：")

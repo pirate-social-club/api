@@ -869,14 +869,10 @@ function telegramStudyProgressLabel(
   const total = Math.max(0, lesson.total_count)
   if (total <= 0) return null
   const resolved = Math.min(total, Math.max(0, lesson.resolved_count))
-  const filled = "▰".repeat(resolved)
-  const empty = "▱".repeat(total - resolved)
+  const cells = 20
+  const filled = Math.round((resolved / total) * cells)
   const review = lesson.next?.is_reappearance ? "🔁 " : ""
-  return `${review}${filled}${empty} ${resolved}/${total}`
-}
-
-function progressHeading(progressLabel: string | null, heading: string): string {
-  return progressLabel ? `${progressLabel} · ${heading}` : heading
+  return `${review}${"▰".repeat(filled)}${"▱".repeat(cells - filled)}`
 }
 
 function feedbackText(input: {
@@ -1054,7 +1050,6 @@ async function presentNextExercise(input: {
         optionIds: exercise.options.map((option) => option.id),
         optionTexts: exercise.options.map((option) => option.text),
         promptText: exercise.prompt_text,
-        question: exercise.question,
         sessionId: studySessionId,
         sessionRevision: lesson?.session_revision,
         songTitle: study?.title ?? input.session.actionPayload.songTitle,
@@ -1069,7 +1064,9 @@ async function presentNextExercise(input: {
     })
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${progressHeading(progressLabel, copy.chooseTranslation)}\n\n${exercise.prompt_text}`,
+      text: [progressLabel, copy.chooseTranslation, exercise.prompt_text]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
       reply_markup: {
         inline_keyboard: [
           ...exercise.options.map((option, index) => [{
@@ -1302,7 +1299,6 @@ async function resendActiveTelegramStudyExercise(input: {
         optionIds: translationPrompt?.options.map((option) => option.id) ?? [],
         optionTexts: translationPrompt?.options.map((option) => option.text) ?? [],
         promptText: translationPrompt?.prompt_text ?? "",
-        question: translationPrompt?.question ?? "",
         ...(study.lesson ? { sessionRevision: study.lesson.session_revision } : {}),
         ...(study.session?.id ? { sessionId: study.session.id } : {}),
         ...(study.title ? { songTitle: study.title } : {}),
@@ -1338,7 +1334,9 @@ async function resendActiveTelegramStudyExercise(input: {
   if (session.actionKind === "answer_choice") {
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${progressHeading(progressLabel, copy.chooseTranslation)}\n\n${translationPrompt!.prompt_text}`,
+      text: [progressLabel, copy.chooseTranslation, translationPrompt!.prompt_text]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
       reply_markup: {
         inline_keyboard: [
           ...translationPrompt!.options.map((option, index) => [{
@@ -1354,7 +1352,7 @@ async function resendActiveTelegramStudyExercise(input: {
   if (next.type !== "say_it_back") return false
   const sent = await sendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: [retryFeedback, progressHeading(progressLabel, copy.sayThis), sayItBackPrompt!.reference_text]
+    text: [retryFeedback, progressLabel, copy.sayThis, sayItBackPrompt!.reference_text]
       .filter((value): value is string => Boolean(value))
       .join("\n\n"),
     reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
@@ -1870,9 +1868,8 @@ export async function handleTelegramChatStudyCallback(input: {
       const correctText = correctOptionId
         ? optionTexts[optionIds.indexOf(correctOptionId)]
         : null
-      const question = stringOrNull(session.actionPayload.question)
       const promptText = stringOrNull(session.actionPayload.promptText)
-      if (Number.isSafeInteger(callbackMessageId) && selectedText && question && promptText) {
+      if (Number.isSafeInteger(callbackMessageId) && selectedText && promptText) {
         const copy = getTelegramStudyCopy(isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en")
         const correction = result.outcome !== "correct" && correctText
           ? `\n✅ ${copy.correctAnswer}${copy.labelSeparator} ${correctText}`
@@ -1883,7 +1880,7 @@ export async function handleTelegramChatStudyCallback(input: {
         await editTelegramMessageText(input.bot, {
           chat_id: chatId,
           message_id: callbackMessageId,
-          text: `${question}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}${correction}${retry}`,
+          text: `${copy.chooseTranslation}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}${correction}${retry}`,
           reply_markup: { inline_keyboard: [] },
         }).catch(() => undefined)
       }
