@@ -4,6 +4,7 @@ import rewards, {
   createRewardBackendFlipReadinessHandler,
   createRewardCampaignRecoveryHandler,
   createRewardEpochCapRehearsalSnapshotHandler,
+  createRewardLifecycleRehearsalHandler,
   createRewardRefundPolicyReadinessHandler,
   createRewardRehearsalHandler,
   createRewardSettlementResolutionHandler,
@@ -11,6 +12,8 @@ import rewards, {
 } from "./rewards"
 import type { Env } from "../env"
 import type { Client } from "../lib/sql-client"
+import type { RewardLifecycleSnapshot } from "../lib/rewards/reward-lifecycle-harness"
+import type { RewardCampaignReconciliationSummary } from "../lib/rewards/reward-campaign-reconciler"
 import {
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
@@ -274,6 +277,82 @@ describe("reward settlement rehearsal route", () => {
       { ENVIRONMENT: "production" } as Env,
     )
     expect(production.status).toBe(404)
+  })
+})
+
+function lifecycleRehearsalApp(input: {
+  environment: string
+  snapshots: RewardLifecycleSnapshot[]
+  reconcile?: () => Promise<RewardCampaignReconciliationSummary>
+}) {
+  const app = withErrors(new Hono<{ Bindings: Env }>())
+  let snapshotIndex = 0
+  let reconcileCount = 0
+  const repository = {
+    listActiveCommunities: async () => [],
+    close: async () => undefined,
+  }
+  app.post("/operator/reward_campaigns/rehearsal", createRewardLifecycleRehearsalHandler({
+    authenticate: async () => ({
+      authType: "operator_credential",
+      operatorCredentialId: "opc_test",
+      operatorActorId: "rehearsal-operator",
+      scopes: [REWARD_REHEARSAL_EXECUTE_SCOPE],
+    }),
+    getClient: (() => ({} as Client)) as typeof import("../lib/runtime-deps").getControlPlaneClient,
+    getCommunityRepository: (() => repository) as unknown as typeof import("../lib/communities/db-community-repository").getCommunityRepository,
+    reconcile: async () => {
+      reconcileCount += 1
+      return input.reconcile?.() ?? ({ enabled: true, scanned_communities: 1 } as RewardCampaignReconciliationSummary)
+    },
+    readSnapshot: async () => input.snapshots[Math.min(snapshotIndex++, input.snapshots.length - 1)] as RewardLifecycleSnapshot,
+  }))
+  return { app, env: { ENVIRONMENT: input.environment } as Env, get reconcileCount() { return reconcileCount } }
+}
+
+const lifecycleSnapshot: RewardLifecycleSnapshot = {
+  campaign: { status: "active", fundedCents: 100, reservedCents: 0, creditedCents: 40, paidCents: 0 },
+  qualificationEvents: 1,
+  reservations: 1,
+  rewardEvents: 1,
+  pendingQualifications: 0,
+  payoutEffects: 0,
+}
+
+describe("reward lifecycle rehearsal route", () => {
+  test("is absent outside staging", async () => {
+    const fixture = lifecycleRehearsalApp({ environment: "production", snapshots: [lifecycleSnapshot] })
+    const response = await fixture.app.request("/operator/reward_campaigns/rehearsal", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ campaign_id: "rcp_test", user_id: "usr_test" }),
+    }, fixture.env)
+    expect(response.status).toBe(404)
+    expect(fixture.reconcileCount).toBe(0)
+  })
+
+  test("runs the replay pass and returns the stable ledger snapshots", async () => {
+    const fixture = lifecycleRehearsalApp({
+      environment: "staging",
+      snapshots: [lifecycleSnapshot, lifecycleSnapshot, lifecycleSnapshot, lifecycleSnapshot],
+    })
+    const response = await fixture.app.request("/operator/reward_campaigns/rehearsal", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Operator test.secret",
+      },
+      body: JSON.stringify({ campaign_id: "rcp_test", user_id: "usr_test", passes: 1 }),
+    }, fixture.env)
+    expect(response.status).toBe(200)
+    expect(fixture.reconcileCount).toBe(2)
+    expect(await response.json()).toMatchObject({
+      campaign_id: "rcp_test",
+      user_id: "usr_test",
+      before: lifecycleSnapshot,
+      after_pass: lifecycleSnapshot,
+      replay: lifecycleSnapshot,
+    })
   })
 })
 

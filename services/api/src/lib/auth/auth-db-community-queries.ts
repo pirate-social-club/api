@@ -230,8 +230,18 @@ export async function listActiveCommunityRows(
   input?: {
     limit?: number
     requireReadyRouting?: boolean
+    communityIds?: string[]
   },
 ): Promise<CommunityRow[]> {
+  const communityIds = input?.communityIds
+  if (communityIds?.length === 0) return []
+  const communityIdPrefix = input?.requireReadyRouting ? "c." : ""
+  const communityIdClause = communityIds === undefined
+    ? ""
+    : `\n        AND ${communityIdPrefix}community_id IN (${communityIds.map((_, index) => `?${index + 1}`).join(", ")})`
+  const limitPlaceholder = input?.limit === undefined
+    ? null
+    : `?${(communityIds?.length ?? 0) + 1}`
   return listCommunityRows(
     executor,
     () => `
@@ -246,10 +256,14 @@ export async function listActiveCommunityRows(
         : ""}
       WHERE ${input?.requireReadyRouting ? "c." : ""}status = 'active'
         AND ${input?.requireReadyRouting ? "c." : ""}provisioning_state = 'active'
+        ${communityIdClause}
       ORDER BY ${input?.requireReadyRouting ? "c." : ""}created_at ASC, ${input?.requireReadyRouting ? "c." : ""}community_id ASC
-      ${input?.limit === undefined ? "" : "LIMIT ?1"}
+      ${limitPlaceholder === null ? "" : `LIMIT ${limitPlaceholder}`}
     `,
-    input?.limit === undefined ? [] : [input.limit],
+    [
+      ...(communityIds ?? []),
+      ...(input?.limit === undefined ? [] : [input.limit]),
+    ],
   )
 }
 

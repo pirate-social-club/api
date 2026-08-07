@@ -7,7 +7,6 @@ import type { Client, QueryResultRow } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { openCommunityWriteClient } from "../communities/community-read-access"
 import type { CommunityJobRepository } from "../communities/jobs/runner-types"
-import { selectScheduledCommunityJobPollIds } from "../communities/jobs/runner"
 import { resolveActiveRewardIdentity, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
 import {
   persistRewardNationalityDecision,
@@ -16,11 +15,16 @@ import {
   type RewardNationalityShadowDecision,
 } from "./reward-nationality-shadow-evaluator"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
+import {
+  listRewardCampaignCommunityIds,
+  rewardCampaignCandidateCutoff,
+  REWARD_QUALIFICATION_GRACE_MS,
+  scheduleRewardCampaignCommunityIds,
+} from "./reward-campaign-candidates"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 
-const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 const REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS = 86_400_000
 
 async function allocateReservationAcrossContributionLots(input: {
@@ -994,10 +998,23 @@ export async function reconcileRewardCampaigns(input: {
   summary.audited_retired_funding_effects = lifecycle.audited_retired_funding_effects
   summary.retirement_policy_anomalies = lifecycle.retirement_policy_anomalies
   summary.ended_campaigns = lifecycle.ended_campaigns
-  const communityIds = selectScheduledCommunityJobPollIds(
-    await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }),
-    Math.max(1, Math.trunc(input.maxCommunities ?? 50)),
-  )
+  const postgres = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
+  const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 50))
+  const candidateCommunityIds = scheduleRewardCampaignCommunityIds(await listRewardCampaignCommunityIds({
+    client: input.controlPlaneClient,
+    now,
+    postgres,
+  }), maxCommunities, now)
+  // The campaign window keeps a community eligible through the complete
+  // seven-day qualification grace period. On re-entry, ingestion resumes at
+  // its persisted checkpoint and catches up in bounded 500-row batches; this
+  // is deliberate so we never discard a potentially creditable outbox row or
+  // add a shard read just to prove the outbox is empty.
+  const communityIds = (await input.communityRepository.listActiveCommunities({
+    requireReadyRouting: true,
+    communityIds: candidateCommunityIds,
+    limit: maxCommunities,
+  })).map((community) => community.community_id)
   for (const communityId of communityIds) {
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
@@ -1020,7 +1037,7 @@ export async function reconcileRewardCampaigns(input: {
     }
   }
 
-  const since = new Date(Date.parse(now) - REWARD_QUALIFICATION_GRACE_MS).toISOString()
+  const since = rewardCampaignCandidateCutoff(now)
   const maxCredits = Math.max(1, Math.trunc(input.maxCredits ?? 500))
   const pageSize = Math.min(500, maxCredits)
   let cursor: { qualifiedAt: string; communityId: string; shardSequence: number } | null = null

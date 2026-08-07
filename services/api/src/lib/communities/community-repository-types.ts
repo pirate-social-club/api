@@ -21,6 +21,7 @@ export interface CommunityReadRepository {
   listActiveCommunities(input?: {
     limit?: number
     requireReadyRouting?: boolean
+    communityIds?: string[]
   }): Promise<CommunityRow[]>
   searchActiveCommunities(input: {
     query: string
