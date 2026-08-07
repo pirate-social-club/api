@@ -363,7 +363,9 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const client = getControlPlaneClient(input.env)
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
-  const instruction = input.progressLabel ? `${input.progressLabel} · ${copy.sayThis}` : copy.sayThis
+  const instruction = [input.progressLabel, copy.sayThis]
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n")
   const text = [input.intent.promptPrefix, instruction, input.intent.referenceText]
     .filter((value): value is string => Boolean(value))
   const disclosure = copy.disclosure
