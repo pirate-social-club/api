@@ -190,6 +190,7 @@ export async function startNamespaceVerificationSession(
         challengeTxtValue,
         dsRecords,
       })
+      status = "challenge_required"
       persistedSetupNameservers = serializeSetupNameservers(nameservers)
       persistedChallengePayload = JSON.stringify({
         kind: "hns_import",
