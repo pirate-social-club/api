@@ -60,18 +60,24 @@ function address(env: Env, key: Extract<CampaignEnvKey, "REWARDS_CAMPAIGN_USDC_T
 }
 
 export function resolveRewardCampaignAssetConfig(env: Env): RewardCampaignAssetConfig {
-  const rpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
+  const chainId = positiveInteger(env, "REWARDS_CAMPAIGN_CHAIN_ID")
+  if (![8453, 84532].includes(chainId)) {
+    throw providerUnavailable("Reward campaign chain is not supported", { chain_id: chainId }, false)
+  }
+
+  const configuredRpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
+  const fallbackRpcUrl = chainId === 8453
+    ? String(env.BASE_MAINNET_RPC_URL ?? "").trim()
+    : String(env.BASE_SEPOLIA_RPC_URL ?? "").trim()
+  const rpcUrl = configuredRpcUrl || fallbackRpcUrl
   if (!/^https:\/\//i.test(rpcUrl)) {
     throw providerUnavailable("Reward campaign RPC URL is invalid", { key: "REWARDS_CAMPAIGN_RPC_URL" }, false)
   }
   const config = {
-    chainId: positiveInteger(env, "REWARDS_CAMPAIGN_CHAIN_ID"),
+    chainId,
     tokenAddress: address(env, "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS"),
     treasuryAddress: address(env, "REWARDS_CAMPAIGN_TREASURY_ADDRESS"),
     rpcUrl,
-  }
-  if (![8453, 84532].includes(config.chainId)) {
-    throw providerUnavailable("Reward campaign chain is not supported", { chain_id: config.chainId }, false)
   }
   return config
 }

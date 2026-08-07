@@ -3,7 +3,9 @@ import * as BunRuntime from "bun"
 
 import type { Env } from "../src/env"
 import { resolveNewBookingIntentChainId } from "../src/lib/bookings/booking-settlement-config"
+import { resolveRewardsSettlementRpcUrl } from "../src/lib/communities/bookings/booking-chain-config"
 import { resolvePirateCheckoutSourceChainId } from "../src/lib/communities/commerce/checkout-config"
+import { resolveRewardCampaignAssetConfig } from "../src/lib/rewards/reward-campaign-config"
 
 // Production money paths have gone wrong three separate ways:
 //
@@ -150,5 +152,22 @@ describe("production money-path invariant", () => {
       const usdc = productionVars[`${prefix}_USDC_TOKEN_ADDRESS`]
       if (usdc) expect(usdc.toLowerCase(), `${path.label} USDC`).not.toBe(SEPOLIA_USDC)
     }
+  })
+
+  test("reward RPCs are resolved from the keyed mainnet fallback", () => {
+    expect(productionVars.BASE_MAINNET_RPC_URL).toBeUndefined()
+    expect(productionVars.REWARDS_CAMPAIGN_RPC_URL).toBeUndefined()
+    expect(productionVars.PIRATE_REWARDS_SETTLEMENT_RPC_URL).toBeUndefined()
+
+    expect(resolveRewardCampaignAssetConfig({
+      ...productionVars,
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_MAINNET_RPC_URL: "https://keyed-mainnet.example.test",
+    } as Env).rpcUrl).toBe("https://keyed-mainnet.example.test")
+    expect(resolveRewardsSettlementRpcUrl({
+      ...productionVars,
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: undefined,
+      BASE_MAINNET_RPC_URL: "https://keyed-mainnet.example.test",
+    } as Env)).toBe("https://keyed-mainnet.example.test")
   })
 })

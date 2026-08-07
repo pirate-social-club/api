@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import { HttpError } from "../errors"
-import { resolveRewardCampaignConfig } from "./reward-campaign-config"
+import {
+  resolveRewardCampaignAssetConfig,
+  resolveRewardCampaignConfig,
+} from "./reward-campaign-config"
 
 function configuredEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -37,6 +40,36 @@ describe("reward campaign config", () => {
       minBudgetCents: 1000,
       maxBudgetCents: 1000000,
     })
+  })
+
+  test("prefers an explicit campaign RPC over the chain fallback", () => {
+    expect(resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_RPC_URL: "https://explicit.example.test",
+      BASE_MAINNET_RPC_URL: "https://fallback.example.test",
+    })).rpcUrl).toBe("https://explicit.example.test")
+  })
+
+  test("resolves an empty campaign RPC from the Base mainnet fallback", () => {
+    expect(resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_MAINNET_RPC_URL: "https://base-mainnet.example.test",
+    })).rpcUrl).toBe("https://base-mainnet.example.test")
+  })
+
+  test("resolves an empty campaign RPC from the Base Sepolia fallback", () => {
+    expect(resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_SEPOLIA_RPC_URL: "https://base-sepolia.example.test",
+    })).rpcUrl).toBe("https://base-sepolia.example.test")
+  })
+
+  test("fails closed when the selected chain has no RPC fallback", () => {
+    expect(() => resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_SEPOLIA_RPC_URL: undefined,
+    }))).toThrow(HttpError)
   })
 
   test("rejects campaigns unless accrual and payouts are enabled together", () => {
