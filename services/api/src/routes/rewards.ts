@@ -48,6 +48,12 @@ import {
   getRewardEpochCapRehearsalSnapshot,
   isRewardRehearsalScenario,
 } from "../lib/rewards/reward-rehearsal"
+import { reconcileRewardCampaigns } from "../lib/rewards/reward-campaign-reconciler"
+import {
+  assertRewardLifecycleCreditReady,
+  assertRewardLifecycleReplayStable,
+  readRewardLifecycleSnapshot,
+} from "../lib/rewards/reward-lifecycle-harness"
 
 const rewards = new Hono<AuthenticatedEnv>()
 
@@ -83,6 +89,11 @@ type RewardReadinessRouteServices = Pick<
 type RewardRehearsalRouteServices = Pick<RewardOperatorRouteServices, "authenticate"> & {
   enqueue: typeof enqueueRewardRehearsalScenario
   snapshot: typeof getRewardEpochCapRehearsalSnapshot
+}
+type RewardLifecycleRehearsalRouteServices = Pick<RewardOperatorRouteServices, "authenticate" | "getClient"> & {
+  reconcile: typeof reconcileRewardCampaigns
+  getCommunityRepository: typeof getCommunityRepository
+  readSnapshot: typeof readRewardLifecycleSnapshot
 }
 
 rewards.use("/me/rewards", authenticate)
@@ -532,6 +543,86 @@ export function createRewardEpochCapRehearsalSnapshotHandler(
   }
 }
 
+export function createRewardLifecycleRehearsalHandler(
+  services: RewardLifecycleRehearsalRouteServices = {
+    authenticate: operatorRouteDefaults.authenticate,
+    getClient: operatorRouteDefaults.getClient,
+    reconcile: reconcileRewardCampaigns,
+    getCommunityRepository,
+    readSnapshot: readRewardLifecycleSnapshot,
+  },
+) {
+  return async (c: Context<AuthenticatedEnv>) => {
+    if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+    const operator = await services.authenticate({
+      env: c.env,
+      authorization: c.req.header("authorization"),
+    })
+    requireOperatorScope(operator, REWARD_REHEARSAL_EXECUTE_SCOPE)
+    const body = await c.req.json<{ campaign_id?: unknown; user_id?: unknown; passes?: unknown }>().catch(() => null)
+    if (!body || typeof body !== "object") throw badRequestError("Rewards lifecycle rehearsal requires a JSON body")
+    const keys = Object.keys(body)
+    if (keys.some((key) => key !== "campaign_id" && key !== "user_id" && key !== "passes")) {
+      throw badRequestError("Rewards lifecycle rehearsal received an unsupported field")
+    }
+    const campaignId = typeof body.campaign_id === "string" ? body.campaign_id.trim() : ""
+    const userId = typeof body.user_id === "string" ? body.user_id.trim() : ""
+    const passes = body.passes === undefined ? 3 : Number(body.passes)
+    if (!campaignId || !userId || !Number.isSafeInteger(passes) || passes < 1 || passes > 5) {
+      throw badRequestError("Rewards lifecycle rehearsal requires campaign_id, user_id, and passes 1-5")
+    }
+
+    const client = services.getClient(c.env)
+    const communityRepository = services.getCommunityRepository(c.env)
+    const before = await services.readSnapshot({ client, campaignId, userId })
+    if (before.campaign.fundedCents <= 0) throw badRequestError("Rewards lifecycle rehearsal campaign is not funded")
+    const summaries: unknown[] = []
+    let afterPass = before
+    const now = new Date().toISOString()
+    for (let index = 0; index < passes; index += 1) {
+      summaries.push(await services.reconcile({
+        env: c.env,
+        communityRepository,
+        controlPlaneClient: client,
+        maxCommunities: 50,
+        maxCredits: 500,
+        outboxBatchSize: 500,
+        now,
+      }))
+      afterPass = await services.readSnapshot({ client, campaignId, userId })
+      if (afterPass.qualificationEvents > before.qualificationEvents) break
+    }
+    assertRewardLifecycleCreditReady(afterPass)
+    const replaySummary = await services.reconcile({
+      env: c.env,
+      communityRepository,
+      controlPlaneClient: client,
+      maxCommunities: 50,
+      maxCredits: 500,
+      outboxBatchSize: 500,
+      now,
+    })
+    const replay = await services.readSnapshot({ client, campaignId, userId })
+    assertRewardLifecycleReplayStable(afterPass, replay)
+    console.warn(JSON.stringify({
+      message: "rewards lifecycle rehearsal completed",
+      campaign_id: campaignId,
+      user_id: userId,
+      operator_actor_id: operator.operatorActorId,
+      passes: summaries.length,
+    }))
+    return c.json({
+      campaign_id: campaignId,
+      user_id: userId,
+      before,
+      after_pass: afterPass,
+      replay,
+      summaries,
+      replay_summary: replaySummary,
+    }, 200, { "cache-control": "private, no-store" })
+  }
+}
+
 rewards.post(
   "/operator/reward_campaigns/:campaignId/incidents/:incidentId/recover",
   createRewardCampaignRecoveryHandler(),
@@ -544,6 +635,7 @@ rewards.get("/operator/reward_pools/refund_policy_readiness", createRewardRefund
 rewards.get("/operator/reward_settlements/backend_flip_readiness", createRewardBackendFlipReadinessHandler())
 rewards.get("/operator/reward_settlements/solvency_readiness", createRewardSolvencyReadinessHandler())
 rewards.post("/operator/reward_settlements/rehearsal", createRewardRehearsalHandler())
+rewards.post("/operator/reward_campaigns/rehearsal", createRewardLifecycleRehearsalHandler())
 rewards.get(
   "/operator/reward_settlements/rehearsal/epoch-cap",
   createRewardEpochCapRehearsalSnapshotHandler(),

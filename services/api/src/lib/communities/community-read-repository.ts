@@ -117,6 +117,7 @@ export async function listActiveCommunities(
   input?: {
     limit?: number
     requireReadyRouting?: boolean
+    communityIds?: string[]
   },
 ): Promise<CommunityRow[]> {
   return listActiveCommunityRows(client, input)
