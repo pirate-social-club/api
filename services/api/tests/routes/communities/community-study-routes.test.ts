@@ -1039,7 +1039,7 @@ describe("community study routes", () => {
         typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
-      expect(exercisePrompt?.text).toStartWith("0/2 · ")
+      expect(exercisePrompt?.text).toMatch(/^▱▱ 0\/2 · /u)
       const mcqDeliveryWindow = await ctx.client.execute({
         sql: "SELECT expires_at FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1157,7 +1157,7 @@ describe("community study routes", () => {
       const secondPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string" && body.text.includes("Line two for route study")
       )
-      expect(secondPrompt?.text).toStartWith("1/2 · ")
+      expect(secondPrompt?.text).toMatch(/^▰▱ 1\/2 · /u)
       const secondMarkup = secondPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -1194,7 +1194,7 @@ describe("community study routes", () => {
         && body.text.includes("Line two for route study")
         && typeof body.reply_markup === "object"
       )
-      expect(retryPrompt?.text).toStartWith("1/2 · ")
+      expect(retryPrompt?.text).toMatch(/^🔁 ▰▱ 1\/2 · /u)
       const retryMarkup = retryPrompt?.reply_markup as {
         inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>>
       }
@@ -2111,6 +2111,136 @@ describe("community study routes", () => {
         "This line will come back later.",
         "1 attempt left",
       ].join("\n"))).toBe(true)
+      const requestsBeforeBoundaryDiff = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_audio",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: { extra: ["extra"], matched: ["one"], missing: ["two", "three"] },
+          lesson: {
+            completion_reason: null,
+            next: null,
+            resolved_count: 0,
+            serving_index: 1,
+            session_revision: 4,
+            total_count: 1,
+          },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "one extra",
+      })
+      const boundaryDiffMessages = await Promise.all(
+        telegramRequests.slice(requestsBeforeBoundaryDiff).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {},
+        ),
+      )
+      const boundaryDiff = boundaryDiffMessages.find((body) => body.text?.startsWith("Not quite"))?.text ?? ""
+      expect(boundaryDiff).toContain("Missing: two, three")
+      expect(boundaryDiff).toContain("Extra: extra")
+
+      const requestsBeforeBelowBoundaryDiff = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_audio",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: { extra: ["extra"], matched: ["one"], missing: ["two", "three", "four"] },
+          lesson: {
+            completion_reason: null,
+            next: null,
+            resolved_count: 0,
+            serving_index: 1,
+            session_revision: 5,
+            total_count: 1,
+          },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "one extra",
+      })
+      const belowBoundaryMessages = await Promise.all(
+        telegramRequests.slice(requestsBeforeBelowBoundaryDiff).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {},
+        ),
+      )
+      const belowBoundaryDiff = belowBoundaryMessages.find((body) => body.text?.startsWith("Not quite"))?.text ?? ""
+      expect(belowBoundaryDiff).toContain("Not quite")
+      expect(belowBoundaryDiff).not.toContain("Missing:")
+      expect(belowBoundaryDiff).not.toContain("Extra:")
+
+      const requestsBeforeEmptyOverlap = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_audio",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: {
+            extra: ["testing"],
+            matched: [],
+            missing: ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen"],
+          },
+          lesson: {
+            completion_reason: null,
+            next: null,
+            resolved_count: 0,
+            serving_index: 1,
+            session_revision: 6,
+            total_count: 1,
+          },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "Testing",
+      })
+      const emptyOverlapMessages = await Promise.all(
+        telegramRequests.slice(requestsBeforeEmptyOverlap).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {},
+        ),
+      )
+      const emptyOverlapFeedback = emptyOverlapMessages.find((body) => body.text?.startsWith("Not quite"))?.text ?? ""
+      expect(emptyOverlapFeedback).not.toContain("Missing:")
+      expect(emptyOverlapFeedback).not.toContain("Extra:")
       const requestsBeforeExhaustedAttempt = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
         bot: {

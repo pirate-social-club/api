@@ -890,10 +890,16 @@ function feedbackText(input: {
   const language = (isStudyHelperLanguage(input.targetLanguage) ? input.targetLanguage : "en")
   const copy = getTelegramStudyCopy(language)
   if (result.outcome === "correct") return copy.correct
-  // The current result contract has no separate informative-diff boolean. A
-  // non-empty server-matched set is the conservative signal available to this
-  // renderer; Telegram never tokenizes or computes overlap itself.
-  const informativeFeedback = (result.feedback?.matched?.length ?? 0) > 0
+  // The current result contract has no separate informative-diff boolean. The
+  // grader partitions every reference token into matched or missing, so this
+  // arithmetic is exactly the server's overlap without re-tokenizing in the
+  // transport. Slice 2b will move the threshold into the shared contract for
+  // web and Telegram to consume together.
+  const matchedCount = result.feedback?.matched?.length ?? 0
+  const missingCount = result.feedback?.missing?.length ?? 0
+  const referenceTokenCount = matchedCount + missingCount
+  const informativeFeedback = referenceTokenCount > 0
+    && matchedCount / referenceTokenCount >= 1 / 3
   const details = informativeFeedback
     ? [
         result.feedback?.missing?.length ? `${copy.missing}${copy.labelSeparator} ${result.feedback.missing.join(", ")}` : null,
@@ -935,6 +941,7 @@ async function sendCompletion(input: {
   session: ChatStudySession
   study?: SongStudyPayload
 }): Promise<void> {
+  const title = stringOrNull(input.session.actionPayload.songTitle) ?? input.study?.title ?? ""
   const studySessionId = input.result?.session?.id
     ?? input.study?.session?.id
     ?? stringOrNull(input.session.actionPayload.sessionId)
@@ -958,7 +965,6 @@ async function sendCompletion(input: {
     : ""
   const summary = score ? `\n\nScore: ${score}${streak}` : ""
   const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
-  const title = stringOrNull(input.session.actionPayload.songTitle) ?? input.study?.title ?? ""
   await sendTelegramMessage(input.bot, {
     chat_id: input.chatId,
     text: `${getTelegramStudyCopy(language).complete}: ${title}${summary}`,
@@ -994,6 +1000,16 @@ async function presentNextExercise(input: {
   const lesson = input.lesson ?? input.lastResult?.lesson ?? study?.lesson
   const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
+  const retryInPlace = input.lastResult?.lesson?.next?.retry_in_place === true
+  const retryFeedback = retryInPlace && input.lastResult
+    ? feedbackText({
+      referenceText: stringOrNull(input.session.actionPayload.referenceText),
+      result: input.lastResult,
+      retryInPlace: true,
+      targetLanguage: input.session.targetLanguage,
+      transcript: input.transcript,
+    })
+    : null
   let localizationNoticeSent = input.session.actionPayload.localizationNoticeSent === true
   if (study?.translation_status === "processing" && !localizationNoticeSent) {
     await sendTelegramMessage(input.bot, {
@@ -1003,7 +1019,7 @@ async function presentNextExercise(input: {
     })
     localizationNoticeSent = true
   }
-  if (input.lastResult && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
+  if (input.lastResult && !retryFeedback && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
     // Grading runs in a deferred task, so its reply can land after a later
     // message. Anchoring it to the voice message keeps the thread unambiguous.
     await sendTelegramMessage(input.bot, {
@@ -1085,6 +1101,7 @@ async function presentNextExercise(input: {
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
     progressLabel,
+    promptPrefix: retryFeedback,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
@@ -1092,6 +1109,7 @@ async function presentNextExercise(input: {
     exerciseId: exercise.id,
     localizationNoticeSent,
     progressLabel,
+    retryFeedback,
     referenceText: exercise.reference_text,
     sessionId: studySessionId,
     sessionRevision: lesson?.session_revision,
@@ -1273,6 +1291,7 @@ async function resendActiveTelegramStudyExercise(input: {
   if (session.actionKind !== "answer_choice" && session.actionKind !== "await_voice") return false
   const translationPrompt = next.prompt.type === "translation_choice" ? next.prompt : null
   const sayItBackPrompt = next.prompt.type === "say_it_back" ? next.prompt : null
+  const retryFeedback = stringOrNull(session.actionPayload.retryFeedback)
   if (session.actionKind === "answer_choice" && (next.type !== "translation_choice" || !translationPrompt)) return false
   if (session.actionKind === "await_voice" && (next.type !== "say_it_back" || !sayItBackPrompt)) return false
   const refreshedPayload = session.actionKind === "answer_choice"
@@ -1335,7 +1354,9 @@ async function resendActiveTelegramStudyExercise(input: {
   if (next.type !== "say_it_back") return false
   const sent = await sendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: `${progressHeading(progressLabel, copy.sayThis)}\n\n${sayItBackPrompt!.reference_text}`,
+    text: [retryFeedback, progressHeading(progressLabel, copy.sayThis), sayItBackPrompt!.reference_text]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n"),
     reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
   })
   await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })

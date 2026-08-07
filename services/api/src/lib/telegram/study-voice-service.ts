@@ -160,6 +160,7 @@ type PreparedTelegramStudyVoiceIntent = {
   userId: string
   deliveryMode: StudyDeliveryMode
   localizationNoticeSent?: boolean
+  promptPrefix?: string | null
 }
 
 type TelegramStudyLessonNext = NonNullable<NonNullable<SongStudyAttemptResult["lesson"]>["next"]>
@@ -179,6 +180,7 @@ async function prepareTelegramStudyVoiceIntent(input: {
   targetLanguage?: string | null
   telegramUserId?: string | null
   deliveryMode?: StudyDeliveryMode
+  promptPrefix?: string | null
 }): Promise<PreparedTelegramStudyVoiceIntent> {
   if (!isTelegramStudyVoiceEnabled(input.env, input.communityId)) {
     throw conflictError("Telegram study voice messages are not enabled for this community")
@@ -278,6 +280,7 @@ async function prepareTelegramStudyVoiceIntent(input: {
     telegramUserId,
     userId: input.actor.userId,
     deliveryMode: input.deliveryMode ?? "text",
+    promptPrefix: input.promptPrefix ?? null,
   }
 }
 
@@ -361,7 +364,8 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
   const instruction = input.progressLabel ? `${input.progressLabel} · ${copy.sayThis}` : copy.sayThis
-  const text = [instruction, input.intent.referenceText]
+  const text = [input.intent.promptPrefix, instruction, input.intent.referenceText]
+    .filter((value): value is string => Boolean(value))
   const disclosure = copy.disclosure
   if (input.includeDisclosure) {
     text.push(disclosure)
@@ -391,9 +395,9 @@ async function deliverTelegramStudyVoicePrompt(input: {
           chat_id: input.intent.telegramUserId,
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
           ...(input.intent.deliveryMode === "audio" ? {
-            caption: input.includeDisclosure
-              ? `${instruction}\n\n${disclosure}`
-              : instruction,
+            caption: [input.intent.promptPrefix, instruction, input.includeDisclosure ? disclosure : null]
+              .filter((value): value is string => Boolean(value))
+              .join("\n\n"),
           } : {}),
         })
         promptMessageId ??= sent.message_id
@@ -642,6 +646,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
   deliveryMode?: StudyDeliveryMode
   localizationNoticeSent?: boolean
   progressLabel?: string | null
+  promptPrefix?: string | null
 }): Promise<TelegramStudyVoiceIntentResource> {
   const intent = await prepareTelegramStudyVoiceIntent(input)
   const client = getControlPlaneClient(input.env)
@@ -692,6 +697,7 @@ export async function createTelegramChatStudyVoiceIntent(input: {
           ...(input.songTitle ? { songTitle: input.songTitle } : {}),
           sessionId: intent.studySessionId,
           ...(input.progressLabel ? { progressLabel: input.progressLabel } : {}),
+          ...(input.promptPrefix ? { retryFeedback: input.promptPrefix } : {}),
         }),
         intent.studySessionId,
         input.exerciseId,
