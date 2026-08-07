@@ -57,6 +57,7 @@ export type HnsEnsureZoneResult = {
   zone_name?: string
   zone_created?: boolean
   nameservers?: string[]
+  ds_records?: string[]
   observation_provider?: string | null
 }
 
@@ -69,6 +70,7 @@ export type HnsRootAuthorityObservation = {
   parent_ds_matches_live_dnskey: boolean
   earliest_rrsig_expires_at: string | null
   parent: {
+    raw_records: Array<Record<string, unknown>>
     nameservers: string[]
     ds_records: Array<{
       key_tag: number
@@ -103,6 +105,31 @@ export type HnsRootAuthorityObservation = {
   }>
 }
 
+export type HnsRootParentObservation = {
+  root_label: string
+  zone_name: string
+  provider: string
+  observed_at: string
+  chain_anchor: {
+    network: string
+    height: number
+    block_hash: string
+    median_time: number
+  }
+  parent: {
+    raw_records: Array<Record<string, unknown>>
+    nameservers: string[]
+    ds_records: Array<{
+      key_tag: number
+      algorithm: number
+      digest_type: number
+      digest: string
+    }>
+    glue4: Array<{ nameserver: string; address: string }>
+    glue6: Array<{ nameserver: string; address: string }>
+  }
+}
+
 export type HnsPublishChallengeResult = {
   root_label?: string
   zone_name?: string
@@ -110,6 +137,7 @@ export type HnsPublishChallengeResult = {
   challenge_txt_value?: string
   zone_created?: boolean
   nameservers?: string[]
+  ds_records?: string[]
   observation_provider?: string | null
 }
 
@@ -293,6 +321,18 @@ export async function observeHnsRootAuthority(
   return request<HnsRootAuthorityObservation>(
     env,
     `/observe-root-authority?${params.toString()}`,
+  )
+}
+
+export async function observeHnsRootParent(
+  env: Env,
+  input: { rootLabel: string },
+): Promise<HnsRootParentObservation> {
+  assertHnsRootLabel(input.rootLabel)
+  const params = new URLSearchParams({ root_label: input.rootLabel })
+  return request<HnsRootParentObservation>(
+    env,
+    `/observe-root-parent?${params.toString()}`,
   )
 }
 

@@ -91,7 +91,171 @@ class HnsCompleteClient implements Client {
   }
 }
 
+class HnsImportProgressClient extends HnsCompleteClient {
+  override async execute(statement: InStatement | string): Promise<QueryResult> {
+    const sql = typeof statement === "string" ? statement : statement.sql
+    if (sql.includes("FROM namespace_verification_sessions AS nvs")) {
+      return { rows: [this.row] }
+    }
+    if (sql.includes("UPDATE namespace_verification_sessions")) {
+      const args = typeof statement === "string" ? [] : (statement.args ?? [])
+      this.row.status = "challenge_pending"
+      if (sql.includes("challenge_payload_json = ?2")) {
+        this.row.challenge_payload_json = String(args[1])
+      }
+      const failureIndex = sql.includes("failure_reason = ?4") ? 3 : sql.includes("failure_reason = ?3") ? 2 : -1
+      if (failureIndex >= 0) this.row.failure_reason = args[failureIndex] == null ? null : String(args[failureIndex])
+      return { rows: [], rowsAffected: 1 }
+    }
+    throw new Error(`unexpected SQL: ${sql}`)
+  }
+}
+
+function makeImportPayload() {
+  const currentRecords = [{ type: "SYNTH4", address: "192.0.2.10" }]
+  const replacementRecords = [
+    ...currentRecords,
+    { type: "NS", ns: "ns1.pirate." },
+    { type: "NS", ns: "ns2.pirate." },
+    { type: "TXT", txt: ["pirate-verification=nvs_test"] },
+    { type: "DS", keyTag: 49194, algorithm: 13, digestType: 2, digest: "05".repeat(32) },
+    { type: "DS", keyTag: 49194, algorithm: 13, digestType: 4, digest: "15".repeat(48) },
+  ]
+  return {
+    kind: "hns_import",
+    publish_plan: {
+      version: "hns_import_publish_v1",
+      replacement_semantics: "complete_resource",
+      current_records: currentRecords,
+      preserved_records: currentRecords,
+      removed_conflicts: [],
+      added_records: replacementRecords.slice(1),
+      replacement_records: replacementRecords,
+      preserved_unknown_record_types: ["SYNTH4"],
+      acknowledgement_required: true,
+    },
+    observed_chain_anchor: {
+      network: "main",
+      height: 1_000,
+      block_hash: "ab".repeat(32),
+      median_time: 1_700_000_000,
+    },
+  }
+}
+
+function parentObservation(rawRecords: Record<string, unknown>[], height: number): Response {
+  return Response.json({
+    root_label: "random",
+    zone_name: "random.",
+    provider: "hsd_json_rpc",
+    observed_at: "2026-08-06T00:00:00.000Z",
+    chain_anchor: {
+      network: "main",
+      height,
+      block_hash: "cd".repeat(32),
+      median_time: 1_700_000_100,
+    },
+    parent: {
+      raw_records: rawRecords,
+      nameservers: [],
+      ds_records: [],
+      glue4: [],
+      glue6: [],
+    },
+  })
+}
+
 describe("completeNamespaceVerificationSession", () => {
+  test("requires explicit acknowledgement before checking a complete-resource HNS UPDATE", async () => {
+    const client = new HnsImportProgressClient(makeHnsChallengeRow({
+      challenge_payload_json: JSON.stringify(makeImportPayload()),
+    }))
+
+    await expect(completeNamespaceVerificationSession(client, {
+      ENVIRONMENT: "production",
+      HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
+      HNS_VERIFIER_AUTH_TOKEN: "test-token",
+    } as never, {
+      namespaceVerificationSessionId: "nvs_test",
+      userId: "usr_test",
+    })).rejects.toThrow("Complete-resource replacement acknowledgement is required")
+  })
+
+  test("distinguishes an unpublished UPDATE from a clobbered resource", async () => {
+    const originalFetch = globalThis.fetch
+    const payload = makeImportPayload()
+    let observed: Record<string, unknown>[] = payload.publish_plan.current_records
+    globalThis.fetch = (async () => parentObservation(observed, 1_001)) as never
+    try {
+      const row = makeHnsChallengeRow({ challenge_payload_json: JSON.stringify(payload) })
+      const client = new HnsImportProgressClient(row)
+      let result = await completeNamespaceVerificationSession(client, {
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "test-token",
+      } as never, {
+        namespaceVerificationSessionId: "nvs_test",
+        userId: "usr_test",
+        acknowledgedResourceReplacement: true,
+      })
+      expect(result?.challenge_payload).toMatchObject({
+        observation: { state: "waiting_for_update", current_height: 1_001 },
+      })
+      expect(result?.failure_reason).toBeNull()
+
+      observed = [{ type: "NS", ns: "wrong.example." }]
+      result = await completeNamespaceVerificationSession(client, {
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "test-token",
+      } as never, {
+        namespaceVerificationSessionId: "nvs_test",
+        userId: "usr_test",
+      })
+      expect(result?.challenge_payload).toMatchObject({
+        observation: {
+          state: "resource_mismatch",
+          unexpected_records: [{ type: "NS", ns: "wrong.example." }],
+        },
+      })
+      expect(result?.failure_reason).toBe("resource_mismatch")
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test("shows pending tree commit only after the complete UPDATE is observed", async () => {
+    const originalFetch = globalThis.fetch
+    const payload = makeImportPayload()
+    globalThis.fetch = (async () => parentObservation(payload.publish_plan.replacement_records, 1_001)) as never
+    try {
+      const client = new HnsImportProgressClient(makeHnsChallengeRow({
+        challenge_payload_json: JSON.stringify(payload),
+      }))
+      const result = await completeNamespaceVerificationSession(client, {
+        ENVIRONMENT: "production",
+        HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
+        HNS_VERIFIER_AUTH_TOKEN: "test-token",
+      } as never, {
+        namespaceVerificationSessionId: "nvs_test",
+        userId: "usr_test",
+        acknowledgedResourceReplacement: true,
+      })
+
+      expect(result?.challenge_payload).toMatchObject({
+        update_observed_height: 1_001,
+        target_tree_boundary: 1_008,
+        observation: {
+          state: "pending_tree_commit",
+          current_height: 1_001,
+          target_tree_boundary: 1_008,
+        },
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test("does not locally accept HNS TXT challenges when the verifier is not configured", async () => {
     const client = new HnsCompleteClient(makeHnsChallengeRow())
 

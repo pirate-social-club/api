@@ -1,5 +1,5 @@
 import type { Client } from "../sql-client"
-import { HttpError, internalError, providerUnavailable } from "../errors"
+import { badRequestError, HttpError, internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import {
   serializeNamespaceVerification,
@@ -7,6 +7,8 @@ import {
 } from "../auth/auth-serializers"
 import {
   checkHnsAuthorityHealth,
+  observeHnsRootAuthority,
+  observeHnsRootParent,
   publishHnsChallenge,
   verifyHnsTxtRecord,
 } from "./hns-verifier"
@@ -35,6 +37,12 @@ import {
   HNS_VERIFIER_OBSERVATION_PROVIDER,
   resolveHnsObservationProviderFallback,
 } from "./namespace-observation-provider"
+import {
+  compareHnsImportResource,
+  nextHnsTreeBoundary,
+  parseHnsImportChallengePayload,
+  type HnsImportChallengePayload,
+} from "./hns-import-plan"
 
 export { startNamespaceVerificationSession } from "./namespace-verification-start"
 
@@ -65,6 +73,7 @@ export async function completeNamespaceVerificationSession(
     namespaceVerificationSessionId: string
     userId: string
     restartChallenge?: boolean | null
+    acknowledgedResourceReplacement?: boolean | null
   },
 ): Promise<NamespaceVerificationSession | null> {
   const row = await getNamespaceVerificationSessionRowForUser(client, input.namespaceVerificationSessionId, input.userId)
@@ -321,6 +330,173 @@ export async function completeNamespaceVerificationSession(
       }),
     ], "write")
   } else {
+    let importPayload: HnsImportChallengePayload | null = null
+    if (row.challenge_payload_json) {
+      try {
+        importPayload = parseHnsImportChallengePayload(JSON.parse(row.challenge_payload_json))
+      } catch {
+        throw internalError("HNS import session contains an invalid publish plan")
+      }
+    }
+    if (importPayload) {
+      if (!importPayload.replacement_acknowledged_at && input.acknowledgedResourceReplacement !== true) {
+        throw badRequestError("Complete-resource replacement acknowledgement is required")
+      }
+      if (!importPayload.replacement_acknowledged_at) {
+        importPayload.replacement_acknowledged_at = updatedAt
+      }
+
+      let parentObservation
+      try {
+        parentObservation = await observeHnsRootParent(env, {
+          rootLabel: requireNormalizedRootLabel(row),
+        })
+      } catch (caught) {
+        if (caught instanceof HttpError && caught.code === "provider_unavailable") {
+          await client.execute({
+            sql: `
+              UPDATE namespace_verification_sessions
+              SET status = 'challenge_pending',
+                  challenge_payload_json = ?2,
+                  failure_reason = 'provider_unavailable',
+                  updated_at = ?3
+              WHERE namespace_verification_session_id = ?1
+            `,
+            args: [input.namespaceVerificationSessionId, JSON.stringify(importPayload), updatedAt],
+          })
+          return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+        }
+        throw caught
+      }
+
+      const comparison = compareHnsImportResource(
+        importPayload.publish_plan.replacement_records,
+        parentObservation.parent.raw_records,
+      )
+      if (!comparison.matches) {
+        const unchanged = compareHnsImportResource(
+          importPayload.publish_plan.current_records,
+          parentObservation.parent.raw_records,
+        ).matches
+        importPayload.observation = {
+          state: unchanged ? "waiting_for_update" : "resource_mismatch",
+          current_height: parentObservation.chain_anchor.height,
+          missing_records: comparison.missing,
+          unexpected_records: comparison.unexpected,
+        }
+        await client.execute({
+          sql: `
+            UPDATE namespace_verification_sessions
+            SET status = 'challenge_pending',
+                challenge_payload_json = ?2,
+                observation_provider = ?3,
+                failure_reason = ?4,
+                updated_at = ?5
+            WHERE namespace_verification_session_id = ?1
+          `,
+          args: [
+            input.namespaceVerificationSessionId,
+            JSON.stringify(importPayload),
+            parentObservation.provider,
+            unchanged ? null : "resource_mismatch",
+            updatedAt,
+          ],
+        })
+        return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+      }
+
+      const updateObservedHeight = importPayload.update_observed_height
+        ?? parentObservation.chain_anchor.height
+      const targetTreeBoundary = importPayload.target_tree_boundary
+        ?? nextHnsTreeBoundary(updateObservedHeight)
+      importPayload.update_observed_height = updateObservedHeight
+      importPayload.target_tree_boundary = targetTreeBoundary
+      if (parentObservation.chain_anchor.height <= targetTreeBoundary) {
+        importPayload.observation = {
+          state: "pending_tree_commit",
+          current_height: parentObservation.chain_anchor.height,
+          target_tree_boundary: targetTreeBoundary,
+        }
+        await client.execute({
+          sql: `
+            UPDATE namespace_verification_sessions
+            SET status = 'challenge_pending',
+                challenge_payload_json = ?2,
+                observation_provider = ?3,
+                failure_reason = NULL,
+                updated_at = ?4
+            WHERE namespace_verification_session_id = ?1
+          `,
+          args: [
+            input.namespaceVerificationSessionId,
+            JSON.stringify(importPayload),
+            parentObservation.provider,
+            updatedAt,
+          ],
+        })
+        return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+      }
+
+      // A verifier outage is still progress-pending; it must not turn a
+      // resource that already matched into a terminal import failure.
+      let authority
+      try {
+        authority = await observeHnsRootAuthority(env, {
+          rootLabel: requireNormalizedRootLabel(row),
+        })
+      } catch (caught) {
+        if (caught instanceof HttpError && caught.code === "provider_unavailable") {
+          await client.execute({
+            sql: `
+              UPDATE namespace_verification_sessions
+              SET status = 'challenge_pending',
+                  challenge_payload_json = ?2,
+                  failure_reason = 'provider_unavailable',
+                  updated_at = ?3
+              WHERE namespace_verification_session_id = ?1
+            `,
+            args: [input.namespaceVerificationSessionId, JSON.stringify(importPayload), updatedAt],
+          })
+          return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+        }
+        throw caught
+      }
+      const secure = authority.authoritative_dnssec_valid
+        && authority.parent_ds_matches_live_dnskey
+        && authority.earliest_rrsig_expires_at != null
+      importPayload.observation = {
+        state: secure ? "secure" : "delegation_not_secure",
+        current_height: parentObservation.chain_anchor.height,
+        target_tree_boundary: targetTreeBoundary,
+      }
+      await client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET challenge_payload_json = ?2,
+              failure_reason = ?3,
+              updated_at = ?4
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [
+          input.namespaceVerificationSessionId,
+          JSON.stringify(importPayload),
+          secure ? null : "delegation_not_secure",
+          updatedAt,
+        ],
+      })
+      if (!secure) {
+        await client.execute({
+          sql: `
+            UPDATE namespace_verification_sessions
+            SET status = 'challenge_pending', updated_at = ?2
+            WHERE namespace_verification_session_id = ?1
+          `,
+          args: [input.namespaceVerificationSessionId, updatedAt],
+        })
+        return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
+      }
+    }
+
     let observationProvider = row.observation_provider ?? resolveHnsObservationProviderFallback(env)
     let verificationEvidence: Record<string, unknown> = {
       root_exists: row.root_exists === 1,
@@ -627,6 +803,14 @@ export async function completeNamespaceVerificationSession(
           { name: "pirate_subspace_issuance_allowed", value: 0 },
         ],
       }),
+      {
+        sql: `
+          DELETE FROM hns_import_session_locks
+          WHERE normalized_root_label = ?1
+            AND namespace_verification_session_id = ?2
+        `,
+        args: [requireNormalizedRootLabel(row), input.namespaceVerificationSessionId],
+      },
     ], "write")
   }
 
