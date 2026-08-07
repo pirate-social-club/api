@@ -129,7 +129,7 @@ describe("song artifact upload session service", () => {
 
   test("allows time for Filebase metadata propagation after completion", () => {
     const retryBudgetMs = POST_COMPLETE_HEAD_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0)
-    expect(retryBudgetMs).toBeGreaterThanOrEqual(4 * 60 * 1000)
+    expect(retryBudgetMs).toBeGreaterThanOrEqual(10 * 60 * 1000)
   })
 
   test("reaps stale multipart sessions idempotently", async () => {
