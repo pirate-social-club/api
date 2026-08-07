@@ -7,6 +7,7 @@ import {
   buildUploadPartPresignedUrl,
   completeMultipartUpload,
   createMultipartUpload,
+  headObject,
   type CompletedMultipartPart,
 } from "../storage/filebase-multipart"
 import { makeId, nowIso } from "../helpers"
@@ -27,6 +28,7 @@ import {
 import { requireActiveCommunity, requireMemberAccess } from "./song-artifact-access"
 import {
   createSongArtifactUploadSession,
+  listPendingSongArtifactUploadSessions,
   listStaleSongArtifactUploadSessions,
   markSongArtifactUploadSessionAborted,
   markSongArtifactUploadSessionUploaded,
@@ -44,6 +46,12 @@ const DIRECT_MULTIPART_SESSION_TTL_MS = 60 * 60 * 1000
 const DIRECT_MULTIPART_PART_URL_TTL_SECONDS = 300
 export const DIRECT_MULTIPART_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const MAX_MULTIPART_PARTS = 10_000
+// HEAD is retried by the scheduled verifier rather than inline with the
+// user-facing completion request. This keeps provider propagation latency out
+// of the request timeout while retaining a durable verification state.
+const HEAD_VERIFICATION_RETRY_DELAY_MS = 30_000
+const HEAD_VERIFICATION_BATCH_LIMIT = 5
+const HEAD_VERIFICATION_REQUEST_TIMEOUT_MS = 5_000
 const DIRECT_MULTIPART_ARTIFACT_KINDS = new Set<SongArtifactKind>([
   "primary_audio",
   "preview_audio",
@@ -216,6 +224,9 @@ function validateCompletedParts(input: {
   }
 }
 
+function normalizeHeadContentType(contentType: string | null): string | null {
+  return contentType?.split(";")[0]?.trim().toLowerCase() || null
+}
 export async function createMultipartSongArtifactUpload(input: {
   env: Env
   userId: string
@@ -445,6 +456,15 @@ export async function completeMultipartSongArtifactUpload(input: {
     fromStatus: "completing",
     toStatus: "head_verifying",
     updatedAt: nowIso(),
+    fields: {
+      storage_provider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
+      storage_object_key: session.object_key,
+      storage_bucket: session.bucket,
+      gateway_url: upload.storage_ref,
+      ipfs_cid: completeResult.cid,
+      content_hash: contentHash,
+      size_bytes: session.declared_size_bytes,
+    },
   })
   if (!headVerifying) {
     throw conflictError("Song artifact upload session was not ready for head verification")
@@ -455,43 +475,134 @@ export async function completeMultipartSongArtifactUpload(input: {
   // signed PUT and completion but may deny object reads from edge runtimes.
   // Size and MIME are bound to the upload session at intent creation and are
   // revalidated from the completion payload above.
-  const sizeBytes = session.declared_size_bytes
-  const ipfsCid = completeResult.cid
-
   const gatewayUrl = upload.storage_ref
-  const uploadedSession = await markSongArtifactUploadSessionUploaded({
-    client,
-    communityId: input.communityId,
-    sessionId: input.sessionId,
-    storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
-    storageObjectKey: session.object_key,
-    storageBucket: session.bucket,
-    gatewayUrl,
-    ipfsCid,
-    contentHash,
-    sizeBytes,
-    completedAt: nowIso(),
-    updatedAt: nowIso(),
-  })
-  if (!uploadedSession) {
-    throw conflictError("Song artifact upload session was not ready for upload finalization")
-  }
   return await markSongArtifactUploadUploaded({
     client,
     communityId: input.communityId,
     songArtifactUploadId: input.songArtifactUploadId,
     mimeType: session.declared_mime_type,
-    sizeBytes,
+    sizeBytes: session.declared_size_bytes,
     contentHash,
     storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
     storageBucket: session.bucket,
     storageObjectKey: session.object_key,
     storageEndpoint: session.storage_endpoint,
     gatewayUrl,
-    ipfsCid,
+    ipfsCid: completeResult.cid,
     contentHashVerifiedAt: null,
     updatedAt: nowIso(),
   })
+}
+
+export async function reconcileHeadVerifyingSongArtifactUploads(input: {
+  env: Env
+  limit?: number
+  now?: string
+}): Promise<{ scanned: number; verified: number; pending: number; failed: number }> {
+  const client = getControlPlaneClient(input.env)
+  const now = input.now ?? nowIso()
+  const retryBefore = new Date(new Date(now).getTime() - HEAD_VERIFICATION_RETRY_DELAY_MS).toISOString()
+  const sessions = await listPendingSongArtifactUploadSessions({
+    client,
+    retryBefore,
+    limit: Math.max(1, Math.min(Math.trunc(input.limit ?? HEAD_VERIFICATION_BATCH_LIMIT), HEAD_VERIFICATION_BATCH_LIMIT)),
+  })
+  let verified = 0
+  let pending = 0
+  let failed = 0
+
+  for (const session of sessions) {
+    try {
+      const upload = await requireSongArtifactUpload(
+        client,
+        session.community_id,
+        session.song_artifact_upload_id,
+      )
+      if (upload.status !== "pending_upload" && upload.status !== "uploaded") {
+        throw badRequestError("Multipart upload is no longer active")
+      }
+      const head = await headObject({
+        env: input.env,
+        config: resolveSessionFilebaseConfig(input.env, session),
+        objectKey: session.object_key,
+        timeoutMs: HEAD_VERIFICATION_REQUEST_TIMEOUT_MS,
+      })
+      if (head.contentLength !== session.declared_size_bytes) {
+        throw badRequestError("Multipart object size does not match the upload session")
+      }
+      if (normalizeHeadContentType(head.contentType) !== session.declared_mime_type) {
+        throw badRequestError("Multipart object content type does not match the upload session")
+      }
+      if (head.cid && session.ipfs_cid && head.cid !== session.ipfs_cid) {
+        throw badRequestError("Multipart object CID does not match the completion response")
+      }
+      const contentHash = session.content_hash ?? session.declared_content_hash ?? upload.content_hash
+      if (!contentHash) {
+        throw badRequestError("Multipart upload is missing its content hash")
+      }
+      const gatewayUrl = session.gateway_url ?? upload.storage_ref
+
+      await markSongArtifactUploadUploaded({
+        client,
+        communityId: session.community_id,
+        songArtifactUploadId: session.song_artifact_upload_id,
+        mimeType: session.declared_mime_type,
+        sizeBytes: head.contentLength,
+        contentHash,
+        storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
+        storageBucket: session.storage_bucket ?? session.bucket,
+        storageObjectKey: session.storage_object_key ?? session.object_key,
+        storageEndpoint: session.storage_endpoint,
+        gatewayUrl,
+        ipfsCid: head.cid ?? session.ipfs_cid,
+        contentHashVerifiedAt: null,
+        updatedAt: nowIso(),
+      })
+      const uploadedSession = await markSongArtifactUploadSessionUploaded({
+        client,
+        communityId: session.community_id,
+        sessionId: session.song_artifact_upload_session_id,
+        storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
+        storageObjectKey: session.storage_object_key ?? session.object_key,
+        storageBucket: session.storage_bucket ?? session.bucket,
+        gatewayUrl,
+        ipfsCid: head.cid ?? session.ipfs_cid,
+        contentHash,
+        sizeBytes: head.contentLength,
+        completedAt: nowIso(),
+        updatedAt: nowIso(),
+      })
+      if (uploadedSession) verified += 1
+    } catch (error) {
+      if (error instanceof HttpError && error.code === "bad_request") {
+        const aborted = await markSongArtifactUploadSessionAborted({
+          client,
+          communityId: session.community_id,
+          sessionId: session.song_artifact_upload_session_id,
+          reason: "metadata_verification_mismatch",
+          abortedAt: nowIso(),
+          updatedAt: nowIso(),
+        })
+        if (aborted) failed += 1
+        continue
+      }
+
+      // Missing or not-yet-visible metadata is expected after Filebase
+      // completion. Move the retry cursor without changing the durable state;
+      // the next scheduled pass will try again after the same bounded delay.
+      await transitionSongArtifactUploadSession({
+        client,
+        communityId: session.community_id,
+        sessionId: session.song_artifact_upload_session_id,
+        fromStatus: "head_verifying",
+        toStatus: "head_verifying",
+        updatedAt: nowIso(),
+      })
+      pending += 1
+    }
+  }
+
+  return { scanned: sessions.length, verified, pending, failed }
 }
 
 export async function abortMultipartSongArtifactUpload(input: {
@@ -505,6 +616,10 @@ export async function abortMultipartSongArtifactUpload(input: {
 }): Promise<SongArtifactUploadSessionRow | null> {
   const session = await requireOwnedSession(input)
   const client = getControlPlaneClient(input.env)
+  const upload = await requireSongArtifactUpload(client, input.communityId, input.songArtifactUploadId)
+  if (upload.status === "uploaded") {
+    throw conflictError("Song artifact upload is already uploaded")
+  }
   const now = nowIso()
   const aborting = await transitionSongArtifactUploadSession({
     client,

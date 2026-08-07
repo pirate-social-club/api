@@ -314,6 +314,26 @@ export async function markSongArtifactUploadSessionUploaded(input: {
   })
 }
 
+export async function listPendingSongArtifactUploadSessions(input: {
+  client: Client
+  retryBefore: string
+  limit: number
+}): Promise<SongArtifactUploadSessionRow[]> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT ${SESSION_COLUMNS}
+      FROM song_artifact_upload_sessions
+      WHERE status = 'head_verifying'
+        AND updated_at <= ?1
+      ORDER BY updated_at ASC, song_artifact_upload_session_id ASC
+      LIMIT ?2
+    `,
+    args: [input.retryBefore, input.limit],
+  })
+
+  return result.rows.map(toSongArtifactUploadSessionRow)
+}
+
 export async function markSongArtifactUploadSessionAborted(input: {
   client: Client
   communityId: string

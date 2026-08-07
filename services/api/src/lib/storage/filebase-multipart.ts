@@ -129,6 +129,7 @@ export async function headObject(input: {
   env: Env
   config?: S3SigningConfig
   objectKey: string
+  timeoutMs?: number
 }): Promise<{
   contentLength: number
   contentType: string | null
@@ -140,7 +141,7 @@ export async function headObject(input: {
     config: requestConfig(input),
     objectKey: input.objectKey,
     bodyHashMode: "empty",
-  }), "Filebase object HEAD")
+  }), "Filebase object HEAD", input.timeoutMs)
   if (response.status === 404) {
     throw notFoundError("Object not found")
   }
@@ -160,7 +161,7 @@ export async function headObject(input: {
     const rangeResponse = await fetchFilebaseWithTimeout(new Request(rangeUrl.toString(), {
       method: "GET",
       headers: { range: "bytes=0-0" },
-    }), "Filebase object range GET")
+    }), "Filebase object range GET", input.timeoutMs)
     if (rangeResponse.status === 404) {
       throw notFoundError("Object not found")
     }
