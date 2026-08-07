@@ -1,6 +1,6 @@
 import type { ActorContext, AdminActorContext } from "../auth-middleware"
 import { getCommunityRepository } from "../communities/db-community-repository"
-import { conflictError, notFoundError, providerUnavailable } from "../errors"
+import { conflictError, HttpError, notFoundError, providerUnavailable } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import {
   getPostStudyPayload,
@@ -160,7 +160,10 @@ type PreparedTelegramStudyVoiceIntent = {
   userId: string
   deliveryMode: StudyDeliveryMode
   localizationNoticeSent?: boolean
+  promptPrefix?: string | null
 }
+
+type TelegramStudyLessonNext = NonNullable<NonNullable<SongStudyAttemptResult["lesson"]>["next"]>
 
 type VoiceIntentExecutor = Pick<ReturnType<typeof getControlPlaneClient>, "execute">
 
@@ -170,10 +173,14 @@ async function prepareTelegramStudyVoiceIntent(input: {
   communityId: string
   env: Env
   exerciseId: string
+  lessonNext?: TelegramStudyLessonNext
   postId: string
+  sessionRevision?: number | null
+  studySessionId?: string | null
   targetLanguage?: string | null
   telegramUserId?: string | null
   deliveryMode?: StudyDeliveryMode
+  promptPrefix?: string | null
 }): Promise<PreparedTelegramStudyVoiceIntent> {
   if (!isTelegramStudyVoiceEnabled(input.env, input.communityId)) {
     throw conflictError("Telegram study voice messages are not enabled for this community")
@@ -201,48 +208,79 @@ async function prepareTelegramStudyVoiceIntent(input: {
     throw conflictError("Telegram account is not linked to this Pirate user")
   }
 
-  const study = await getPostStudyPayload({
-    actor: input.actor,
-    communityId: input.communityId,
-    communityRepository: getCommunityRepository(input.env),
-    env: input.env,
-    postId: input.postId,
-    targetLanguage: input.targetLanguage,
-  })
-  const exercise = study.exercises.find((candidate) => candidate.id === input.exerciseId)
-  if (
-    study.access !== "ready"
-    || !study.session?.id
-    || !exercise
-    || exercise.type !== "say_it_back"
-    || exercise.mastered
-    || exercise.presentation_count >= exercise.max_attempts
-  ) {
-    throw conflictError("This say-it-back exercise is not currently eligible")
+  let attemptNumber: number
+  let referenceText: string
+  let studySessionId: string
+  let targetLanguage: string
+  if (input.lessonNext && input.studySessionId) {
+    const prompt = input.lessonNext.prompt
+    const promptReferenceText = "reference_text" in prompt && typeof prompt.reference_text === "string"
+      ? prompt.reference_text
+      : null
+    if (
+      input.lessonNext.exercise_id !== input.exerciseId
+      || input.lessonNext.type !== "say_it_back"
+      || prompt.id !== input.exerciseId
+      || prompt.type !== "say_it_back"
+      || !promptReferenceText
+    ) {
+      throw conflictError("This say-it-back exercise is not currently eligible")
+    }
+    attemptNumber = input.lessonNext.presentation_number
+    referenceText = promptReferenceText
+    studySessionId = input.studySessionId
+    targetLanguage = input.targetLanguage ?? "en"
+  } else {
+    const study = await getPostStudyPayload({
+      actor: input.actor,
+      communityId: input.communityId,
+      communityRepository: getCommunityRepository(input.env),
+      env: input.env,
+      postId: input.postId,
+      targetLanguage: input.targetLanguage,
+    })
+    const exercise = study.exercises.find((candidate) => candidate.id === input.exerciseId)
+    if (
+      study.access !== "ready"
+      || !study.session?.id
+      || !exercise
+      || exercise.type !== "say_it_back"
+      || exercise.mastered
+      || exercise.presentation_count >= exercise.max_attempts
+    ) {
+      throw conflictError("This say-it-back exercise is not currently eligible")
+    }
+    attemptNumber = exercise.presentation_count + 1
+    referenceText = exercise.reference_text
+    studySessionId = study.session.id
+    targetLanguage = study.target_language ?? input.targetLanguage ?? "en"
   }
 
   const createdAt = nowIso()
   const expiresAt = new Date(Date.parse(createdAt) + VOICE_INTENT_TTL_MS).toISOString()
   const intentId = makeId("tsv")
-  const idempotencyKey = `telegram-study:${intentId}`
-  const attemptNumber = exercise.presentation_count + 1
+  // Voice intents predate a revision column. Keep the prompt's revision in the
+  // durable idempotency key so a later Telegram action cannot overwrite the
+  // revision that this voice message was shown under.
+  const idempotencyKey = `telegram-study:${intentId}${input.sessionRevision === null || input.sessionRevision === undefined ? "" : `:r${input.sessionRevision}`}`
   return {
     attemptNumber,
     bot,
     chatStudySessionId: input.chatStudySessionId ?? null,
     communityId: input.communityId,
     createdAt,
-    exerciseId: exercise.id,
+    exerciseId: input.exerciseId,
     expiresAt,
     idempotencyKey,
     intentId,
     postId: input.postId,
-    referenceText: exercise.reference_text,
-    studySessionId: study.session.id,
-    targetLanguage: study.target_language ?? input.targetLanguage ?? "en",
+    referenceText,
+    studySessionId,
+    targetLanguage,
     telegramUserId,
     userId: input.actor.userId,
     deliveryMode: input.deliveryMode ?? "text",
+    promptPrefix: input.promptPrefix ?? null,
   }
 }
 
@@ -326,7 +364,8 @@ async function deliverTelegramStudyVoicePrompt(input: {
   const language = isStudyHelperLanguage(input.intent.targetLanguage) ? input.intent.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
   const instruction = input.progressLabel ? `${input.progressLabel} · ${copy.sayThis}` : copy.sayThis
-  const text = [instruction, input.intent.referenceText]
+  const text = [input.intent.promptPrefix, instruction, input.intent.referenceText]
+    .filter((value): value is string => Boolean(value))
   const disclosure = copy.disclosure
   if (input.includeDisclosure) {
     text.push(disclosure)
@@ -356,9 +395,9 @@ async function deliverTelegramStudyVoicePrompt(input: {
           chat_id: input.intent.telegramUserId,
           voice: new File([audio], "study-prompt.ogg", { type: "audio/ogg" }),
           ...(input.intent.deliveryMode === "audio" ? {
-            caption: input.includeDisclosure
-              ? `${instruction}\n\n${disclosure}`
-              : instruction,
+            caption: [input.intent.promptPrefix, instruction, input.includeDisclosure ? disclosure : null]
+              .filter((value): value is string => Boolean(value))
+              .join("\n\n"),
           } : {}),
         })
         promptMessageId ??= sent.message_id
@@ -595,14 +634,19 @@ export async function createTelegramChatStudyVoiceIntent(input: {
   communityId: string
   env: Env
   exerciseId: string
+  lessonNext?: TelegramStudyLessonNext
   nextActionToken: string
   postId: string
   previousActionToken: string
+  sessionRevision?: number | null
+  songTitle?: string | null
+  studySessionId?: string | null
   targetLanguage?: string | null
   telegramUserId: string
   deliveryMode?: StudyDeliveryMode
   localizationNoticeSent?: boolean
   progressLabel?: string | null
+  promptPrefix?: string | null
 }): Promise<TelegramStudyVoiceIntentResource> {
   const intent = await prepareTelegramStudyVoiceIntent(input)
   const client = getControlPlaneClient(input.env)
@@ -646,7 +690,14 @@ export async function createTelegramChatStudyVoiceIntent(input: {
           deliveryMode: input.deliveryMode ?? "text",
           exerciseId: input.exerciseId,
           localizationNoticeSent: input.localizationNoticeSent === true,
+          referenceText: intent.referenceText,
+          ...(input.sessionRevision !== null && input.sessionRevision !== undefined
+            ? { sessionRevision: input.sessionRevision }
+            : {}),
+          ...(input.songTitle ? { songTitle: input.songTitle } : {}),
+          sessionId: intent.studySessionId,
           ...(input.progressLabel ? { progressLabel: input.progressLabel } : {}),
+          ...(input.promptPrefix ? { retryFeedback: input.promptPrefix } : {}),
         }),
         intent.studySessionId,
         input.exerciseId,
@@ -703,6 +754,30 @@ async function findVoiceIntent(input: {
     args: [input.botId, input.telegramUserId],
   })
   return serializeIntentRow(result.rows[0])
+}
+
+async function chatStudySessionRevision(input: { env: Env; sessionId: string }): Promise<number | null> {
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: "SELECT action_payload_json FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1 LIMIT 1",
+    args: [input.sessionId],
+  })
+  const payload = rowValue(result.rows[0], "action_payload_json")
+  if (typeof payload !== "string") return null
+  try {
+    const parsed = JSON.parse(payload) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+    const revision = Number((parsed as Record<string, unknown>).sessionRevision)
+    return Number.isSafeInteger(revision) && revision >= 0 ? revision : null
+  } catch {
+    return null
+  }
+}
+
+function revisionFromVoiceIntent(intent: VoiceIntentRow): number | null {
+  const match = intent.idempotencyKey.match(/:r(\d+)$/u)
+  if (!match) return null
+  const revision = Number(match[1])
+  return Number.isSafeInteger(revision) && revision >= 0 ? revision : null
 }
 
 async function isKnownVoiceDelivery(input: {
@@ -954,6 +1029,12 @@ export async function handleTelegramStudyVoiceMessage(input: {
     telegramMessageId: number
     transcript: string
   }) => Promise<void>
+  onChatStudyAttemptConflict?: (completion: {
+    chatId: string
+    chatStudySessionId: string
+    lesson: NonNullable<SongStudyAttemptResult["lesson"]>
+    telegramMessageId: number
+  }) => Promise<void>
   waitUntil?: (promise: Promise<void>) => void
 }): Promise<boolean> {
   const chatId = telegramIdentifier(input.message.chat?.id)
@@ -1125,6 +1206,10 @@ export async function handleTelegramStudyVoiceMessage(input: {
         postId: intent.postId,
       })
       transcriptText = transcription.text
+      const sessionRevision = revisionFromVoiceIntent(intent)
+        ?? (intent.chatStudySessionId
+          ? await chatStudySessionRevision({ env: input.env, sessionId: intent.chatStudySessionId })
+          : null)
       result = await submitPostStudyAttempt({
         actor,
         body: {
@@ -1132,6 +1217,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
           exercise_id: intent.exerciseId,
           idempotency_key: intent.idempotencyKey,
           session_id: intent.sessionId,
+          ...(sessionRevision === null ? {} : { session_revision: sessionRevision }),
           transcript: transcriptText,
           type: "say_it_back",
         },
@@ -1147,6 +1233,28 @@ export async function handleTelegramStudyVoiceMessage(input: {
         leaseId: claimedLeaseId,
       })
     } catch (error) {
+      if (
+        error instanceof HttpError
+        && error.code === "study_session_revision_conflict"
+        && intent.chatStudySessionId
+        && input.onChatStudyAttemptConflict
+        && error.details?.lesson
+        && typeof error.details.lesson === "object"
+      ) {
+        await consumeClaimedVoiceIntent({
+          consumedAt: nowIso(),
+          env: input.env,
+          intentId: intent.id,
+          leaseId: claimedLeaseId,
+        })
+        await input.onChatStudyAttemptConflict({
+          chatId,
+          chatStudySessionId: intent.chatStudySessionId,
+          lesson: error.details.lesson as NonNullable<SongStudyAttemptResult["lesson"]>,
+          telegramMessageId,
+        })
+        return
+      }
       const processingAttemptCount = intent.processingAttemptCount + 1
       const errorMessage = error instanceof Error ? error.message : String(error)
       const failedAt = nowIso()

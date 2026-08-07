@@ -1404,6 +1404,20 @@ async function handleTelegramWebhookUpdate(
             result,
             transcript,
           }),
+        onChatStudyAttemptConflict: ({
+          chatId: conflictChatId,
+          chatStudySessionId,
+          lesson,
+          telegramMessageId: conflictMessageId,
+        }) =>
+          continueTelegramChatStudyAfterVoice({
+            bot,
+            chatId: conflictChatId,
+            chatStudySessionId,
+            env,
+            lesson,
+            replyToMessageId: conflictMessageId,
+          }),
         waitUntil,
       })) {
         return

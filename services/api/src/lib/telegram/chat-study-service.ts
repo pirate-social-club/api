@@ -10,7 +10,6 @@ import {
   type SongStudyAttemptResult,
   type SongStudyPayload,
 } from "../posts/post-study-service"
-import { getExerciseForAttempt } from "../posts/post-study-attempt-store"
 import type { StudyPost } from "../posts/post-study-access"
 import {
   isSameLanguageStudyPair,
@@ -22,6 +21,7 @@ import {
 import { rowValue } from "../sql-row"
 import type { ReadClient } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
+import { HttpError } from "../errors"
 import { resolveRewardCampaignConfig } from "../rewards/reward-campaign-config"
 import { learnerVisibleRewardCampaignSql } from "../rewards/reward-campaign-visibility"
 import type { Env } from "../../env"
@@ -96,6 +96,9 @@ type ReadySong = {
   title: string
 }
 
+type TelegramStudyLesson = NonNullable<SongStudyAttemptResult["lesson"]>
+type TelegramStudyLessonNext = NonNullable<TelegramStudyLesson["next"]>
+
 function stringOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null
 }
@@ -110,6 +113,12 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function revisionConflictLesson(error: unknown): TelegramStudyLesson | null {
+  if (!(error instanceof HttpError) || error.code !== "study_session_revision_conflict") return null
+  const lesson = error.details?.lesson
+  return lesson && typeof lesson === "object" ? lesson as TelegramStudyLesson : null
 }
 
 function parseSession(row: unknown): ChatStudySession | null {
@@ -854,19 +863,16 @@ async function updateSessionAction(input: {
   return token
 }
 
-function eligibleExercise(study: SongStudyPayload): SongStudyPayload["exercises"][number] | null {
-  return study.exercises.find((exercise) =>
-    !exercise.mastered && exercise.presentation_count < exercise.max_attempts
-  ) ?? null
-}
-
-export function telegramStudyExerciseProgressLabel(
-  session: SongStudyPayload["session"],
+function telegramStudyProgressLabel(
+  lesson: TelegramStudyLesson,
 ): string | null {
-  const total = session?.served_count ?? 0
+  const total = Math.max(0, lesson.total_count)
   if (total <= 0) return null
-  const mastered = session?.mastered_exercise_count ?? 0
-  return `${Math.min(total, Math.max(0, mastered))}/${total}`
+  const resolved = Math.min(total, Math.max(0, lesson.resolved_count))
+  const filled = "▰".repeat(resolved)
+  const empty = "▱".repeat(total - resolved)
+  const review = lesson.next?.is_reappearance ? "🔁 " : ""
+  return `${review}${filled}${empty} ${resolved}/${total}`
 }
 
 function progressHeading(progressLabel: string | null, heading: string): string {
@@ -875,27 +881,51 @@ function progressHeading(progressLabel: string | null, heading: string): string 
 
 function feedbackText(input: {
   result: SongStudyAttemptResult
-  study: SongStudyPayload
+  referenceText?: string | null
+  retryInPlace?: boolean
+  targetLanguage: string
   transcript?: string
 }): string {
   const { result } = input
-  const language = (isStudyHelperLanguage(input.study.target_language) ? input.study.target_language : "en")
+  const language = (isStudyHelperLanguage(input.targetLanguage) ? input.targetLanguage : "en")
   const copy = getTelegramStudyCopy(language)
   if (result.outcome === "correct") return copy.correct
-  const attempted = input.study.exercises.find((exercise) => exercise.id === result.exercise_id)
-  const details = [
-    result.feedback?.missing?.length ? `${copy.missing}${copy.labelSeparator} ${result.feedback.missing.join(", ")}` : null,
-    result.feedback?.extra?.length ? `${copy.extra}${copy.labelSeparator} ${result.feedback.extra.join(", ")}` : null,
-  ].filter((value): value is string => Boolean(value))
+  // The current result contract has no separate informative-diff boolean. The
+  // grader partitions every reference token into matched or missing, so this
+  // arithmetic is exactly the server's overlap without re-tokenizing in the
+  // transport. Slice 2b will move the threshold into the shared contract for
+  // web and Telegram to consume together.
+  const matchedCount = result.feedback?.matched?.length ?? 0
+  const missingCount = result.feedback?.missing?.length ?? 0
+  const referenceTokenCount = matchedCount + missingCount
+  const informativeFeedback = referenceTokenCount > 0
+    && matchedCount / referenceTokenCount >= 1 / 3
+  const details = informativeFeedback
+    ? [
+        result.feedback?.missing?.length ? `${copy.missing}${copy.labelSeparator} ${result.feedback.missing.join(", ")}` : null,
+        result.feedback?.extra?.length ? `${copy.extra}${copy.labelSeparator} ${result.feedback.extra.join(", ")}` : null,
+      ].filter((value): value is string => Boolean(value))
+    : []
+  if (result.outcome === "ungradable") {
+    const transcript = input.transcript?.trim()
+    return [
+      copy.recordingNotCaught,
+      transcript ? `${copy.youSaid}${copy.labelSeparator} ${transcript}` : copy.nothingDetected,
+    ].join("\n")
+  }
   const retry = [
-    ...(result.attempts_remaining > 0 ? [copy.returnsLater] : []),
+    ...(input.retryInPlace
+      ? [copy.tryAgainNow]
+      : result.attempts_remaining > 0
+        ? [copy.returnsLater]
+        : []),
     copy.attemptsRemaining({ count: result.attempts_remaining }),
   ]
-  if (input.transcript !== undefined && attempted?.type === "say_it_back") {
+  if (input.transcript !== undefined && input.referenceText) {
     return [
       copy.notQuite,
       `${copy.youSaid}${copy.labelSeparator} ${input.transcript.trim() || copy.nothingDetected}`,
-      `${copy.lineWas}${copy.labelSeparator} “${attempted.reference_text}”`,
+      `${copy.lineWas}${copy.labelSeparator} “${input.referenceText}”`,
       ...details,
       ...retry,
     ].join("\n")
@@ -909,15 +939,19 @@ async function sendCompletion(input: {
   env: Env
   result?: SongStudyAttemptResult
   session: ChatStudySession
-  study: SongStudyPayload
+  study?: SongStudyPayload
 }): Promise<void> {
+  const title = stringOrNull(input.session.actionPayload.songTitle) ?? input.study?.title ?? ""
+  const studySessionId = input.result?.session?.id
+    ?? input.study?.session?.id
+    ?? stringOrNull(input.session.actionPayload.sessionId)
   await updateSessionAction({
     actionKind: "none",
     actionPayload: {},
     env: input.env,
     session: input.session,
     status: "completed",
-    studySessionId: input.study.session?.id ?? null,
+    studySessionId,
   })
   const progress = input.result?.study_progress
   const resultSession = input.result?.session
@@ -930,9 +964,10 @@ async function sendCompletion(input: {
     ? `\nStreak: ${progress.current_streak} day${progress.current_streak === 1 ? "" : "s"}`
     : ""
   const summary = score ? `\n\nScore: ${score}${streak}` : ""
+  const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
   await sendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: `${getTelegramStudyCopy(isStudyHelperLanguage(input.study.target_language) ? input.study.target_language : "en").complete}: ${input.study.title}${summary}`,
+    text: `${getTelegramStudyCopy(language).complete}: ${title}${summary}`,
   })
 }
 
@@ -941,25 +976,42 @@ async function presentNextExercise(input: {
   chatId: string
   env: Env
   lastResult?: SongStudyAttemptResult
+  lesson?: TelegramStudyLesson
   replyToMessageId?: number | null
+  study?: SongStudyPayload
   suppressIncorrectFeedback?: boolean
   session: ChatStudySession
   transcript?: string
 }): Promise<void> {
   if (!input.session.postId) throw new Error("Chat study session has no song")
   const actor: ActorContext = { authType: "user", userId: input.session.userId }
-  const study = await getPostStudyPayload({
-    actor,
-    communityId: input.session.communityId,
-    communityRepository: getCommunityRepository(input.env),
-    env: input.env,
-    postId: input.session.postId,
-    targetLanguage: input.session.targetLanguage,
-  })
+  const study = input.study ?? (
+    input.lastResult || input.lesson
+      ? undefined
+      : await getPostStudyPayload({
+        actor,
+        communityId: input.session.communityId,
+        communityRepository: getCommunityRepository(input.env),
+        env: input.env,
+        postId: input.session.postId,
+        targetLanguage: input.session.targetLanguage,
+      })
+  )
+  const lesson = input.lesson ?? input.lastResult?.lesson ?? study?.lesson
   const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
+  const retryInPlace = input.lastResult?.lesson?.next?.retry_in_place === true
+  const retryFeedback = retryInPlace && input.lastResult
+    ? feedbackText({
+      referenceText: stringOrNull(input.session.actionPayload.referenceText),
+      result: input.lastResult,
+      retryInPlace: true,
+      targetLanguage: input.session.targetLanguage,
+      transcript: input.transcript,
+    })
+    : null
   let localizationNoticeSent = input.session.actionPayload.localizationNoticeSent === true
-  if (study.translation_status === "processing" && !localizationNoticeSent) {
+  if (study?.translation_status === "processing" && !localizationNoticeSent) {
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: copy.pendingLocalization,
@@ -967,32 +1019,45 @@ async function presentNextExercise(input: {
     })
     localizationNoticeSent = true
   }
-  const exercise = study.access === "ready" ? eligibleExercise(study) : null
-  if (input.lastResult && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
+  if (input.lastResult && !retryFeedback && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
     // Grading runs in a deferred task, so its reply can land after a later
     // message. Anchoring it to the voice message keeps the thread unambiguous.
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: feedbackText({ result: input.lastResult, study, transcript: input.transcript }),
+      text: feedbackText({
+        referenceText: stringOrNull(input.session.actionPayload.referenceText),
+        result: input.lastResult,
+        retryInPlace: input.lastResult.lesson?.next?.retry_in_place === true,
+        targetLanguage: input.session.targetLanguage,
+        transcript: input.transcript,
+      }),
       ...(input.replyToMessageId ? { reply_parameters: { message_id: input.replyToMessageId } } : {}),
     })
   }
-  if (!exercise) {
+  const next = lesson?.next
+  if (!next) {
+    if (study?.access === "processing" || !lesson || lesson.completion_reason === null) return
     await sendCompletion({ ...input, result: input.lastResult, study })
     return
   }
-  const progressLabel = telegramStudyExerciseProgressLabel(study.session)
+  const exercise: TelegramStudyLessonNext["prompt"] = next.prompt
+  const studySessionId = input.lastResult?.session?.id
+    ?? study?.session?.id
+    ?? stringOrNull(input.session.actionPayload.sessionId)
+  const progressLabel = lesson ? telegramStudyProgressLabel(lesson) : null
   if (exercise.type === "translation_choice") {
     const token = await updateSessionAction({
       actionKind: "answer_choice",
       actionPayload: {
-        attemptNumber: exercise.presentation_count + 1,
+        attemptNumber: next.presentation_number,
         exerciseId: exercise.id,
         optionIds: exercise.options.map((option) => option.id),
         optionTexts: exercise.options.map((option) => option.text),
         promptText: exercise.prompt_text,
         question: exercise.question,
-        sessionId: study.session?.id,
+        sessionId: studySessionId,
+        sessionRevision: lesson?.session_revision,
+        songTitle: study?.title ?? input.session.actionPayload.songTitle,
         deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
         localizationNoticeSent,
         progressLabel,
@@ -1000,7 +1065,7 @@ async function presentNextExercise(input: {
       env: input.env,
       exerciseId: exercise.id,
       session: input.session,
-      studySessionId: study.session?.id ?? null,
+      studySessionId,
     })
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
@@ -1024,14 +1089,19 @@ async function presentNextExercise(input: {
     communityId: input.session.communityId,
     env: input.env,
     exerciseId: exercise.id,
+    lessonNext: next,
     nextActionToken: nextToken,
     postId: input.session.postId,
     previousActionToken: input.session.actionToken,
+    sessionRevision: lesson?.session_revision,
+    songTitle: stringOrNull(study?.title ?? input.session.actionPayload.songTitle),
+    studySessionId,
     targetLanguage: input.session.targetLanguage,
     telegramUserId: input.session.telegramUserId,
     deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
     localizationNoticeSent,
     progressLabel,
+    promptPrefix: retryFeedback,
   })
   input.session.actionKind = "await_voice"
   input.session.actionPayload = {
@@ -1039,6 +1109,11 @@ async function presentNextExercise(input: {
     exerciseId: exercise.id,
     localizationNoticeSent,
     progressLabel,
+    retryFeedback,
+    referenceText: exercise.reference_text,
+    sessionId: studySessionId,
+    sessionRevision: lesson?.session_revision,
+    songTitle: study?.title ?? input.session.actionPayload.songTitle,
   }
   input.session.actionToken = nextToken
   input.session.status = "active"
@@ -1202,22 +1277,73 @@ async function resendActiveTelegramStudyExercise(input: {
   if (!session || session.communityId !== input.bot.communityId || !session.postId) return false
   const language = isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en"
   const copy = getTelegramStudyCopy(language)
+  const study = await getPostStudyPayload({
+    actor: { authType: "user", userId: session.userId },
+    communityId: session.communityId,
+    communityRepository: getCommunityRepository(input.env),
+    env: input.env,
+    postId: session.postId,
+    targetLanguage: session.targetLanguage,
+  })
+  const next = study.lesson?.next
+  const progressLabel = study.lesson ? telegramStudyProgressLabel(study.lesson) : null
+  if (!next) return false
+  if (session.actionKind !== "answer_choice" && session.actionKind !== "await_voice") return false
+  const translationPrompt = next.prompt.type === "translation_choice" ? next.prompt : null
+  const sayItBackPrompt = next.prompt.type === "say_it_back" ? next.prompt : null
+  const retryFeedback = stringOrNull(session.actionPayload.retryFeedback)
+  if (session.actionKind === "answer_choice" && (next.type !== "translation_choice" || !translationPrompt)) return false
+  if (session.actionKind === "await_voice" && (next.type !== "say_it_back" || !sayItBackPrompt)) return false
+  const refreshedPayload = session.actionKind === "answer_choice"
+    ? {
+        ...session.actionPayload,
+        attemptNumber: next.presentation_number,
+        exerciseId: next.exercise_id,
+        optionIds: translationPrompt?.options.map((option) => option.id) ?? [],
+        optionTexts: translationPrompt?.options.map((option) => option.text) ?? [],
+        promptText: translationPrompt?.prompt_text ?? "",
+        question: translationPrompt?.question ?? "",
+        ...(study.lesson ? { sessionRevision: study.lesson.session_revision } : {}),
+        ...(study.session?.id ? { sessionId: study.session.id } : {}),
+        ...(study.title ? { songTitle: study.title } : {}),
+        progressLabel,
+      }
+    : {
+        ...session.actionPayload,
+        exerciseId: next.exercise_id,
+        referenceText: sayItBackPrompt?.reference_text ?? "",
+        ...(study.lesson ? { sessionRevision: study.lesson.session_revision } : {}),
+        ...(study.session?.id ? { sessionId: study.session.id } : {}),
+        ...(study.title ? { songTitle: study.title } : {}),
+        progressLabel,
+      }
+  const refreshed = await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_chat_study_sessions
+      SET action_payload_json = ?2, study_session_id = COALESCE(?3, study_session_id),
+          current_exercise_id = ?4, updated_at = ?5
+      WHERE chat_study_session_id = ?1 AND action_token = ?6 AND status = 'active'
+    `,
+    args: [
+      session.id,
+      JSON.stringify(refreshedPayload),
+      study.session?.id ?? null,
+      next.exercise_id,
+      nowIso(),
+      session.actionToken,
+    ],
+  })
+  if ((refreshed.rowsAffected ?? 0) !== 1) return false
+  session.actionPayload = refreshedPayload
   if (session.actionKind === "answer_choice") {
-    const optionTexts = Array.isArray(session.actionPayload.optionTexts)
-      ? session.actionPayload.optionTexts.map(String)
-      : []
-    const question = stringOrNull(session.actionPayload.question)
-    const promptText = stringOrNull(session.actionPayload.promptText)
-    const progressLabel = stringOrNull(session.actionPayload.progressLabel)
-    if (!question || !promptText || optionTexts.length === 0) return false
     const sent = await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: `${progressHeading(progressLabel, copy.chooseTranslation)}\n\n${promptText}`,
+      text: `${progressHeading(progressLabel, copy.chooseTranslation)}\n\n${translationPrompt!.prompt_text}`,
       reply_markup: {
         inline_keyboard: [
-          ...optionTexts.map((text, index) => [{
+          ...translationPrompt!.options.map((option, index) => [{
             callback_data: callbackData(session.actionToken, index),
-            text: text.slice(0, 60),
+            text: option.text.slice(0, 60),
           }]),
         ],
       },
@@ -1225,23 +1351,16 @@ async function resendActiveTelegramStudyExercise(input: {
     await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
     return true
   }
-  const exerciseId = stringOrNull(session.actionPayload.exerciseId)
-  const progressLabel = stringOrNull(session.actionPayload.progressLabel)
-  if (!exerciseId) return false
-  const db = await openCommunityReadClient(input.env, getCommunityRepository(input.env), session.communityId)
-  try {
-    const exercise = await getExerciseForAttempt(db.client, exerciseId)
-    if (!exercise || exercise.post_id !== session.postId || !exercise.reference_text) return false
-    const sent = await sendTelegramMessage(input.bot, {
-      chat_id: input.chatId,
-      text: `${progressHeading(progressLabel, copy.sayThis)}\n\n${exercise.reference_text}`,
-      reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
-    })
-    await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
-    return true
-  } finally {
-    db.close()
-  }
+  if (next.type !== "say_it_back") return false
+  const sent = await sendTelegramMessage(input.bot, {
+    chat_id: input.chatId,
+    text: [retryFeedback, progressHeading(progressLabel, copy.sayThis), sayItBackPrompt!.reference_text]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n"),
+    reply_markup: { inline_keyboard: telegramStudyTutorButtons(session.id, language) },
+  })
+  await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
+  return true
 }
 
 export async function handleTelegramChatStudyCallback(input: {
@@ -1735,6 +1854,9 @@ export async function handleTelegramChatStudyCallback(input: {
           idempotency_key: `telegram-chat-study:${session.id}:${session.actionToken}`,
           selected_option_id: selectedOptionId,
           session_id: studySessionId,
+          ...(Number.isSafeInteger(Number(session.actionPayload.sessionRevision))
+            ? { session_revision: Number(session.actionPayload.sessionRevision) }
+            : {}),
           type: "translation_choice",
         },
         communityId: session.communityId,
@@ -1776,6 +1898,28 @@ export async function handleTelegramChatStudyCallback(input: {
     }
     await finishCallback({ callbackQueryId, env: input.env })
   } catch (error) {
+    const conflictLesson = revisionConflictLesson(error)
+    if (conflictLesson) {
+      try {
+        await presentNextExercise({
+          bot: input.bot,
+          chatId,
+          env: input.env,
+          lesson: conflictLesson,
+          session,
+        })
+        await finishCallback({ callbackQueryId, env: input.env })
+        return true
+      } catch (conflictRenderError) {
+        await releaseSessionAction({ env: input.env, session }).catch(() => undefined)
+        await finishCallback({ callbackQueryId, env: input.env, error: conflictRenderError })
+        await sendTelegramMessage(input.bot, {
+          chat_id: chatId,
+          text: getTelegramStudyCopy(isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en").processingError,
+        }).catch(() => undefined)
+        throw conflictRenderError
+      }
+    }
     await releaseSessionAction({ env: input.env, session }).catch(() => undefined)
     await finishCallback({ callbackQueryId, env: input.env, error })
     await sendTelegramMessage(input.bot, {
@@ -1792,9 +1936,10 @@ export async function continueTelegramChatStudyAfterVoice(input: {
   chatId: string
   chatStudySessionId: string
   env: Env
+  lesson?: TelegramStudyLesson
   replyToMessageId?: number | null
-  result: SongStudyAttemptResult
-  transcript: string
+  result?: SongStudyAttemptResult
+  transcript?: string
 }): Promise<void> {
   const query = await getControlPlaneClient(input.env).execute({
     sql: `
@@ -1817,6 +1962,7 @@ export async function continueTelegramChatStudyAfterVoice(input: {
     chatId: input.chatId,
     env: input.env,
     lastResult: input.result,
+    lesson: input.lesson,
     replyToMessageId: input.replyToMessageId,
     session,
     transcript: input.transcript,
