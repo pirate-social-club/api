@@ -71,6 +71,11 @@ function providerErrorMessage(label: string, response: Response, responseText: s
   return `${label} failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`
 }
 
+function parseContentRangeTotal(value: string | null): number | null {
+  const match = value?.trim().match(/^bytes \d+-\d+\/(\d+)$/i)
+  return match?.[1] ? parseRequiredInteger(match[1], "Content-Range") : null
+}
+
 async function requireProviderOk(response: Response, label: string): Promise<string> {
   const responseText = await providerResponseText(response)
   if (!response.ok) {
@@ -138,6 +143,32 @@ export async function headObject(input: {
   }), "Filebase object HEAD")
   if (response.status === 404) {
     throw notFoundError("Object not found")
+  }
+  // Some S3-compatible gateways reject header-authenticated HEAD requests from
+  // edge runtimes while accepting the equivalent range GET. Keep HEAD as the
+  // cheap, normal path and use a one-byte GET only for that specific response.
+  if (response.status === 403) {
+    const rangeResponse = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
+      method: "GET",
+      config: requestConfig(input),
+      objectKey: input.objectKey,
+      bodyHashMode: "empty",
+      headers: { range: "bytes=0-0" },
+    }), "Filebase object range GET")
+    if (rangeResponse.status === 404) {
+      throw notFoundError("Object not found")
+    }
+    if (!rangeResponse.ok) {
+      throw providerUnavailable(providerErrorMessage("Filebase object HEAD", rangeResponse, await providerResponseText(rangeResponse)))
+    }
+    const contentRangeTotal = parseContentRangeTotal(rangeResponse.headers.get("content-range"))
+    await rangeResponse.arrayBuffer()
+    return {
+      contentLength: contentRangeTotal ?? parseRequiredInteger(rangeResponse.headers.get("content-length"), "Content-Length"),
+      contentType: rangeResponse.headers.get("content-type")?.trim() || null,
+      etag: rangeResponse.headers.get("etag")?.trim() || null,
+      cid: rangeResponse.headers.get("x-amz-meta-cid")?.trim() || null,
+    }
   }
   if (!response.ok) {
     throw providerUnavailable(providerErrorMessage("Filebase object HEAD", response, await providerResponseText(response)))
