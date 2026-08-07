@@ -129,7 +129,11 @@ describe("song artifact upload session service", () => {
 
   test("allows time for Filebase metadata propagation after completion", () => {
     const retryBudgetMs = POST_COMPLETE_HEAD_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0)
-    expect(retryBudgetMs).toBeGreaterThanOrEqual(10 * 60 * 1000)
+    // A real staging object took about 11m40s after the browser PUT before
+    // Filebase's authenticated HEAD exposed its metadata. Keep margin for
+    // another slow propagation window without exceeding the 15m live-gate
+    // test timeout.
+    expect(retryBudgetMs).toBeGreaterThanOrEqual(13 * 60 * 1000)
   })
 
   test("reaps stale multipart sessions idempotently", async () => {

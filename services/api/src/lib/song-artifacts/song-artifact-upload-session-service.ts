@@ -66,6 +66,9 @@ export const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [
   60000,
   60000,
   60000,
+  60000,
+  60000,
+  60000,
 ] as const
 const DIRECT_MULTIPART_ARTIFACT_KINDS = new Set<SongArtifactKind>([
   "primary_audio",
