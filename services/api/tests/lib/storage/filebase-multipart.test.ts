@@ -138,7 +138,9 @@ describe("filebase multipart helpers", () => {
       cid: "QmHeadCid",
     })
     expect(requests.map((request) => request.method)).toEqual(["HEAD", "GET"])
-    expect(new URL(requests[1]!.url).search).toBe("")
+    const rangeUrl = new URL(requests[1]!.url)
+    expect(rangeUrl.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256")
+    expect(rangeUrl.searchParams.get("X-Amz-SignedHeaders")).toBe("host;range")
     expect(requests[1]!.headers.get("range")).toBe("bytes=0-0")
   })
 
