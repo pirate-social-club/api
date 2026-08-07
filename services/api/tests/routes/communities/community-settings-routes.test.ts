@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
-import { app } from "../../../src/index"
+import handler, { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { MIRROR_REQUEST_HOST_HEADER } from "../../../src/lib/http/request-host-mirror"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeAgeOver18Verification,
@@ -1581,5 +1582,82 @@ membership_mode: "request",
     expect(fetchedBody.human_verification_lane_origin).toBe("explicit")
     expect(fetchedBody.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(fetchedBody.accepted_agent_ownership_providers_origin).toBe("explicit")
+  })
+
+  test("community reads mirror stored avatar/banner refs to the allowlisted HNS request host", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-mirror-settings-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Mirror Settings Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityId = ((await json(communityCreate)) as {
+      community: { id: string }
+    }).community.id.replace(/^com_/, "")
+
+    const profileUpdate = await app.request(
+      `http://pirate.test/communities/${communityId}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: settingsJson({
+          avatar_ref: "https://api.pirate.sc/community-media/avatar/avatar_route.jpg",
+          banner_ref: "https://api.pirate.sc/community-media/banner/banner_route.jpg",
+        }),
+      },
+      ctx.env,
+    )
+    expect(profileUpdate.status).toBe(200)
+
+    if (!handler.fetch) {
+      throw new Error("handler fetch is not configured")
+    }
+    const executionCtx = { waitUntil: () => {} } as unknown as ExecutionContext
+    const mirroredResponse = await handler.fetch(
+      new Request(`http://pirate.test/communities/${communityId}`, {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          [MIRROR_REQUEST_HOST_HEADER]: "api.pirate",
+        },
+      }) as Parameters<NonNullable<typeof handler.fetch>>[0],
+      ctx.env,
+      executionCtx,
+    )
+    expect(mirroredResponse.status).toBe(200)
+    expect(mirroredResponse.headers.get("vary") ?? "").toContain(MIRROR_REQUEST_HOST_HEADER)
+    const mirroredBody = await json(mirroredResponse) as {
+      avatar_ref: string | null
+      banner_ref: string | null
+    }
+    expect(mirroredBody.avatar_ref).toBe("https://api.pirate/community-media/avatar/avatar_route.jpg")
+    expect(mirroredBody.banner_ref).toBe("https://api.pirate/community-media/banner/banner_route.jpg")
+
+    const canonicalResponse = await handler.fetch(
+      new Request(`http://pirate.test/communities/${communityId}`, {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      }) as Parameters<NonNullable<typeof handler.fetch>>[0],
+      ctx.env,
+      executionCtx,
+    )
+    expect(canonicalResponse.status).toBe(200)
+    const canonicalBody = await json(canonicalResponse) as {
+      avatar_ref: string | null
+      banner_ref: string | null
+    }
+    expect(canonicalBody.avatar_ref).toBe("https://api.pirate.sc/community-media/avatar/avatar_route.jpg")
+    expect(canonicalBody.banner_ref).toBe("https://api.pirate.sc/community-media/banner/banner_route.jpg")
   })
 })

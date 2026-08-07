@@ -8,6 +8,7 @@ import {
   PUBLIC_READ_CACHE_CONTROL,
   PUBLIC_READ_CDN_CACHE_CONTROL,
 } from "../../src/routes/cache-headers"
+import { MIRROR_REQUEST_HOST_HEADER } from "../../src/lib/http/request-host-mirror"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import {
   completeUniqueHumanVerification,
@@ -829,5 +830,187 @@ describe("feed routes", () => {
     expect(forwardedRequests).toHaveLength(1)
     expect(forwardedRequests[0]?.headers.get("authorization")).toBeNull()
     expect(forwardedRequests[0]?.headers.get("origin")).toBeNull()
+  })
+
+  describe("request-host mirror", () => {
+    // Every stored-absolute ref class the HNS feed payload can carry: video
+    // playable media (storage_ref, preview_video, poster), song cover art,
+    // song-artifact-upload content refs, and community avatar/banner media.
+    const canonicalRefs = {
+      video: "https://api.pirate.sc/public-communities/cmt_mirror/song-artifact-uploads/sau_video/content",
+      preview: "https://api.pirate.sc/public-communities/cmt_mirror/song-artifact-uploads/sau_preview/content",
+      poster: "https://api.pirate.sc/community-media/post_image/poster_m.jpg",
+      coverArt: "https://api.pirate.sc/communities/cmt_mirror/song-artifact-uploads/sau_cover/content",
+      audio: "https://api.pirate.sc/communities/cmt_mirror/song-artifact-uploads/sau_audio/content",
+      avatar: "https://api.pirate.sc/community-media/avatar/avatar_m.jpg",
+      banner: "https://api.pirate.sc/community-media/banner/banner_m.jpg",
+    }
+    const mirroredRefs = {
+      video: "https://api.pirate/public-communities/cmt_mirror/song-artifact-uploads/sau_video/content",
+      preview: "https://api.pirate/public-communities/cmt_mirror/song-artifact-uploads/sau_preview/content",
+      poster: "https://api.pirate/community-media/post_image/poster_m.jpg",
+      coverArt: "https://api.pirate/communities/cmt_mirror/song-artifact-uploads/sau_cover/content",
+      audio: "https://api.pirate/communities/cmt_mirror/song-artifact-uploads/sau_audio/content",
+      avatar: "https://api.pirate/community-media/avatar/avatar_m.jpg",
+      banner: "https://api.pirate/community-media/banner/banner_m.jpg",
+    }
+
+    function materializedBodyWithRefs(refs: typeof canonicalRefs) {
+      return {
+        items: [{
+          post: {
+            post: {
+              id: "pst_mirror",
+              media_refs: [{
+                storage_ref: refs.video,
+                poster_ref: refs.poster,
+                preview_video: { storage_ref: refs.preview },
+              }],
+              song_cover_art_ref: refs.coverArt,
+              song_presentation: {
+                cover_art_ref: refs.coverArt,
+                downloadable_audio: [{ kind: "original", storage_ref: refs.audio }],
+              },
+            },
+          },
+        }],
+        top_communities: [{
+          id: "com_cmt_mirror",
+          object: "home_feed_community_summary",
+          display_name: "Mirror Club",
+          route_slug: "mirror-club",
+          avatar_url: refs.avatar,
+          banner_ref: refs.banner,
+          view_count: 1,
+        }],
+        next_cursor: null,
+      }
+    }
+
+    async function seedMaterializedPublicFeed(
+      ctx: Awaited<ReturnType<typeof createRouteTestContext>>,
+      body: unknown,
+    ): Promise<void> {
+      const target = buildMaterializedPublicHomeFeedTarget({
+        locale: "en",
+        sort: "best",
+        timeRange: "all",
+        cursor: null,
+      })
+      if (!target) {
+        throw new Error("expected materialized target")
+      }
+      const now = Date.now()
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO materialized_public_feeds (
+            cache_key,
+            json_body,
+            created_at,
+            refreshed_at,
+            expires_at,
+            stale_at,
+            source_version
+          ) VALUES (?1, ?2, ?3, ?3, ?4, ?5, ?6)
+        `,
+        args: [
+          target.cacheKey,
+          JSON.stringify(body),
+          new Date(now).toISOString(),
+          new Date(now + 60_000).toISOString(),
+          new Date(now + 600_000).toISOString(),
+          "test-materialized-mirror",
+        ],
+      })
+    }
+
+    function fetchPublicHomeFeed(headers: Record<string, string>, env: Parameters<NonNullable<typeof handler.fetch>>[1]) {
+      return fetchHandler(
+        new Request("http://pirate.test/feed/home/public?sort=best&locale=en", { headers }),
+        env,
+        createExecutionContext().ctx,
+      )
+    }
+
+    test("rehosts stored absolute media refs to the allowlisted HNS request host", async () => {
+      const ctx = await createRouteTestContext()
+      cleanup = ctx.cleanup
+      await seedMaterializedPublicFeed(ctx, materializedBodyWithRefs(canonicalRefs))
+
+      const response = await fetchPublicHomeFeed({ [MIRROR_REQUEST_HOST_HEADER]: "api.pirate" }, ctx.env)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("x-pirate-materialized-feed")).toBe("hit")
+
+      const body = await json(response) as ReturnType<typeof materializedBodyWithRefs>
+      const post = body.items[0]!.post.post
+      expect(post.media_refs[0]!.storage_ref).toBe(mirroredRefs.video)
+      expect(post.media_refs[0]!.preview_video.storage_ref).toBe(mirroredRefs.preview)
+      expect(post.media_refs[0]!.poster_ref).toBe(mirroredRefs.poster)
+      expect(post.song_cover_art_ref).toBe(mirroredRefs.coverArt)
+      expect(post.song_presentation.cover_art_ref).toBe(mirroredRefs.coverArt)
+      expect(post.song_presentation.downloadable_audio[0]!.storage_ref).toBe(mirroredRefs.audio)
+      expect(body.top_communities[0]!.avatar_url).toBe(mirroredRefs.avatar)
+      expect(body.top_communities[0]!.banner_ref).toBe(mirroredRefs.banner)
+
+      // A mirrored variant must stay out of every cache shared with
+      // canonical-host traffic.
+      expect(response.headers.get("cloudflare-cdn-cache-control")).toBe("no-store")
+      expect(response.headers.get("cdn-cache-control")).toBe("no-store")
+      expect(response.headers.get("cache-control")).toBe("private, no-store")
+      expect(response.headers.get("vary") ?? "").toContain(MIRROR_REQUEST_HOST_HEADER)
+
+      // The materialized store keeps the canonical origin; the mirror is
+      // applied at the response boundary only.
+      const stored = await ctx.client.execute({
+        sql: "SELECT json_body FROM materialized_public_feeds LIMIT 1",
+      })
+      const storedBody = String(stored.rows[0]?.json_body)
+      expect(storedBody).toContain("https://api.pirate.sc/")
+      expect(storedBody).not.toContain("https://api.pirate/")
+    })
+
+    test("mirrors from the request Host header when the gateway header is absent", async () => {
+      const ctx = await createRouteTestContext()
+      cleanup = ctx.cleanup
+      await seedMaterializedPublicFeed(ctx, materializedBodyWithRefs(canonicalRefs))
+
+      const response = await fetchPublicHomeFeed({ host: "api.pirate" }, ctx.env)
+      expect(response.status).toBe(200)
+      const body = await json(response) as ReturnType<typeof materializedBodyWithRefs>
+      expect(body.items[0]!.post.post.media_refs[0]!.storage_ref).toBe(mirroredRefs.video)
+      expect(body.top_communities[0]!.avatar_url).toBe(mirroredRefs.avatar)
+    })
+
+    test("keeps canonical refs byte-identical when no HNS host is present", async () => {
+      const ctx = await createRouteTestContext()
+      cleanup = ctx.cleanup
+      await seedMaterializedPublicFeed(ctx, materializedBodyWithRefs(canonicalRefs))
+
+      const response = await fetchPublicHomeFeed({}, ctx.env)
+      expect(response.status).toBe(200)
+      expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+      expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
+      expect(response.headers.get("vary") ?? "").not.toContain(MIRROR_REQUEST_HOST_HEADER)
+      expect(await json(response)).toEqual(materializedBodyWithRefs(canonicalRefs))
+    })
+
+    test("never reflects hostile or unknown request host values into refs", async () => {
+      const ctx = await createRouteTestContext()
+      cleanup = ctx.cleanup
+      await seedMaterializedPublicFeed(ctx, materializedBodyWithRefs(canonicalRefs))
+
+      const hostileHeaderSets: Record<string, string>[] = [
+        { [MIRROR_REQUEST_HOST_HEADER]: "evil.example" },
+        { host: "evil.example" },
+        { [MIRROR_REQUEST_HOST_HEADER]: "api.pirate.evil.example" },
+        { [MIRROR_REQUEST_HOST_HEADER]: "api.pirate.sc" },
+      ]
+      for (const headers of hostileHeaderSets) {
+        const response = await fetchPublicHomeFeed(headers, ctx.env)
+        expect(response.status).toBe(200)
+        expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
+        expect(await json(response)).toEqual(materializedBodyWithRefs(canonicalRefs))
+      }
+    })
   })
 })

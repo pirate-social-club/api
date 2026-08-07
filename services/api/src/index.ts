@@ -85,6 +85,7 @@ import {
 } from "./lib/communities/community-shard-registry"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
 import { configuredCorsOrigin as configuredCorsOriginForEnv } from "./lib/http/allowed-origins"
+import { mirrorResponseToRequestHost } from "./lib/http/request-host-mirror"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { splitScheduledLanes } from "./lib/scheduled-lanes"
@@ -752,7 +753,11 @@ async function fetchApi(req: Request, env: Env, ctx: ExecutionContext): Promise<
   const response = isPublicReadCacheRequest(req)
     ? await fetchPublicRead(req, env, ctx)
     : await app.fetch(req, env, ctx)
-  return applyCorsHeaders(req, response, env)
+  // Rehost stored absolute media refs to the allowlisted HNS request host
+  // after the (potentially cache-fronted) inner fetch, so cached and stored
+  // payloads always keep the canonical origin.
+  const mirrored = await mirrorResponseToRequestHost({ request: req, response, env })
+  return applyCorsHeaders(req, mirrored, env)
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
