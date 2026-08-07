@@ -1,4 +1,4 @@
-name: api-ci # rewards retirement hardening keeps the merge gate explicit
+name: api-ci
 
 on:
   pull_request:
