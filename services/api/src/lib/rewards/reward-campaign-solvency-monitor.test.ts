@@ -90,6 +90,38 @@ describe("reward campaign treasury solvency monitor", () => {
     expect(warn).not.toHaveBeenCalled()
   })
 
+  test("resolves the campaign RPC from the chain fallback", async () => {
+    let resolvedRpcUrl = ""
+    const summary = await monitorRewardCampaignTreasurySolvency({
+      env: {
+        ...env,
+        REWARDS_CAMPAIGN_RPC_URL: undefined,
+        BASE_SEPOLIA_RPC_URL: "https://keyed-sepolia.example.test",
+      } as Env,
+      client: clientWithRow({
+        contribution_liability_cents: "100",
+        credited_unpaid_liability_cents: "0",
+        pending_refund_atomic: "0",
+      }),
+      readBalance: async (config) => {
+        resolvedRpcUrl = config.rpcUrl
+        return 2_000_000n
+      },
+    })
+
+    expect(resolvedRpcUrl).toBe("https://keyed-sepolia.example.test")
+    expect(summary).toMatchObject({ configured: true, solvent: true, chainId: 84532 })
+  })
+
+  test("keeps the monitor as a no-op when the reward rail is unconfigured", async () => {
+    const summary = await monitorRewardCampaignTreasurySolvency({
+      env: { PIRATE_REWARDS_SETTLEMENT_BACKEND: "local" } as Env,
+      client: clientWithRow({}),
+    })
+
+    expect(summary).toEqual({ configured: false })
+  })
+
   test("alerts on a depleted Lit signer and recent nonce contention", async () => {
     const warn = mock(async (..._args: Parameters<typeof captureScheduledWarning>) => true)
     const client = {
