@@ -45,7 +45,22 @@ const DIRECT_MULTIPART_SESSION_TTL_MS = 60 * 60 * 1000
 const DIRECT_MULTIPART_PART_URL_TTL_SECONDS = 300
 export const DIRECT_MULTIPART_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const MAX_MULTIPART_PARTS = 10_000
-const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 16000] as const
+// Filebase can return AccessDenied for a newly completed object while its S3
+// metadata propagates. Keep retrying long enough to cover that window instead
+// of turning a successful multipart completion into a false provider failure.
+export const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [
+  1000,
+  2000,
+  4000,
+  8000,
+  16000,
+  30000,
+  30000,
+  30000,
+  30000,
+  30000,
+  60000,
+] as const
 const DIRECT_MULTIPART_ARTIFACT_KINDS = new Set<SongArtifactKind>([
   "primary_audio",
   "preview_audio",

@@ -3,6 +3,7 @@ import { HttpError } from "../../../src/lib/errors"
 import {
   computeMultipartPartPlan,
   DIRECT_MULTIPART_MAX_BYTES,
+  POST_COMPLETE_HEAD_RETRY_DELAYS_MS,
   reapStaleMultipartSongArtifactUploads,
 } from "../../../src/lib/song-artifacts/song-artifact-upload-session-service"
 import { createSongArtifactUploadIntent } from "../../../src/lib/song-artifacts/song-artifact-repository"
@@ -124,6 +125,11 @@ describe("song artifact upload session service", () => {
   test("rejects direct multipart uploads above the product cap", () => {
     expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_MAX_BYTES)).not.toThrow()
     expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_MAX_BYTES + 1)).toThrow("Direct multipart uploads are currently limited to 2GB")
+  })
+
+  test("allows time for Filebase metadata propagation after completion", () => {
+    const retryBudgetMs = POST_COMPLETE_HEAD_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0)
+    expect(retryBudgetMs).toBeGreaterThanOrEqual(4 * 60 * 1000)
   })
 
   test("reaps stale multipart sessions idempotently", async () => {
