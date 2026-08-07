@@ -84,6 +84,7 @@ import {
   resolveCommunityAllocationShard,
 } from "./lib/communities/community-shard-registry"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
+import { configuredCorsOrigin as configuredCorsOriginForEnv } from "./lib/http/allowed-origins"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
 import { splitScheduledLanes } from "./lib/scheduled-lanes"
@@ -274,44 +275,7 @@ async function buildVersionPayload(env: Env) {
 }
 
 function configuredCorsOrigin(origin: string, c: { env: Env }): string | null {
-  if (isTrustedHnsWebOrigin(origin)) {
-    return origin
-  }
-
-  const raw = c.env?.CORS_ALLOWED_ORIGINS?.trim()
-  if (!raw) {
-    return null
-  }
-
-  const allowedOrigins = raw.split(",").map((allowedOrigin) => allowedOrigin.trim()).filter(Boolean)
-  if (allowedOrigins.includes("*")) {
-    return "*"
-  }
-  return allowedOrigins.includes(origin) ? origin : null
-}
-
-function isTrustedHnsWebOrigin(origin: string): boolean {
-  let url: URL
-  try {
-    url = new URL(origin)
-  } catch {
-    return false
-  }
-
-  if (url.protocol !== "https:" || url.username || url.password || url.port) {
-    return false
-  }
-
-  const hostname = url.hostname.toLowerCase()
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/u.test(hostname)) {
-    return false
-  }
-
-  if (!hostname.includes(".")) {
-    return true
-  }
-
-  return hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")
+  return configuredCorsOriginForEnv(origin, c.env)
 }
 
 app.use(
