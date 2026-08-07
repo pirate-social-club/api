@@ -14,10 +14,9 @@ import {
   continueTelegramChatStudyAfterVoice,
   formatUsdcCents,
   handleTelegramChatStudyCallback,
-  telegramStudyExerciseProgressLabel,
   telegramStudySongSelectionIndex,
 } from "../../../src/lib/telegram/chat-study-service"
-import { resolvePostStudyCapability, submitPostStudyAttempt } from "../../../src/lib/posts/post-study-service"
+import { resolvePostStudyCapability, submitPostStudyAttempt, type SongStudyAttemptResult } from "../../../src/lib/posts/post-study-service"
 import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
 import { clearActiveCommunityElevenLabsCredentialPresenceCacheForTests } from "../../../src/lib/communities/assistant-policy/credential-service"
 import type { StudyPost } from "../../../src/lib/posts/post-study-access"
@@ -44,29 +43,14 @@ afterEach(async () => {
   }
 })
 
-test("Telegram retry-phase progress tracks mastery instead of first-pass coverage", () => {
-  const session = {
-    completion_reason: null,
-    completed_exercise_count: 10,
-    due_count: 0,
-    first_pass_correct_count: 1,
-    id: "sss_retry_progress",
-    mastered_exercise_count: 1,
-    max_presentations: 20,
-    next_due_at: undefined,
-    presentation_count: 10,
-    qualified: false,
-    resolved_exercise_count: 1,
-    required_correct_count: 7,
-    served_count: 10,
-    session_revision: 0,
-    status: "active" as const,
-    total_units: 10,
+test("Telegram orchestration feedback copy covers every helper language", () => {
+  for (const { code } of STUDY_LANGUAGE_BUTTONS) {
+    const copy = getTelegramStudyCopy(code)
+    expect(copy.tryAgainNow).toBeTruthy()
+    expect(copy.recordingNotCaught).toBeTruthy()
+    expect(copy.attemptsRemaining({ count: 1 })).toBeTruthy()
+    expect(copy.attemptsRemaining({ count: 0 })).toBeTruthy()
   }
-
-  expect(telegramStudyExerciseProgressLabel(session)).toBe("1/10")
-  expect(telegramStudyExerciseProgressLabel({ ...session, mastered_exercise_count: 2, presentation_count: 11 })).toBe("2/10")
-  expect(telegramStudyExerciseProgressLabel({ ...session, mastered_exercise_count: 99 })).toBe("10/10")
 })
 
 async function applyStudyMigration(client: Client): Promise<void> {
@@ -1453,7 +1437,7 @@ describe("community study routes", () => {
           from: { id: 454546, is_bot: false }, message: { chat: { id: 454546, type: "private" }, message_id: 708 } },
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("0/4 · 请说：\n\n")
+        typeof body.text === "string" && body.text.startsWith("▱▱▱▱ 0/4 · 请说：\n\n")
       )).toBe(true)
       const mixIntent = await ctx.client.execute({
         sql: `SELECT chat_study_session_id, exercise_id, study_session_id, attempt_number
@@ -1474,7 +1458,7 @@ describe("community study routes", () => {
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith("1/4 · 请说：\n\n")
+        typeof body.text === "string" && body.text.startsWith("▰▱▱▱ 1/4 · 请说：\n\n")
       )).toBe(true)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string" && body.text.startsWith("1/4 · 选择译文：")
@@ -1934,6 +1918,109 @@ describe("community study routes", () => {
         prompt_delivery_status: "uncertain",
       })
       forcePromptFailure = false
+      await ctx.client.execute(
+        "UPDATE telegram_chat_study_sessions SET action_payload_json = json_set(action_payload_json, '$.deliveryMode', 'text') WHERE chat_study_session_id = 'tcs_audio'",
+      )
+      const reappearanceRequestsBefore = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_audio",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: { extra: ["extra"], matched: ["line"], missing: ["missing"] },
+          lesson: {
+            completion_reason: null,
+            next: {
+              attempts_this_appearance: 1,
+              exercise_id: exercise!.id,
+              is_reappearance: true,
+              presentation_number: 2,
+              prompt: exercise! as unknown as NonNullable<NonNullable<SongStudyAttemptResult["lesson"]>["next"]>["prompt"],
+              retry_in_place: true,
+              type: "say_it_back",
+            },
+            resolved_count: 0,
+            serving_index: 2,
+            session_revision: 1,
+            total_count: 1,
+          },
+          object: "song_study_attempt_result",
+          outcome: "incorrect",
+        },
+        transcript: "wrong words",
+      })
+      const reappearanceMessages = await Promise.all(
+        telegramRequests.slice(reappearanceRequestsBefore).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {},
+        ),
+      )
+      const reappearancePrompt = reappearanceMessages.find((body) => body.text?.includes("🔁"))?.text ?? ""
+      expect(reappearancePrompt).toContain("🔁")
+      expect(reappearancePrompt).toContain("Try again")
+      expect(reappearancePrompt).not.toContain("This line will come back later.")
+      const ungradableRequestsBefore = telegramRequests.length
+      await continueTelegramChatStudyAfterVoice({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        chatId: "787878",
+        chatStudySessionId: "tcs_audio",
+        env: ctx.env,
+        result: {
+          attempts_remaining: 1,
+          exercise_id: exercise!.id,
+          feedback: { extra: ["testing", "one"], matched: [], missing: ["line"] },
+          lesson: {
+            completion_reason: null,
+            next: {
+              attempts_this_appearance: 1,
+              exercise_id: exercise!.id,
+              is_reappearance: true,
+              presentation_number: 2,
+              prompt: exercise! as unknown as NonNullable<NonNullable<SongStudyAttemptResult["lesson"]>["next"]>["prompt"],
+              retry_in_place: true,
+              type: "say_it_back",
+            },
+            resolved_count: 0,
+            serving_index: 2,
+            session_revision: 2,
+            total_count: 1,
+          },
+          object: "song_study_attempt_result",
+          outcome: "ungradable",
+        },
+        transcript: "testing one two",
+      })
+      const ungradableMessages = await Promise.all(
+        telegramRequests.slice(ungradableRequestsBefore).map(async (request) =>
+          request.url.endsWith("/sendMessage")
+            ? await request.clone().json() as { text?: string }
+            : {},
+        ),
+      )
+      const ungradableFeedback = ungradableMessages.find((body) => body.text?.includes("I didn't catch"))?.text ?? ""
+      expect(ungradableFeedback).toContain("I didn't catch")
+      expect(ungradableFeedback).not.toContain("Missing")
+      expect(ungradableFeedback).not.toContain("Extra")
       await continueTelegramChatStudyAfterVoice({
         bot: {
           communityId,
@@ -1950,7 +2037,7 @@ describe("community study routes", () => {
         result: {
           attempts_remaining: 2,
           exercise_id: exercise!.id,
-          feedback: { extra: ["wrong"], matched: [], missing: ["line"] },
+          feedback: { extra: ["wrong"], matched: ["kept"], missing: ["line"] },
           lesson: {
             completion_reason: null,
             next: null,
@@ -1995,7 +2082,7 @@ describe("community study routes", () => {
         result: {
           attempts_remaining: 1,
           exercise_id: exercise!.id,
-          feedback: { extra: [], matched: [], missing: ["line"] },
+          feedback: { extra: [], matched: ["kept"], missing: ["line"] },
           lesson: {
             completion_reason: null,
             next: null,
@@ -2041,7 +2128,7 @@ describe("community study routes", () => {
         result: {
           attempts_remaining: 0,
           exercise_id: exercise!.id,
-          feedback: { extra: [], matched: [], missing: ["line"] },
+          feedback: { extra: [], matched: ["kept"], missing: ["line"] },
           lesson: {
             completion_reason: null,
             next: null,

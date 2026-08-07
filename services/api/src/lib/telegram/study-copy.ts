@@ -19,8 +19,10 @@ type StudyCopy = {
   missing: string
   noSongs: string
   notQuite: string
+  tryAgainNow: string
   nothingDetected: string
   processingError: string
+  recordingNotCaught: string
   pendingLocalization: string
   playSong: string
   translationsReady: string
@@ -56,7 +58,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     alreadyHandled: "That answer was already handled. Send /study if you need a new session.", attemptsRemaining: ({ count }) => `${count} attempt${count === 1 ? "" : "s"} left`, buttonExpired: "This button expired. Send /study to continue.", returnsLater: "This line will come back later.",
     deliveryText: "Text", disclosure: "The community bot owner can access and listen to voice messages sent here. Pirate also receives this recording for transcription and grading.",
     exerciseExpired: "This study exercise expired.", extra: "Extra", lineWas: "The line was", labelSeparator: ":", missing: "Missing",
-    noSongs: "No songs are ready to study in this community yet.", notQuite: "Not quite", nothingDetected: "(nothing detected)",
+    noSongs: "No songs are ready to study in this community yet.", notQuite: "Not quite", tryAgainNow: "Try again", nothingDetected: "(nothing detected)", recordingNotCaught: "I didn't catch that recording. Please try again.",
     pendingLocalization: "Translations are being prepared. Voice practice is ready now.", playSong: "🎵 Play song", processingError: "I couldn't process that answer. Send /study to restart.", sayThis: "Say this:",
     settingsLanguage: "🌐 Change language", settingsPromptFormat: "🔊 Prompt format", settingsTitle: "Study settings:",
     startAgain: "Start again", studyUnavailable: "Study is not available here yet.", tutorUnavailable: "The study tutor is unavailable right now. Your exercise is still open.", suggested: "Suggested", translationsReady: "Translations are ready.", youSaid: "You said",
@@ -69,7 +71,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     alreadyHandled: "这个答案已经处理过了。如需新练习，请发送 /study。", attemptsRemaining: ({ count }) => `还剩 ${count} 次机会`, buttonExpired: "此按钮已过期。请发送 /study 继续。", returnsLater: "这句稍后会再次出现。",
     deliveryText: "文字", disclosure: "社区机器人所有者可以访问并收听你在此发送的语音消息。Pirate 也会接收录音，用于转写和评分。",
     exerciseExpired: "此学习练习已过期。", extra: "多说", lineWas: "原句是", labelSeparator: "：", missing: "漏说",
-    noSongs: "这个社区还没有可学习的歌曲。", notQuite: "还不对", nothingDetected: "（未检测到语音）",
+    noSongs: "这个社区还没有可学习的歌曲。", notQuite: "还不对", tryAgainNow: "再试一次", nothingDetected: "（未检测到语音）", recordingNotCaught: "没有听清这段录音。请再试一次。",
     pendingLocalization: "翻译正在准备中。现在可以先进行语音练习。", playSong: "🎵 播放歌曲", processingError: "无法处理这个答案。请发送 /study 重新开始。", sayThis: "请说：",
     settingsLanguage: "🌐 更改语言", settingsPromptFormat: "🔊 提示格式", settingsTitle: "学习设置：",
     startAgain: "重新开始", studyUnavailable: "此处暂未开放学习功能。", tutorUnavailable: "学习助手暂时不可用。练习仍在进行。", suggested: "推荐", translationsReady: "翻译已准备好。", youSaid: "你说的是",
@@ -82,7 +84,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     alreadyHandled: "تمت معالجة هذه الإجابة بالفعل. أرسل /study لبدء جلسة جديدة.", attemptsRemaining: ({ count }) => `المحاولات المتبقية: ${count}`, buttonExpired: "انتهت صلاحية هذا الزر. أرسل /study للمتابعة.", returnsLater: "سيظهر هذا السطر مجددًا لاحقًا.",
     deliveryText: "نص", disclosure: "يمكن لمالك روبوت المجتمع الوصول إلى الرسائل الصوتية المرسلة هنا والاستماع إليها. يتلقى Pirate التسجيل أيضًا للنسخ والتقييم.",
     exerciseExpired: "انتهت صلاحية هذا التمرين.", extra: "إضافي", lineWas: "كان السطر", labelSeparator: ":", missing: "ناقص",
-    noSongs: "لا توجد أغانٍ جاهزة للدراسة في هذا المجتمع بعد.", notQuite: "ليست صحيحة تمامًا", nothingDetected: "(لم يتم اكتشاف شيء)",
+    noSongs: "لا توجد أغانٍ جاهزة للدراسة في هذا المجتمع بعد.", notQuite: "ليست صحيحة تمامًا", tryAgainNow: "حاول مرة أخرى", nothingDetected: "(لم يتم اكتشاف شيء)", recordingNotCaught: "لم أتمكن من فهم التسجيل. حاول مرة أخرى.",
     pendingLocalization: "يجري إعداد الترجمات. التدريب الصوتي متاح الآن.", playSong: "🎵 تشغيل الأغنية", processingError: "تعذر معالجة الإجابة. أرسل /study للبدء مجددًا.", sayThis: "قل هذا:",
     settingsLanguage: "🌐 تغيير اللغة", settingsPromptFormat: "🔊 تنسيق التمرين", settingsTitle: "إعدادات الدراسة:",
     startAgain: "ابدأ مجددًا", studyUnavailable: "الدراسة غير متاحة هنا بعد.", tutorUnavailable: "مساعد الدراسة غير متاح الآن. التمرين ما زال مفتوحًا.", suggested: "مقترح", translationsReady: "الترجمات جاهزة.", youSaid: "قلت",
@@ -95,7 +97,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     alreadyHandled: "ეს პასუხი უკვე დამუშავდა. ახალი სესიისთვის გაგზავნეთ /study.", attemptsRemaining: ({ count }) => `დარჩენილია ${count} მცდელობა`, buttonExpired: "ამ ღილაკს ვადა გაუვიდა. გასაგრძელებლად გაგზავნეთ /study.", returnsLater: "ეს სტრიქონი მოგვიანებით ისევ გამოჩნდება.",
     deliveryText: "ტექსტი", disclosure: "თემის ბოტის მფლობელს აქ გაგზავნილი ხმოვანი შეტყობინებების მოსმენა შეუძლია. Pirate-იც იღებს ჩანაწერს ტრანსკრიფციისა და შეფასებისთვის.",
     exerciseExpired: "ამ სავარჯიშოს ვადა გაუვიდა.", extra: "ზედმეტი", lineWas: "სტრიქონი იყო", labelSeparator: ":", missing: "აკლია",
-    noSongs: "ამ თემში სასწავლად მზად სიმღერები ჯერ არ არის.", notQuite: "ჯერ არასწორია", nothingDetected: "(ვერაფერი დაფიქსირდა)",
+    noSongs: "ამ თემში სასწავლად მზად სიმღერები ჯერ არ არის.", notQuite: "ჯერ არასწორია", tryAgainNow: "სცადეთ კიდევ ერთხელ", nothingDetected: "(ვერაფერი დაფიქსირდა)", recordingNotCaught: "ჩანაწერი ვერ გავიგე. გთხოვთ, სცადოთ ხელახლა.",
     pendingLocalization: "თარგმანები მზადდება. ხმოვანი ვარჯიში უკვე შეგიძლიათ.", playSong: "🎵 სიმღერის დაკვრა", processingError: "პასუხი ვერ დამუშავდა. თავიდან დასაწყებად გაგზავნეთ /study.", sayThis: "თქვით:",
     settingsLanguage: "🌐 ენის შეცვლა", settingsPromptFormat: "🔊 მინიშნების ფორმატი", settingsTitle: "სწავლის პარამეტრები:",
     startAgain: "თავიდან დაწყება", studyUnavailable: "სწავლა აქ ჯერ ხელმისაწვდომი არ არის.", tutorUnavailable: "სასწავლო ასისტენტი ამჟამად მიუწვდომელია. სავარჯიშო ღია რჩება.", suggested: "რეკომენდებული", translationsReady: "თარგმანები მზადაა.", youSaid: "თქვენ თქვით",
@@ -108,7 +110,7 @@ const COPY: Record<StudyHelperLanguage, StudyCopy> = {
     alreadyHandled: "Этот ответ уже обработан. Отправьте /study, чтобы начать новый урок.", attemptsRemaining: ({ count }) => `Осталось попыток: ${count}`, buttonExpired: "Срок действия кнопки истёк. Отправьте /study, чтобы продолжить.", returnsLater: "Эта строка встретится снова позже.",
     deliveryText: "Текст", disclosure: "Владелец бота сообщества может получить доступ к отправленным сюда голосовым сообщениям и прослушать их. Pirate также получает запись для расшифровки и оценки.",
     exerciseExpired: "Срок действия упражнения истёк.", extra: "Лишнее", lineWas: "Строка", labelSeparator: ":", missing: "Пропущено",
-    noSongs: "В этом сообществе пока нет готовых для изучения песен.", notQuite: "Пока неверно", nothingDetected: "(ничего не распознано)",
+    noSongs: "В этом сообществе пока нет готовых для изучения песен.", notQuite: "Пока неверно", tryAgainNow: "Попробуйте ещё раз", nothingDetected: "(ничего не распознано)", recordingNotCaught: "Не удалось разобрать запись. Попробуйте ещё раз.",
     pendingLocalization: "Переводы готовятся. Голосовые упражнения уже доступны.", playSong: "🎵 Воспроизвести песню", processingError: "Не удалось обработать ответ. Отправьте /study, чтобы начать заново.", sayThis: "Произнесите:",
     settingsLanguage: "🌐 Изменить язык", settingsPromptFormat: "🔊 Формат задания", settingsTitle: "Настройки обучения:",
     startAgain: "Начать заново", studyUnavailable: "Обучение здесь пока недоступно.", tutorUnavailable: "Учебный помощник сейчас недоступен. Упражнение остаётся открытым.", suggested: "Рекомендуется", translationsReady: "Переводы готовы.", youSaid: "Вы сказали",
