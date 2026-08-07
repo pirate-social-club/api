@@ -10,6 +10,59 @@ import { decodePublicNamespaceVerificationSessionId } from "../../../src/lib/pub
 
 let cleanup: (() => Promise<void>) | null = null
 
+const testDsRecords = [
+  `49194 13 2 ${"05".repeat(32)}`,
+  `49194 13 4 ${"15".repeat(48)}`,
+]
+
+function hnsParentObservation(rootLabel: string, challengeTxtValue: string, height: number, committed: boolean): Record<string, unknown> {
+  return {
+    root_label: rootLabel,
+    zone_name: `${rootLabel}.`,
+    provider: "hnsd_json_rpc",
+    observed_at: new Date().toISOString(),
+    chain_anchor: {
+      network: "main",
+      height,
+      block_hash: "ab".repeat(32),
+      median_time: 1_786_000_000,
+    },
+    parent: {
+      raw_records: committed
+        ? [
+            { type: "SYNTH4", address: "192.0.2.44" },
+            { type: "NS", ns: "ns1.pirate." },
+            { type: "NS", ns: "ns2.pirate." },
+            { type: "TXT", txt: [challengeTxtValue] },
+            { type: "DS", keyTag: 49194, algorithm: 13, digestType: 2, digest: "05".repeat(32) },
+            { type: "DS", keyTag: 49194, algorithm: 13, digestType: 4, digest: "15".repeat(48) },
+          ]
+        : [{ type: "SYNTH4", address: "192.0.2.44" }],
+      nameservers: committed ? ["ns1.pirate.", "ns2.pirate."] : [],
+      ds_records: [],
+      glue4: [],
+      glue6: [],
+    },
+  }
+}
+
+function hnsAuthorityObservation(rootLabel: string): Record<string, unknown> {
+  return {
+    root_label: rootLabel,
+    zone_name: `${rootLabel}.`,
+    provider: "powerdns_api",
+    observed_at: new Date().toISOString(),
+    authoritative_dnssec_valid: true,
+    parent_ds_matches_live_dnskey: true,
+    earliest_rrsig_expires_at: "2099-01-01T00:00:00.000Z",
+    parent: { raw_records: [], nameservers: [], ds_records: [] },
+    parent_ds_results: [],
+    authority_redundancy_ok: true,
+    authorities: [],
+    required_rrsets: [],
+  }
+}
+
 beforeEach(() => {
   resetRuntimeCaches()
 })
@@ -31,10 +84,13 @@ describe("hns verification lifecycle routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-hns-restart-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
 
+    let parentObservationCount = 0
+    let challengeTxtValue = "pirate-verification=test"
     const originalFetch = globalThis.fetch
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
+        const body = init?.body ? JSON.parse(String(init.body)) as { challenge_txt_value?: string } : null
         if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
@@ -49,6 +105,15 @@ describe("hns verification lifecycle routes", () => {
             headers: { "content-type": "application/json" },
           })
         }
+        if (url.includes("/observe-root-parent?")) {
+          parentObservationCount += 1
+          return Response.json(hnsParentObservation(
+            "piraterestartroot",
+            challengeTxtValue,
+            parentObservationCount === 1 ? 1000 : parentObservationCount === 2 ? 1040 : 1080,
+            parentObservationCount > 1,
+          ))
+        }
         if (url.endsWith("/verify-txt-public")) {
           return new Response(JSON.stringify({
             verified: true,
@@ -60,17 +125,22 @@ describe("hns verification lifecycle routes", () => {
           })
         }
         if (url.endsWith("/publish-txt")) {
+          challengeTxtValue = body?.challenge_txt_value ?? challengeTxtValue
           return new Response(JSON.stringify({
             root_label: "piraterestartroot",
             zone_name: "piraterestartroot.",
             challenge_name: "_pirate.piraterestartroot.",
             zone_created: true,
-            nameservers: ["ns1.pirate."],
+            nameservers: ["ns1.pirate.", "ns2.pirate."],
+            ds_records: testDsRecords,
             observation_provider: "powerdns_api",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
+        }
+        if (url.includes("/observe-root-authority?")) {
+          return Response.json(hnsAuthorityObservation("piraterestartroot"))
         }
         if (url.includes("/authority-health?")) {
           return new Response(JSON.stringify({
@@ -103,11 +173,19 @@ describe("hns verification lifecycle routes", () => {
 
       const completedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
-      const completedBody = await json(completedNamespaceSession) as {
+      const pendingBody = await json(completedNamespaceSession) as { status: string }
+      expect(pendingBody.status).toBe("challenge_pending")
+      const verifiedNamespaceSession = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
+        { acknowledged_resource_replacement: true },
+        ctx.env,
+        session.accessToken,
+      )
+      const completedBody = await json(verifiedNamespaceSession) as {
         status: string
         namespace_verification: string | null
         evidence_bundle_ref: string | null
@@ -155,10 +233,13 @@ describe("hns verification lifecycle routes", () => {
     await createSelfVerifiedSession(ctx.env, session.accessToken)
 
     let verifyCount = 0
+    let parentObservationCount = 0
+    let challengeTxtValue = "pirate-verification=test"
     const originalFetch = globalThis.fetch
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
+        const body = init?.body ? JSON.parse(String(init.body)) as { challenge_txt_value?: string } : null
         if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
@@ -172,6 +253,15 @@ describe("hns verification lifecycle routes", () => {
             status: 200,
             headers: { "content-type": "application/json" },
           })
+        }
+        if (url.includes("/observe-root-parent?")) {
+          parentObservationCount += 1
+          return Response.json(hnsParentObservation(
+            "piratependingroot",
+            challengeTxtValue,
+            parentObservationCount === 1 ? 1000 : parentObservationCount === 2 ? 1040 : 1080,
+            parentObservationCount > 1,
+          ))
         }
         if (url.endsWith("/verify-txt-public")) {
           verifyCount += 1
@@ -193,17 +283,22 @@ describe("hns verification lifecycle routes", () => {
           })
         }
         if (url.endsWith("/publish-txt")) {
+          challengeTxtValue = body?.challenge_txt_value ?? challengeTxtValue
           return new Response(JSON.stringify({
             root_label: "piratependingroot",
             zone_name: "piratependingroot.",
             challenge_name: "_pirate.piratependingroot.",
             zone_created: true,
-            nameservers: ["ns1.pirate."],
+            nameservers: ["ns1.pirate.", "ns2.pirate."],
+            ds_records: testDsRecords,
             observation_provider: "powerdns_api",
           }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
+        }
+        if (url.includes("/observe-root-authority?")) {
+          return Response.json(hnsAuthorityObservation("piratependingroot"))
         }
         if (url.includes("/authority-health?")) {
           return new Response(JSON.stringify({
@@ -236,7 +331,7 @@ describe("hns verification lifecycle routes", () => {
 
       const pendingCompletion = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
@@ -252,9 +347,19 @@ describe("hns verification lifecycle routes", () => {
       expect(pendingBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
       expect(pendingBody.failure_reason).toBeNull()
 
+      const postBoundaryPending = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
+        { acknowledged_resource_replacement: true },
+        ctx.env,
+        session.accessToken,
+      )
+      expect(postBoundaryPending.status).toBe(200)
+      const postBoundaryPendingBody = await json(postBoundaryPending) as { status: string }
+      expect(postBoundaryPendingBody.status).toBe("challenge_pending")
+
       const verifiedCompletion = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
@@ -279,10 +384,12 @@ describe("hns verification lifecycle routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-hns-expiry-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
 
+    let challengeTxtValue = "pirate-verification=test"
     const originalFetch = globalThis.fetch
     await withFetchMock(async (input, init) => {
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test")) {
+        const body = init?.body ? JSON.parse(String(init.body)) as { challenge_txt_value?: string } : null
         if (url.includes("/inspect-public?")) {
           return new Response(JSON.stringify({
             root_exists: true,
@@ -294,7 +401,27 @@ describe("hns verification lifecycle routes", () => {
             status: 200,
             headers: { "content-type": "application/json" },
           })
-        }      }
+        }
+        if (url.includes("/observe-root-parent?")) {
+          return Response.json(hnsParentObservation(
+            "pirateexpiryroot",
+            challengeTxtValue,
+            1000,
+            false,
+          ))
+        }
+        if (url.endsWith("/publish-txt")) {
+          challengeTxtValue = body?.challenge_txt_value ?? challengeTxtValue
+          return Response.json({
+            root_label: "pirateexpiryroot",
+            zone_name: "pirateexpiryroot.",
+            zone_created: true,
+            nameservers: ["ns1.pirate.", "ns2.pirate."],
+            ds_records: testDsRecords,
+            observation_provider: "powerdns_api",
+          })
+        }
+      }
 
       return originalFetch(input, init)
     }, async () => {

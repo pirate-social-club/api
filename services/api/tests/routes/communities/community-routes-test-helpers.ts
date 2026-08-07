@@ -47,6 +47,12 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
   const originalFetch = globalThis.fetch
   const originalHnsVerifierBaseUrl = env.HNS_VERIFIER_BASE_URL
   const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
+  const dsRecords = [
+    `49194 13 2 ${"05".repeat(32)}`,
+    `49194 13 4 ${"15".repeat(48)}`,
+  ]
+  let publishedChallengeTxtValue = "pirate-verification=placeholder"
+  let parentObservationCount = 0
   env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
   env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -64,6 +70,62 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
           pirate_subdomain_issuance_allowed: true,
           operation_class: "pirate_delegated_namespace",
           observation_provider: "web3dns_json_doh",
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url.includes("/observe-root-parent?")) {
+        const observationNumber = parentObservationCount++
+        const resourceRecords = observationNumber === 0
+          ? [{ type: "SYNTH4", address: "192.0.2.44" }]
+          : [
+              { type: "SYNTH4", address: "192.0.2.44" },
+              { type: "NS", ns: "ns1.pirate." },
+              { type: "NS", ns: "ns2.pirate." },
+              { type: "TXT", txt: [publishedChallengeTxtValue] },
+              { type: "DS", keyTag: 49194, algorithm: 13, digestType: 2, digest: "05".repeat(32) },
+              { type: "DS", keyTag: 49194, algorithm: 13, digestType: 4, digest: "15".repeat(48) },
+            ]
+        return new Response(JSON.stringify({
+          root_label: "piratecommunityroot",
+          zone_name: "piratecommunityroot.",
+          provider: "hsd_json_rpc",
+          observed_at: "2026-04-27T00:00:00.000Z",
+          chain_anchor: {
+            network: "main",
+            height: observationNumber === 0 ? 1_000 : observationNumber === 1 ? 1_040 : 1_080,
+            block_hash: "ab".repeat(32),
+            median_time: 1_700_000_000,
+          },
+          parent: {
+            raw_records: resourceRecords,
+            nameservers: observationNumber === 0 ? [] : ["ns1.pirate.", "ns2.pirate."],
+            ds_records: observationNumber === 0 ? [] : [
+              { key_tag: 49194, algorithm: 13, digest_type: 2, digest: "05".repeat(32) },
+              { key_tag: 49194, algorithm: 13, digest_type: 4, digest: "15".repeat(48) },
+            ],
+            glue4: [],
+            glue6: [],
+          },
+        }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      }
+      if (url.includes("/observe-root-authority?")) {
+        return new Response(JSON.stringify({
+          root_label: "piratecommunityroot",
+          zone_name: "piratecommunityroot.",
+          provider: "powerdns_api",
+          observed_at: "2026-04-27T00:00:00.000Z",
+          authoritative_dnssec_valid: true,
+          parent_ds_matches_live_dnskey: true,
+          earliest_rrsig_expires_at: "2099-01-01T00:00:00.000Z",
+          parent_ds_results: [],
+          authority_redundancy_ok: true,
+          authorities: [],
+          required_rrsets: [],
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
@@ -90,12 +152,21 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
       }
       // Provisioning publishes the session nonce into the child zone...
       if (url.endsWith("/publish-txt") || url.endsWith("/ensure-zone")) {
+        if (init?.body) {
+          try {
+            const body = JSON.parse(String(init.body)) as { challenge_txt_value?: string }
+            publishedChallengeTxtValue = body.challenge_txt_value ?? publishedChallengeTxtValue
+          } catch {
+            // Keep the deterministic fixture value when a test sends no JSON body.
+          }
+        }
         return new Response(JSON.stringify({
           root_label: "piratecommunityroot",
           zone_name: "piratecommunityroot.",
           challenge_name: "_pirate.piratecommunityroot.",
           zone_created: true,
-          nameservers: ["ns1.pirate."],
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: dsRecords,
           observation_provider: "powerdns_api",
         }), {
           status: 200,
@@ -131,11 +202,20 @@ export async function prepareVerifiedNamespace(env: Env, accessToken: string): P
     const namespaceBody = await json(namespaceSession) as { id: string }
     const completed = await requestJson(
       `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
-      {},
+      { acknowledged_resource_replacement: true },
       env,
       accessToken,
     )
-    const completedBody = await json(completed) as { namespace_verification: string | null }
+    let completedBody = await json(completed) as { namespace_verification: string | null }
+    if (!completedBody.namespace_verification) {
+      const afterBoundary = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${namespaceBody.id}/complete`,
+        { acknowledged_resource_replacement: true },
+        env,
+        accessToken,
+      )
+      completedBody = await json(afterBoundary) as { namespace_verification: string | null }
+    }
     if (!completedBody.namespace_verification) {
       throw new Error("namespace verification did not complete")
     }

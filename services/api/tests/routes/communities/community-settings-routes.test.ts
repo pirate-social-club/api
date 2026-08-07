@@ -25,9 +25,18 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
   const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
   env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
   env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
+  const parentObservationCounts = new Map<string, number>()
+  const challengeTxtValues = new Map<string, string>()
+  const dsRecords = [
+    `49194 13 2 ${"05".repeat(32)}`,
+    `49194 13 4 ${"15".repeat(48)}`,
+  ]
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString()
     if (url.startsWith("http://hns-verifier.test")) {
+      const parsedUrl = new URL(url)
+      const rootLabel = parsedUrl.searchParams.get("root_label") ?? "piratecommunityroot"
+      const requestBody = init?.body ? JSON.parse(String(init.body)) as { root_label?: string; challenge_txt_value?: string } : null
       if (url.includes("/inspect-public?")) {
         return new Response(JSON.stringify({
           root_exists: true,
@@ -58,16 +67,70 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
           observation_provider: "web3dns_json_doh",
         }), { status: 200, headers: { "content-type": "application/json" } })
       }
+      if (url.includes("/observe-root-parent?")) {
+        const count = (parentObservationCounts.get(rootLabel) ?? 0) + 1
+        parentObservationCounts.set(rootLabel, count)
+        const challengeTxtValue = challengeTxtValues.get(rootLabel) ?? "pirate-verification=test"
+        const committed = count > 1
+        return Response.json({
+          root_label: rootLabel,
+          zone_name: `${rootLabel}.`,
+          provider: "hnsd_json_rpc",
+          observed_at: new Date().toISOString(),
+          chain_anchor: {
+            network: "main",
+            height: count === 1 ? 1000 : count === 2 ? 1040 : 1080,
+            block_hash: "ab".repeat(32),
+            median_time: 1_786_000_000,
+          },
+          parent: {
+            raw_records: committed
+              ? [
+                  { type: "SYNTH4", address: "192.0.2.44" },
+                  { type: "NS", ns: "ns1.pirate." },
+                  { type: "NS", ns: "ns2.pirate." },
+                  { type: "TXT", txt: [challengeTxtValue] },
+                  { type: "DS", keyTag: 49194, algorithm: 13, digestType: 2, digest: "05".repeat(32) },
+                  { type: "DS", keyTag: 49194, algorithm: 13, digestType: 4, digest: "15".repeat(48) },
+                ]
+              : [{ type: "SYNTH4", address: "192.0.2.44" }],
+            nameservers: committed ? ["ns1.pirate.", "ns2.pirate."] : [],
+            ds_records: [],
+            glue4: [],
+            glue6: [],
+          },
+        })
+      }
       // Provisioning publishes the session nonce into the child zone...
       if (url.endsWith("/publish-txt") || url.endsWith("/ensure-zone")) {
+        const provisionedRootLabel = requestBody?.root_label?.trim() || rootLabel
+        const challengeTxtValue = requestBody?.challenge_txt_value ?? `pirate-verification=${provisionedRootLabel}`
+        challengeTxtValues.set(provisionedRootLabel, challengeTxtValue)
         return new Response(JSON.stringify({
-          root_label: "piratecommunityroot",
-          zone_name: "piratecommunityroot.",
-          challenge_name: "_pirate.piratecommunityroot.",
+          root_label: provisionedRootLabel,
+          zone_name: `${provisionedRootLabel}.`,
+          challenge_name: `_pirate.${provisionedRootLabel}.`,
           zone_created: true,
-          nameservers: ["ns1.pirate."],
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: dsRecords,
           observation_provider: "powerdns_api",
         }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (url.includes("/observe-root-authority?")) {
+        return Response.json({
+          root_label: rootLabel,
+          zone_name: `${rootLabel}.`,
+          provider: "powerdns_api",
+          observed_at: new Date().toISOString(),
+          authoritative_dnssec_valid: true,
+          parent_ds_matches_live_dnskey: true,
+          earliest_rrsig_expires_at: "2099-01-01T00:00:00.000Z",
+          parent: { raw_records: [], nameservers: [], ds_records: [] },
+          parent_ds_results: [],
+          authority_redundancy_ok: true,
+          authorities: [],
+          required_rrsets: [],
+        })
       }
       // ...and the authority-health check reads it back through the serving path.
       if (url.includes("/authority-health")) {
@@ -366,11 +429,19 @@ membership_mode: "request",
       }
       const firstCompleted = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
-      return json(firstCompleted) as Promise<{ namespace_verification: string }>
+      const firstPending = await json(firstCompleted) as { namespace_verification: string | null }
+      expect(firstPending.namespace_verification).toBeNull()
+      const firstVerified = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.id}/complete`,
+        { acknowledged_resource_replacement: true },
+        ctx.env,
+        session.accessToken,
+      )
+      return json(firstVerified) as Promise<{ namespace_verification: string }>
     })
 
     const firstAttach = await requestJson(
@@ -391,13 +462,21 @@ membership_mode: "request",
       }
       const secondCompleted = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
+        ctx.env,
+        session.accessToken,
+      )
+      const secondPending = await json(secondCompleted) as { namespace_verification: string | null }
+      expect(secondPending.namespace_verification).toBeNull()
+      const secondVerified = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.id}/complete`,
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
       return {
         session: secondNamespaceSessionBody.id,
-        completed: await json(secondCompleted) as { namespace_verification: string },
+        completed: await json(secondVerified) as { namespace_verification: string },
       }
     })
     const secondCompletedBody = secondNamespace.completed
@@ -459,11 +538,19 @@ membership_mode: "request",
       const startedBody = await json(started) as { id: string }
       const completed = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${startedBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
-      const completedBody = await json(completed) as { namespace_verification: string }
+      const pending = await json(completed) as { namespace_verification: string | null }
+      expect(pending.namespace_verification).toBeNull()
+      const verified = await requestJson(
+        `http://pirate.test/namespace-verification-sessions/${startedBody.id}/complete`,
+        { acknowledged_resource_replacement: true },
+        ctx.env,
+        session.accessToken,
+      )
+      const completedBody = await json(verified) as { namespace_verification: string }
       return completedBody.namespace_verification
     }
 

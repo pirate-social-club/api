@@ -714,6 +714,9 @@ membership_mode: "request",
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test") && url.includes("/inspect-public?")) {
         return new Response(JSON.stringify({
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
           zone_exists: false,
           challenge_present: false,
           nameservers: ["ns1.pirate.sc."],
@@ -722,6 +725,44 @@ membership_mode: "request",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.includes("/observe-root-parent?")) {
+        return Response.json({
+          root_label: "adminverifierroot",
+          zone_name: "adminverifierroot.",
+          provider: "hsd_json_rpc",
+          observed_at: "2026-04-27T00:00:00.000Z",
+          chain_anchor: {
+            network: "main",
+            height: 1_000,
+            block_hash: "ab".repeat(32),
+            median_time: 1_700_000_000,
+          },
+          parent: {
+            raw_records: [],
+            nameservers: [],
+            ds_records: [],
+            glue4: [],
+            glue6: [],
+          },
+        })
+      }
+
+      if (url.endsWith("/publish-txt")) {
+        return Response.json({
+          root_label: "adminverifierroot",
+          zone_name: "adminverifierroot.",
+          challenge_name: "_pirate.adminverifierroot.",
+          challenge_txt_value: "pirate-verification=nvs_test",
+          zone_created: true,
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: [
+            `49194 13 2 ${"05".repeat(32)}`,
+            `49194 13 4 ${"15".repeat(48)}`,
+          ],
+          observation_provider: "powerdns_api",
         })
       }
 
@@ -754,7 +795,7 @@ membership_mode: "request",
       expect(createdBody.status).toBe("challenge_required")
       expect(createdBody.challenge_host).toBe("adminverifierroot")
       expect(typeof createdBody.challenge_txt_value).toBe("string")
-      expect(createdBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
+      expect(createdBody.setup_nameservers).toEqual(["ns1.pirate.", "ns2.pirate."])
 
       const fetched = await Promise.resolve(app.request(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}`,
@@ -777,7 +818,7 @@ membership_mode: "request",
       expect(fetchedBody.status).toBe("challenge_required")
       expect(fetchedBody.challenge_host).toBe("adminverifierroot")
       expect(fetchedBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
-      expect(fetchedBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
+      expect(fetchedBody.setup_nameservers).toEqual(["ns1.pirate.", "ns2.pirate."])
     })
   })
 
