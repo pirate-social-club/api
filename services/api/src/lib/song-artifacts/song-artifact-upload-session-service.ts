@@ -48,6 +48,8 @@ const MAX_MULTIPART_PARTS = 10_000
 // Filebase can return AccessDenied for a newly completed object while its S3
 // metadata propagates. Keep retrying long enough to cover that window instead
 // of turning a successful multipart completion into a false provider failure.
+// The retry window is intentionally bounded so a broken provider cannot hold
+// the completion request forever.
 export const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [
   1000,
   2000,
@@ -59,6 +61,10 @@ export const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [
   30000,
   30000,
   30000,
+  60000,
+  60000,
+  60000,
+  60000,
   60000,
 ] as const
 const DIRECT_MULTIPART_ARTIFACT_KINDS = new Set<SongArtifactKind>([
@@ -241,9 +247,9 @@ function normalizeHeadContentType(contentType: string | null): string | null {
   return contentType?.split(";")[0]?.trim().toLowerCase() || null
 }
 
-function isRetryableHeadVerificationError(error: unknown): boolean {
+export function isRetryableHeadVerificationError(error: unknown): boolean {
   return error instanceof HttpError
-    && (error.code === "provider_unavailable" || error.code === "not_found")
+    && (error.code === "not_found" || (error.code === "provider_unavailable" && error.retryable))
 }
 
 async function headObjectAfterComplete(input: {

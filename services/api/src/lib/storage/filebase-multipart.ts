@@ -171,6 +171,9 @@ export async function headObject(input: {
     }
   }
   if (!response.ok) {
+    // Filebase can briefly return 403 while a just-completed object is being
+    // pinned and becomes readable through the S3 metadata endpoint. Keep this
+    // in the same retryable provider path as other transient HEAD failures.
     throw providerUnavailable(providerErrorMessage("Filebase object HEAD", response, await providerResponseText(response)))
   }
   return {

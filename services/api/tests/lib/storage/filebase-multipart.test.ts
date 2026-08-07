@@ -48,11 +48,18 @@ describe("filebase multipart helpers", () => {
       })
     }
 
-    await expect(fetchFilebaseWithTimeout(
-      new Request("https://s3.filebase.test/example-bucket/object"),
-      "Filebase test request",
-      1,
-    )).rejects.toThrow("Filebase test request timed out")
+    try {
+      await fetchFilebaseWithTimeout(
+        new Request("https://s3.filebase.test/example-bucket/object"),
+        "Filebase test request",
+        1,
+      )
+      throw new Error("expected fetchFilebaseWithTimeout to throw")
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpError)
+      expect((error as HttpError).message).toContain("Filebase test request timed out")
+      expect((error as HttpError).retryable).toBe(true)
+    }
     expect(observedAbort).toBe(true)
   })
 
@@ -152,6 +159,38 @@ describe("filebase multipart helpers", () => {
       expect(error).toBeInstanceOf(HttpError)
       expect((error as HttpError).status).toBe(404)
       expect((error as HttpError).code).toBe("not_found")
+    }
+  })
+
+  test.each([401, 403])("keeps transient HEAD %d failures retryable", async (status) => {
+    installFetch(() => new Response("<Error><Code>AccessDenied</Code></Error>", { status }))
+
+    try {
+      await headObject({ env, objectKey: "test-object-hidden" })
+      throw new Error("expected headObject to throw")
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpError)
+      const httpError = error as HttpError
+      expect(httpError.code).toBe("provider_unavailable")
+      expect(httpError.status).toBe(502)
+      expect(httpError.retryable).toBe(true)
+      expect(httpError.message).toContain("Filebase object HEAD failed with status " + status)
+    }
+  })
+
+  test("keeps transient HEAD provider failures retryable", async () => {
+    installFetch(() => new Response("temporarily unavailable", { status: 503 }))
+
+    try {
+      await headObject({ env, objectKey: "test-object-unavailable" })
+      throw new Error("expected headObject to throw")
+    } catch (error) {
+      expect(error).toBeInstanceOf(HttpError)
+      const httpError = error as HttpError
+      expect(httpError.code).toBe("provider_unavailable")
+      expect(httpError.status).toBe(502)
+      expect(httpError.retryable).toBe(true)
+      expect(httpError.message).toContain("Filebase object HEAD failed with status 503")
     }
   })
 

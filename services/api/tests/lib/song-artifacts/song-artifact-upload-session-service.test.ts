@@ -3,6 +3,7 @@ import { HttpError } from "../../../src/lib/errors"
 import {
   computeMultipartPartPlan,
   DIRECT_MULTIPART_MAX_BYTES,
+  isRetryableHeadVerificationError,
   POST_COMPLETE_HEAD_RETRY_DELAYS_MS,
   reapStaleMultipartSongArtifactUploads,
 } from "../../../src/lib/song-artifacts/song-artifact-upload-session-service"
@@ -127,9 +128,30 @@ describe("song artifact upload session service", () => {
     expect(() => computeMultipartPartPlan(DIRECT_MULTIPART_MAX_BYTES + 1)).toThrow("Direct multipart uploads are currently limited to 2GB")
   })
 
+  test("retries transient provider failures, including Filebase visibility 403s", () => {
+    expect(isRetryableHeadVerificationError(new HttpError(
+      502,
+      "provider_unavailable",
+      "Filebase object HEAD failed with status 403",
+      true,
+    ))).toBe(true)
+    expect(isRetryableHeadVerificationError(new HttpError(
+      502,
+      "provider_unavailable",
+      "Filebase object HEAD failed with status 503",
+      true,
+    ))).toBe(true)
+    expect(isRetryableHeadVerificationError(new HttpError(
+      502,
+      "provider_unavailable",
+      "Filebase object HEAD timed out",
+      true,
+    ))).toBe(true)
+  })
+
   test("allows time for Filebase metadata propagation after completion", () => {
     const retryBudgetMs = POST_COMPLETE_HEAD_RETRY_DELAYS_MS.reduce((total, delay) => total + delay, 0)
-    expect(retryBudgetMs).toBeGreaterThanOrEqual(4 * 60 * 1000)
+    expect(retryBudgetMs).toBeGreaterThanOrEqual(8 * 60 * 1000)
   })
 
   test("reaps stale multipart sessions idempotently", async () => {
