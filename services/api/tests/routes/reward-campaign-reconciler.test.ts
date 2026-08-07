@@ -43,6 +43,12 @@ function env() {
   }
 }
 
+const ACTIVE_SETTLEMENT_ASSET = {
+  chainId: 84532,
+  tokenAddress: "0x1000000000000000000000000000000000000001",
+  treasuryAddress: "0x2000000000000000000000000000000000000002",
+}
+
 describe("reward campaign reconciler", () => {
   test("activates scheduled campaigns and terminally ends elapsed live campaigns", async () => {
     const ctx = await createRouteTestContext(env())
@@ -80,7 +86,7 @@ describe("reward campaign reconciler", () => {
       })
     }
 
-    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false, activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET })).toEqual({
       activated_campaigns: 1,
       canceled_draft_campaigns: 0,
       canceled_retired_funding_campaigns: 0,
@@ -163,7 +169,7 @@ describe("reward campaign reconciler", () => {
       args: [session.userId],
     })
 
-    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false, activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET })).toEqual({
       activated_campaigns: 0,
       canceled_draft_campaigns: 2,
       canceled_retired_funding_campaigns: 0,
@@ -280,7 +286,7 @@ describe("reward campaign reconciler", () => {
       })
     }
 
-    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toEqual({
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false, activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET })).toEqual({
       activated_campaigns: 0,
       canceled_draft_campaigns: 0,
       canceled_retired_funding_campaigns: 1,
@@ -352,11 +358,41 @@ describe("reward campaign reconciler", () => {
       detected_at: now,
     }])
 
-    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false })).toMatchObject({
+    expect(await advanceRewardCampaignLifecycle({ client: ctx.client, now, postgres: false, activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET })).toMatchObject({
       canceled_retired_funding_campaigns: 0,
       audited_retired_funding_effects: 0,
       retirement_policy_anomalies: 0,
     })
+  })
+
+  test("fails closed when a retirement policy matches the active settlement asset", async () => {
+    const ctx = await createRouteTestContext(env())
+    cleanup = ctx.cleanup
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_funding_asset_retirements (
+          reward_funding_asset_retirement_id, chain_id, token_address,
+          treasury_address, quote_cutoff_at, disposition, authorized_by,
+          authorization_reference, authorized_at
+        ) VALUES (
+          'rfr_active_asset_test', ?1, ?2, ?3, '2026-08-06T00:00:00.000Z',
+          'non_material_test_asset', 'test_owner', 'test-authorization',
+          '2026-08-06T00:00:00.000Z'
+        )
+      `,
+      args: [
+        ACTIVE_SETTLEMENT_ASSET.chainId,
+        ACTIVE_SETTLEMENT_ASSET.tokenAddress,
+        ACTIVE_SETTLEMENT_ASSET.treasuryAddress,
+      ],
+    })
+
+    await expect(advanceRewardCampaignLifecycle({
+      client: ctx.client,
+      now: "2026-08-06T12:00:00.000Z",
+      postgres: false,
+      activeSettlementAsset: ACTIVE_SETTLEMENT_ASSET,
+    })).rejects.toThrow("Active reward settlement asset is declared retired: rfr_active_asset_test")
   })
 
   test("uses an exact seven-day qualified-at grace boundary across the UTC day", () => {

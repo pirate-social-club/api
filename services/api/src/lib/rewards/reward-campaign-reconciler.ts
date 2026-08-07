@@ -986,6 +986,7 @@ export async function reconcileRewardCampaigns(input: {
     client: input.controlPlaneClient,
     now,
     postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+    activeSettlementAsset: campaigns,
   })
   summary.activated_campaigns = lifecycle.activated_campaigns
   summary.canceled_draft_campaigns = lifecycle.canceled_draft_campaigns
