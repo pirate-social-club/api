@@ -2,6 +2,9 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 
+import type { Env } from "../src/env"
+import { resolveRewardsSettlementRpcUrl } from "../src/lib/communities/bookings/booking-chain-config"
+import { resolveRewardCampaignAssetConfig } from "../src/lib/rewards/reward-campaign-config"
 import { readWranglerVars } from "../scripts/_lib/dev-vars"
 
 const wranglerConfigPath = fileURLToPath(new URL("../wrangler.jsonc", import.meta.url))
@@ -37,10 +40,8 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x01c84e513CC823255A9651885Fb59E363B47d55a",
-      REWARDS_CAMPAIGN_RPC_URL: "https://sepolia.base.org",
       PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
       PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xf536b0DAfD04AE1E5ADB8C170880c7996Fa26c5C",
-      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://sepolia.base.org",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
@@ -66,6 +67,18 @@ describe("staging reward money-loop configuration", () => {
     expect(vars.REWARDS_CAMPAIGN_TREASURY_ADDRESS).not.toBe(
       vars.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS,
     )
+    expect(vars.REWARDS_CAMPAIGN_RPC_URL).toBeUndefined()
+    expect(vars.PIRATE_REWARDS_SETTLEMENT_RPC_URL).toBeUndefined()
+    expect(resolveRewardCampaignAssetConfig({
+      ...vars,
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_SEPOLIA_RPC_URL: "https://keyed-sepolia.example.test",
+    } as Env).rpcUrl).toBe("https://keyed-sepolia.example.test")
+    expect(resolveRewardsSettlementRpcUrl({
+      ...vars,
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: undefined,
+      BASE_SEPOLIA_RPC_URL: "https://keyed-sepolia.example.test",
+    } as Env)).toBe("https://keyed-sepolia.example.test")
   })
 
   test("arms production settlement on Base mainnet without testnet custody config", () => {
@@ -85,10 +98,8 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_CAMPAIGN_CHAIN_ID: "8453",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
-      REWARDS_CAMPAIGN_RPC_URL: "https://mainnet.base.org",
       PIRATE_REWARDS_SETTLEMENT_BACKEND: "eoa_vault",
       PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0x43bbA97370B00E9930994EA427DAEE400846617B",
-      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://mainnet.base.org",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "8453",
       PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "false",
@@ -119,5 +130,17 @@ describe("staging reward money-loop configuration", () => {
     expect(vars.REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS).toBe(
       vars.PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS,
     )
+    expect(vars.REWARDS_CAMPAIGN_RPC_URL).toBeUndefined()
+    expect(vars.PIRATE_REWARDS_SETTLEMENT_RPC_URL).toBeUndefined()
+    expect(resolveRewardCampaignAssetConfig({
+      ...vars,
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_MAINNET_RPC_URL: "https://keyed-mainnet.example.test",
+    } as Env).rpcUrl).toBe("https://keyed-mainnet.example.test")
+    expect(resolveRewardsSettlementRpcUrl({
+      ...vars,
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: undefined,
+      BASE_MAINNET_RPC_URL: "https://keyed-mainnet.example.test",
+    } as Env)).toBe("https://keyed-mainnet.example.test")
   })
 })
