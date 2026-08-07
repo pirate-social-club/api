@@ -35,7 +35,7 @@ class PlatformManagedZoneBootstrapClient implements Client {
     if (sql.includes("INSERT INTO namespace_verification_sessions")) {
       this.insertAttempts += 1
       const args = typeof statement === "string" ? [] : (statement.args ?? [])
-      expect(args[5]).toBe("dns_setup_required")
+      expect(args[5]).toBe("challenge_required")
       expect(args[6]).toBe("dns_txt")
       expect(JSON.parse(String(args[7]))).toMatchObject({
         kind: "hns_import",
@@ -59,7 +59,7 @@ class PlatformManagedZoneBootstrapClient implements Client {
           family: "hns",
           submitted_root_label: "clawitzer",
           normalized_root_label: "clawitzer",
-          status: "dns_setup_required",
+          status: "challenge_required",
           challenge_kind: "dns_txt",
           challenge_payload_json: JSON.stringify({
             kind: "hns_import",
@@ -230,7 +230,7 @@ describe("startNamespaceVerificationSession", () => {
     })
 
     expect(client.insertAttempts).toBe(1)
-    expect(session.status).toBe("dns_setup_required")
+    expect(session.status).toBe("challenge_required")
     expect(session.challenge_host).toBe("clawitzer")
     expect(session.challenge_txt_value).toBe("pirate-verification=nvs_test")
     expect(session.setup_nameservers).toEqual(["ns1.pirate.", "ns2.pirate."])
