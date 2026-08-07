@@ -1492,7 +1492,7 @@ describe("post study service", () => {
       body: {
         attempt_number: 1,
         exercise_id: exercise.id,
-        idempotency_key: "voice-ungradable-1",
+        idempotency_key: "rerecord-first",
         session_id: payload.session!.id!,
         session_revision: payload.session!.session_revision,
         transcript: "testing one two three",
@@ -1519,7 +1519,7 @@ describe("post study service", () => {
       ...base,
       body: {
         ...firstInput.body,
-        idempotency_key: "voice-ungradable-2",
+        idempotency_key: "rerecord-second",
         session_revision: first.lesson!.session_revision,
       },
     })
