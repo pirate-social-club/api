@@ -4,6 +4,7 @@ import type { Env } from "../../env"
 import type { Client } from "../sql-client"
 import { rowValue } from "../sql-row"
 import { captureScheduledWarning } from "../ops-alerts/scheduled"
+import { resolveOptionalRewardCampaignAssetConfig } from "./reward-campaign-config"
 import { resolveRewardsSettlementBackend } from "./reward-vault-lit-config"
 
 const TASK = "reward_campaign_treasury_solvency"
@@ -88,23 +89,6 @@ type SolvencyConfig = {
   tokenAddress: `0x${string}`
   rpcUrl: string
   chainId: number
-}
-
-function resolveConfig(env: Env): SolvencyConfig | null {
-  const treasury = String(env.REWARDS_CAMPAIGN_TREASURY_ADDRESS ?? "").trim()
-  const token = String(env.REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS ?? "").trim()
-  const rpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
-  const chainId = Number(String(env.REWARDS_CAMPAIGN_CHAIN_ID ?? "").trim())
-  if (!treasury && !token && !rpcUrl && !chainId) return null
-  if (!treasury || !token || !/^https:\/\//i.test(rpcUrl) || !Number.isSafeInteger(chainId) || chainId <= 0) {
-    throw new Error("Reward campaign treasury solvency configuration is incomplete")
-  }
-  return {
-    treasuryAddress: getAddress(treasury) as `0x${string}`,
-    tokenAddress: getAddress(token) as `0x${string}`,
-    rpcUrl,
-    chainId,
-  }
 }
 
 function bigintValue(value: unknown): bigint {
@@ -254,8 +238,14 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
   readCapacity?: (config: SolvencyConfig) => Promise<RewardVaultCapacityObservation>
   warn?: typeof captureScheduledWarning
 }): Promise<RewardCampaignSolvencySummary> {
-  const config = resolveConfig(input.env)
-  if (!config) return { configured: false }
+  const asset = resolveOptionalRewardCampaignAssetConfig(input.env)
+  if (!asset) return { configured: false }
+  const config: SolvencyConfig = {
+    treasuryAddress: asset.treasuryAddress as `0x${string}`,
+    tokenAddress: asset.tokenAddress as `0x${string}`,
+    rpcUrl: asset.rpcUrl,
+    chainId: asset.chainId,
+  }
   const liability = await readRewardCampaignLiability(input.client)
   const balanceAtomic = await (input.readBalance ?? readTreasuryBalance)(config)
   const solvent = balanceAtomic >= liability.totalAtomic

@@ -37,6 +37,13 @@ const CAMPAIGN_ENV_KEYS = [
   "REWARDS_CAMPAIGN_MAX_DURATION_SECONDS",
 ] as const
 
+const REWARD_CAMPAIGN_ASSET_ENV_KEYS = [
+  "REWARDS_CAMPAIGN_CHAIN_ID",
+  "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS",
+  "REWARDS_CAMPAIGN_TREASURY_ADDRESS",
+  "REWARDS_CAMPAIGN_RPC_URL",
+] as const
+
 type CampaignEnvKey = typeof CAMPAIGN_ENV_KEYS[number]
 
 function enabled(raw: string | undefined): boolean {
@@ -80,6 +87,11 @@ export function resolveRewardCampaignAssetConfig(env: Env): RewardCampaignAssetC
     rpcUrl,
   }
   return config
+}
+
+export function resolveOptionalRewardCampaignAssetConfig(env: Env): RewardCampaignAssetConfig | null {
+  const configured = REWARD_CAMPAIGN_ASSET_ENV_KEYS.some((key) => String(env[key] ?? "").trim() !== "")
+  return configured ? resolveRewardCampaignAssetConfig(env) : null
 }
 
 export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
