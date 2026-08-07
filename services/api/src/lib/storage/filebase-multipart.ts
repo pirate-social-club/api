@@ -145,14 +145,20 @@ export async function headObject(input: {
     throw notFoundError("Object not found")
   }
   // Some S3-compatible gateways reject header-authenticated HEAD requests from
-  // edge runtimes while accepting the equivalent range GET. Keep HEAD as the
-  // cheap, normal path and use a one-byte GET only for that specific response.
+  // edge runtimes while accepting the equivalent presigned range GET. Keep
+  // HEAD as the cheap, normal path and use a one-byte GET only for that
+  // specific response. Presigning avoids the gateway-specific rejection of
+  // edge-runtime Authorization headers while retaining object authorization.
   if (response.status === 403) {
-    const rangeResponse = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
+    const rangeUrl = await buildS3PresignedUrl({
       method: "GET",
       config: requestConfig(input),
       objectKey: input.objectKey,
-      bodyHashMode: "empty",
+      bodyHashMode: "unsigned",
+      headers: { range: "bytes=0-0" },
+    })
+    const rangeResponse = await fetchFilebaseWithTimeout(new Request(rangeUrl.toString(), {
+      method: "GET",
       headers: { range: "bytes=0-0" },
     }), "Filebase object range GET")
     if (rangeResponse.status === 404) {
