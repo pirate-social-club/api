@@ -1,5 +1,6 @@
 import type { Client } from "../sql-client"
 import { rowValue } from "../sql-row"
+import { rotateCommunityJobTickIds } from "../communities/jobs/tick-rotation"
 
 export const REWARD_QUALIFICATION_GRACE_MS = 7 * 86_400_000
 
@@ -7,6 +8,17 @@ export function rewardCampaignCandidateCutoff(now: string): string {
   const nowMs = Date.parse(now)
   if (!Number.isFinite(nowMs)) throw new TypeError("invalid reward reconciliation time")
   return new Date(nowMs - REWARD_QUALIFICATION_GRACE_MS).toISOString()
+}
+
+export function scheduleRewardCampaignCommunityIds(
+  communityIds: string[],
+  maxCommunities: number,
+  now: string,
+): string[] {
+  const nowMs = Date.parse(now)
+  if (!Number.isFinite(nowMs)) throw new TypeError("invalid reward reconciliation time")
+  const boundedMax = Math.max(1, Math.trunc(maxCommunities))
+  return rotateCommunityJobTickIds(communityIds, nowMs).slice(0, boundedMax)
 }
 
 export async function listRewardCampaignCommunityIds(input: {

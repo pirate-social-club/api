@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
-import { listRewardCampaignCommunityIds } from "./reward-campaign-candidates"
+import {
+  listRewardCampaignCommunityIds,
+  scheduleRewardCampaignCommunityIds,
+} from "./reward-campaign-candidates"
 
 describe("reward campaign ingestion candidates", () => {
   test("uses the seven-day post-end credit window without filtering campaign status", async () => {
@@ -27,5 +30,13 @@ describe("reward campaign ingestion candidates", () => {
     expect(query).toContain("ends_at >= CAST(?1 AS TEXT)")
     expect(query).not.toContain("status")
     expect(ids).toEqual(["cmt_exhausted", "cmt_ended"])
+  })
+
+  test("rotates the scoped candidates before applying the per-tick cap", () => {
+    expect(scheduleRewardCampaignCommunityIds(
+      ["cmt_a", "cmt_b", "cmt_c", "cmt_d"],
+      2,
+      "1970-01-01T00:01:00.000Z",
+    )).toEqual(["cmt_b", "cmt_c"])
   })
 })

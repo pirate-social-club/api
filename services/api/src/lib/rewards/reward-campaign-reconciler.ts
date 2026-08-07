@@ -19,6 +19,7 @@ import {
   listRewardCampaignCommunityIds,
   rewardCampaignCandidateCutoff,
   REWARD_QUALIFICATION_GRACE_MS,
+  scheduleRewardCampaignCommunityIds,
 } from "./reward-campaign-candidates"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
@@ -999,11 +1000,11 @@ export async function reconcileRewardCampaigns(input: {
   summary.ended_campaigns = lifecycle.ended_campaigns
   const postgres = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 50))
-  const candidateCommunityIds = (await listRewardCampaignCommunityIds({
+  const candidateCommunityIds = scheduleRewardCampaignCommunityIds(await listRewardCampaignCommunityIds({
     client: input.controlPlaneClient,
     now,
     postgres,
-  })).slice(0, maxCommunities)
+  }), maxCommunities, now)
   // The campaign window keeps a community eligible through the complete
   // seven-day qualification grace period. On re-entry, ingestion resumes at
   // its persisted checkpoint and catches up in bounded 500-row batches; this
