@@ -142,11 +142,17 @@ export function gradeSayItBack(input: {
   reference: string
   sourceLanguage: string | null | undefined
   transcript: string
-}): { correct: boolean; feedback?: { matched: string[]; missing: string[]; extra: string[] }; rating: FsrsRating } {
+}): {
+  correct: boolean
+  feedback?: { matched: string[]; missing: string[]; extra: string[] }
+  /** Exact v2 ungradable overlap: matched normalized tokens / normalized reference tokens. */
+  overlap: number
+  rating: FsrsRating
+} {
   const referenceTokens = recallTokensForSourceLanguage(input.reference, input.sourceLanguage)
   const transcriptTokens = recallTokensForSourceLanguage(input.transcript, input.sourceLanguage)
   if (tokenEditDistance(referenceTokens, transcriptTokens) === 0) {
-    return { correct: true, rating: fsrsRatingFor("correct", input.attemptNumber) }
+    return { correct: true, overlap: 1, rating: fsrsRatingFor("correct", input.attemptNumber) }
   }
   if (isEnglishRecall(input.sourceLanguage)) {
     // STT near-misses (word fragmentation like "shooby doo", tense endings
@@ -161,12 +167,14 @@ export function gradeSayItBack(input: {
       // Not an exact match, so cap at "hard" even on the first attempt. The
       // token diff is suppressed: reporting missing/extra tokens on an attempt
       // graded correct would contradict the verdict.
-      return { correct: true, rating: "hard" }
+      return { correct: true, overlap: 1, rating: "hard" }
     }
   }
+  const feedback = tokenDiff(input.reference, input.transcript, input.sourceLanguage)
   return {
     correct: false,
-    feedback: tokenDiff(input.reference, input.transcript, input.sourceLanguage),
+    feedback,
+    overlap: referenceTokens.length === 0 ? 0 : feedback.matched.length / referenceTokens.length,
     rating: "again",
   }
 }

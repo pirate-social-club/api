@@ -98,7 +98,7 @@ INSERT INTO reward_funding_asset_retirements (
     '0xc74e72ce521674bcaea66c99874fe9d5984e12be',
     '2026-07-30T21:17:40.000Z',
     'non_material_test_asset',
-    'alex',
-    'web-release-run:30581575428;retirement-review:2026-08-06',
-    '2026-08-06T00:00:00.000Z'
+    'workspace_owner',
+    'web-release-run:30581575428;owner-chat-authorization:2026-08-06',
+    '2026-08-06T14:58:43.000Z'
 );

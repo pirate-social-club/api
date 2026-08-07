@@ -81,6 +81,19 @@ describe("gradeSayItBack phonetic rejection", () => {
     expect(grade.rating).toBe("again")
     expect(grade.feedback?.missing).toEqual(["shoo", "be", "doo"])
     expect(grade.feedback?.extra?.length).toBeGreaterThan(0)
+    expect(grade.overlap).toBe(0)
+  })
+
+  test("reports overlap from the existing normalized source-language tokens", () => {
+    const grade = gradeSayItBack({
+      attemptNumber: 1,
+      reference: "Let myself be woven",
+      sourceLanguage: "en",
+      transcript: "let myself testing",
+    })
+    expect(grade.correct).toBe(false)
+    expect(grade.feedback?.matched).toEqual(["let", "myself"])
+    expect(grade.overlap).toBe(0.5)
   })
 
   test("never applies phonetics for non-English source languages", () => {

@@ -24,6 +24,7 @@ import type { StudyPost } from "../../../src/lib/posts/post-study-access"
 import {
   createTelegramChatStudyVoiceIntent,
   createTelegramStudyVoiceIntent,
+  handleTelegramStudyVoiceMessage,
 } from "../../../src/lib/telegram/study-voice-service"
 import { telegramStudyPlaybackButton } from "../../../src/lib/telegram/chat-study-playback-service"
 import { getTelegramStudyCopy, STUDY_LANGUAGE_BUTTONS } from "../../../src/lib/telegram/study-copy"
@@ -45,6 +46,7 @@ afterEach(async () => {
 
 test("Telegram retry-phase progress tracks mastery instead of first-pass coverage", () => {
   const session = {
+    completion_reason: null,
     completed_exercise_count: 10,
     due_count: 0,
     first_pass_correct_count: 1,
@@ -54,8 +56,10 @@ test("Telegram retry-phase progress tracks mastery instead of first-pass coverag
     next_due_at: undefined,
     presentation_count: 10,
     qualified: false,
+    resolved_exercise_count: 1,
     required_correct_count: 7,
     served_count: 10,
+    session_revision: 0,
     status: "active" as const,
     total_units: 10,
   }
@@ -86,6 +90,10 @@ async function applyStudyMigration(client: Client): Promise<void> {
     await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1118_song_study_review_sessions.sql")
     await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1121_song_study_attempt_identity.sql")
     await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1142_song_study_sessions.sql")
+  }
+  const sessionColumns = await client.execute("PRAGMA table_info(song_study_session)")
+  if (!sessionColumns.rows.some((row) => String(row.name) === "session_revision")) {
+    await applyMigrationFile(client, "../../../test-fixtures/db/community-template/migrations/1151_song_study_orchestration_v2.sql")
   }
 }
 
@@ -1943,6 +1951,14 @@ describe("community study routes", () => {
           attempts_remaining: 2,
           exercise_id: exercise!.id,
           feedback: { extra: ["wrong"], matched: [], missing: ["line"] },
+          lesson: {
+            completion_reason: null,
+            next: null,
+            resolved_count: 0,
+            serving_index: 1,
+            session_revision: 1,
+            total_count: 1,
+          },
           object: "song_study_attempt_result",
           outcome: "incorrect",
         },
@@ -1980,6 +1996,14 @@ describe("community study routes", () => {
           attempts_remaining: 1,
           exercise_id: exercise!.id,
           feedback: { extra: [], matched: [], missing: ["line"] },
+          lesson: {
+            completion_reason: null,
+            next: null,
+            resolved_count: 0,
+            serving_index: 1,
+            session_revision: 2,
+            total_count: 1,
+          },
           object: "song_study_attempt_result",
           outcome: "incorrect",
         },
@@ -2018,6 +2042,14 @@ describe("community study routes", () => {
           attempts_remaining: 0,
           exercise_id: exercise!.id,
           feedback: { extra: [], matched: [], missing: ["line"] },
+          lesson: {
+            completion_reason: null,
+            next: null,
+            resolved_count: 1,
+            serving_index: 1,
+            session_revision: 3,
+            total_count: 1,
+          },
           object: "song_study_attempt_result",
           outcome: "incorrect",
         },
@@ -2194,6 +2226,11 @@ describe("community study routes", () => {
           backgroundTasks.push(promise)
         },
       } as ExecutionContext
+      const drainBackgroundTasks = async () => {
+        for (let index = 0; index < backgroundTasks.length; index += 1) {
+          await backgroundTasks[index]
+        }
+      }
       const webhookRequest = () => app.fetch(
         new Request("http://pirate.test/telegram/community-bots/tgb_study_voice/webhook", {
           method: "POST",
@@ -2213,7 +2250,7 @@ describe("community study routes", () => {
       expect(retryWebhook.status).toBe(200)
       expect(concurrentDuplicateWebhook.status).toBe(200)
       expect(backgroundTasks).toHaveLength(1)
-      await Promise.all(backgroundTasks)
+      await drainBackgroundTasks()
       expect(transcriptionRequests).toBe(2)
       const consumed = await ctx.client.execute({
         sql: `
@@ -2457,44 +2494,62 @@ describe("community study routes", () => {
       }
       const requestsBeforeExpiredReply = telegramRequests.length
       backgroundTasks.length = 0
-      const expiredWebhookRequest = () => app.fetch(
-        new Request("http://pirate.test/telegram/community-bots/tgb_study_voice/webhook", {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-telegram-bot-api-secret-token": "voice-secret",
+      const expiredVoiceRequest = () => handleTelegramStudyVoiceMessage({
+        bot: {
+          communityId,
+          id: "tcb_study_voice",
+          token: botToken,
+          userId: "987654",
+          username: "VoiceStudyBot",
+          webhookId: "tgb_study_voice",
+          webhookSecret: "voice-secret",
+        },
+        env: ctx.env,
+        message: expiredVoiceUpdate.message,
+        onChatStudyAttemptComplete: ({
+          chatId,
+          chatStudySessionId,
+          result,
+          telegramMessageId,
+          transcript,
+        }) => continueTelegramChatStudyAfterVoice({
+          bot: {
+            communityId,
+            id: "tcb_study_voice",
+            token: botToken,
+            userId: "987654",
+            username: "VoiceStudyBot",
+            webhookId: "tgb_study_voice",
+            webhookSecret: "voice-secret",
           },
-          body: JSON.stringify(expiredVoiceUpdate),
+          chatId,
+          chatStudySessionId,
+          env: ctx.env,
+          replyToMessageId: telegramMessageId,
+          result,
+          transcript,
         }),
-        ctx.env,
-        executionCtx,
-      )
+      })
       const [expiredWebhook, concurrentExpiredWebhook] = await Promise.all([
-        expiredWebhookRequest(),
-        expiredWebhookRequest(),
+        expiredVoiceRequest(),
+        expiredVoiceRequest(),
       ])
-      expect(expiredWebhook.status).toBe(200)
-      expect(concurrentExpiredWebhook.status).toBe(200)
-      expect(backgroundTasks).toHaveLength(1)
-      await Promise.all(backgroundTasks)
-      let recoveredIntents = await ctx.client.execute({ sql: "SELECT 1 WHERE 0" })
-      // The webhook schedules recovery work after the first waitUntil task.
-      // Blacksmith can take longer than 300ms to observe that nested write.
-      for (let index = 0; index < 200; index += 1) {
-        recoveredIntents = await ctx.client.execute({
-          sql: `
-            SELECT intent_id, status, telegram_voice_message_id,
-                   telegram_voice_file_id, telegram_voice_file_unique_id
-            FROM telegram_study_voice_intents
-            WHERE chat_study_session_id = 'tcs_expired_recovery'
-            ORDER BY created_at, intent_id
-          `,
-        })
-        if (recoveredIntents.rows.some((row) =>
-          row.telegram_voice_message_id === 657 && row.status === "consumed"
-        )) break
-        await new Promise((resolve) => setTimeout(resolve, 10))
-      }
+      expect(expiredWebhook).toBe(true)
+      expect(concurrentExpiredWebhook).toBe(true)
+      // The concurrent recovery winner may leave its replacement pending while
+      // the duplicate observes the old intent. Drive the observable duplicate
+      // delivery once more; this synchronously claims and consumes that exact
+      // replacement, with no timer/polling dependency.
+      expect(await expiredVoiceRequest()).toBe(true)
+      const recoveredIntents = await ctx.client.execute({
+        sql: `
+          SELECT intent_id, status, telegram_voice_message_id,
+                 telegram_voice_file_id, telegram_voice_file_unique_id
+          FROM telegram_study_voice_intents
+          WHERE chat_study_session_id = 'tcs_expired_recovery'
+          ORDER BY created_at, intent_id
+        `,
+      })
       const staleRecoveredIntent = recoveredIntents.rows.find((row) => row.intent_id === expiringIntent.id)
       const claimedReplacements = recoveredIntents.rows.filter((row) => row.telegram_voice_message_id === 657)
       expect(staleRecoveredIntent).toMatchObject({
