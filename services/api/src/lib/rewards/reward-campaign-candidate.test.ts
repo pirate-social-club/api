@@ -11,6 +11,7 @@ describe("reward campaign ingestion candidates", () => {
       now: "2026-08-07T12:00:00.000Z",
       client: {
         execute: async (statement) => {
+          if (typeof statement === "string") throw new Error("expected_candidate_query_statement")
           query = statement.sql
           args = statement.args ?? []
           return { rows: [

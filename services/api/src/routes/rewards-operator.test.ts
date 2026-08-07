@@ -13,6 +13,7 @@ import rewards, {
 import type { Env } from "../env"
 import type { Client } from "../lib/sql-client"
 import type { RewardLifecycleSnapshot } from "../lib/rewards/reward-lifecycle-harness"
+import type { RewardCampaignReconciliationSummary } from "../lib/rewards/reward-campaign-reconciler"
 import {
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
@@ -282,7 +283,7 @@ describe("reward settlement rehearsal route", () => {
 function lifecycleRehearsalApp(input: {
   environment: string
   snapshots: RewardLifecycleSnapshot[]
-  reconcile?: () => Promise<unknown>
+  reconcile?: () => Promise<RewardCampaignReconciliationSummary>
 }) {
   const app = withErrors(new Hono<{ Bindings: Env }>())
   let snapshotIndex = 0
@@ -302,7 +303,7 @@ function lifecycleRehearsalApp(input: {
     getCommunityRepository: (() => repository) as unknown as typeof import("../lib/communities/db-community-repository").getCommunityRepository,
     reconcile: async () => {
       reconcileCount += 1
-      return input.reconcile?.() ?? { enabled: true, scanned_communities: 1 }
+      return input.reconcile?.() ?? ({ enabled: true, scanned_communities: 1 } as RewardCampaignReconciliationSummary)
     },
     readSnapshot: async () => input.snapshots[Math.min(snapshotIndex++, input.snapshots.length - 1)] as RewardLifecycleSnapshot,
   }))
