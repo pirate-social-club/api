@@ -6,6 +6,14 @@ import { rowValue } from "../sql-row"
 export const STUDY_HELPER_LANGUAGES = ["en", "zh", "ar", "ka", "ru"] as const
 export const STUDY_DELIVERY_MODES = ["audio", "text", "both"] as const
 
+const STUDY_HELPER_LANGUAGE_NAMES: Record<(typeof STUDY_HELPER_LANGUAGES)[number], string> = {
+  ar: "Arabic",
+  en: "English",
+  ka: "Georgian",
+  ru: "Russian",
+  zh: "Simplified Chinese",
+}
+
 export type StudyHelperLanguage = typeof STUDY_HELPER_LANGUAGES[number]
 export type StudyDeliveryMode = typeof STUDY_DELIVERY_MODES[number]
 export type UserStudyPreference = {
@@ -15,6 +23,10 @@ export type UserStudyPreference = {
 
 export function isStudyHelperLanguage(value: unknown): value is StudyHelperLanguage {
   return typeof value === "string" && STUDY_HELPER_LANGUAGES.includes(value as StudyHelperLanguage)
+}
+
+export function studyHelperLanguageName(language: StudyHelperLanguage): string {
+  return STUDY_HELPER_LANGUAGE_NAMES[language]
 }
 
 export function isStudyDeliveryMode(value: unknown): value is StudyDeliveryMode {
