@@ -90,7 +90,7 @@ describe("staging reward money-loop configuration", () => {
       REWARDS_READS_ENABLED: "true",
       REWARDS_ACCRUAL_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
-      REWARDS_MIN_CASHOUT_CENTS: "500",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
       REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED: "false",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "false",
