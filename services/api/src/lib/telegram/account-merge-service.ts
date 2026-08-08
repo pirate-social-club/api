@@ -357,13 +357,13 @@ async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
 
     await tx.execute({
       sql: `
-        DELETE FROM reward_qualification_outbox AS source
-        WHERE source.user_id = ?1 AND EXISTS (
+        DELETE FROM reward_qualification_outbox
+        WHERE user_id = ?1 AND EXISTS (
           SELECT 1 FROM reward_qualification_outbox target
           WHERE target.user_id = ?2
-            AND target.post_id = source.post_id
-            AND target.activity = source.activity
-            AND target.reward_period_key = source.reward_period_key
+            AND target.post_id = reward_qualification_outbox.post_id
+            AND target.activity = reward_qualification_outbox.activity
+            AND target.reward_period_key = reward_qualification_outbox.reward_period_key
         )
       `,
       args: [merge.sourceUserId, merge.canonicalUserId],
@@ -408,6 +408,16 @@ async function finalizeControlPlane(input: {
       if (sourceVerified > 0 && canonicalVerified > 0) throw mergeConflict("distinct_verified_humans")
 
       if (sourceVerified > 0) {
+        const sourceUser = await tx.execute({
+          sql: `
+            SELECT verification_state, capability_provider, verification_capabilities_json,
+                   verified_at, current_verification_session_id
+            FROM users WHERE user_id = ?1 LIMIT 1
+          `,
+          args: [input.merge.sourceUserId],
+        })
+        const verification = sourceUser.rows[0]
+        if (!verification) throw new Error("Source user disappeared during account merge")
         await tx.execute({
           sql: `UPDATE identity_nullifiers SET user_id = ?2, updated_at = ?3 WHERE user_id = ?1 AND status = 'active'`,
           args: [input.merge.sourceUserId, input.merge.canonicalUserId, now],
@@ -418,32 +428,39 @@ async function finalizeControlPlane(input: {
         })
         await tx.execute({
           sql: `
-            UPDATE users target SET
-              verification_state = source.verification_state,
-              capability_provider = source.capability_provider,
-              verification_capabilities_json = source.verification_capabilities_json,
-              verified_at = source.verified_at,
-              current_verification_session_id = source.current_verification_session_id,
-              updated_at = ?3
-            FROM users source
-            WHERE target.user_id = ?2 AND source.user_id = ?1
+            UPDATE users SET
+              verification_state = ?2,
+              capability_provider = ?3,
+              verification_capabilities_json = ?4,
+              verified_at = ?5,
+              current_verification_session_id = ?6,
+              updated_at = ?7
+            WHERE user_id = ?1
           `,
-          args: [input.merge.sourceUserId, input.merge.canonicalUserId, now],
+          args: [
+            input.merge.canonicalUserId,
+            rowValue(verification, "verification_state"),
+            rowValue(verification, "capability_provider"),
+            rowValue(verification, "verification_capabilities_json"),
+            rowValue(verification, "verified_at"),
+            rowValue(verification, "current_verification_session_id"),
+            now,
+          ],
         })
       }
 
       await tx.execute({
         sql: `
-          UPDATE reward_pending_qualifications source
+          UPDATE reward_pending_qualifications
           SET status = 'ineligible', terminal_reason = 'identity_duplicate', updated_at = ?3
-          WHERE source.user_id = ?1 AND source.status IN ('pending_verification', 'reconciling')
+          WHERE user_id = ?1 AND status IN ('pending_verification', 'reconciling')
             AND EXISTS (
               SELECT 1 FROM reward_pending_qualifications target
               WHERE target.user_id = ?2
-                AND target.community_id = source.community_id
-                AND target.post_id = source.post_id
-                AND target.reward_period_key = source.reward_period_key
-                AND target.reward_kind = source.reward_kind
+                AND target.community_id = reward_pending_qualifications.community_id
+                AND target.post_id = reward_pending_qualifications.post_id
+                AND target.reward_period_key = reward_pending_qualifications.reward_period_key
+                AND target.reward_kind = reward_pending_qualifications.reward_kind
                 AND target.status IN ('pending_verification', 'reconciling', 'credited')
             )
         `,
