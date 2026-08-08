@@ -1223,6 +1223,12 @@ export async function handleTelegramStudyVoiceMessage(input: {
           session_id: intent.sessionId,
           ...(sessionRevision === null ? {} : { session_revision: sessionRevision }),
           transcript: transcriptText,
+          ...(transcription.language_code
+            ? { transcription_language_code: transcription.language_code }
+            : {}),
+          ...(transcription.language_probability == null
+            ? {}
+            : { transcription_language_probability: transcription.language_probability }),
           type: "say_it_back",
         },
         communityId: intent.communityId,

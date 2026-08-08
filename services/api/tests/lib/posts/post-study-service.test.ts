@@ -40,6 +40,7 @@ import {
 } from "../../../src/lib/posts/post-study-streak-write-service"
 import { recordKaraokeAttempt } from "../../../src/lib/karaoke/karaoke-attempt-service"
 import type { Env, LocalizedPostResponse } from "../../../src/types"
+import { encryptCredentialSecret } from "../../../src/lib/crypto/credential-secret"
 import { splitSqlStatements, toSqliteCompatibleStatements } from "../../../shared/sql-migration"
 import { withMockedFetch } from "../../helpers"
 
@@ -1526,6 +1527,85 @@ describe("post study service", () => {
     expect(spent).toMatchObject({ outcome: "incorrect", lesson: { session_revision: 2 } })
     expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(1)
     expect(observedBatchWriteSql.every((sql) => /^(?:INSERT|UPDATE|DELETE)\b/iu.test(sql))).toBe(true)
+  })
+
+  test("a high-confidence STT language mismatch uses the existing free re-record without grading", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const exercise = payload.exercises.find((candidate) => candidate.type === "say_it_back")!
+    const result = await submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: exercise.id,
+        idempotency_key: "language-mismatch-rerecord",
+        session_id: payload.session!.id!,
+        session_revision: payload.session!.session_revision,
+        transcript: exercise.reference_text,
+        transcription_language_code: "th",
+        transcription_language_probability: 0.99,
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_UNGRADABLE_RERECORD_ENABLED: "true" }),
+      postId: POST_ID,
+    })
+
+    expect(result).toMatchObject({
+      outcome: "ungradable",
+      lesson: {
+        resolved_count: 0,
+        next: { exercise_id: exercise.id, retry_in_place: true },
+      },
+      session: { presentation_count: 0 },
+    })
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(0)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_ungradable_receipt")).rows[0]?.count)).toBe(1)
+  })
+
+  test("the language mismatch guard remains inert while the ungradable flag is off", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const exercise = payload.exercises.find((candidate) => candidate.type === "say_it_back")!
+    const result = await submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: exercise.id,
+        idempotency_key: "language-mismatch-flag-off",
+        session_id: payload.session!.id!,
+        session_revision: payload.session!.session_revision,
+        transcript: exercise.reference_text,
+        transcription_language_code: "th",
+        transcription_language_probability: 0.99,
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("correct")
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")).rows[0]?.count)).toBe(1)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_ungradable_receipt")).rows[0]?.count)).toBe(0)
   })
 
   test("different keys at one revision commit once and stale replay stays idempotent", async () => {
@@ -3791,6 +3871,51 @@ describe("post study service", () => {
     // The codec-parameterized MediaRecorder type must clear the mime gate (it may
     // still fail later on ElevenLabs config, but never on the unsupported-type check).
     expect(String((err as Error | undefined)?.message ?? "")).not.toContain("audio file type is not supported")
+  })
+
+  test("transcription sends the song source language to ElevenLabs and omits it when unknown", async () => {
+    await seedSongPost()
+    const wrapKey = "cd".repeat(32)
+    await execControl(
+      "UPDATE community_assistant_credentials SET encrypted_secret = ?1 WHERE community_id = ?2 AND provider = 'elevenlabs'",
+      [encryptCredentialSecret({ plaintext: "elevenlabs-study-test-key", wrapKey }), COMMUNITY_ID],
+    )
+    const transcriptionEnv = env({ CREDENTIAL_WRAP_KEY: wrapKey, CREDENTIAL_WRAP_KEY_VERSION: "1" })
+
+    const languageCodes: Array<string | null> = []
+    await withMockedFetch(() => (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      if (request.url !== "https://api.elevenlabs.io/v1/speech-to-text") {
+        return new Response("unexpected", { status: 500 })
+      }
+      const form = await request.formData()
+      languageCodes.push(typeof form.get("language_code") === "string" ? form.get("language_code") as string : null)
+      return Response.json({
+        language_code: "en",
+        language_probability: 0.99,
+        text: "I was lost in the midnight waves",
+      })
+    }) as typeof fetch, async () => {
+      await transcribePostStudyAudio({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: transcriptionEnv,
+        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
+        postId: POST_ID,
+      })
+      await exec("UPDATE posts SET source_language = NULL WHERE post_id = ?1", [POST_ID])
+      await transcribePostStudyAudio({
+        actor: learnerActor,
+        communityId: COMMUNITY_ID,
+        communityRepository: repo,
+        env: transcriptionEnv,
+        file: new File([new Uint8Array([1, 2, 3])], "attempt.webm", { type: "audio/webm" }),
+        postId: POST_ID,
+      })
+    })
+
+    expect(languageCodes).toEqual(["en", null])
   })
 
   test("attempts are blocked without writes when study is disabled", async () => {

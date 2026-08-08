@@ -20,6 +20,27 @@ const ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 const ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
 export const COMMUNITY_ASSISTANT_MAX_TRANSCRIPTION_AUDIO_BYTES = 20 * 1024 * 1024
 const MAX_TTS_TEXT_LENGTH = 2000
+export const STUDY_TRANSCRIPTION_LANGUAGE_MISMATCH_MIN_PROBABILITY = 0.8
+
+const ISO_639_3_TO_1 = new Map<string, string>([
+  ["ara", "ar"],
+  ["chi", "zh"],
+  ["cmn", "zh"],
+  ["deu", "de"],
+  ["eng", "en"],
+  ["fra", "fr"],
+  ["fre", "fr"],
+  ["ger", "de"],
+  ["ita", "it"],
+  ["jpn", "ja"],
+  ["kor", "ko"],
+  ["por", "pt"],
+  ["rus", "ru"],
+  ["spa", "es"],
+  ["tha", "th"],
+  ["tur", "tr"],
+  ["yue", "zh"],
+])
 
 const SUPPORTED_TRANSCRIPTION_MIME_TYPES = new Set([
   "audio/aac",
@@ -74,6 +95,35 @@ function normalizeAudioMimeType(file: File): string {
   // Strip any codec/parameter suffix (e.g. "audio/webm;codecs=opus" from
   // MediaRecorder) so the base type matches SUPPORTED_TRANSCRIPTION_MIME_TYPES.
   return String(file.type || "application/octet-stream").split(";")[0].trim().toLowerCase()
+}
+
+/**
+ * ElevenLabs accepts ISO-639-1 and ISO-639-3 language identifiers. Study
+ * metadata can also contain a BCP-47 region/script suffix, so send and
+ * compare only the normalized primary language.
+ */
+export function normalizeSpeechLanguageCode(value: string | null | undefined): string | null {
+  const raw = String(value ?? "").trim().replace(/_/gu, "-").toLowerCase()
+  const primary = raw.split("-")[0] ?? ""
+  if (!/^[a-z]{2,3}$/u.test(primary)) return null
+  return ISO_639_3_TO_1.get(primary) ?? primary
+}
+
+export function isClearSpeechLanguageMismatch(input: {
+  detectedLanguage: string | null | undefined
+  expectedLanguage: string | null | undefined
+  probability: number | null | undefined
+}): boolean {
+  const expected = normalizeSpeechLanguageCode(input.expectedLanguage)
+  const detected = normalizeSpeechLanguageCode(input.detectedLanguage)
+  return Boolean(
+    expected
+    && detected
+    && expected !== detected
+    && input.probability != null
+    && Number.isFinite(input.probability)
+    && input.probability >= STUDY_TRANSCRIPTION_LANGUAGE_MISMATCH_MIN_PROBABILITY,
+  )
 }
 
 function assertTranscriptionPolicy(policy: CommunityAssistantPolicy): void {
@@ -207,6 +257,7 @@ export async function transcribeCommunityAudioWithElevenLabs(input: {
   communityId: string
   env: Env
   file: File
+  languageCode?: string | null
   missingCredentialMessage?: string
   model?: string | null
 }): Promise<CommunityAudioTranscriptionResponse> {
@@ -215,6 +266,7 @@ export async function transcribeCommunityAudioWithElevenLabs(input: {
       communityId: input.communityId,
       env: input.env,
       file: input.file,
+      languageCode: input.languageCode,
       missingCredentialMessage: input.missingCredentialMessage,
       model: input.model,
     }),
@@ -245,6 +297,7 @@ async function transcribeCommunityAudioWithElevenLabsInternal(input: {
   communityId: string
   env: Env
   file: File
+  languageCode?: string | null
   missingCredentialMessage?: string
   model?: string | null
 }): Promise<Omit<CommunityAssistantTranscriptionResponse, "object">> {
@@ -263,6 +316,8 @@ async function transcribeCommunityAudioWithElevenLabsInternal(input: {
   const form = new FormData()
   form.set("file", input.file)
   form.set("model_id", model)
+  const languageCode = normalizeSpeechLanguageCode(input.languageCode)
+  if (languageCode) form.set("language_code", languageCode)
   const apiKey = await decryptActiveCommunityElevenLabsKey({
     env: input.env,
     communityId: input.communityId,
