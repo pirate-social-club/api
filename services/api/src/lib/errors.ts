@@ -113,6 +113,12 @@ export function structuredSurfaceDisabled(message: string, details: Record<strin
   return new HttpError(403, "structured_surface_disabled", message, false, details)
 }
 
+export function verifierContractIncompatible(message: string, details: Record<string, unknown> | null = null): HttpError {
+  // Not retryable: the deployed verifier predates a response field this API
+  // requires, which only a verifier redeploy can fix.
+  return new HttpError(503, "verifier_contract_incompatible", message, false, details)
+}
+
 export function providerUnavailable(
   message: string,
   details: Record<string, unknown> | null = null,

@@ -1,4 +1,4 @@
-import { badRequestError, providerUnavailable } from "../errors"
+import { badRequestError, providerUnavailable, verifierContractIncompatible } from "../errors"
 import { isProductionEnv } from "../helpers"
 import type { Env } from "../../env"
 
@@ -70,7 +70,9 @@ export type HnsRootAuthorityObservation = {
   parent_ds_matches_live_dnskey: boolean
   earliest_rrsig_expires_at: string | null
   parent: {
-    raw_records: Array<Record<string, unknown>>
+    // The deployed verifier only emits raw_records on observe-root-parent.
+    // Never build a publish bundle from this observation.
+    raw_records?: Array<Record<string, unknown>>
     nameservers: string[]
     ds_records: Array<{
       key_tag: number
@@ -330,10 +332,21 @@ export async function observeHnsRootParent(
 ): Promise<HnsRootParentObservation> {
   assertHnsRootLabel(input.rootLabel)
   const params = new URLSearchParams({ root_label: input.rootLabel })
-  return request<HnsRootParentObservation>(
+  const observation = await request<HnsRootParentObservation>(
     env,
     `/observe-root-parent?${params.toString()}`,
   )
+  // The publish plan replaces the complete on-chain resource, so it must be
+  // built from the verbatim record list. A verifier that omits it (pre-core#436)
+  // must fail loudly here instead of surfacing a TypeError downstream.
+  const rawRecords = observation?.parent?.raw_records
+  if (!Array.isArray(rawRecords) || rawRecords.some((record) => typeof record !== "object" || record == null)) {
+    throw verifierContractIncompatible(
+      "HNS verifier observe-root-parent response is missing parent.raw_records; the deployed verifier predates the raw-root-records contract and must be redeployed at the pinned Core commit",
+      { required_capability: "raw_root_records_v1" },
+    )
+  }
+  return observation
 }
 
 export async function verifyHnsTxtRecord(

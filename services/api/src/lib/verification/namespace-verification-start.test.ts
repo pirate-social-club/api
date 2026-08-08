@@ -244,4 +244,91 @@ describe("startNamespaceVerificationSession", () => {
       "POST https://verifier.pirate.sc/hns/publish-txt",
     ])
   })
+
+  // Regression: production incident 2026-08-08. The deployed verifier predated
+  // core#436 and omitted parent.raw_records, which surfaced as an untyped
+  // TypeError (500) instead of a diagnosable contract failure.
+  test("fails with verifier_contract_incompatible when observe-root-parent omits raw_records", async () => {
+    let lockReleased = false
+    globalThis.fetch = mockFetch(async (input, init) => {
+      const url = typeof input === "string" ? input : input.toString()
+
+      if (url.includes("/inspect-public?")) {
+        return Response.json({
+          root_exists: true,
+          root_control_verified: null,
+          expiry_horizon_sufficient: true,
+          routing_enabled: null,
+          pirate_dns_authority_verified: false,
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          observation_provider: "web3dns_json_doh",
+          failure_reason: "zone_not_provisioned",
+          control_class: null,
+          operation_class: null,
+        })
+      }
+
+      if (url.includes("/observe-root-parent?")) {
+        return Response.json({
+          root_label: "clawitzer",
+          zone_name: "clawitzer.",
+          provider: "hsd_json_rpc",
+          observed_at: "2026-04-27T00:00:00.000Z",
+          chain_anchor: {
+            network: "main",
+            height: 1_000,
+            block_hash: "ab".repeat(32),
+            median_time: 1_700_000_000,
+          },
+          parent: {
+            nameservers: ["ns1.pirate."],
+            ds_records: [],
+            glue4: [],
+            glue6: [],
+          },
+        })
+      }
+
+      if (url.endsWith("/publish-txt") && init?.method === "POST") {
+        return Response.json({
+          root_label: "clawitzer",
+          zone_name: "clawitzer.",
+          challenge_name: "_pirate.clawitzer.",
+          challenge_txt_value: "pirate-verification=nvs_test",
+          zone_created: true,
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: [
+            `49194 13 2 ${"05".repeat(32)}`,
+            `49194 13 4 ${"15".repeat(48)}`,
+          ],
+          observation_provider: "powerdns_api",
+        })
+      }
+
+      throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`)
+    })
+
+    const client = new PlatformManagedZoneBootstrapClient()
+    const originalExecute = client.execute.bind(client)
+    client.execute = async (statement) => {
+      const sql = typeof statement === "string" ? statement : statement.sql
+      if (sql.includes("DELETE FROM hns_import_session_locks")) {
+        lockReleased = true
+      }
+      return originalExecute(statement)
+    }
+
+    await expect(startNamespaceVerificationSession(client, {
+      ENVIRONMENT: "production",
+      HNS_VERIFIER_BASE_URL: "https://verifier.pirate.sc/hns",
+      HNS_VERIFIER_AUTH_TOKEN: "test-token",
+    }, {
+      userId: "usr_test",
+      family: "hns",
+      rootLabel: "clawitzer",
+    })).rejects.toThrow("observe-root-parent response is missing parent.raw_records")
+
+    expect(client.insertAttempts).toBe(0)
+    expect(lockReleased).toBe(true)
+  })
 })
