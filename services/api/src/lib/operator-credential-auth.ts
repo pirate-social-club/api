@@ -115,8 +115,19 @@ function parseOperatorScopes(scopesJson: string): OperatorScope[] {
 }
 
 function parseIsoMs(value: string): number {
-  const ms = Date.parse(value)
-  return Number.isFinite(ms) ? ms : NaN
+  const direct = Date.parse(value)
+  if (Number.isFinite(direct)) return direct
+  // Some Postgres/Hyperdrive adapters surface TIMESTAMPTZ as an object that
+  // becomes a JSON-quoted ISO string through the generic row normalizer.
+  // Accept that representation without weakening expiry validation.
+  try {
+    const decoded = JSON.parse(value)
+    if (typeof decoded !== "string") return NaN
+    const decodedMs = Date.parse(decoded)
+    return Number.isFinite(decodedMs) ? decodedMs : NaN
+  } catch {
+    return NaN
+  }
 }
 
 function toOperatorCredentialRow(row: unknown): OperatorCredentialRow {
