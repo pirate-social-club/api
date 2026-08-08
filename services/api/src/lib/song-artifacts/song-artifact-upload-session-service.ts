@@ -7,7 +7,6 @@ import {
   buildUploadPartPresignedUrl,
   completeMultipartUpload,
   createMultipartUpload,
-  headObject,
   type CompletedMultipartPart,
 } from "../storage/filebase-multipart"
 import { makeId, nowIso } from "../helpers"
@@ -45,33 +44,6 @@ const DIRECT_MULTIPART_SESSION_TTL_MS = 60 * 60 * 1000
 const DIRECT_MULTIPART_PART_URL_TTL_SECONDS = 300
 export const DIRECT_MULTIPART_MAX_BYTES = 2 * 1024 * 1024 * 1024
 const MAX_MULTIPART_PARTS = 10_000
-// Filebase can return AccessDenied for a newly completed object while its S3
-// metadata propagates. Keep retrying long enough to cover that window instead
-// of turning a successful multipart completion into a false provider failure.
-export const POST_COMPLETE_HEAD_RETRY_DELAYS_MS = [
-  1000,
-  2000,
-  4000,
-  8000,
-  16000,
-  30000,
-  30000,
-  30000,
-  30000,
-  30000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-  60000,
-] as const
 const DIRECT_MULTIPART_ARTIFACT_KINDS = new Set<SongArtifactKind>([
   "primary_audio",
   "preview_audio",
@@ -101,10 +73,6 @@ export type CreateMultipartSongArtifactUploadResult = SongArtifactUpload & {
 
 function addMilliseconds(iso: string, milliseconds: number): string {
   return new Date(new Date(iso).getTime() + milliseconds).toISOString()
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function resolveSessionFilebaseConfig(
@@ -246,35 +214,6 @@ function validateCompletedParts(input: {
       throw badRequestError("Invalid multipart part ETag")
     }
   }
-}
-
-function normalizeHeadContentType(contentType: string | null): string | null {
-  return contentType?.split(";")[0]?.trim().toLowerCase() || null
-}
-
-function isRetryableHeadVerificationError(error: unknown): boolean {
-  return error instanceof HttpError
-    && (error.code === "provider_unavailable" || error.code === "not_found")
-}
-
-async function headObjectAfterComplete(input: {
-  env: Env
-  config: S3SigningConfig
-  objectKey: string
-}): ReturnType<typeof headObject> {
-  let lastError: unknown = null
-  for (let attempt = 0; attempt <= POST_COMPLETE_HEAD_RETRY_DELAYS_MS.length; attempt += 1) {
-    try {
-      return await headObject(input)
-    } catch (error) {
-      lastError = error
-      if (!isRetryableHeadVerificationError(error) || attempt >= POST_COMPLETE_HEAD_RETRY_DELAYS_MS.length) {
-        throw error
-      }
-      await sleep(POST_COMPLETE_HEAD_RETRY_DELAYS_MS[attempt]!)
-    }
-  }
-  throw lastError
 }
 
 export async function createMultipartSongArtifactUpload(input: {
@@ -510,20 +449,14 @@ export async function completeMultipartSongArtifactUpload(input: {
   if (!headVerifying) {
     throw conflictError("Song artifact upload session was not ready for head verification")
   }
-  const head = await headObjectAfterComplete({
-    env: input.env,
-    config: resolveSessionFilebaseConfig(input.env, session),
-    objectKey: session.object_key,
-  })
-  if (head.contentLength !== session.declared_size_bytes) {
-    throw badRequestError("Multipart object size does not match the upload session")
-  }
-  if (normalizeHeadContentType(head.contentType) !== session.declared_mime_type) {
-    throw badRequestError("Multipart object content type does not match the upload session")
-  }
-  if (head.cid && head.cid !== completeResult.cid) {
-    throw badRequestError("Multipart object CID does not match the completion response")
-  }
+  // CompleteMultipartUpload is the provider's authoritative acknowledgement
+  // that the assembled object exists and returns its CID. Do not make
+  // publication depend on a follow-up HEAD: Filebase accepts the browser's
+  // signed PUT and completion but may deny object reads from edge runtimes.
+  // Size and MIME are bound to the upload session at intent creation and are
+  // revalidated from the completion payload above.
+  const sizeBytes = session.declared_size_bytes
+  const ipfsCid = completeResult.cid
 
   const gatewayUrl = upload.storage_ref
   const uploadedSession = await markSongArtifactUploadSessionUploaded({
@@ -534,9 +467,9 @@ export async function completeMultipartSongArtifactUpload(input: {
     storageObjectKey: session.object_key,
     storageBucket: session.bucket,
     gatewayUrl,
-    ipfsCid: head.cid ?? completeResult.cid,
+    ipfsCid,
     contentHash,
-    sizeBytes: head.contentLength,
+    sizeBytes,
     completedAt: nowIso(),
     updatedAt: nowIso(),
   })
@@ -548,14 +481,14 @@ export async function completeMultipartSongArtifactUpload(input: {
     communityId: input.communityId,
     songArtifactUploadId: input.songArtifactUploadId,
     mimeType: session.declared_mime_type,
-    sizeBytes: head.contentLength,
+    sizeBytes,
     contentHash,
     storageProvider: FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER,
     storageBucket: session.bucket,
     storageObjectKey: session.object_key,
     storageEndpoint: session.storage_endpoint,
     gatewayUrl,
-    ipfsCid: head.cid ?? completeResult.cid,
+    ipfsCid,
     contentHashVerifiedAt: null,
     updatedAt: nowIso(),
   })

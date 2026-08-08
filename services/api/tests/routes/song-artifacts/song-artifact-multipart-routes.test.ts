@@ -40,6 +40,7 @@ function installMultipartFilebaseMock(input: {
   const contentType = input.contentType ?? "video/mp4"
   const completeBodies: string[] = []
   const abortUrls: string[] = []
+  const headUrls: string[] = []
 
   ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
@@ -64,6 +65,7 @@ function installMultipartFilebaseMock(input: {
     }
 
     if (request.method === "HEAD") {
+      headUrls.push(request.url)
       return new Response(null, {
         status: 200,
         headers: {
@@ -83,7 +85,7 @@ function installMultipartFilebaseMock(input: {
     return new Response(`unexpected Filebase request: ${request.method} ${request.url}`, { status: 500 })
   }
 
-  return { completeBodies, abortUrls }
+  return { completeBodies, abortUrls, headUrls }
 }
 
 async function createMultipartRouteSetup() {
@@ -318,6 +320,7 @@ describe("song artifact multipart routes", () => {
     expect(rows.rows[0]?.upload_status).toBe("uploaded")
     expect(rows.rows[0]?.content_hash_verified_at).toBeNull()
     expect(rows.rows[0]?.session_status).toBe("uploaded")
+    expect(setup.filebase.headUrls).toHaveLength(0)
   })
 
   test("rejects malformed multipart completion payloads", async () => {
