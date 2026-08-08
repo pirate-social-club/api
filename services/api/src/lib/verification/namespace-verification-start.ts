@@ -6,12 +6,9 @@ import {
 } from "../auth/auth-serializers"
 import {
   assertHnsRootLabel,
-  inspectHnsRoot,
   normalizeHnsRootLabel,
-  observeHnsRootParent,
-  publishHnsChallenge,
 } from "./hns-verifier"
-import { buildHnsImportPublishPlan } from "./hns-import-plan"
+import { prepareHnsImportChallenge } from "./hns-import-challenge"
 import {
   releaseHnsImportSessionLock,
   reserveHnsImportSessionLock,
@@ -23,18 +20,12 @@ import {
 } from "./spaces-verifier"
 import type { Env } from "../../env"
 import type { NamespaceVerificationSession } from "../../types"
+import { resolveHnsObservationProviderFallback } from "./namespace-observation-provider"
 import {
-  HNS_VERIFIER_OBSERVATION_PROVIDER,
-  resolveHnsObservationProviderFallback,
-} from "./namespace-observation-provider"
-import {
-  deriveHnsInspectionSnapshot,
   getHnsChallengeTtlHours,
   getNamespaceVerificationSessionRowForUser,
-  isHnsVerifierConfigured,
   isProductionEnv,
   isSpacesVerifierConfigured,
-  serializeSetupNameservers,
   type HnsSessionAssertionSnapshot,
 } from "./verification-shared"
 import { assertNamespaceRootLabelIsAttachable } from "./namespace-root-policy"
@@ -158,50 +149,18 @@ export async function startNamespaceVerificationSession(
       operationClass: null,
     }
 
-    if (isHnsVerifierConfigured(env)) {
-      const inspection = await inspectHnsRoot(env, {
-        rootLabel: normalizedRootLabel,
-      })
-      if (inspection.root_exists !== true) {
-        throw verificationRequired("Handshake root does not exist on chain")
-      }
-      if (inspection.expiry_horizon_sufficient !== true) {
-        throw verificationRequired("Handshake root must be renewed before import")
-      }
-      inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
-      observationProvider = inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
-
-      // Provision and sign the inert child zone before asking the holder to
-      // publish anything. This produces the final DS pair, allowing ownership
-      // TXT, NS delegation, and DNSSEC to land in one owner-signed UPDATE and
-      // one Handshake tree interval.
-      const [parentObservation, provisioned] = await Promise.all([
-        observeHnsRootParent(env, { rootLabel: normalizedRootLabel }),
-        publishHnsChallenge(env, {
-          rootLabel: normalizedRootLabel,
-          challengeTxtValue,
-        }),
-      ])
-      const nameservers = provisioned.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? []
-      const dsRecords = provisioned.ds_records ?? []
-      const publishPlan = buildHnsImportPublishPlan({
-        currentRecords: parentObservation.parent.raw_records,
-        nameservers,
-        challengeTxtValue,
-        dsRecords,
-      })
-      status = "challenge_required"
-      persistedSetupNameservers = serializeSetupNameservers(nameservers)
-      persistedChallengePayload = JSON.stringify({
-        kind: "hns_import",
-        publish_plan: publishPlan,
-        observed_chain_anchor: parentObservation.chain_anchor,
-      })
-      anchorHeight = parentObservation.chain_anchor.height
-      anchorBlockHash = parentObservation.chain_anchor.block_hash
-    } else {
-      throw providerUnavailable("HNS verifier is not configured")
-    }
+    const prepared = await prepareHnsImportChallenge(env, {
+      rootLabel: normalizedRootLabel,
+      challengeTxtValue,
+    })
+    status = "challenge_required"
+    challengeKind = "hns_import"
+    inspectionSnapshot = prepared.inspectionSnapshot
+    observationProvider = prepared.observationProvider
+    persistedSetupNameservers = prepared.setupNameservers
+    persistedChallengePayload = JSON.stringify(prepared.challengePayload)
+    anchorHeight = prepared.anchorHeight
+    anchorBlockHash = prepared.anchorBlockHash
 
     await client.execute({
       sql: `

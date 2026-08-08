@@ -5,6 +5,125 @@ import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("widens HNS import challenge kinds in the SQLite control-plane mirror", async () => {
+    const database = new Database(":memory:")
+    const applyFixture = async (fileName: string) => {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+    }
+
+    try {
+      await applyFixture("0000_control_plane_baseline_postgres.sql")
+      await applyFixture("0138_control_plane_hns_verification_assertion_split.sql")
+      database.run(`
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id,
+          user_id,
+          family,
+          submitted_root_label,
+          status,
+          challenge_kind,
+          ownership_source,
+          authority_health_verified,
+          expires_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, 'hns', 'existing-root', 'expired', 'dns_txt', ?, 1, ?, ?, ?)
+      `, [
+        "nvs_existing_fixture",
+        "usr_fixture",
+        "hns_parent_chain_txt",
+        "2026-08-09T00:00:00.000Z",
+        "2026-08-08T00:00:00.000Z",
+        "2026-08-08T00:00:00.000Z",
+      ])
+      await applyFixture("0198_control_plane_hns_import_challenge_kind.sql")
+      database.run(`
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id,
+          user_id,
+          family,
+          submitted_root_label,
+          status,
+          challenge_kind,
+          expires_at,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, 'hns', 'fixture-root', 'expired', 'hns_import', ?, ?, ?)
+      `, [
+        "nvs_hns_import_fixture",
+        "usr_fixture",
+        "2026-08-09T00:00:00.000Z",
+        "2026-08-08T00:00:00.000Z",
+        "2026-08-08T00:00:00.000Z",
+      ])
+      expect(database.query(`
+        SELECT challenge_kind, ownership_source, authority_health_verified
+        FROM namespace_verification_sessions
+        WHERE namespace_verification_session_id = 'nvs_existing_fixture'
+      `).get()).toEqual({
+        challenge_kind: "dns_txt",
+        ownership_source: "hns_parent_chain_txt",
+        authority_health_verified: 1,
+      })
+      expect(database.query(`
+        SELECT challenge_kind
+        FROM namespace_verification_sessions
+        WHERE namespace_verification_session_id = 'nvs_hns_import_fixture'
+      `).get()).toEqual({ challenge_kind: "hns_import" })
+      expect(() => database.run(`
+        UPDATE namespace_verification_sessions
+        SET challenge_kind = 'unsupported'
+        WHERE namespace_verification_session_id = 'nvs_hns_import_fixture'
+      `)).toThrow(/CHECK constraint failed/u)
+    } finally {
+      database.close()
+    }
+  })
+
+  test("adds durable HNS restart-attempt fencing fields to the SQLite mirror", async () => {
+    const database = new Database(":memory:")
+    const applyFixture = async (fileName: string) => {
+      const sql = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations",
+        fileName,
+      ), "utf8")
+      for (const statement of splitSqlStatements(sql)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+    }
+
+    try {
+      database.exec("CREATE TABLE users (user_id TEXT PRIMARY KEY);")
+      await applyFixture("0197_control_plane_hns_import_session_locks.sql")
+      await applyFixture("0199_control_plane_hns_import_restart_attempts.sql")
+
+      expect(database.query("PRAGMA table_info(hns_import_session_locks)").all())
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: "restart_attempt_token", type: "TEXT" }),
+          expect.objectContaining({ name: "restart_challenge_txt_value", type: "TEXT" }),
+          expect.objectContaining({ name: "restart_attempt_expires_at", type: "TEXT" }),
+        ]))
+      expect(database.query("PRAGMA index_list(hns_import_session_locks)").all())
+        .toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: "idx_hns_import_session_locks_restart_attempt_expires_at" }),
+        ]))
+    } finally {
+      database.close()
+    }
+  })
+
   test("widens helper languages without losing existing SQLite preferences", async () => {
     const database = new Database(":memory:")
     const applyFixture = async (fileName: string) => {
