@@ -10,17 +10,22 @@ describe("Telegram study language buttons", () => {
     expect([...buttonCodes].sort()).toEqual([...STUDY_HELPER_LANGUAGES].sort())
   })
 
-  test("all helper languages distinguish deferred retries from an exhausted card", () => {
+  test("all helper languages provide the complete lesson presentation copy", () => {
     for (const language of STUDY_HELPER_LANGUAGES) {
       const copy = getTelegramStudyCopy(language)
 
-      expect(copy.notQuite.length).toBeGreaterThan(0)
-      expect(copy.returnsLater.length).toBeGreaterThan(0)
-      expect(copy.attemptsRemaining({ count: 2 })).toContain("2")
-      expect(copy.attemptsRemaining({ count: 0 })).toContain("0")
+      expect(copy.incorrect.length).toBeGreaterThan(0)
+      expect(copy.correct.length).toBeGreaterThan(0)
       expect(copy.youSaid.length).toBeGreaterThan(0)
-      expect(copy.lineWas.length).toBeGreaterThan(0)
-      expect(copy.nothingDetected.length).toBeGreaterThan(0)
+      expect(copy.questionsRemaining({ count: 4 })).toContain("4")
+      expect(copy.reviewMarker.length).toBeGreaterThan(0)
+      expect(copy.lessonComplete.length).toBeGreaterThan(0)
+      expect(copy.scoreLine({ correct: 8, total: 10 })).toContain("8/10")
+      expect(copy.streakLine({ days: 6 })).toContain("6")
+      expect(copy.voiceTemporaryFailure.length).toBeGreaterThan(0)
+      expect(copy.voiceTerminalChatFailure.length).toBeGreaterThan(0)
+      expect(copy.voiceTerminalNonChatFailure.length).toBeGreaterThan(0)
+      expect(copy.voiceContinuationFailure.length).toBeGreaterThan(0)
     }
   })
 })
