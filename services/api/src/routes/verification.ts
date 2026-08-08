@@ -453,20 +453,42 @@ authenticatedNamespaceVerification.get("/namespace-verification-sessions/:namesp
   return c.json(serializeNamespaceVerificationSession(result), 200)
 })
 
+type NamespaceVerificationCompletionBody = {
+  restart_challenge?: boolean | null
+  acknowledged_resource_replacement?: boolean | null
+}
+
+function parseNamespaceVerificationCompletionBody(value: unknown): NamespaceVerificationCompletionBody {
+  if (value == null) return {}
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw badRequestError("Invalid namespace verification completion payload")
+  }
+
+  const body = value as Record<string, unknown>
+  const allowedKeys = new Set(["restart_challenge", "acknowledged_resource_replacement"])
+  if (Object.keys(body).some((key) => !allowedKeys.has(key))) {
+    throw badRequestError("Namespace verification completion received an unsupported field")
+  }
+  for (const key of allowedKeys) {
+    const field = body[key]
+    if (field !== undefined && field !== null && typeof field !== "boolean") {
+      throw badRequestError(`Invalid ${key}`)
+    }
+  }
+  return body as NamespaceVerificationCompletionBody
+}
+
 authenticatedNamespaceVerification.post("/namespace-verification-sessions/:namespaceVerificationSessionId/complete", async (c) => {
   const actor = c.get("actor")
-  const body = (await c.req.json<{
-    restart_challenge?: boolean | null
-    acknowledged_resource_replacement?: boolean | null
-  }>().catch(() => null)) ?? null
+  const body = parseNamespaceVerificationCompletionBody(await c.req.json<unknown>().catch(() => null))
   const repo = getControlPlaneVerificationRepository(c.env)
   const namespaceVerificationSessionId = decodePublicNamespaceVerificationSessionId(c.req.param("namespaceVerificationSessionId"))
   try {
     const result = await repo.completeNamespaceVerificationSession({
       namespaceVerificationSessionId,
       userId: actor.userId,
-      restartChallenge: body?.restart_challenge ?? null,
-      acknowledgedResourceReplacement: body?.acknowledged_resource_replacement ?? null,
+      restartChallenge: body.restart_challenge ?? null,
+      acknowledgedResourceReplacement: body.acknowledged_resource_replacement ?? null,
     })
     if (!result) {
       throw notFoundError("Namespace verification session not found")

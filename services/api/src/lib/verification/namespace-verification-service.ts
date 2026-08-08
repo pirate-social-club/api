@@ -95,6 +95,13 @@ export async function completeNamespaceVerificationSession(
     return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
   }
 
+  // Expired sessions are terminal until the caller explicitly requests a fresh
+  // challenge. This prevents an empty body or misspelled restart field from
+  // running the normal completion pipeline against stale challenge evidence.
+  if (row.status === "expired") {
+    return serializeNamespaceVerificationSession(row)
+  }
+
   if (row.expires_at && new Date(row.expires_at).getTime() < now.getTime()) {
     await client.execute({
       sql: `
