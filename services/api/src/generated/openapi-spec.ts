@@ -10100,6 +10100,7 @@ const spec = {
       },
       "CompleteNamespaceVerificationSessionRequest": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "restart_challenge": {
             "type": "boolean",

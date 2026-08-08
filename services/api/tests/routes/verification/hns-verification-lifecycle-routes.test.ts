@@ -79,6 +79,82 @@ afterEach(async () => {
 })
 
 describe("hns verification lifecycle routes", () => {
+  test("rejects a camelCase restart field instead of treating it as plain completion", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "verification-hns-restart-typo-user")
+
+    const response = await requestJson(
+      "http://pirate.test/namespace-verification-sessions/nvs_missing/complete",
+      { restartChallenge: true },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(response.status).toBe(400)
+    expect(await json(response)).toMatchObject({ code: "bad_request" })
+  })
+
+  test("keeps an expired HNS session terminal when completion omits restart_challenge", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "verification-hns-expired-plain-complete-user")
+    const sessionId = "nvs_expired_plain_complete"
+    const now = new Date().toISOString()
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id, user_id, family,
+          submitted_root_label, normalized_root_label, status,
+          challenge_kind, expires_at, created_at, updated_at
+        ) VALUES (?1, ?2, 'hns', 'expiredroot', 'expiredroot', 'expired',
+                  'dns_txt', ?3, ?3, ?3)
+      `,
+      args: [sessionId, session.userId, now],
+    })
+
+    const response = await requestJson(
+      `http://pirate.test/namespace-verification-sessions/${sessionId}/complete`,
+      {},
+      ctx.env,
+      session.accessToken,
+    )
+    expect(response.status).toBe(200)
+    expect(await json(response)).toMatchObject({
+      status: "expired",
+      challenge_kind: "dns_txt",
+      challenge_payload: null,
+    })
+  })
+
+  test("preserves the non-expired restart state gate", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "verification-hns-nonexpired-restart-user")
+    const sessionId = "nvs_nonexpired_restart"
+    const now = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + 60_000).toISOString()
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO namespace_verification_sessions (
+          namespace_verification_session_id, user_id, family,
+          submitted_root_label, normalized_root_label, status,
+          challenge_kind, expires_at, created_at, updated_at
+        ) VALUES (?1, ?2, 'hns', 'pendingroot', 'pendingroot', 'challenge_pending',
+                  'hns_import', ?3, ?4, ?4)
+      `,
+      args: [sessionId, session.userId, expiresAt, now],
+    })
+
+    const response = await requestJson(
+      `http://pirate.test/namespace-verification-sessions/${sessionId}/complete`,
+      { restart_challenge: true },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(response.status).toBe(409)
+    expect(await json(response)).toMatchObject({ code: "conflict" })
+  })
+
   test("HNS restart rebuilds a complete import plan with fresh chain and challenge evidence", async () => {
     const ctx = await createRouteTestContext({
       HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
