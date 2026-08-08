@@ -15133,6 +15133,14 @@ const spec = {
           "transcript": {
             "type": "string"
           },
+          "transcription_language_code": {
+            "type": "string"
+          },
+          "transcription_language_probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
           "timezone": {
             "type": "string"
           }

@@ -27,6 +27,8 @@ export function studyAttemptRequestFingerprint(input: {
   sessionId: string
   sessionRevision: number | null
   transcript: string | null
+  transcriptionLanguageCode: string | null
+  transcriptionLanguageProbability: number | null
   type: string
 }): string {
   return JSON.stringify({
@@ -36,6 +38,8 @@ export function studyAttemptRequestFingerprint(input: {
     session_id: input.sessionId,
     session_revision: input.sessionRevision,
     transcript: input.transcript,
+    transcription_language_code: input.transcriptionLanguageCode,
+    transcription_language_probability: input.transcriptionLanguageProbability,
     type: input.type,
   })
 }

@@ -2453,6 +2453,8 @@ export type SongStudyAttemptRequest = {
   session_revision?: number;
   selected_option_id?: string;
   transcript?: string;
+  transcription_language_code?: string;
+  transcription_language_probability?: number;
   timezone?: string;
 };
 

@@ -1737,6 +1737,7 @@ describe("community study routes", () => {
         const form = await request.formData()
         expect(form.get("file")).toBeInstanceOf(File)
         expect((form.get("file") as File).type).toBe("audio/ogg")
+        expect(form.get("language_code")).toBe("en")
         return Response.json({
           confidence: 0.99,
           language_code: "es",

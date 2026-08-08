@@ -16,7 +16,11 @@ import { openCommunityWriteClient } from "../communities/community-read-access"
 import {
   hasActiveCommunityElevenLabsCredential,
 } from "../communities/assistant-policy/credential-service"
-import { transcribeCommunityAudioWithElevenLabs } from "../communities/assistant-policy/speech-service"
+import {
+  isClearSpeechLanguageMismatch,
+  normalizeSpeechLanguageCode,
+  transcribeCommunityAudioWithElevenLabs,
+} from "../communities/assistant-policy/speech-service"
 import {
   getAttemptByIdempotencyKey,
   getAttemptBySessionPresentation,
@@ -205,6 +209,8 @@ export type SongStudyAttemptRequest = {
   session_id?: unknown
   session_revision?: unknown
   selected_option_id?: unknown
+  transcription_language_code?: unknown
+  transcription_language_probability?: unknown
   timezone?: unknown
   transcript?: unknown
   type?: unknown
@@ -316,6 +322,26 @@ function readOptionalSessionRevision(value: unknown): number | undefined {
   if (value == null) return undefined
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw badRequestError("session_revision must be a non-negative integer")
+  }
+  return value
+}
+
+function readOptionalTranscriptionLanguageCode(value: unknown): string | null {
+  if (value == null) return null
+  if (typeof value !== "string") {
+    throw badRequestError("transcription_language_code must be a string")
+  }
+  const normalized = normalizeSpeechLanguageCode(value)
+  if (!normalized) {
+    throw badRequestError("transcription_language_code must be a valid ISO language code")
+  }
+  return normalized
+}
+
+function readOptionalTranscriptionLanguageProbability(value: unknown): number | null {
+  if (value == null) return null
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) {
+    throw badRequestError("transcription_language_probability must be a number between 0 and 1")
   }
   return value
 }
@@ -1249,6 +1275,13 @@ export async function submitPostStudyAttempt(input: {
   }
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
   const sessionRevision = readOptionalSessionRevision(input.body.session_revision)
+  const transcriptionLanguageCode = readOptionalTranscriptionLanguageCode(input.body.transcription_language_code)
+  const transcriptionLanguageProbability = readOptionalTranscriptionLanguageProbability(
+    input.body.transcription_language_probability,
+  )
+  if (type !== "say_it_back" && (transcriptionLanguageCode || transcriptionLanguageProbability != null)) {
+    throw badRequestError("transcription language metadata is only valid for say_it_back")
+  }
   const requestFingerprint = studyAttemptRequestFingerprint({
     attemptNumber,
     exerciseId,
@@ -1256,6 +1289,8 @@ export async function submitPostStudyAttempt(input: {
     sessionId,
     sessionRevision: sessionRevision ?? null,
     transcript: readString(input.body.transcript),
+    transcriptionLanguageCode,
+    transcriptionLanguageProbability,
     type,
   })
   // The streak day boundary belongs to the learner: prefer the device's IANA
@@ -1538,6 +1573,12 @@ export async function submitPostStudyAttempt(input: {
       throw badRequestError("type does not match exercise")
     }
     timingExerciseType = exercise.exercise_type
+    const transcriptionLanguageMismatch = type === "say_it_back"
+      && isClearSpeechLanguageMismatch({
+        detectedLanguage: transcriptionLanguageCode,
+        expectedLanguage: exercise.source_language,
+        probability: transcriptionLanguageProbability,
+      })
     // Refuse to grade same-language translation_choice attempts (e.g. from a client that
     // still holds an exercise id generated before this exercise type was suppressed).
     // Mirror the read-path exclusion so it reads as "not offered", not a server error.
@@ -1675,9 +1716,8 @@ export async function submitPostStudyAttempt(input: {
       const stateExercise = state.exercises.find((candidate) => candidate.exerciseId === exerciseId)
       if (!stateExercise) throw notFoundError("Study session exercise not found")
       const useUngradable = type === "say_it_back"
-        && !correct
         && ungradableRerecordEnabled(input.env)
-        && voiceOverlap < 1 / 3
+        && (transcriptionLanguageMismatch || (!correct && voiceOverlap < 1 / 3))
         && !await hasUngradableReceipt({
           appearanceOrdinal: stateExercise.appearanceOrdinal,
           client: db.client,
@@ -2024,6 +2064,7 @@ export async function transcribePostStudyAudio(input: {
   postId: string
 }): Promise<SongStudyTranscriptionResponse> {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+  let sourceLanguage: string | null = null
   try {
     if (!await isCommunityStudyEnabled({ executor: db.client, communityId: input.communityId })) {
       throw new HttpError(403, "forbidden", "Study is disabled for this community")
@@ -2042,6 +2083,7 @@ export async function transcribePostStudyAudio(input: {
     if (post.post_type !== "song") {
       throw notFoundError("Study is not available")
     }
+    sourceLanguage = normalizeSpeechLanguageCode(post.source_language)
     if (!await canStudyPost({ actor: input.actor, client: db.client, communityId: input.communityId, post })) {
       throw new HttpError(403, "forbidden", "Caller is not entitled to study this post")
     }
@@ -2060,6 +2102,7 @@ export async function transcribePostStudyAudio(input: {
     communityId: input.communityId,
     env: input.env,
     file: input.file,
+    languageCode: sourceLanguage,
     missingCredentialMessage: "An ElevenLabs API key is required for say-it-back transcription",
   })
   return {
