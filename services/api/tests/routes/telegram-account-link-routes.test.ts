@@ -190,6 +190,21 @@ describe("Telegram account linking", () => {
       `,
       args: [sourceUserId, now],
     })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO wallet_attachments (
+          wallet_attachment_id, user_id, chain_namespace,
+          wallet_address_normalized, wallet_address_display,
+          attachment_kind, is_primary, status, attached_at, created_at, updated_at
+        ) VALUES (
+          'wal_telegram_source', ?1, 'eip155:1',
+          '0x1111111111111111111111111111111111111111',
+          '0x1111111111111111111111111111111111111111',
+          'external', 0, 'active', ?2, ?2, ?2
+        )
+      `,
+      args: [sourceUserId, now],
+    })
 
     const created = await post(
       "http://pirate.test/users/me/telegram-account-link-intents",
@@ -224,5 +239,12 @@ describe("Telegram account linking", () => {
       args: [sourceUserId],
     })
     expect(String(alias.rows[0]?.canonical_user_id)).toBe(target.userId)
+
+    // Attaching a cashout wallet must not block consolidation and must not
+    // silently transfer wallet authority to the canonical account.
+    const sourceWallet = await ctx.client.execute({
+      sql: `SELECT user_id FROM wallet_attachments WHERE wallet_attachment_id = 'wal_telegram_source'`,
+    })
+    expect(String(sourceWallet.rows[0]?.user_id)).toBe(sourceUserId)
   })
 })
