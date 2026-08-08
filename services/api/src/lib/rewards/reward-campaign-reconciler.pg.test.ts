@@ -23,6 +23,7 @@ import { REWARD_PAYOUT_COORDINATOR_MIRROR_SQL } from "./reward-cashout-service"
 import type { RewardCampaignFinalityProvider } from "./reward-campaign-finality"
 import { cancelRewardCampaignDraft, rewardSongPoolRegisterSql } from "./reward-campaign-service"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
+import { readRewardCampaignLiability } from "./reward-campaign-solvency-monitor"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_CAMPAIGN_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -34,7 +35,7 @@ const ACTIVE_SETTLEMENT_ASSET = {
   chainId: 8453,
   tokenAddress: "0x1000000000000000000000000000000000000001",
   treasuryAddress: "0x2000000000000000000000000000000000000002",
-}
+} as const
 const INVARIANTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0136_control_plane_reward_campaign_enable_invariants.sql",
   import.meta.url,
@@ -49,6 +50,10 @@ const SCORE_TERMS_MIGRATION_URL = new URL(
 )
 const PAYOUT_EFFECTS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0132_control_plane_reward_payout_effects.sql",
+  import.meta.url,
+)
+const PAYOUT_ALLOCATIONS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0150_control_plane_reward_payout_allocations.sql",
   import.meta.url,
 )
 const SONG_SLOTS_MIGRATION_URL = new URL(
@@ -314,6 +319,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SCORE_TERMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(PAYOUT_EFFECTS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(PAYOUT_ALLOCATIONS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SONG_SLOTS_MIGRATION_URL, "utf8"))
     await db.unsafe(`
       CREATE TABLE reward_campaign_funding_effects (
@@ -655,6 +661,186 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe("DELETE FROM reward_campaigns WHERE post_id = $1", [postId])
     await db.end()
   }
+
+  test("solvency liability excludes retired-chain, wrong-token, and wrong-treasury campaign value", async () => {
+    const seed = connect(TEST_DB, 1)
+    await seed.unsafe(`
+      INSERT INTO users VALUES ('usr_solvency_asset_pg', '{}'::jsonb);
+      INSERT INTO communities VALUES ('cmt_solvency_asset_pg');
+    `)
+    await seed.unsafe(`
+      INSERT INTO reward_campaigns (
+        reward_campaign_id, rewarder_user_id, creation_idempotency_key,
+        community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
+        status, eligible_activity, daily_reward_cents, reward_period_cap_cents,
+        budget_cents, funded_cents, reserved_cents, credited_cents, paid_cents,
+        refunded_cents, terms_version, terms_hash, starts_at, ends_at,
+        canceled_at, updated_at
+      ) VALUES
+        ('rcp_solvency_current_pg', 'usr_solvency_asset_pg', 'solvency-current-pg',
+          'cmt_solvency_asset_pg', 'pst_solvency_current_pg', 'sab_solvency_current_pg',
+          'usr_solvency_asset_pg', 'canceled', 'study', 40, 40, 100, 100, 0, 40, 0, 0,
+          1, 'solvency-current-terms', $1, $2, $2, $2),
+        ('rcp_solvency_retired_pg', 'usr_solvency_asset_pg', 'solvency-retired-pg',
+          'cmt_solvency_asset_pg', 'pst_solvency_retired_pg', 'sab_solvency_retired_pg',
+          'usr_solvency_asset_pg', 'canceled', 'study', 50, 50, 3400, 3400, 0, 50, 0, 0,
+          1, 'solvency-retired-terms', $1, $2, $2, $2),
+        ('rcp_solvency_token_pg', 'usr_solvency_asset_pg', 'solvency-token-pg',
+          'cmt_solvency_asset_pg', 'pst_solvency_token_pg', 'sab_solvency_token_pg',
+          'usr_solvency_asset_pg', 'canceled', 'study', 60, 60, 500, 500, 0, 60, 0, 0,
+          1, 'solvency-token-terms', $1, $2, $2, $2),
+        ('rcp_solvency_treasury_pg', 'usr_solvency_asset_pg', 'solvency-treasury-pg',
+          'cmt_solvency_asset_pg', 'pst_solvency_treasury_pg', 'sab_solvency_treasury_pg',
+          'usr_solvency_asset_pg', 'canceled', 'study', 70, 70, 600, 600, 0, 70, 0, 0,
+          1, 'solvency-treasury-terms', $1, $2, $2, $2)
+    `, [NOW, "2026-07-11T12:00:00.000Z"])
+    await seed.unsafe(`
+      INSERT INTO reward_campaign_reservations (
+        reward_campaign_reservation_id, reward_campaign_id, reward_identity_id,
+        user_id, reward_period_key, reward_kind, qualification_basis,
+        amount_cents, status, reward_event_id, reserved_at, credited_at,
+        created_at, updated_at
+      ) VALUES
+        ('rcr_solvency_current_pg', 'rcp_solvency_current_pg', 'identity-current',
+          'usr_solvency_asset_pg', '2026-07-10', 'campaign_practice_day', 'study',
+          40, 'credited', 'rew_solvency_current_pg', $1, $1, $1, $1),
+        ('rcr_solvency_retired_pg', 'rcp_solvency_retired_pg', 'identity-retired',
+          'usr_solvency_asset_pg', '2026-07-10', 'campaign_practice_day', 'study',
+          50, 'credited', 'rew_solvency_retired_pg', $1, $1, $1, $1),
+        ('rcr_solvency_token_pg', 'rcp_solvency_token_pg', 'identity-token',
+          'usr_solvency_asset_pg', '2026-07-10', 'campaign_practice_day', 'study',
+          60, 'credited', 'rew_solvency_token_pg', $1, $1, $1, $1),
+        ('rcr_solvency_treasury_pg', 'rcp_solvency_treasury_pg', 'identity-treasury',
+          'usr_solvency_asset_pg', '2026-07-10', 'campaign_practice_day', 'study',
+          70, 'credited', 'rew_solvency_treasury_pg', $1, $1, $1, $1)
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_campaign_funding_effects (
+        reward_campaign_funding_effect_id, reward_campaign_id, status, chain_id,
+        token_address, treasury_address, expected_amount_cents,
+        received_amount_atomic, confirmed_at
+      ) VALUES
+        ('rcf_solvency_current_pg', 'rcp_solvency_current_pg', 'confirmed', 8453,
+          '0x1000000000000000000000000000000000000001',
+          '0x2000000000000000000000000000000000000002', 100, '1000000', $1),
+        ('rcf_solvency_retired_pg', 'rcp_solvency_retired_pg', 'confirmed', 84532,
+          '0x1000000000000000000000000000000000000001',
+          '0x2000000000000000000000000000000000000002', 3400, '34000000', $1),
+        ('rcf_solvency_token_pg', 'rcp_solvency_token_pg', 'confirmed', 8453,
+          '0x9000000000000000000000000000000000000009',
+          '0x2000000000000000000000000000000000000002', 500, '5000000', $1),
+        ('rcf_solvency_treasury_pg', 'rcp_solvency_treasury_pg', 'confirmed', 8453,
+          '0x1000000000000000000000000000000000000001',
+          '0x8000000000000000000000000000000000000008', 600, '6000000', $1),
+        ('rcf_solvency_current_refund_pg', 'rcp_solvency_current_pg', 'refund_pending', 8453,
+          '0x1000000000000000000000000000000000000001',
+          '0x2000000000000000000000000000000000000002', 1, '7', NULL),
+        ('rcf_solvency_retired_refund_pg', 'rcp_solvency_retired_pg', 'refund_pending', 84532,
+          '0x1000000000000000000000000000000000000001',
+          '0x2000000000000000000000000000000000000002', 1, '99', NULL),
+        ('rcf_solvency_token_refund_pg', 'rcp_solvency_token_pg', 'refund_pending', 8453,
+          '0x9000000000000000000000000000000000000009',
+          '0x2000000000000000000000000000000000000002', 1, '88', NULL),
+        ('rcf_solvency_treasury_refund_pg', 'rcp_solvency_treasury_pg', 'refund_pending', 8453,
+          '0x1000000000000000000000000000000000000001',
+          '0x8000000000000000000000000000000000000008', 1, '77', NULL)
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_campaign_reservation_funding_allocations (
+        reward_campaign_reservation_id, reward_campaign_funding_effect_id,
+        amount_cents, allocated_at
+      ) VALUES
+        ('rcr_solvency_current_pg', 'rcf_solvency_current_pg', 40, $1),
+        ('rcr_solvency_retired_pg', 'rcf_solvency_retired_pg', 50, $1),
+        ('rcr_solvency_token_pg', 'rcf_solvency_token_pg', 60, $1),
+        ('rcr_solvency_treasury_pg', 'rcf_solvency_treasury_pg', 70, $1)
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_events (
+        reward_event_id, user_id, community_id, post_id, activity_date,
+        reward_kind, amount_cents, source, created_at, reward_campaign_id,
+        reward_campaign_reservation_id, reward_identity_id, reward_period_key,
+        qualification_basis, campaign_terms_version, campaign_rate_snapshot_json
+      ) VALUES
+        ('rew_solvency_current_pg', 'usr_solvency_asset_pg', 'cmt_solvency_asset_pg',
+          'pst_solvency_current_pg', '2026-07-10', 'campaign_practice_day', 40,
+          'reward_campaign_reconciler', $1, 'rcp_solvency_current_pg',
+          'rcr_solvency_current_pg', 'identity-current', '2026-07-10', 'study', 1, '{}'),
+        ('rew_solvency_retired_pg', 'usr_solvency_asset_pg', 'cmt_solvency_asset_pg',
+          'pst_solvency_retired_pg', '2026-07-10', 'campaign_practice_day', 50,
+          'reward_campaign_reconciler', $1, 'rcp_solvency_retired_pg',
+          'rcr_solvency_retired_pg', 'identity-retired', '2026-07-10', 'study', 1, '{}'),
+        ('rew_solvency_token_pg', 'usr_solvency_asset_pg', 'cmt_solvency_asset_pg',
+          'pst_solvency_token_pg', '2026-07-10', 'campaign_practice_day', 60,
+          'reward_campaign_reconciler', $1, 'rcp_solvency_token_pg',
+          'rcr_solvency_token_pg', 'identity-token', '2026-07-10', 'study', 1, '{}'),
+        ('rew_solvency_treasury_pg', 'usr_solvency_asset_pg', 'cmt_solvency_asset_pg',
+          'pst_solvency_treasury_pg', '2026-07-10', 'campaign_practice_day', 70,
+          'reward_campaign_reconciler', $1, 'rcp_solvency_treasury_pg',
+          'rcr_solvency_treasury_pg', 'identity-treasury', '2026-07-10', 'study', 1, '{}')
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_payout_effects (
+        reward_payout_effect_id, user_id, amount_cents, recipient_address,
+        idempotency_key, status, confirmed_at, created_at, updated_at
+      ) VALUES
+        ('rpe_solvency_current_pg', 'usr_solvency_asset_pg', 10,
+          '0x3000000000000000000000000000000000000003', 'solvency-current-payout',
+          'confirmed', $1, $1, $1),
+        ('rpe_solvency_retired_pg', 'usr_solvency_asset_pg', 20,
+          '0x3000000000000000000000000000000000000003', 'solvency-retired-payout',
+          'confirmed', $1, $1, $1),
+        ('rpe_solvency_token_pg', 'usr_solvency_asset_pg', 30,
+          '0x3000000000000000000000000000000000000003', 'solvency-token-payout',
+          'confirmed', $1, $1, $1),
+        ('rpe_solvency_treasury_pg', 'usr_solvency_asset_pg', 40,
+          '0x3000000000000000000000000000000000000003', 'solvency-treasury-payout',
+          'confirmed', $1, $1, $1)
+    `, [NOW])
+    await seed.unsafe(`
+      INSERT INTO reward_payout_allocations (
+        reward_payout_allocation_id, reward_payout_effect_id, reward_event_id,
+        reward_campaign_id, amount_cents, status, created_at, confirmed_at,
+        updated_at
+      ) VALUES
+        ('rpa_solvency_current_pg', 'rpe_solvency_current_pg', 'rew_solvency_current_pg',
+          'rcp_solvency_current_pg', 10, 'confirmed', $1, $1, $1),
+        ('rpa_solvency_retired_pg', 'rpe_solvency_retired_pg', 'rew_solvency_retired_pg',
+          'rcp_solvency_retired_pg', 20, 'confirmed', $1, $1, $1),
+        ('rpa_solvency_token_pg', 'rpe_solvency_token_pg', 'rew_solvency_token_pg',
+          'rcp_solvency_token_pg', 30, 'confirmed', $1, $1, $1),
+        ('rpa_solvency_treasury_pg', 'rpe_solvency_treasury_pg', 'rew_solvency_treasury_pg',
+          'rcp_solvency_treasury_pg', 40, 'confirmed', $1, $1, $1)
+    `, [NOW])
+
+    try {
+      await withProductionPostgresClient(async (client) => {
+        const liability = await readRewardCampaignLiability(client, ACTIVE_SETTLEMENT_ASSET)
+        expect(liability).toEqual({
+          contributionLiabilityCents: 60n,
+          creditedUnpaidLiabilityCents: 30n,
+          pendingRefundAtomic: 7n,
+          totalAtomic: 900_007n,
+        })
+      })
+    } finally {
+      await seed.unsafe(`
+        DELETE FROM reward_payout_allocations WHERE reward_payout_allocation_id LIKE 'rpa_solvency_%';
+        DELETE FROM reward_payout_effects WHERE reward_payout_effect_id LIKE 'rpe_solvency_%';
+        DELETE FROM reward_events WHERE reward_event_id LIKE 'rew_solvency_%';
+        DELETE FROM reward_campaign_reservation_funding_allocations
+          WHERE reward_campaign_reservation_id LIKE 'rcr_solvency_%';
+        DELETE FROM reward_campaign_reservations
+          WHERE reward_campaign_reservation_id LIKE 'rcr_solvency_%';
+        DELETE FROM reward_campaign_funding_effects
+          WHERE reward_campaign_funding_effect_id LIKE 'rcf_solvency_%';
+        DELETE FROM reward_campaigns WHERE reward_campaign_id LIKE 'rcp_solvency_%';
+        DELETE FROM communities WHERE community_id = 'cmt_solvency_asset_pg';
+        DELETE FROM users WHERE user_id = 'usr_solvency_asset_pg';
+      `)
+      await seed.end()
+    }
+  })
 
   test("concurrent song-pool registration admits one stable pool identity", async () => {
     const seed = connect(TEST_DB, 1)
