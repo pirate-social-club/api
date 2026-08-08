@@ -19,6 +19,11 @@ import {
   withFetchMock,
 } from "./verification-test-helpers"
 import type { Env } from "../../../src/types"
+import {
+  deriveRewardIdentityId,
+  resolveActiveSupportedRewardIdentity,
+} from "../../../src/lib/verification/unique-human-eligibility"
+import { INTERACTIVE_VERIFICATION_TTL_MS } from "../../../src/lib/verification/verification-capabilities"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -516,13 +521,32 @@ describe("verification routes", () => {
     }
 
     expect((await completeZkPassportNationalityVerification(input)).status).toBe(200)
+    const firstIdentity = await ctx.client.execute({
+      sql: `
+        SELECT identity_nullifier_id, mechanism, nullifier_hash,
+               source_user_attestation_id, source_verification_session_id
+        FROM identity_nullifiers
+        WHERE user_id = ?1 AND provider = 'zkpassport'
+      `,
+      args: [session.userId],
+    })
+    const firstIdentityRow = firstIdentity.rows[0]!
+    const firstRewardIdentityId = await deriveRewardIdentityId(
+      "zkpassport",
+      String(firstIdentityRow.mechanism),
+      String(firstIdentityRow.nullifier_hash),
+    )
     expect((await completeZkPassportNationalityVerification(input)).status).toBe(200)
 
     const evidence = await ctx.client.execute({
       sql: `
         SELECT a.source_verification_session_id AS attestation_session,
                a.source_identity_nullifier_id,
-               n.source_verification_session_id AS nullifier_session
+               n.source_verification_session_id AS nullifier_session,
+               n.source_user_attestation_id,
+               n.mechanism,
+               n.nullifier_hash,
+               n.identity_nullifier_id
         FROM user_attestations a
         JOIN identity_nullifiers n
           ON n.identity_nullifier_id = a.source_identity_nullifier_id
@@ -535,7 +559,29 @@ describe("verification routes", () => {
     })
     expect(evidence.rows).toHaveLength(2)
     expect(evidence.rows[0]?.source_identity_nullifier_id).toBe(evidence.rows[1]?.source_identity_nullifier_id)
-    expect(evidence.rows[1]?.attestation_session).not.toBe(evidence.rows[1]?.nullifier_session)
+    expect(evidence.rows[1]?.attestation_session).toBe(evidence.rows[1]?.nullifier_session)
+    expect(evidence.rows[1]?.identity_nullifier_id).toBe(firstIdentityRow.identity_nullifier_id)
+    expect(evidence.rows[1]?.source_user_attestation_id).not.toBe(firstIdentityRow.source_user_attestation_id)
+    expect(await deriveRewardIdentityId(
+      "zkpassport",
+      String(evidence.rows[1]?.mechanism),
+      String(evidence.rows[1]?.nullifier_hash),
+    )).toBe(firstRewardIdentityId)
+
+    const currentSource = await ctx.client.execute({
+      sql: `
+        SELECT a.source_verification_session_id, a.verified_at, a.expires_at
+        FROM identity_nullifiers n
+        JOIN user_attestations a ON a.user_attestation_id = n.source_user_attestation_id
+        WHERE n.user_id = ?1 AND n.provider = 'zkpassport'
+      `,
+      args: [session.userId],
+    })
+    expect(currentSource.rows[0]?.source_verification_session_id).toBe(evidence.rows[1]?.nullifier_session)
+    expect(
+      Date.parse(String(currentSource.rows[0]?.expires_at))
+        - Date.parse(String(currentSource.rows[0]?.verified_at)),
+    ).toBe(INTERACTIVE_VERIFICATION_TTL_MS)
   })
 
   test("concurrent zkpassport finalizations preserve both attestations on one nullifier", async () => {
@@ -657,6 +703,26 @@ describe("verification routes", () => {
       nullifier,
       nationality: "USA",
     })
+    const firstIdentity = await ctx.client.execute({
+      sql: `
+        SELECT identity_nullifier_id, mechanism, nullifier_hash,
+               source_user_attestation_id, source_verification_session_id
+        FROM identity_nullifiers
+        WHERE user_id = ?1 AND provider = 'self'
+      `,
+      args: [session.userId],
+    })
+    const firstIdentityRow = firstIdentity.rows[0]!
+    const firstRewardIdentityId = await deriveRewardIdentityId(
+      "self",
+      String(firstIdentityRow.mechanism),
+      String(firstIdentityRow.nullifier_hash),
+    )
+    await ctx.client.execute({
+      sql: "UPDATE user_attestations SET expires_at = ?2 WHERE user_attestation_id = ?1",
+      args: [firstIdentityRow.source_user_attestation_id, "2020-01-01T00:00:00.000Z"],
+    })
+    expect(await resolveActiveSupportedRewardIdentity(ctx.client, session.userId)).toBeNull()
     await completeSelfNationalityVerification({
       env: ctx.env,
       accessToken: session.accessToken,
@@ -668,7 +734,11 @@ describe("verification routes", () => {
       sql: `
         SELECT a.source_verification_session_id AS attestation_session,
                a.source_identity_nullifier_id,
-               n.source_verification_session_id AS nullifier_session
+               n.source_verification_session_id AS nullifier_session,
+               n.source_user_attestation_id,
+               n.mechanism,
+               n.nullifier_hash,
+               n.identity_nullifier_id
         FROM user_attestations a
         JOIN identity_nullifiers n
           ON n.identity_nullifier_id = a.source_identity_nullifier_id
@@ -681,7 +751,33 @@ describe("verification routes", () => {
     })
     expect(evidence.rows).toHaveLength(2)
     expect(evidence.rows[0]?.source_identity_nullifier_id).toBe(evidence.rows[1]?.source_identity_nullifier_id)
-    expect(evidence.rows[1]?.attestation_session).not.toBe(evidence.rows[1]?.nullifier_session)
+    expect(evidence.rows[1]?.attestation_session).toBe(evidence.rows[1]?.nullifier_session)
+    expect(evidence.rows[1]?.identity_nullifier_id).toBe(firstIdentityRow.identity_nullifier_id)
+    expect(evidence.rows[1]?.source_user_attestation_id).not.toBe(firstIdentityRow.source_user_attestation_id)
+    expect(await deriveRewardIdentityId(
+      "self",
+      String(evidence.rows[1]?.mechanism),
+      String(evidence.rows[1]?.nullifier_hash),
+    )).toBe(firstRewardIdentityId)
+    expect(await resolveActiveSupportedRewardIdentity(ctx.client, session.userId)).toEqual({
+      id: firstRewardIdentityId,
+      provider: "self",
+    })
+
+    const currentSource = await ctx.client.execute({
+      sql: `
+        SELECT a.source_verification_session_id, a.verified_at, a.expires_at
+        FROM identity_nullifiers n
+        JOIN user_attestations a ON a.user_attestation_id = n.source_user_attestation_id
+        WHERE n.user_id = ?1 AND n.provider = 'self'
+      `,
+      args: [session.userId],
+    })
+    expect(currentSource.rows[0]?.source_verification_session_id).toBe(evidence.rows[1]?.nullifier_session)
+    expect(
+      Date.parse(String(currentSource.rows[0]?.expires_at))
+        - Date.parse(String(currentSource.rows[0]?.verified_at)),
+    ).toBe(INTERACTIVE_VERIFICATION_TTL_MS)
   })
 
   test("concurrent same-document finalizations preserve both nationality attestations on one nullifier", async () => {

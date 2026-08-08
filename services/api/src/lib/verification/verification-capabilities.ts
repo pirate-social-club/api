@@ -2,6 +2,15 @@ import type { User, VerificationCapabilities } from "../../types"
 
 export const INTERACTIVE_VERIFICATION_TTL_MS = 90 * 24 * 60 * 60 * 1000
 
+/**
+ * Durable attestations and their capability projection share one validity
+ * window. A verification session's expiry is only the deadline to finish the
+ * interactive flow and must never become the credential's expiry.
+ */
+export function interactiveVerificationExpiresAt(verifiedAt: Date): string {
+  return new Date(verifiedAt.getTime() + INTERACTIVE_VERIFICATION_TTL_MS).toISOString()
+}
+
 function timestampToMs(timestamp: number | string | null | undefined): number | null {
   if (typeof timestamp === "number") {
     const millis = timestamp * 1000

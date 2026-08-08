@@ -1,5 +1,5 @@
 import type { Client, InStatement } from "../sql-client"
-import { badRequestError, eligibilityFailed, HttpError, internalError, providerUnavailable } from "../errors"
+import { badRequestError, conflictError, eligibilityFailed, HttpError, internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import {
@@ -36,6 +36,7 @@ import {
   getVerificationSessionRow,
   getVerificationSessionRowForUser,
 } from "./verification-shared"
+import { interactiveVerificationExpiresAt } from "./verification-capabilities"
 
 function parseVerificationRequirements(raw: string | null | undefined): VerificationRequirement[] {
   if (!raw) return []
@@ -119,10 +120,40 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
   identityNullifier: IdentityNullifierInput
   activeNullifier: ActiveIdentityNullifier | null
   buildBatchStatements: (activeNullifier: ActiveIdentityNullifier | null) => InStatement[]
+  activeNullifierRefreshStatementIndex?: number
 }): Promise<void> {
+  const writeBatch = async (activeNullifier: ActiveIdentityNullifier | null): Promise<void> => {
+    const statements = input.buildBatchStatements(activeNullifier)
+    if (input.activeNullifierRefreshStatementIndex === undefined) {
+      await input.client.batch(statements, "write")
+      return
+    }
+
+    const transaction = await input.client.transaction("write")
+    try {
+      const results = await transaction.batch(statements, "write")
+      if (
+        activeNullifier
+        && results[input.activeNullifierRefreshStatementIndex]?.rowsAffected !== 1
+      ) {
+        throw conflictError("Active identity changed during verification; please try again")
+      }
+      await transaction.commit()
+    } catch (error) {
+      try {
+        await transaction.rollback()
+      } catch (rollbackError) {
+        console.error("[verification] identity batch rollback failed", rollbackError)
+      }
+      throw error
+    } finally {
+      transaction.close()
+    }
+  }
+
   const attemptedNullifierInsert = input.activeNullifier === null
   try {
-    await input.client.batch(input.buildBatchStatements(input.activeNullifier), "write")
+    await writeBatch(input.activeNullifier)
     return
   } catch (error) {
     if (!attemptedNullifierInsert || !isActiveIdentityNullifierUniqueConflict(error)) throw error
@@ -131,7 +162,7 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
     if (winningNullifier.userId !== input.userId) {
       throw eligibilityFailed("Identity proof is already linked to another user")
     }
-    await input.client.batch(input.buildBatchStatements(winningNullifier), "write")
+    await writeBatch(winningNullifier)
   }
 }
 
@@ -1041,7 +1072,7 @@ async function finalizeZkPassportDocumentVerification(
 
   const now = new Date()
   const updatedAt = now.toISOString()
-  const expiresAt = row.expires_at ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const expiresAt = interactiveVerificationExpiresAt(now)
   const userRow = await getUserRow(client, input.userId)
   if (!userRow) {
     throw internalError("User row missing while completing ZKPassport verification session")
@@ -1214,10 +1245,29 @@ async function finalizeZkPassportDocumentVerification(
         updatedAt,
       ],
     }]
+    const identityNullifierRefresh: InStatement[] = resolvedNullifier ? [{
+      sql: `
+        UPDATE identity_nullifiers
+        SET source_verification_session_id = ?2,
+            source_user_attestation_id = ?3,
+            updated_at = ?4
+        WHERE identity_nullifier_id = ?1
+          AND user_id = ?5
+          AND status = 'active'
+      `,
+      args: [
+        resolvedNullifier.identityNullifierId,
+        verificationSessionId,
+        uniqueHumanAttestationId,
+        updatedAt,
+        input.userId,
+      ],
+    }] : []
     return [
       verificationSessionUpdate,
       uniqueHumanAttestationInsert,
       ...identityNullifierInsert,
+      ...identityNullifierRefresh,
       ...documentAttestationBuilders.map((buildStatement) => buildStatement(sourceIdentityNullifierId)),
       userCapabilityUpdate,
     ]
@@ -1229,6 +1279,7 @@ async function finalizeZkPassportDocumentVerification(
     identityNullifier,
     activeNullifier,
     buildBatchStatements,
+    activeNullifierRefreshStatementIndex: 2,
   })
 
   await approvePendingTelegramJoinGrantsAfterVerification({
@@ -1266,7 +1317,7 @@ async function finalizeVerification(
 
   const now = new Date()
   const updatedAt = now.toISOString()
-  const expiresAt = row.expires_at ?? new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+  const expiresAt = interactiveVerificationExpiresAt(now)
   const userRow = await getUserRow(client, input.userId)
   if (!userRow) {
     throw internalError("User row missing while completing verification session")
@@ -1441,6 +1492,24 @@ async function finalizeVerification(
         updatedAt,
       ],
     }]
+    const identityNullifierRefresh: InStatement[] = resolvedNullifier ? [{
+      sql: `
+        UPDATE identity_nullifiers
+        SET source_verification_session_id = ?2,
+            source_user_attestation_id = ?3,
+            updated_at = ?4
+        WHERE identity_nullifier_id = ?1
+          AND user_id = ?5
+          AND status = 'active'
+      `,
+      args: [
+        resolvedNullifier.identityNullifierId,
+        input.verificationSessionId,
+        uniqueHumanAttestationId,
+        updatedAt,
+        input.userId,
+      ],
+    }] : []
     const capabilityInserts = capabilityAttestationBuilders.map((buildStatement) => (
       buildStatement(sourceIdentityNullifierId)
     ))
@@ -1448,6 +1517,7 @@ async function finalizeVerification(
       verificationSessionUpdate,
       uniqueHumanAttestationInsert,
       ...identityNullifierInsert,
+      ...identityNullifierRefresh,
       ...capabilityInserts,
       userCapabilityUpdate,
     ]
@@ -1459,6 +1529,7 @@ async function finalizeVerification(
     identityNullifier,
     activeNullifier,
     buildBatchStatements,
+    activeNullifierRefreshStatementIndex: 2,
   })
 
   await approvePendingTelegramJoinGrantsAfterVerification({
