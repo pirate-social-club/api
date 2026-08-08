@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import type { Client, InStatement } from "../sql-client"
+import { assertManualRewardNoBroadcastEvidence } from "../communities/bookings/operator-signing-coordinator-do"
 import {
   resolveRewardSettlementManually,
   setRewardSettlementManualResolutionCoordinatorForTests,
@@ -21,6 +22,24 @@ function client(row: Record<string, unknown>): Client {
 }
 
 describe("manual reward settlement resolution", () => {
+  test("requires both an absent transaction and an unchanged pending nonce", () => {
+    expect(() => assertManualRewardNoBroadcastEvidence({
+      liveness: "absent",
+      pendingNonce: 1,
+      expectedNonce: 1,
+    })).not.toThrow()
+    expect(() => assertManualRewardNoBroadcastEvidence({
+      liveness: "pending",
+      pendingNonce: 1,
+      expectedNonce: 1,
+    })).toThrow("absent transaction")
+    expect(() => assertManualRewardNoBroadcastEvidence({
+      liveness: "absent",
+      pendingNonce: 2,
+      expectedNonce: 1,
+    })).toThrow("unchanged pending nonce")
+  })
+
   test("requires the mirror to be reconciliation-required with exact tx evidence", async () => {
     await expect(resolveRewardSettlementManually({
       env: {} as Env,
@@ -41,6 +60,7 @@ describe("manual reward settlement resolution", () => {
   test("passes the durable coordinator key and exact evidence to the DO", async () => {
     let received: Record<string, unknown> | null = null
     setRewardSettlementManualResolutionCoordinatorForTests({
+      resolveRewardNoBroadcast: async () => { throw new Error("not used") },
       resolveRewardReconciliation: async (value) => {
         received = value
         return {
@@ -73,5 +93,64 @@ describe("manual reward settlement resolution", () => {
       reason: "Receipt and event independently verified.",
       operatorActorId: "reward-operator",
     })
+  })
+
+  test("terminalizes an evidenced pre-broadcast effect and releases its allocation", async () => {
+    const statements: string[] = []
+    let committed = false
+    let received: Record<string, unknown> | null = null
+    setRewardSettlementManualResolutionCoordinatorForTests({
+      resolveRewardReconciliation: async () => { throw new Error("not used") },
+      resolveRewardNoBroadcast: async (value) => {
+        received = value
+        return {
+          idempotencyKey: value.idempotencyKey,
+          txHash: value.expectedTxHash,
+          nonce: value.expectedNonce,
+          state: "preparation_parked",
+        }
+      },
+    })
+    const tx = {
+      execute: async (statement: InStatement | string) => {
+        const sql = typeof statement === "string" ? statement : statement.sql
+        statements.push(sql)
+        return { rows: sql.includes("UPDATE reward_payout_effects") ? [{ reward_payout_effect_id: "rpe_test" }] : [] }
+      },
+      batch: async () => [],
+      commit: async () => { committed = true },
+      rollback: async () => undefined,
+      close: () => undefined,
+    }
+    const prebroadcastClient = {
+      execute: async () => ({
+        rows: [{
+          coordinator_ref: COORDINATOR_REF,
+          coordinator_state: "prepared",
+          tx_hash: TX_HASH,
+          broadcast_nonce: 1,
+        }],
+      }),
+      batch: async () => [],
+      transaction: async () => tx,
+    } as Client
+
+    const result = await resolveRewardSettlementManually({
+      env: {} as Env,
+      client: prebroadcastClient,
+      effectKind: "cashout",
+      effectId: "rpe_test",
+      expectedTxHash: TX_HASH,
+      expectedNonce: 1,
+      resolution: "failed_prebroadcast",
+      reason: "Transaction absent and operator nonce unchanged.",
+      operatorActorId: "reward-operator",
+    })
+
+    expect(result.state).toBe("preparation_parked")
+    expect(received).toMatchObject({ expectedTxHash: TX_HASH, expectedNonce: 1 })
+    expect(committed).toBe(true)
+    expect(statements.some((sql) => sql.includes("UPDATE reward_payout_effects"))).toBe(true)
+    expect(statements.some((sql) => sql.includes("UPDATE reward_payout_allocations"))).toBe(true)
   })
 })

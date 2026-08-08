@@ -410,6 +410,7 @@ export function createRewardSettlementResolutionHandler(
     const body = await c.req.json<{
       effect_kind?: unknown
       expected_tx_hash?: unknown
+      expected_nonce?: unknown
       resolution?: unknown
       reason?: unknown
     }>().catch(() => null)
@@ -418,7 +419,7 @@ export function createRewardSettlementResolutionHandler(
     if (effectKind !== "cashout" && effectKind !== "funding_refund") {
       throw badRequestError("Invalid rewards settlement effect kind")
     }
-    if (resolution !== "confirmed" && resolution !== "failed_onchain") {
+    if (resolution !== "confirmed" && resolution !== "failed_onchain" && resolution !== "failed_prebroadcast") {
       throw badRequestError("Invalid rewards settlement resolution")
     }
     const result = await services.resolveSettlement({
@@ -427,6 +428,7 @@ export function createRewardSettlementResolutionHandler(
       effectKind,
       effectId: c.req.param("effectId") ?? "",
       expectedTxHash: typeof body?.expected_tx_hash === "string" ? body.expected_tx_hash : "",
+      expectedNonce: typeof body?.expected_nonce === "number" ? body.expected_nonce : undefined,
       resolution,
       reason: typeof body?.reason === "string" ? body.reason : "",
       operatorActorId: operator.operatorActorId,
