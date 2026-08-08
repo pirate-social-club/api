@@ -126,7 +126,7 @@ describe("Telegram account linking", () => {
     expect(replayBody.code).toBe("telegram_account_link_expired")
   })
 
-  test("refuses to merge a Telegram identity once it has meaningful state", async () => {
+  test("merges allowed Telegram membership activity into the canonical account", async () => {
     const ctx = await createRouteTestContext({
       PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
     })
@@ -205,8 +205,24 @@ describe("Telegram account linking", () => {
       target.accessToken,
       ctx.env,
     )
-    expect(consumed.status).toBe(409)
-    const body = await json(consumed) as { code: string }
-    expect(body.code).toBe("telegram_account_link_conflict")
+    expect(consumed.status).toBe(200)
+    expect(await json(consumed)).toEqual({ linked: true })
+
+    const projection = await ctx.client.execute({
+      sql: `
+        SELECT user_id, membership_state
+        FROM community_membership_projections
+        WHERE community_id = 'cmt_conflict_link'
+      `,
+    })
+    expect(projection.rows).toHaveLength(1)
+    expect(String(projection.rows[0]?.user_id)).toBe(target.userId)
+    expect(String(projection.rows[0]?.membership_state)).toBe("member")
+
+    const alias = await ctx.client.execute({
+      sql: `SELECT canonical_user_id FROM user_account_aliases WHERE source_user_id = ?1`,
+      args: [sourceUserId],
+    })
+    expect(String(alias.rows[0]?.canonical_user_id)).toBe(target.userId)
   })
 })

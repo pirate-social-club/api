@@ -149,36 +149,46 @@ export async function getRewardsSummaryForUser(input: {
     executeFirst(client, {
       sql: `
         SELECT COALESCE(SUM(amount_cents), 0) AS credit_cents
-        FROM reward_events
-        WHERE user_id = ?1
+        FROM reward_events event
+        LEFT JOIN reward_ownership_transfers transfer
+          ON transfer.source_user_id = event.user_id
+        WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
       `,
       args: [input.userId],
     }),
     executeFirst(client, {
       sql: `
         SELECT COALESCE(SUM(amount_cents), 0) AS payout_cents
-        FROM reward_payout_effects
-        WHERE user_id = ?1
+        FROM reward_payout_effects payout
+        LEFT JOIN reward_ownership_transfers transfer
+          ON transfer.source_user_id = payout.user_id
+        WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
           AND status IN ('submitted', 'confirmed')
       `,
       args: [input.userId],
     }),
     executeFirst(client, {
       sql: `
-        SELECT credited_cents
-        FROM reward_user_days
-        WHERE user_id = ?1
+        SELECT COALESCE(SUM(credited_cents), 0) AS credited_cents
+        FROM reward_user_days day
+        LEFT JOIN reward_ownership_transfers transfer
+          ON transfer.source_user_id = day.user_id
+        WHERE COALESCE(transfer.canonical_user_id, day.user_id) = ?1
           AND activity_date = ?2
+        GROUP BY activity_date
         LIMIT 1
       `,
       args: [input.userId, activityDate],
     }),
     client.execute({
       sql: `
-        SELECT reward_event_id, user_id, community_id, post_id, activity_date, reward_kind,
+        SELECT reward_event_id, COALESCE(transfer.canonical_user_id, event.user_id) AS user_id,
+          community_id, post_id, activity_date, reward_kind,
           amount_cents, reward_campaign_id, reward_period_key, qualification_basis, created_at
-        FROM reward_events
-        WHERE user_id = ?1
+        FROM reward_events event
+        LEFT JOIN reward_ownership_transfers transfer
+          ON transfer.source_user_id = event.user_id
+        WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
         ORDER BY created_at DESC, reward_event_id DESC
         LIMIT ?2
       `,
