@@ -153,7 +153,7 @@ export interface OperatorSettleResult {
   preparationFailure?: PreparationFailureDiagnostic | null
   settlementFailure?: SettlementFailureDiagnostic | null
   manualResolution?: {
-    resolution: "confirmed" | "failed_onchain"
+    resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast"
     reason: string
     operatorActorId: string
     resolvedAt: number
@@ -246,6 +246,16 @@ export function assertManualRewardResolutionEvidence(input: {
   }
   if (input.resolution === "failed_onchain" && input.liveness !== "failed") {
     throw conflictError("Cannot manually fail rewards settlement without a failed receipt")
+  }
+}
+
+export function assertManualRewardNoBroadcastEvidence(input: {
+  liveness: TxLiveness
+  pendingNonce: number
+  expectedNonce: number
+}): void {
+  if (input.liveness !== "absent" || input.pendingNonce !== input.expectedNonce) {
+    throw conflictError("Cannot fail rewards settlement without absent transaction and unchanged pending nonce")
   }
 }
 export interface ChainPrimitives {
@@ -449,7 +459,7 @@ interface EffectRow {
   next_attempt_at: number | null
   last_error: string | null
   reconciliation_count: number
-  manual_resolution: "confirmed" | "failed_onchain" | null
+  manual_resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast" | null
   manual_resolution_reason: string | null
   manual_resolved_by: string | null
   manual_resolved_at: number | null
@@ -742,6 +752,72 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     ).catch((error) => {
       console.error(JSON.stringify({
         message: "manual rewards settlement resolution alert failed",
+        effect: row.idempotency_key,
+        error: errMsg(error),
+      }))
+    })
+    return this.result(resolved)
+  }
+
+  async resolveRewardNoBroadcast(input: {
+    idempotencyKey: string
+    expectedTxHash: string
+    expectedNonce: number
+    reason: string
+    operatorActorId: string
+  }): Promise<OperatorSettleResult> {
+    const row = this.read(String(input.idempotencyKey ?? ""))
+    if (!row || this.operatorKind(row) !== "rewards") {
+      throw conflictError("Rewards settlement effect not found")
+    }
+    if (row.state !== "prepared" || !row.signed_tx || !row.tx_hash || row.nonce == null) {
+      throw conflictError("Rewards settlement effect is not awaiting pre-broadcast recovery")
+    }
+    const expectedTxHash = String(input.expectedTxHash ?? "").trim().toLowerCase()
+    if (row.tx_hash.toLowerCase() !== expectedTxHash || row.nonce !== input.expectedNonce) {
+      throw conflictError("Rewards pre-broadcast recovery evidence mismatch")
+    }
+    const reason = String(input.reason ?? "").trim()
+    const operatorActorId = String(input.operatorActorId ?? "").trim()
+    if (reason.length < 10 || reason.length > 1_000) {
+      throw badRequestError("Rewards pre-broadcast recovery reason must be 10-1000 characters")
+    }
+    if (!operatorActorId || operatorActorId.length > 200) {
+      throw badRequestError("Rewards pre-broadcast resolver identity is invalid")
+    }
+    const [liveness, pendingNonce] = await Promise.all([
+      chain().txLiveness(this.env, expectedTxHash, "rewards"),
+      chain().pendingNonce(this.env, "rewards"),
+    ])
+    assertManualRewardNoBroadcastEvidence({ liveness, pendingNonce, expectedNonce: row.nonce })
+    const resolvedAt = Date.now()
+    const resolved = this.cas(row.idempotency_key, row.version, {
+      state: "preparation_parked",
+      signed_tx: null,
+      next_attempt_at: null,
+      last_error: `operator-confirmed no broadcast: ${reason}`.slice(0, 1_000),
+      manual_resolution: "failed_prebroadcast",
+      manual_resolution_reason: reason,
+      manual_resolved_by: operatorActorId,
+      manual_resolved_at: resolvedAt,
+    })
+    if (!resolved) throw conflictError("Rewards settlement effect changed during pre-broadcast recovery")
+    await captureScheduledWarning(
+      this.env,
+      "Rewards settlement pre-broadcast failure manually resolved",
+      `reward_settlement_prebroadcast_resolution:${row.operation_id ?? row.idempotency_key}`,
+      {
+        operation_id: row.operation_id,
+        tx_hash: row.tx_hash,
+        nonce: row.nonce,
+        resolution: "failed_prebroadcast",
+        operator_actor_id: operatorActorId,
+        reason,
+      },
+      { urgency: "high" },
+    ).catch((error) => {
+      console.error(JSON.stringify({
+        message: "manual rewards pre-broadcast resolution alert failed",
         effect: row.idempotency_key,
         error: errMsg(error),
       }))
@@ -1336,7 +1412,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       reconciliation_count: Number(r.reconciliation_count ?? 0),
       manual_resolution: r.manual_resolution == null
         ? null
-        : String(r.manual_resolution) as "confirmed" | "failed_onchain",
+        : String(r.manual_resolution) as "confirmed" | "failed_onchain" | "failed_prebroadcast",
       manual_resolution_reason: r.manual_resolution_reason == null ? null : String(r.manual_resolution_reason),
       manual_resolved_by: r.manual_resolved_by == null ? null : String(r.manual_resolved_by),
       manual_resolved_at: r.manual_resolved_at == null ? null : Number(r.manual_resolved_at),
