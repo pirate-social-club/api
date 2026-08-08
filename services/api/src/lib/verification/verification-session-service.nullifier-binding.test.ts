@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { Client, InStatement } from "../sql-client"
+import type { Client, InStatement, Transaction } from "../sql-client"
 import {
   isActiveIdentityNullifierUniqueConflict,
   writeVerificationBatchWithNullifierRetry,
@@ -33,6 +33,42 @@ describe("active identity nullifier conflict classification", () => {
 })
 
 describe("writeVerificationBatchWithNullifierRetry", () => {
+  test("rolls back when the active nullifier repoint matches no row", async () => {
+    let committed = false
+    let rolledBack = false
+    let closed = false
+    const transaction = {
+      batch: async () => [
+        { rows: [], rowsAffected: 1 },
+        { rows: [], rowsAffected: 1 },
+        { rows: [], rowsAffected: 0 },
+      ],
+      commit: async () => { committed = true },
+      rollback: async () => { rolledBack = true },
+      close: () => { closed = true },
+    } as unknown as Transaction
+    const client = {
+      transaction: async () => transaction,
+    } as unknown as Client
+
+    await expect(writeVerificationBatchWithNullifierRetry({
+      client,
+      userId: "usr_1",
+      identityNullifier,
+      activeNullifier: { identityNullifierId: "nul_stale", userId: "usr_1" },
+      buildBatchStatements: (): InStatement[] => [
+        { sql: "UPDATE verification_sessions" },
+        { sql: "INSERT INTO user_attestations" },
+        { sql: "UPDATE identity_nullifiers" },
+      ],
+      activeNullifierRefreshStatementIndex: 2,
+    })).rejects.toMatchObject({ status: 409 })
+
+    expect(committed).toBe(false)
+    expect(rolledBack).toBe(true)
+    expect(closed).toBe(true)
+  })
+
   test("resolves the winning nullifier and replays once through the reuse branch", async () => {
     const winner: ActiveIdentityNullifier = { identityNullifierId: "nul_winner", userId: "usr_1" }
     const builtFor: Array<ActiveIdentityNullifier | null> = []
