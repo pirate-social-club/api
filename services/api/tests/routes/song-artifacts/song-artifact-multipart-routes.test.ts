@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
+import { reconcileHeadVerifyingSongArtifactUploads } from "../../../src/lib/song-artifacts/song-artifact-upload-session-service"
 import { json, createRouteTestContext, resetRuntimeCaches } from "../../helpers"
 import { createOpenSongCommunity } from "./song-artifact-locked-test-helpers"
 import { exchangeJwt, requestJson } from "./song-artifact-test-helpers"
@@ -33,7 +34,7 @@ function installMultipartFilebaseMock(input: {
   cid?: string
   contentLength?: number
   contentType?: string
-} = {}): { completeBodies: string[]; abortUrls: string[]; headUrls: string[] } {
+} = {}): { completeBodies: string[]; abortUrls: string[]; headUrls: string[]; readonly headCalls: number } {
   const uploadId = input.uploadId ?? "filebase-upload-1"
   const cid = input.cid ?? "QmMultipartRouteCid"
   const contentLength = input.contentLength ?? VIDEO_SIZE_BYTES
@@ -85,7 +86,7 @@ function installMultipartFilebaseMock(input: {
     return new Response(`unexpected Filebase request: ${request.method} ${request.url}`, { status: 500 })
   }
 
-  return { completeBodies, abortUrls, headUrls }
+  return { completeBodies, abortUrls, headUrls, get headCalls() { return headUrls.length } }
 }
 
 async function createMultipartRouteSetup() {
@@ -303,6 +304,7 @@ describe("song artifact multipart routes", () => {
     expect(completeBody.ipfs_cid).toBe("QmMultipartRouteCid")
     expect(completeBody.content_hash).toBe(CONTENT_HASH)
     expect(setup.filebase.completeBodies[0]).toContain("<PartNumber>3</PartNumber>")
+    expect(setup.filebase.headCalls).toBe(0)
 
     const rows = await setup.client.execute({
       sql: `
@@ -319,8 +321,26 @@ describe("song artifact multipart routes", () => {
     })
     expect(rows.rows[0]?.upload_status).toBe("uploaded")
     expect(rows.rows[0]?.content_hash_verified_at).toBeNull()
-    expect(rows.rows[0]?.session_status).toBe("uploaded")
-    expect(setup.filebase.headUrls).toHaveLength(0)
+    // Multipart completion is durable from the provider's Complete response;
+    // S3 metadata verification advances the session asynchronously.
+    expect(rows.rows[0]?.session_status).toBe("head_verifying")
+
+    await setup.client.execute({
+      sql: `UPDATE song_artifact_upload_sessions SET updated_at = '2026-01-01T00:00:00.000Z' WHERE song_artifact_upload_session_id = ?1`,
+      args: [intent.upload_session.id],
+    })
+    await expect(reconcileHeadVerifyingSongArtifactUploads({
+      env: setup.env,
+      limit: 1,
+      now: "2026-01-01T00:01:00.000Z",
+    })).resolves.toMatchObject({ scanned: 1, verified: 1, pending: 0, failed: 0 })
+    expect(setup.filebase.headCalls).toBe(1)
+
+    const verifiedRows = await setup.client.execute({
+      sql: `SELECT status AS session_status FROM song_artifact_upload_sessions WHERE song_artifact_upload_session_id = ?1`,
+      args: [intent.upload_session.id],
+    })
+    expect(verifiedRows.rows[0]?.session_status).toBe("uploaded")
   })
 
   test("rejects malformed multipart completion payloads", async () => {

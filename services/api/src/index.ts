@@ -65,6 +65,7 @@ import {
 import { createBookingHoldWriteRepository } from "./lib/bookings/hold-repository"
 import { getUserRepository } from "./lib/auth/repositories"
 import { reconcileStaleSongArtifactUploadSessionJobs } from "./lib/communities/jobs/song-artifact-session-reaper-handler"
+import { reconcileHeadVerifyingSongArtifactUploads } from "./lib/song-artifacts/song-artifact-upload-session-service"
 import { exhaustedCommunityJobs, processAvailableCommunityJobs } from "./lib/communities/jobs/runner"
 import { reconcileRequestedLockedAssetDeliveryJobs } from "./lib/communities/jobs/locked-asset-delivery-handler"
 import { reconcileStuckPostPublishFinalizeJobs } from "./lib/communities/jobs/post-publish-finalize-handler"
@@ -1325,6 +1326,18 @@ async function monitorScheduledRewardCampaignTreasurySolvency(env: Env): Promise
   }
 }
 
+async function reconcileScheduledSongArtifactHeadVerifications(env: Env): Promise<void> {
+  try {
+    const summary = await reconcileHeadVerifyingSongArtifactUploads({ env })
+    if (summary.scanned > 0) {
+      console.info("[song-artifacts] head verification", JSON.stringify(summary))
+    }
+  } catch (error) {
+    console.error("[song-artifacts] head verification failed", error)
+    await captureScheduledError(env, error, "song_artifact_head_verification")
+  }
+}
+
 async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   try {
     const client = getControlPlaneClient(env)
@@ -1609,7 +1622,7 @@ const COMMUNITY_JOB_PRELUDE_DEADLINE_MS = 20_000
 // 13% waited more than ten minutes and the worst waited ~8 hours. A song whose
 // publish-finalize attempt fails backs off 30s and then waits on this job to get
 // a start, which is why "Preparing song features" could linger for half an hour.
-export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 11
+export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 12
 const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
@@ -1640,6 +1653,7 @@ type ScheduledPriorityJobName =
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
   | "reconcile_reward_funding_refunds"
+  | "reconcile_song_artifact_head_verifications"
   | "monitor_reward_campaign_treasury_solvency"
   | "process_community_jobs"
   | "reconcile_d1_provisioning"
@@ -1661,6 +1675,7 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
+    "reconcile_song_artifact_head_verifications",
     // Funded reward campaigns must retain their solvency and lifecycle
     // watchdogs even when community D1 work consumes the nominal batch budget.
     "monitor_reward_campaign_treasury_solvency",
@@ -1768,6 +1783,7 @@ const handler: ExportedHandler<Env> = {
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
       reconcile_reward_funding_refunds: () => reconcileScheduledRewardFundingRefunds(env),
+      reconcile_song_artifact_head_verifications: () => reconcileScheduledSongArtifactHeadVerifications(env),
       monitor_reward_campaign_treasury_solvency: () => monitorScheduledRewardCampaignTreasurySolvency(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
