@@ -59,10 +59,8 @@ async function controlPlaneBlockReason(
   sourceUserId: string,
   canonicalUserId: string,
 ): Promise<AccountMergeBlockReason | null> {
-  const [sourceVerified, canonicalVerified] = await Promise.all([
-    activeVerifiedIdentityCount(tx, sourceUserId),
-    activeVerifiedIdentityCount(tx, canonicalUserId),
-  ])
+  const sourceVerified = await activeVerifiedIdentityCount(tx, sourceUserId)
+  const canonicalVerified = await activeVerifiedIdentityCount(tx, canonicalUserId)
   if (sourceVerified > 0 && canonicalVerified > 0) return "distinct_verified_humans"
 
   const authority = await tx.execute({
@@ -232,7 +230,7 @@ async function recomputeStreaks(tx: Transaction, canonicalUserId: string, now: s
     sql: `
       SELECT post_id, community_id, activity_date
       FROM song_engagement_days
-      WHERE user_id = ?1
+      WHERE user_id = ?1 AND qualified = 1
       ORDER BY post_id, activity_date
     `,
     args: [canonicalUserId],
@@ -401,10 +399,8 @@ async function finalizeControlPlane(input: {
       args: [input.merge.sourceUserId],
     })
     if (already.rows.length === 0) {
-      const [sourceVerified, canonicalVerified] = await Promise.all([
-        activeVerifiedIdentityCount(tx, input.merge.sourceUserId),
-        activeVerifiedIdentityCount(tx, input.merge.canonicalUserId),
-      ])
+      const sourceVerified = await activeVerifiedIdentityCount(tx, input.merge.sourceUserId)
+      const canonicalVerified = await activeVerifiedIdentityCount(tx, input.merge.canonicalUserId)
       if (sourceVerified > 0 && canonicalVerified > 0) throw mergeConflict("distinct_verified_humans")
 
       if (sourceVerified > 0) {
@@ -527,11 +523,11 @@ async function finalizeControlPlane(input: {
                 OR excluded.membership_state = 'member' THEN 'member'
               ELSE community_membership_projections.membership_state
             END,
-            source_updated_at = GREATEST(
+            source_updated_at = MAX(
               community_membership_projections.source_updated_at,
               excluded.source_updated_at
             ),
-            updated_at = GREATEST(
+            updated_at = MAX(
               community_membership_projections.updated_at,
               excluded.updated_at
             )
@@ -557,7 +553,7 @@ async function finalizeControlPlane(input: {
                 OR excluded.follow_state = 'active' THEN 'active'
               ELSE community_follow_projections.follow_state
             END,
-            source_updated_at = GREATEST(
+            source_updated_at = MAX(
               community_follow_projections.source_updated_at,
               excluded.source_updated_at
             ),
@@ -566,7 +562,7 @@ async function finalizeControlPlane(input: {
                 OR excluded.follow_state = 'active' THEN NULL
               ELSE community_follow_projections.unfollowed_at
             END,
-            updated_at = GREATEST(
+            updated_at = MAX(
               community_follow_projections.updated_at,
               excluded.updated_at
             )
