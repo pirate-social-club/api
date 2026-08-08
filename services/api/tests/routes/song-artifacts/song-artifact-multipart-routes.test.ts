@@ -33,7 +33,7 @@ function installMultipartFilebaseMock(input: {
   cid?: string
   contentLength?: number
   contentType?: string
-} = {}): { completeBodies: string[]; abortUrls: string[] } {
+} = {}): { completeBodies: string[]; abortUrls: string[]; headUrls: string[] } {
   const uploadId = input.uploadId ?? "filebase-upload-1"
   const cid = input.cid ?? "QmMultipartRouteCid"
   const contentLength = input.contentLength ?? VIDEO_SIZE_BYTES
