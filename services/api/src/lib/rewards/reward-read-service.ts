@@ -184,12 +184,13 @@ export async function getRewardsSummaryForUser(input: {
       sql: `
         SELECT reward_event_id, COALESCE(transfer.canonical_user_id, event.user_id) AS user_id,
           community_id, post_id, activity_date, reward_kind,
-          amount_cents, reward_campaign_id, reward_period_key, qualification_basis, created_at
+          amount_cents, reward_campaign_id, reward_period_key, qualification_basis,
+          event.created_at AS created_at
         FROM reward_events event
         LEFT JOIN reward_ownership_transfers transfer
           ON transfer.source_user_id = event.user_id
         WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
-        ORDER BY created_at DESC, reward_event_id DESC
+        ORDER BY event.created_at DESC, reward_event_id DESC
         LIMIT ?2
       `,
       args: [input.userId, recentLimit],

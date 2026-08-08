@@ -72,15 +72,7 @@ async function controlPlaneBlockReason(
   if (authority.rows.length > 0) return "community_authority"
 
   const authored = await tx.execute({
-    sql: `
-      SELECT 1 FROM (
-        SELECT author_user_id FROM community_post_projections
-        UNION ALL
-        SELECT author_user_id FROM community_comment_projections
-      ) authored
-      WHERE author_user_id = ?1
-      LIMIT 1
-    `,
+    sql: `SELECT 1 FROM community_post_projections WHERE author_user_id = ?1 LIMIT 1`,
     args: [sourceUserId],
   })
   if (authored.rows.length > 0) return "authored_content"
