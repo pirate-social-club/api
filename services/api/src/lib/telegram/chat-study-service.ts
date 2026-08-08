@@ -410,13 +410,14 @@ async function listReadySongs(input: {
         }),
         activeCampaignRewards({ env: input.env, postIds: posts.map((post) => post.post_id) }),
       ])
+      const language = isStudyHelperLanguage(input.targetLanguage) ? input.targetLanguage : "en"
       posts.forEach((post) => {
         if (!readyPostIds.has(post.post_id)) return
         const dailyRewardCents = rewards.get(post.post_id)
         ready.push({
           ...(dailyRewardCents ? { dailyRewardCents } : {}),
           postId: post.post_id,
-          title: post.song_title?.trim() || post.title?.trim() || getTelegramStudyCopy(input.targetLanguage).untitledSong,
+          title: post.song_title?.trim() || post.title?.trim() || getTelegramStudyCopy(language).untitledSong,
         })
       })
       if (rows.rows.length < CHAT_STUDY_SONG_QUERY_PAGE_SIZE) break
