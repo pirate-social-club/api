@@ -131,6 +131,125 @@ const SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS = [
   `,
 ]
 
+// Migration 0198 widens challenge_kind on an existing PostgreSQL CHECK.
+// SQLite cannot alter that inline constraint, so rebuild the session table and
+// preserve every column/index while admitting the same enum as PostgreSQL.
+const SQLITE_NAMESPACE_VERIFICATION_SESSIONS_CHALLENGE_KIND_REBUILD = [
+  `
+    CREATE TABLE namespace_verification_sessions_sqlite_rebuild (
+      namespace_verification_session_id TEXT PRIMARY KEY,
+      namespace_verification_id TEXT,
+      user_id TEXT NOT NULL,
+      family TEXT NOT NULL CHECK (family IN ('hns', 'spaces')),
+      submitted_root_label TEXT NOT NULL,
+      normalized_root_label TEXT,
+      status TEXT NOT NULL CHECK (status IN (
+        'draft', 'inspecting', 'dns_setup_required', 'challenge_required',
+        'challenge_pending', 'verifying', 'verified', 'failed', 'expired', 'disputed'
+      )),
+      challenge_host TEXT,
+      challenge_txt_value TEXT,
+      setup_nameservers_json JSONB,
+      challenge_kind TEXT CHECK (
+        challenge_kind IS NULL OR challenge_kind IN ('dns_txt', 'hns_import', 'fabric_txt_publish')
+      ),
+      challenge_payload_json JSONB,
+      challenge_expires_at TIMESTAMPTZ,
+      ownership_source TEXT CHECK (
+        ownership_source IS NULL OR ownership_source IN (
+          'hns_parent_chain_txt', 'owner_authoritative_dns_txt'
+        )
+      ),
+      authority_health_verified INTEGER CHECK (
+        authority_health_verified IS NULL OR authority_health_verified IN (0, 1)
+      ),
+      root_exists INTEGER CHECK (root_exists IS NULL OR root_exists IN (0, 1)),
+      root_control_verified INTEGER CHECK (root_control_verified IS NULL OR root_control_verified IN (0, 1)),
+      expiry_horizon_sufficient INTEGER CHECK (expiry_horizon_sufficient IS NULL OR expiry_horizon_sufficient IN (0, 1)),
+      routing_enabled INTEGER CHECK (routing_enabled IS NULL OR routing_enabled IN (0, 1)),
+      pirate_dns_authority_verified INTEGER CHECK (pirate_dns_authority_verified IS NULL OR pirate_dns_authority_verified IN (0, 1)),
+      club_attach_allowed INTEGER CHECK (club_attach_allowed IS NULL OR club_attach_allowed IN (0, 1)),
+      pirate_web_routing_allowed INTEGER CHECK (pirate_web_routing_allowed IS NULL OR pirate_web_routing_allowed IN (0, 1)),
+      pirate_subdomain_issuance_allowed INTEGER CHECK (pirate_subdomain_issuance_allowed IS NULL OR pirate_subdomain_issuance_allowed IN (0, 1)),
+      control_class TEXT CHECK (control_class IS NULL OR control_class IN (
+        'single_holder_root', 'multisig_controlled_root', 'dao_controlled_root', 'burned_or_immutable_root'
+      )),
+      operation_class TEXT CHECK (operation_class IS NULL OR operation_class IN (
+        'owner_managed_namespace', 'routing_only_namespace',
+        'pirate_delegated_namespace', 'owner_signed_updates_namespace'
+      )),
+      anchor_height BIGINT,
+      anchor_block_hash TEXT,
+      anchor_root_hash TEXT,
+      proof_root_hash TEXT,
+      observation_provider TEXT,
+      evidence_bundle_ref TEXT,
+      failure_reason TEXT,
+      accepted_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(user_id)
+    );
+  `,
+  `
+    INSERT INTO namespace_verification_sessions_sqlite_rebuild
+    SELECT
+      namespace_verification_session_id,
+      namespace_verification_id,
+      user_id,
+      family,
+      submitted_root_label,
+      normalized_root_label,
+      status,
+      challenge_host,
+      challenge_txt_value,
+      setup_nameservers_json,
+      challenge_kind,
+      challenge_payload_json,
+      challenge_expires_at,
+      ownership_source,
+      authority_health_verified,
+      root_exists,
+      root_control_verified,
+      expiry_horizon_sufficient,
+      routing_enabled,
+      pirate_dns_authority_verified,
+      club_attach_allowed,
+      pirate_web_routing_allowed,
+      pirate_subdomain_issuance_allowed,
+      control_class,
+      operation_class,
+      anchor_height,
+      anchor_block_hash,
+      anchor_root_hash,
+      proof_root_hash,
+      observation_provider,
+      evidence_bundle_ref,
+      failure_reason,
+      accepted_at,
+      expires_at,
+      created_at,
+      updated_at
+    FROM namespace_verification_sessions;
+  `,
+  `DROP TABLE namespace_verification_sessions;`,
+  `ALTER TABLE namespace_verification_sessions_sqlite_rebuild RENAME TO namespace_verification_sessions;`,
+  `
+    CREATE UNIQUE INDEX idx_namespace_verification_sessions_verification_id
+      ON namespace_verification_sessions(namespace_verification_id)
+      WHERE namespace_verification_id IS NOT NULL;
+  `,
+  `
+    CREATE INDEX idx_namespace_verification_sessions_user_status
+      ON namespace_verification_sessions(user_id, status);
+  `,
+  `
+    CREATE INDEX idx_namespace_verification_sessions_root_status
+      ON namespace_verification_sessions(normalized_root_label, status);
+  `,
+]
+
 // SQLite cannot ALTER a CHECK constraint, and simply dropping the ADD CONSTRAINT
 // (as every other constraint statement is) would leave the baseline's inline
 // CHECK rejecting assertion names introduced by later migrations. Rebuild the
@@ -792,6 +911,12 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     }
     if (normalized.includes("NAMESPACE_VERIFICATION_ASSERTIONS_ASSERTION_NAME_CHECK")) {
       return SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD
+    }
+    if (
+      normalized.includes("NAMESPACE_VERIFICATION_SESSIONS_CHALLENGE_KIND_CHECK")
+      && normalized.includes("'HNS_IMPORT'")
+    ) {
+      return SQLITE_NAMESPACE_VERIFICATION_SESSIONS_CHALLENGE_KIND_REBUILD
     }
     return []
   }

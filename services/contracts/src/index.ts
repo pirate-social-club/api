@@ -724,7 +724,7 @@ export type NamespaceVerificationSession = {
   submitted_root_label: string;
   normalized_root_label?: string | null;
   status: "draft" | "inspecting" | "dns_setup_required" | "challenge_required" | "challenge_pending" | "verifying" | "verified" | "failed" | "expired" | "disputed";
-  challenge_kind?: "dns_txt" | "fabric_txt_publish" | null;
+  challenge_kind?: "dns_txt" | "hns_import" | "fabric_txt_publish" | null;
   challenge_host?: string | null;
   challenge_txt_value?: string | null;
   challenge_payload?: (Record<string, unknown>) | null;

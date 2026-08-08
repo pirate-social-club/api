@@ -36,7 +36,7 @@ class PlatformManagedZoneBootstrapClient implements Client {
       this.insertAttempts += 1
       const args = typeof statement === "string" ? [] : (statement.args ?? [])
       expect(args[5]).toBe("challenge_required")
-      expect(args[6]).toBe("dns_txt")
+      expect(args[6]).toBe("hns_import")
       expect(JSON.parse(String(args[7]))).toMatchObject({
         kind: "hns_import",
         publish_plan: {

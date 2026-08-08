@@ -221,6 +221,14 @@ describe("spaces verification lifecycle routes", () => {
       expect(completedBody.status).toBe("verified")
       expect(typeof completedBody.namespace_verification).toBe("string")
       expect(typeof completedBody.evidence_bundle_ref).toBe("string")
+      await ctx.client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET status = 'expired'
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [decodePublicNamespaceVerificationSessionId(createdBody.id)],
+      })
 
       const restartedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,

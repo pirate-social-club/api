@@ -9997,6 +9997,7 @@ const spec = {
             "type": "string",
             "enum": [
               "dns_txt",
+              "hns_import",
               "fabric_txt_publish"
             ],
             "nullable": true

@@ -31,13 +31,17 @@ function hnsParentObservation(rootLabel: string, challengeTxtValue: string, heig
       raw_records: committed
         ? [
             { type: "SYNTH4", address: "192.0.2.44" },
+            { type: "TXT", txt: ["owner=", "preserved"] },
             { type: "NS", ns: "ns1.pirate." },
             { type: "NS", ns: "ns2.pirate." },
             { type: "TXT", txt: [challengeTxtValue] },
             { type: "DS", keyTag: 49194, algorithm: 13, digestType: 2, digest: "05".repeat(32) },
             { type: "DS", keyTag: 49194, algorithm: 13, digestType: 4, digest: "15".repeat(48) },
           ]
-        : [{ type: "SYNTH4", address: "192.0.2.44" }],
+        : [
+            { type: "SYNTH4", address: "192.0.2.44" },
+            { type: "TXT", txt: ["owner=", "preserved"] },
+          ],
       nameservers: committed ? ["ns1.pirate.", "ns2.pirate."] : [],
       ds_records: [],
       glue4: [],
@@ -75,7 +79,7 @@ afterEach(async () => {
 })
 
 describe("hns verification lifecycle routes", () => {
-  test("namespace verification restart clears accepted metadata and renews session expiry", async () => {
+  test("HNS restart rebuilds a complete import plan with fresh chain and challenge evidence", async () => {
     const ctx = await createRouteTestContext({
       HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
     })
@@ -168,33 +172,24 @@ describe("hns verification lifecycle routes", () => {
       const createdBody = await json(createdNamespaceSession) as {
         id: string
         challenge_txt_value: string | null
+        challenge_payload: {
+          publish_plan: { replacement_records: Array<Record<string, unknown>> }
+        }
         expires_at: string
       }
-
-      const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      const pendingBody = await json(completedNamespaceSession) as { status: string }
-      expect(pendingBody.status).toBe("challenge_pending")
-      const verifiedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      const completedBody = await json(verifiedNamespaceSession) as {
-        status: string
-        namespace_verification: string | null
-        evidence_bundle_ref: string | null
-        accepted_at: number | null
-      }
-      expect(completedBody.status).toBe("verified")
-      expect(typeof completedBody.namespace_verification).toBe("string")
-      expect(typeof completedBody.evidence_bundle_ref).toBe("string")
-      expect(typeof completedBody.accepted_at).toBe("number")
+      const internalSessionId = decodePublicNamespaceVerificationSessionId(createdBody.id)
+      await ctx.client.execute({
+        sql: `
+          UPDATE namespace_verification_sessions
+          SET status = 'expired',
+              challenge_kind = 'dns_txt',
+              challenge_payload_json = NULL,
+              anchor_height = 7,
+              anchor_block_hash = 'stale-anchor'
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [internalSessionId],
+      })
 
       const restartedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
@@ -210,6 +205,15 @@ describe("hns verification lifecycle routes", () => {
         accepted_at: string | null
         failure_reason: string | null
         challenge_txt_value: string | null
+        challenge_kind: string | null
+        challenge_payload: {
+          kind: string
+          observed_chain_anchor: { height: number; block_hash: string }
+          publish_plan: {
+            current_records: Array<Record<string, unknown>>
+            replacement_records: Array<Record<string, unknown>>
+          }
+        }
         expires_at: string
       }
       expect(restartedBody.status).toBe("challenge_required")
@@ -217,8 +221,57 @@ describe("hns verification lifecycle routes", () => {
       expect(restartedBody.evidence_bundle_ref).toBeNull()
       expect(restartedBody.accepted_at).toBeNull()
       expect(restartedBody.failure_reason).toBeNull()
+      expect(restartedBody.challenge_kind).toBe("hns_import")
       expect(restartedBody.challenge_txt_value !== createdBody.challenge_txt_value).toBe(true)
+      expect(restartedBody.challenge_txt_value).toStartWith("pirate-verification=nch_")
+      expect(restartedBody.challenge_payload.kind).toBe("hns_import")
+      expect(restartedBody.challenge_payload.observed_chain_anchor).toEqual({
+        network: "main",
+        height: 1040,
+        block_hash: "ab".repeat(32),
+        median_time: 1_786_000_000,
+      })
+      expect(restartedBody.challenge_payload.publish_plan.current_records).toContainEqual({
+        type: "TXT",
+        txt: ["owner=", "preserved"],
+      })
+      expect(restartedBody.challenge_payload.publish_plan.replacement_records).toContainEqual({
+        type: "TXT",
+        txt: ["owner=", "preserved"],
+      })
+      const createdDs = createdBody.challenge_payload.publish_plan.replacement_records
+        .filter((record) => record.type === "DS")
+      const restartedDs = restartedBody.challenge_payload.publish_plan.replacement_records
+        .filter((record) => record.type === "DS")
+      expect(restartedDs).toEqual(createdDs)
+      expect(challengeTxtValue).toBe(restartedBody.challenge_txt_value)
       expect(new Date(restartedBody.expires_at).getTime() >= new Date(createdBody.expires_at).getTime()).toBe(true)
+      const persisted = await ctx.client.execute({
+        sql: `
+          SELECT challenge_kind, challenge_payload_json, challenge_txt_value,
+                 anchor_height, anchor_block_hash, failure_reason, accepted_at
+          FROM namespace_verification_sessions
+          WHERE namespace_verification_session_id = ?1
+        `,
+        args: [internalSessionId],
+      })
+      expect(persisted.rows[0]).toMatchObject({
+        challenge_kind: "hns_import",
+        challenge_txt_value: restartedBody.challenge_txt_value,
+        anchor_height: 1040,
+        anchor_block_hash: "ab".repeat(32),
+        failure_reason: null,
+        accepted_at: null,
+      })
+      expect(JSON.parse(String(persisted.rows[0]?.challenge_payload_json))).toEqual(restartedBody.challenge_payload)
+      const lock = await ctx.client.execute({
+        sql: `
+          SELECT namespace_verification_session_id
+          FROM hns_import_session_locks
+          WHERE normalized_root_label = 'piraterestartroot'
+        `,
+      })
+      expect(lock.rows).toEqual([{ namespace_verification_session_id: internalSessionId }])
     })
   })
 
