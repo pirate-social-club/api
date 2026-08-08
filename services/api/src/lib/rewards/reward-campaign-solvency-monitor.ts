@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, formatUnits, getAddress } from "ethers"
+import { Contract, Interface, JsonRpcProvider, formatUnits, getAddress } from "ethers"
 
 import type { Env } from "../../env"
 import type { Client } from "../sql-client"
@@ -10,6 +10,10 @@ import { resolveRewardsSettlementBackend } from "./reward-vault-lit-config"
 const TASK = "reward_campaign_treasury_solvency"
 const CENTS_TO_USDC_ATOMIC = 10_000n
 const ERC20_BALANCE_ABI = ["function balanceOf(address account) view returns (uint256)"] as const
+const BASE_MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11" as const
+const MULTICALL3_ABI = [
+  "function aggregate3((address target,bool allowFailure,bytes callData)[] calls) payable returns ((bool success,bytes returnData)[] returnData)",
+] as const
 const REWARDS_VAULT_CAPACITY_ABI = [
   "function policyVersion() view returns (uint64)",
   "function epochDuration() view returns (uint64)",
@@ -20,6 +24,26 @@ const REWARDS_VAULT_CAPACITY_ABI = [
   "function refundSpentByEpoch(uint256) view returns (uint256)",
   "function settlementOperator() view returns (address)",
 ] as const
+
+type MulticallResult = {
+  success?: boolean
+  returnData?: string
+  0?: boolean
+  1?: string
+}
+
+function decodeRequiredMulticallResult(
+  vaultInterface: Interface,
+  functionName: string,
+  result: MulticallResult | undefined,
+): string {
+  const success = Boolean(result?.success ?? result?.[0])
+  const returnData = String(result?.returnData ?? result?.[1] ?? "")
+  if (!success || !returnData.startsWith("0x")) {
+    throw new Error(`Reward vault capacity read failed: ${functionName}`)
+  }
+  return String(vaultInterface.decodeFunctionResult(functionName, returnData)[0])
+}
 
 export const REWARD_CAMPAIGN_LIABILITY_SQL = `
   SELECT
@@ -171,24 +195,44 @@ async function readNativeBalance(config: SolvencyConfig, address: string): Promi
 async function readVaultCapacity(config: SolvencyConfig): Promise<RewardVaultCapacityObservation> {
   const provider = new JsonRpcProvider(config.rpcUrl, config.chainId)
   try {
-    const observedBlockNumber = await provider.getBlockNumber()
-    const block = await provider.getBlock(observedBlockNumber)
+    const block = await provider.getBlock("latest")
     if (!block?.hash) throw new Error("Reward vault capacity block is unavailable")
-    const vault = new Contract(config.treasuryAddress, REWARDS_VAULT_CAPACITY_ABI, provider)
+    const observedBlockNumber = block.number
     const call = { blockTag: observedBlockNumber }
+    const vaultInterface = new Interface(REWARDS_VAULT_CAPACITY_ABI)
+    const multicall = new Contract(BASE_MULTICALL3_ADDRESS, MULTICALL3_ABI, provider)
+    const firstFunctionNames = [
+      "policyVersion",
+      "epochDuration",
+      "currentEpoch",
+      "payoutEpochCap",
+      "refundEpochCap",
+      "settlementOperator",
+    ] as const
+    const firstResults = await multicall.aggregate3.staticCall(
+      firstFunctionNames.map((functionName) => ({
+        target: config.treasuryAddress,
+        allowFailure: true,
+        callData: vaultInterface.encodeFunctionData(functionName),
+      })),
+      call,
+    ) as MulticallResult[]
     const [policyVersion, epochDurationSeconds, currentEpoch, payoutEpochCapAtomic, refundEpochCapAtomic, settlementOperator] =
-      await Promise.all([
-        vault.policyVersion(call),
-        vault.epochDuration(call),
-        vault.currentEpoch(call),
-        vault.payoutEpochCap(call),
-        vault.refundEpochCap(call),
-        vault.settlementOperator(call),
-      ])
-    const [payoutSpentAtomic, refundSpentAtomic] = await Promise.all([
-      vault.payoutSpentByEpoch(currentEpoch, call),
-      vault.refundSpentByEpoch(currentEpoch, call),
-    ])
+      firstFunctionNames.map((functionName, index) => (
+        decodeRequiredMulticallResult(vaultInterface, functionName, firstResults[index])
+      ))
+    const spentFunctionNames = ["payoutSpentByEpoch", "refundSpentByEpoch"] as const
+    const spentResults = await multicall.aggregate3.staticCall(
+      spentFunctionNames.map((functionName) => ({
+        target: config.treasuryAddress,
+        allowFailure: true,
+        callData: vaultInterface.encodeFunctionData(functionName, [currentEpoch]),
+      })),
+      call,
+    ) as MulticallResult[]
+    const [payoutSpentAtomic, refundSpentAtomic] = spentFunctionNames.map((functionName, index) => (
+      decodeRequiredMulticallResult(vaultInterface, functionName, spentResults[index])
+    ))
     return {
       policyVersion: BigInt(policyVersion),
       epochDurationSeconds: BigInt(epochDurationSeconds),
