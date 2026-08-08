@@ -217,16 +217,7 @@ describe("hns verification routes", () => {
         session.accessToken,
       )
       expect(completedNamespaceSession.status).toBe(200)
-      const pendingNamespaceBody = await json(completedNamespaceSession) as { status: string }
-      expect(pendingNamespaceBody.status).toBe("challenge_pending")
-      const verifiedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(verifiedNamespaceSession.status).toBe(200)
-      const completedNamespaceBody = await json(verifiedNamespaceSession) as {
+      const completedNamespaceBody = await json(completedNamespaceSession) as {
         status: string
         namespace_verification: string | null
         observation_provider: string | null
@@ -395,15 +386,6 @@ describe("hns verification routes", () => {
         id: string
       }
 
-      const completedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(completedNamespaceSession.status).toBe(200)
-      const pendingNamespaceBody = await json(completedNamespaceSession) as { status: string }
-      expect(pendingNamespaceBody.status).toBe("challenge_pending")
       const failedNamespaceSession = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
         { acknowledged_resource_replacement: true },
@@ -536,15 +518,8 @@ describe("hns verification routes", () => {
         ctx.env,
         session.accessToken,
       )
-      const pendingBody = await json(completedNamespaceSession) as { status: string }
-      expect(pendingBody.status).toBe("challenge_pending")
-      const verifiedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      const completedBody = await json(verifiedNamespaceSession) as {
+      expect(completedNamespaceSession.status).toBe(200)
+      const completedBody = await json(completedNamespaceSession) as {
         namespace_verification: string | null
         assertions: { authority_health_verified: boolean | null }
         ownership_source: string | null

@@ -1313,16 +1313,7 @@ describe("verification routes", () => {
         session.accessToken,
       )
       expect(completedNamespaceSession.status).toBe(200)
-      const pendingNamespaceBody = await json(completedNamespaceSession) as { status: string }
-      expect(pendingNamespaceBody.status).toBe("challenge_pending")
-      const verifiedNamespaceSession = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${namespaceSessionBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(verifiedNamespaceSession.status).toBe(200)
-      const completedNamespaceBody = await json(verifiedNamespaceSession) as {
+      const completedNamespaceBody = await json(completedNamespaceSession) as {
         status: string
         namespace_verification: string | null
       }

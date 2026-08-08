@@ -39,8 +39,8 @@ import {
 } from "./namespace-observation-provider"
 import {
   compareHnsImportResource,
-  nextHnsTreeBoundary,
   parseHnsImportChallengePayload,
+  resolveHnsImportTreeProgress,
   type HnsImportChallengePayload,
 } from "./hns-import-plan"
 
@@ -412,17 +412,22 @@ export async function completeNamespaceVerificationSession(
         return getNamespaceVerificationSession(client, input.namespaceVerificationSessionId, input.userId)
       }
 
-      const updateObservedHeight = importPayload.update_observed_height
-        ?? parentObservation.chain_anchor.height
-      const targetTreeBoundary = importPayload.target_tree_boundary
-        ?? nextHnsTreeBoundary(updateObservedHeight)
-      importPayload.update_observed_height = updateObservedHeight
-      importPayload.target_tree_boundary = targetTreeBoundary
-      if (parentObservation.chain_anchor.height <= targetTreeBoundary) {
+      const treeProgress = resolveHnsImportTreeProgress({
+        currentHeight: parentObservation.chain_anchor.height,
+        updateObservedHeight: importPayload.update_observed_height,
+        targetTreeBoundary: importPayload.target_tree_boundary,
+      })
+      if (treeProgress.updateObservedHeight != null) {
+        importPayload.update_observed_height = treeProgress.updateObservedHeight
+      }
+      if (treeProgress.targetTreeBoundary != null) {
+        importPayload.target_tree_boundary = treeProgress.targetTreeBoundary
+      }
+      if (treeProgress.pendingTreeCommit) {
         importPayload.observation = {
           state: "pending_tree_commit",
           current_height: parentObservation.chain_anchor.height,
-          target_tree_boundary: targetTreeBoundary,
+          target_tree_boundary: treeProgress.targetTreeBoundary ?? undefined,
         }
         await client.execute({
           sql: `
@@ -474,7 +479,7 @@ export async function completeNamespaceVerificationSession(
       importPayload.observation = {
         state: secure ? "secure" : "delegation_not_secure",
         current_height: parentObservation.chain_anchor.height,
-        target_tree_boundary: targetTreeBoundary,
+        target_tree_boundary: treeProgress.targetTreeBoundary ?? undefined,
       }
       await client.execute({
         sql: `

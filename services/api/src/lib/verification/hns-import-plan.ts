@@ -187,3 +187,49 @@ export function nextHnsTreeBoundary(updateObservedHeight: number): number {
   }
   return Math.ceil((updateObservedHeight + 1) / 36) * 36
 }
+
+export function resolveHnsImportTreeProgress(input: {
+  currentHeight: number
+  updateObservedHeight?: number
+  targetTreeBoundary?: number
+}): {
+  updateObservedHeight: number | null
+  targetTreeBoundary: number | null
+  pendingTreeCommit: boolean
+} {
+  if (!Number.isSafeInteger(input.currentHeight) || input.currentHeight < 0) {
+    throw internalError("HNS parent observation height is invalid")
+  }
+
+  // A matching parent resource is already authoritative committed state. The
+  // current chain tip is not an UPDATE height, so never derive a new future
+  // boundary from it. Only a height previously recorded while observing the
+  // mined UPDATE may authorize the pending-boundary UI.
+  const updateObservedHeight = input.updateObservedHeight
+  if (
+    typeof updateObservedHeight !== "number"
+    ||
+    !Number.isSafeInteger(updateObservedHeight)
+    || updateObservedHeight < 0
+  ) {
+    return {
+      updateObservedHeight: null,
+      targetTreeBoundary: null,
+      pendingTreeCommit: false,
+    }
+  }
+
+  const requestedTargetTreeBoundary = input.targetTreeBoundary
+  const targetTreeBoundary = typeof requestedTargetTreeBoundary === "number"
+    && Number.isSafeInteger(requestedTargetTreeBoundary)
+    && requestedTargetTreeBoundary >= 0
+    ? requestedTargetTreeBoundary
+    : nextHnsTreeBoundary(updateObservedHeight)
+
+  return {
+    updateObservedHeight,
+    targetTreeBoundary,
+    // Equality means the boundary has been reached.
+    pendingTreeCommit: input.currentHeight < targetTreeBoundary,
+  }
+}

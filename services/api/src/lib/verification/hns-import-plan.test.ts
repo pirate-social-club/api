@@ -3,6 +3,7 @@ import {
   buildHnsImportPublishPlan,
   compareHnsImportResource,
   nextHnsTreeBoundary,
+  resolveHnsImportTreeProgress,
 } from "./hns-import-plan"
 
 describe("buildHnsImportPublishPlan", () => {
@@ -85,5 +86,37 @@ describe("buildHnsImportPublishPlan", () => {
     expect(nextHnsTreeBoundary(341_443)).toBe(341_460)
     expect(nextHnsTreeBoundary(341_459)).toBe(341_460)
     expect(nextHnsTreeBoundary(341_460)).toBe(341_496)
+  })
+
+  test("does not invent a future boundary when the first matching resource is late", () => {
+    expect(resolveHnsImportTreeProgress({ currentHeight: 341_762 })).toEqual({
+      updateObservedHeight: null,
+      targetTreeBoundary: null,
+      pendingTreeCommit: false,
+    })
+  })
+
+  test("treats the exact target height as committed", () => {
+    expect(resolveHnsImportTreeProgress({
+      currentHeight: 342_468,
+      updateObservedHeight: 342_433,
+      targetTreeBoundary: 342_468,
+    })).toEqual({
+      updateObservedHeight: 342_433,
+      targetTreeBoundary: 342_468,
+      pendingTreeCommit: false,
+    })
+  })
+
+  test("keeps a trusted update pending below its target boundary", () => {
+    expect(resolveHnsImportTreeProgress({
+      currentHeight: 342_440,
+      updateObservedHeight: 342_433,
+      targetTreeBoundary: 342_468,
+    })).toEqual({
+      updateObservedHeight: 342_433,
+      targetTreeBoundary: 342_468,
+      pendingTreeCommit: true,
+    })
   })
 })
