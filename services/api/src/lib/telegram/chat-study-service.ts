@@ -214,12 +214,13 @@ function songButtonText(song: ReadySong, language: StudyHelperLanguage): string 
 function songPickerMarkup(songs: ReadySong[], token: string, page: number, language: StudyHelperLanguage) {
   const start = page * CHAT_STUDY_SONG_PAGE_SIZE
   const pageSongs = songs.slice(start, start + CHAT_STUDY_SONG_PAGE_SIZE)
+  const copy = getTelegramStudyCopy(language)
   const navigation: Array<{ callback_data: string; text: string }> = []
   if (page > 0) {
-    navigation.push({ callback_data: callbackData(token, PREVIOUS_PAGE_INDEX), text: "Previous" })
+    navigation.push({ callback_data: callbackData(token, PREVIOUS_PAGE_INDEX), text: copy.previous })
   }
   if (start + CHAT_STUDY_SONG_PAGE_SIZE < songs.length) {
-    navigation.push({ callback_data: callbackData(token, NEXT_PAGE_INDEX), text: "Next" })
+    navigation.push({ callback_data: callbackData(token, NEXT_PAGE_INDEX), text: copy.next })
   }
   return {
     inline_keyboard: [
@@ -409,13 +410,14 @@ async function listReadySongs(input: {
         }),
         activeCampaignRewards({ env: input.env, postIds: posts.map((post) => post.post_id) }),
       ])
+      const language = isStudyHelperLanguage(input.targetLanguage) ? input.targetLanguage : "en"
       posts.forEach((post) => {
         if (!readyPostIds.has(post.post_id)) return
         const dailyRewardCents = rewards.get(post.post_id)
         ready.push({
           ...(dailyRewardCents ? { dailyRewardCents } : {}),
           postId: post.post_id,
-          title: post.song_title?.trim() || post.title?.trim() || "Untitled song",
+          title: post.song_title?.trim() || post.title?.trim() || getTelegramStudyCopy(language).untitledSong,
         })
       })
       if (rows.rows.length < CHAT_STUDY_SONG_QUERY_PAGE_SIZE) break
@@ -567,6 +569,7 @@ async function runTelegramChatStudyStart(input: {
     telegramUserId: input.telegramUserId,
   })
   if (!account) {
+    const language = isStudyHelperLanguage(input.targetLanguage) ? input.targetLanguage : "en"
     const onboarding = await createTelegramOnboardingIntent({
       env: input.env,
       communityId: input.bot.communityId,
@@ -577,7 +580,7 @@ async function runTelegramChatStudyStart(input: {
     }).catch(() => null)
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
-      text: "Link your Telegram account before studying here.",
+      text: getTelegramStudyCopy(language).linkAccount,
       ...(onboarding
         ? { reply_markup: telegramOnboardingWebAppReplyMarkup(onboarding.web_app_url) }
         : {}),
@@ -865,43 +868,28 @@ async function updateSessionAction(input: {
 
 function telegramStudyProgressLabel(
   lesson: TelegramStudyLesson,
+  copy: ReturnType<typeof getTelegramStudyCopy>,
 ): string | null {
   const total = Math.max(0, lesson.total_count)
   if (total <= 0) return null
   const resolved = Math.min(total, Math.max(0, lesson.resolved_count))
-  const cells = 20
-  const filled = Math.round((resolved / total) * cells)
-  const review = lesson.next?.is_reappearance ? "🔁 " : ""
-  return `${review}${"▰".repeat(filled)}${"▱".repeat(cells - filled)}`
+  const remaining = Math.max(0, total - resolved)
+  if (remaining <= 0 || !lesson.next) return null
+  return [
+    lesson.next.is_reappearance ? `🔁 ${copy.reviewMarker}` : null,
+    `#️⃣ ${copy.questionsRemaining({ count: remaining })}`,
+  ].filter((value): value is string => Boolean(value)).join("\n")
 }
 
 function feedbackText(input: {
   result: SongStudyAttemptResult
-  referenceText?: string | null
-  retryInPlace?: boolean
   targetLanguage: string
   transcript?: string
 }): string {
   const { result } = input
   const language = (isStudyHelperLanguage(input.targetLanguage) ? input.targetLanguage : "en")
   const copy = getTelegramStudyCopy(language)
-  if (result.outcome === "correct") return copy.correct
-  // The current result contract has no separate informative-diff boolean. The
-  // grader partitions every reference token into matched or missing, so this
-  // arithmetic is exactly the server's overlap without re-tokenizing in the
-  // transport. Slice 2b will move the threshold into the shared contract for
-  // web and Telegram to consume together.
-  const matchedCount = result.feedback?.matched?.length ?? 0
-  const missingCount = result.feedback?.missing?.length ?? 0
-  const referenceTokenCount = matchedCount + missingCount
-  const informativeFeedback = referenceTokenCount > 0
-    && matchedCount / referenceTokenCount >= 1 / 3
-  const details = informativeFeedback
-    ? [
-        result.feedback?.missing?.length ? `${copy.missing}${copy.labelSeparator} ${result.feedback.missing.join(", ")}` : null,
-        result.feedback?.extra?.length ? `${copy.extra}${copy.labelSeparator} ${result.feedback.extra.join(", ")}` : null,
-      ].filter((value): value is string => Boolean(value))
-    : []
+  if (result.outcome === "correct") return `✅ ${copy.correct}`
   if (result.outcome === "ungradable") {
     const transcript = input.transcript?.trim()
     return [
@@ -909,24 +897,35 @@ function feedbackText(input: {
       transcript ? `${copy.youSaid}${copy.labelSeparator} ${transcript}` : copy.nothingDetected,
     ].join("\n")
   }
-  const retry = [
-    ...(input.retryInPlace
-      ? [copy.tryAgainNow]
-      : result.attempts_remaining > 0
-        ? [copy.returnsLater]
-        : []),
-    copy.attemptsRemaining({ count: result.attempts_remaining }),
-  ]
-  if (input.transcript !== undefined && input.referenceText) {
+  const transcript = input.transcript?.trim()
+  if (transcript) {
     return [
-      copy.notQuite,
-      `${copy.youSaid}${copy.labelSeparator} ${input.transcript.trim() || copy.nothingDetected}`,
-      `${copy.lineWas}${copy.labelSeparator} “${input.referenceText}”`,
-      ...details,
-      ...retry,
+      `❌ ${copy.incorrect}`,
+      `${copy.youSaid}${copy.labelSeparator} “${transcript}”`,
     ].join("\n")
   }
-  return [copy.notQuite, ...details, ...retry].join("\n")
+  return `❌ ${copy.incorrect}`
+}
+
+export function telegramStudyCompletionText(input: {
+  currentStreak?: number | null
+  language: string
+  session?: {
+    first_pass_correct_count: number
+    served_count: number
+  } | null
+}): string {
+  const language = isStudyHelperLanguage(input.language) ? input.language : "en"
+  const copy = getTelegramStudyCopy(language)
+  return [
+    `🎉 ${copy.lessonComplete}`,
+    input.session && input.session.served_count > 0
+      ? copy.scoreLine({ correct: input.session.first_pass_correct_count, total: input.session.served_count })
+      : null,
+    input.currentStreak === null || input.currentStreak === undefined
+      ? null
+      : copy.streakLine({ days: input.currentStreak }),
+  ].filter((value): value is string => Boolean(value)).join("\n")
 }
 
 async function sendCompletion(input: {
@@ -937,7 +936,6 @@ async function sendCompletion(input: {
   session: ChatStudySession
   study?: SongStudyPayload
 }): Promise<void> {
-  const title = stringOrNull(input.session.actionPayload.songTitle) ?? input.study?.title ?? ""
   const studySessionId = input.result?.session?.id
     ?? input.study?.session?.id
     ?? stringOrNull(input.session.actionPayload.sessionId)
@@ -949,21 +947,14 @@ async function sendCompletion(input: {
     status: "completed",
     studySessionId,
   })
-  const progress = input.result?.study_progress
-  const resultSession = input.result?.session
-  const score = progress
-    ? `${progress.study_correct_count}/${progress.study_target_count}`
-    : resultSession
-      ? `${resultSession.first_pass_correct_count}/${resultSession.required_correct_count}`
-      : null
-  const streak = progress
-    ? `\nStreak: ${progress.current_streak} day${progress.current_streak === 1 ? "" : "s"}`
-    : ""
-  const summary = score ? `\n\nScore: ${score}${streak}` : ""
-  const language = isStudyHelperLanguage(input.session.targetLanguage) ? input.session.targetLanguage : "en"
+  const resultSession = input.result?.session ?? input.study?.session
   await sendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: `${getTelegramStudyCopy(language).complete}: ${title}${summary}`,
+    text: telegramStudyCompletionText({
+      currentStreak: input.result?.study_progress?.current_streak,
+      language: input.session.targetLanguage,
+      session: resultSession,
+    }),
   })
 }
 
@@ -975,7 +966,7 @@ async function presentNextExercise(input: {
   lesson?: TelegramStudyLesson
   replyToMessageId?: number | null
   study?: SongStudyPayload
-  suppressIncorrectFeedback?: boolean
+  suppressFeedback?: boolean
   session: ChatStudySession
   transcript?: string
 }): Promise<void> {
@@ -999,9 +990,7 @@ async function presentNextExercise(input: {
   const retryInPlace = input.lastResult?.lesson?.next?.retry_in_place === true
   const retryFeedback = retryInPlace && input.lastResult
     ? feedbackText({
-      referenceText: stringOrNull(input.session.actionPayload.referenceText),
       result: input.lastResult,
-      retryInPlace: true,
       targetLanguage: input.session.targetLanguage,
       transcript: input.transcript,
     })
@@ -1015,15 +1004,13 @@ async function presentNextExercise(input: {
     })
     localizationNoticeSent = true
   }
-  if (input.lastResult && !retryFeedback && !(input.suppressIncorrectFeedback && input.lastResult.outcome !== "correct")) {
+  if (input.lastResult && !retryFeedback && !input.suppressFeedback) {
     // Grading runs in a deferred task, so its reply can land after a later
     // message. Anchoring it to the voice message keeps the thread unambiguous.
     await sendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: feedbackText({
-        referenceText: stringOrNull(input.session.actionPayload.referenceText),
         result: input.lastResult,
-        retryInPlace: input.lastResult.lesson?.next?.retry_in_place === true,
         targetLanguage: input.session.targetLanguage,
         transcript: input.transcript,
       }),
@@ -1040,7 +1027,7 @@ async function presentNextExercise(input: {
   const studySessionId = input.lastResult?.session?.id
     ?? study?.session?.id
     ?? stringOrNull(input.session.actionPayload.sessionId)
-  const progressLabel = lesson ? telegramStudyProgressLabel(lesson) : null
+  const progressLabel = lesson ? telegramStudyProgressLabel(lesson, copy) : null
   if (exercise.type === "translation_choice") {
     const token = await updateSessionAction({
       actionKind: "answer_choice",
@@ -1283,7 +1270,7 @@ async function resendActiveTelegramStudyExercise(input: {
     targetLanguage: session.targetLanguage,
   })
   const next = study.lesson?.next
-  const progressLabel = study.lesson ? telegramStudyProgressLabel(study.lesson) : null
+  const progressLabel = study.lesson ? telegramStudyProgressLabel(study.lesson, copy) : null
   if (!next) return false
   if (session.actionKind !== "answer_choice" && session.actionKind !== "await_voice") return false
   const translationPrompt = next.prompt.type === "translation_choice" ? next.prompt : null
@@ -1871,16 +1858,15 @@ export async function handleTelegramChatStudyCallback(input: {
       const promptText = stringOrNull(session.actionPayload.promptText)
       if (Number.isSafeInteger(callbackMessageId) && selectedText && promptText) {
         const copy = getTelegramStudyCopy(isStudyHelperLanguage(session.targetLanguage) ? session.targetLanguage : "en")
-        const correction = result.outcome !== "correct" && correctText
-          ? `\n✅ ${copy.correctAnswer}${copy.labelSeparator} ${correctText}`
-          : ""
-        const retry = result.outcome !== "correct"
-          ? `\n${result.attempts_remaining > 0 ? `${copy.returnsLater}\n` : ""}${copy.attemptsRemaining({ count: result.attempts_remaining })}`
-          : ""
+        const verdict = result.outcome === "correct"
+          ? `✅ ${copy.correct}`
+          : [`❌ ${copy.incorrect}`, correctText ? `✅ ${correctText}` : null]
+              .filter((value): value is string => Boolean(value))
+              .join("\n")
         await editTelegramMessageText(input.bot, {
           chat_id: chatId,
           message_id: callbackMessageId,
-          text: `${copy.chooseTranslation}\n\n${promptText}\n\n${result.outcome === "correct" ? "✅" : "❌"} ${selectedText}${correction}${retry}`,
+          text: `${copy.chooseTranslation}\n\n${promptText}\n\n${verdict}`,
           reply_markup: { inline_keyboard: [] },
         }).catch(() => undefined)
       }
@@ -1890,7 +1876,7 @@ export async function handleTelegramChatStudyCallback(input: {
         env: input.env,
         lastResult: result,
         session,
-        suppressIncorrectFeedback: true,
+        suppressFeedback: true,
       })
     }
     await finishCallback({ callbackQueryId, env: input.env })

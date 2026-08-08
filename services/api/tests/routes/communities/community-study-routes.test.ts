@@ -14,6 +14,7 @@ import {
   continueTelegramChatStudyAfterVoice,
   formatUsdcCents,
   handleTelegramChatStudyCallback,
+  telegramStudyCompletionText,
   telegramStudySongSelectionIndex,
 } from "../../../src/lib/telegram/chat-study-service"
 import { resolvePostStudyCapability, submitPostStudyAttempt, type SongStudyAttemptResult } from "../../../src/lib/posts/post-study-service"
@@ -46,12 +47,53 @@ afterEach(async () => {
 test("Telegram orchestration feedback copy covers every helper language", () => {
   for (const { code } of STUDY_LANGUAGE_BUTTONS) {
     const copy = getTelegramStudyCopy(code)
-    expect(copy.tryAgainNow).toBeTruthy()
+    expect(copy.incorrect).toBeTruthy()
+    expect(copy.correct).toBeTruthy()
     expect(copy.recordingNotCaught).toBeTruthy()
     expect(copy.chooseTranslation).not.toBe("Choose the best translation.")
-    expect(copy.attemptsRemaining({ count: 1 })).toBeTruthy()
-    expect(copy.attemptsRemaining({ count: 0 })).toBeTruthy()
+    expect(copy.questionsRemaining({ count: 1 })).toContain("1")
+    expect(copy.reviewMarker).toBeTruthy()
+    expect(copy.lessonComplete).toBeTruthy()
+    expect(copy.scoreLine({ correct: 8, total: 10 })).toContain("8/10")
+    expect(copy.streakLine({ days: 6 })).toContain("6")
   }
+})
+
+test("Telegram completion uses the completed lesson denominator and omits unavailable scores", () => {
+  const completed = telegramStudyCompletionText({
+    currentStreak: 6,
+    language: "en",
+    session: {
+      first_pass_correct_count: 3,
+      served_count: 4,
+    },
+  })
+  expect(completed).toBe("🎉 Lesson complete\n✅ 3/4\n🔥 6 days")
+  expect(completed).not.toContain("3/3")
+  expect(telegramStudyCompletionText({ currentStreak: 6, language: "en" }))
+    .toBe("🎉 Lesson complete\n🔥 6 days")
+  expect(telegramStudyCompletionText({
+    currentStreak: 6,
+    language: "en",
+    session: { first_pass_correct_count: 0, served_count: 0 },
+  })).toBe("🎉 Lesson complete\n🔥 6 days")
+})
+
+test("Telegram study presentation sources contain no retired chrome or score fallbacks", async () => {
+  const [chatSource, voiceSource] = await Promise.all([
+    readFile(fileURLToPath(new URL("../../../src/lib/telegram/chat-study-service.ts", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../src/lib/telegram/study-voice-service.ts", import.meta.url)), "utf8"),
+  ])
+  const source = `${chatSource}\n${voiceSource}`
+  for (const retired of [
+    "▰", "▱", "The line was", "Missing:", "Extra:",
+    "I could not grade that recording", "I could not grade this exercise",
+    "Your answer was saved, but I could not continue", "Continue studying",
+  ]) {
+    expect(source).not.toContain(retired)
+  }
+  expect(chatSource).not.toContain("study_correct_count}/${progress.study_target_count")
+  expect(chatSource).not.toContain("first_pass_correct_count}/${resultSession.required_correct_count")
 })
 
 async function applyStudyMigration(client: Client): Promise<void> {
@@ -1001,12 +1043,36 @@ describe("community study routes", () => {
         typeof body.text === "string" && body.text.includes("选择译文")
       )
       expect(exercisePrompt).toBeTruthy()
-      expect(exercisePrompt?.text).toMatch(/^▱{20}\n\n选择译文：\n\n/u)
+      expect(exercisePrompt?.text).toMatch(/^#️⃣ 剩余问题：2\n\n选择译文：\n\n/u)
       const firstPresented = await ctx.client.execute({
-        sql: "SELECT current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
+        sql: "SELECT current_exercise_id, study_session_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
       })
       const firstExerciseId = String(firstPresented.rows[0]?.current_exercise_id)
+      const scoreInvariantClient = createClient({
+        url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+      })
+      try {
+        const scoreInvariant = await scoreInvariantClient.execute({
+          sql: `
+            SELECT s.exercise_count AS served_count,
+                   SUM(CASE WHEN e.qualifies_for_reward = 1 THEN 1 ELSE 0 END) AS qualifying_count
+            FROM song_study_session s
+            JOIN song_study_session_exercise e ON e.session_id = s.id
+            WHERE s.id = ?1
+            GROUP BY s.id, s.exercise_count
+          `,
+          args: [firstPresented.rows[0]?.study_session_id],
+        })
+        // The completion score uses first_pass_correct_count / served_count. The
+        // numerator counts only qualifying questions, so this ratio is honest ONLY
+        // while every served question qualifies. If say_translation — or any future
+        // non-qualifying type — enters lessons, this must fail until the numerator
+        // moves to a genuine all-question first-attempt count.
+        expect(Number(scoreInvariant.rows[0]?.qualifying_count)).toBe(Number(scoreInvariant.rows[0]?.served_count))
+      } finally {
+        scoreInvariantClient.close()
+      }
       const mcqDeliveryWindow = await ctx.client.execute({
         sql: "SELECT expires_at FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1120,7 +1186,9 @@ describe("community study routes", () => {
           && markup.inline_keyboard.length === 0
       })
       expect(zhAnsweredEdit).toBeTruthy()
+      expect(zhAnsweredEdit?.text).toEndWith("✅ 正确")
       expect(String(zhAnsweredEdit?.text)).not.toContain("Choose the best translation.")
+      expect(telegramBodies.some((body) => body.text === "✅ 正确")).toBe(false)
       const callbacks = await ctx.client.execute({
         sql: `
           SELECT status
@@ -1133,7 +1201,7 @@ describe("community study routes", () => {
       const secondPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string" && body.text.includes("Line two for route study")
       )
-      expect(secondPrompt?.text).toMatch(/^▰{10}▱{10}\n\n选择译文：\n\n/u)
+      expect(secondPrompt?.text).toMatch(/^#️⃣ 剩余问题：1\n\n选择译文：\n\n/u)
       const secondPresented = await ctx.client.execute({
         sql: "SELECT current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1165,20 +1233,18 @@ describe("community study routes", () => {
       expect(secondAnswer.status).toBe(200)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string"
-        && body.text.includes("❌ 错误翻译 2")
-        && body.text.includes("✅ 正确答案： 正确翻译 2")
-        && body.text.includes("这句稍后会再次出现。")
-        && body.text.includes("还剩 2 次机会")
+        && body.text.includes("❌ 不正确")
+        && body.text.includes("✅ 正确翻译 2")
       )).toBe(true)
       expect(telegramBodies.slice(bodiesBeforeWrongAnswer).some((body) =>
-        body.text === "Not quite."
+        body.text === "❌ 不正确"
       )).toBe(false)
       const retryPrompt = [...telegramBodies].reverse().find((body) =>
         typeof body.text === "string"
         && body.text.includes("Line two for route study")
         && typeof body.reply_markup === "object"
       )
-      expect(retryPrompt?.text).toMatch(/^🔁 ▰{10}▱{10}\n\n选择译文：\n\n/u)
+      expect(retryPrompt?.text).toMatch(/^🔁 复习\n#️⃣ 剩余问题：1\n\n选择译文：\n\n/u)
       const reappeared = await ctx.client.execute({
         sql: "SELECT current_exercise_id FROM telegram_chat_study_sessions WHERE chat_study_session_id = ?1",
         args: [selectingSession.rows[0]?.chat_study_session_id],
@@ -1208,9 +1274,12 @@ describe("community study routes", () => {
       expect(retryAnswer.status).toBe(200)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string"
-        && body.text.startsWith("学习完成: Route Song")
-        && body.text.includes("Score:")
+        && body.text.startsWith("🎉 课程完成")
+        && body.text.includes("✅ 1/2")
       )).toBe(true)
+      expect(telegramBodies.some((body) =>
+        typeof body.text === "string" && body.text.includes("剩余问题：0")
+      )).toBe(false)
       const completed = await ctx.client.execute({
         sql: `
           SELECT status
@@ -1428,7 +1497,7 @@ describe("community study routes", () => {
           from: { id: 454546, is_bot: false }, message: { chat: { id: 454546, type: "private" }, message_id: 708 } },
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith(`${"▱".repeat(20)}\n\n请说：\n\n`)
+        typeof body.text === "string" && body.text.startsWith("#️⃣ 剩余问题：4\n\n请说：\n\n")
       )).toBe(true)
       const mixIntent = await ctx.client.execute({
         sql: `SELECT chat_study_session_id, exercise_id, study_session_id, attempt_number
@@ -1449,7 +1518,7 @@ describe("community study routes", () => {
         env: ctx.env, result: mixResult, transcript: "Line one for route study",
       })
       expect(telegramBodies.some((body) =>
-        typeof body.text === "string" && body.text.startsWith(`${"▰".repeat(5)}${"▱".repeat(15)}\n\n请说：\n\n`)
+        typeof body.text === "string" && body.text.startsWith("#️⃣ 剩余问题：3\n\n请说：\n\n")
       )).toBe(true)
       expect(telegramBodies.some((body) =>
         typeof body.text === "string" && body.text.startsWith("1/4 · 选择译文：")
@@ -1912,7 +1981,7 @@ describe("community study routes", () => {
       await ctx.client.execute(
         "UPDATE telegram_chat_study_sessions SET action_payload_json = json_set(action_payload_json, '$.deliveryMode', 'text') WHERE chat_study_session_id = 'tcs_audio'",
       )
-      const reappearanceRequestsBefore = telegramRequests.length
+      const immediateRetryRequestsBefore = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
         bot: {
           communityId,
@@ -1935,7 +2004,7 @@ describe("community study routes", () => {
             next: {
               attempts_this_appearance: 1,
               exercise_id: exercise!.id,
-              is_reappearance: true,
+              is_reappearance: false,
               presentation_number: 2,
               prompt: exercise! as unknown as NonNullable<NonNullable<SongStudyAttemptResult["lesson"]>["next"]>["prompt"],
               retry_in_place: true,
@@ -1951,17 +2020,17 @@ describe("community study routes", () => {
         },
         transcript: "wrong words",
       })
-      const reappearanceMessages = await Promise.all(
-        telegramRequests.slice(reappearanceRequestsBefore).map(async (request) =>
+      const immediateRetryMessages = await Promise.all(
+        telegramRequests.slice(immediateRetryRequestsBefore).map(async (request) =>
           request.url.endsWith("/sendMessage")
             ? await request.clone().json() as { text?: string }
             : {},
         ),
       )
-      const reappearancePrompt = reappearanceMessages.find((body) => body.text?.includes("🔁"))?.text ?? ""
-      expect(reappearancePrompt).toContain("🔁")
-      expect(reappearancePrompt).toContain("Try again")
-      expect(reappearancePrompt).not.toContain("This line will come back later.")
+      const immediateRetryPrompt = immediateRetryMessages.find((body) => body.text?.includes("Say this:"))?.text ?? ""
+      expect(immediateRetryPrompt).toContain("❌ Incorrect\nYou said: “wrong words”")
+      expect(immediateRetryPrompt).toContain("#️⃣ Questions left: 1")
+      expect(immediateRetryPrompt).not.toContain("🔁")
       const ungradableRequestsBefore = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
         bot: {
@@ -2048,13 +2117,8 @@ describe("community study routes", () => {
           : {}
       ))
       expect(reveal.some((body) => body.text === [
-        "Not quite",
-        "You said: wrong words",
-        `The line was: “${exercise!.reference_text}”`,
-        "Missing: line",
-        "Extra: wrong",
-        "This line will come back later.",
-        "2 attempts left",
+        "❌ Incorrect",
+        "You said: “wrong words”",
       ].join("\n"))).toBe(true)
       const requestsBeforeEmptyTranscript = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
@@ -2094,14 +2158,7 @@ describe("community study routes", () => {
             : {}
         ),
       )
-      expect(emptyTranscriptMessages.some((body) => body.text === [
-        "Not quite",
-        "You said: (nothing detected)",
-        `The line was: “${exercise!.reference_text}”`,
-        "Missing: line",
-        "This line will come back later.",
-        "1 attempt left",
-      ].join("\n"))).toBe(true)
+      expect(emptyTranscriptMessages.some((body) => body.text === "❌ Incorrect")).toBe(true)
       const requestsBeforeBoundaryDiff = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
         bot: {
@@ -2140,9 +2197,10 @@ describe("community study routes", () => {
             : {},
         ),
       )
-      const boundaryDiff = boundaryDiffMessages.find((body) => body.text?.startsWith("Not quite"))?.text ?? ""
-      expect(boundaryDiff).toContain("Missing: two, three")
-      expect(boundaryDiff).toContain("Extra: extra")
+      const boundaryDiff = boundaryDiffMessages.find((body) => body.text?.startsWith("❌ Incorrect"))?.text ?? ""
+      expect(boundaryDiff).toBe("❌ Incorrect\nYou said: “one extra”")
+      expect(boundaryDiff).not.toContain("Missing:")
+      expect(boundaryDiff).not.toContain("Extra:")
 
       const requestsBeforeBelowBoundaryDiff = telegramRequests.length
       await continueTelegramChatStudyAfterVoice({
@@ -2182,8 +2240,8 @@ describe("community study routes", () => {
             : {},
         ),
       )
-      const belowBoundaryDiff = belowBoundaryMessages.find((body) => body.text?.startsWith("Not quite"))?.text ?? ""
-      expect(belowBoundaryDiff).toContain("Not quite")
+      const belowBoundaryDiff = belowBoundaryMessages.find((body) => body.text?.startsWith("❌ Incorrect"))?.text ?? ""
+      expect(belowBoundaryDiff).toBe("❌ Incorrect\nYou said: “one extra”")
       expect(belowBoundaryDiff).not.toContain("Missing:")
       expect(belowBoundaryDiff).not.toContain("Extra:")
 
@@ -2229,7 +2287,8 @@ describe("community study routes", () => {
             : {},
         ),
       )
-      const emptyOverlapFeedback = emptyOverlapMessages.find((body) => body.text?.startsWith("Not quite"))?.text ?? ""
+      const emptyOverlapFeedback = emptyOverlapMessages.find((body) => body.text?.startsWith("❌ Incorrect"))?.text ?? ""
+      expect(emptyOverlapFeedback).toBe("❌ Incorrect\nYou said: “Testing”")
       expect(emptyOverlapFeedback).not.toContain("Missing:")
       expect(emptyOverlapFeedback).not.toContain("Extra:")
       const requestsBeforeExhaustedAttempt = telegramRequests.length
@@ -2270,8 +2329,7 @@ describe("community study routes", () => {
             : {}
         ),
       )
-      const exhaustedFeedback = exhaustedMessages.find((body) => body.text?.includes("0 attempts left"))?.text ?? ""
-      expect(exhaustedFeedback).not.toContain("This line will come back later.")
+      expect(exhaustedMessages.some((body) => body.text === "❌ Incorrect\nYou said: “wrong words”")).toBe(true)
       await ctx.client.execute("DELETE FROM telegram_study_voice_intents")
       await ctx.client.execute("DELETE FROM telegram_chat_study_sessions")
       telegramRequests.length = 0
@@ -2413,6 +2471,22 @@ describe("community study routes", () => {
         args: [session.userId],
       })
       expect(attemptsAfterTranscriptionFailure.rows).toHaveLength(0)
+      const sessionAfterTranscriptionFailure = await communityClient.execute({
+        sql: `SELECT presentation_count,
+                     (SELECT COUNT(*) FROM song_study_session_exercise e
+                       WHERE e.session_id = song_study_session.id AND e.lesson_resolved = 1) AS resolved_exercise_count
+              FROM song_study_session WHERE user_id = ?1 AND status = 'active'`,
+        args: [session.userId],
+      })
+      expect(sessionAfterTranscriptionFailure.rows[0]).toMatchObject({
+        presentation_count: 0,
+        resolved_exercise_count: 0,
+      })
+      expect((await Promise.all(telegramRequests.map(async (request) =>
+        request.url.endsWith("/sendMessage")
+          ? await request.clone().json() as { text?: string }
+          : {}
+      ))).some((body) => body.text === getTelegramStudyCopy("en").voiceTemporaryFailure)).toBe(true)
 
       const retryVoiceUpdate = {
         ...voiceUpdate,
@@ -2570,6 +2644,11 @@ describe("community study routes", () => {
         processing_attempt_count: 3,
         status: "failed",
       })
+      expect((await Promise.all(telegramRequests.map(async (request) =>
+        request.url.endsWith("/sendMessage")
+          ? await request.clone().json() as { text?: string }
+          : {}
+      ))).some((body) => body.text === getTelegramStudyCopy("en").voiceTerminalNonChatFailure)).toBe(true)
       forceTranscriptionFailure = false
       await ctx.client.execute({
         sql: "DELETE FROM telegram_accounts WHERE telegram_user_id = '787879'",

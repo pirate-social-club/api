@@ -1187,6 +1187,8 @@ export async function handleTelegramStudyVoiceMessage(input: {
   const processClaimedVoice = async (): Promise<void> => {
     let result: SongStudyAttemptResult
     let transcriptText = ""
+    const language = isStudyHelperLanguage(intent.targetLanguage) ? intent.targetLanguage : "en"
+    const copy = getTelegramStudyCopy(language)
     try {
       const telegramFile = await getTelegramFile(input.bot, voiceFileId)
       if (!telegramFile.file_path?.trim()) {
@@ -1280,8 +1282,8 @@ export async function handleTelegramStudyVoiceMessage(input: {
         await sendTelegramMessage(input.bot, {
           chat_id: chatId,
           text: intent.chatStudySessionId
-            ? "I could not grade this exercise after several tries. Send /study to start again."
-            : "I could not grade this exercise after several tries. Reopen study to start it again.",
+            ? copy.voiceTerminalChatFailure
+            : copy.voiceTerminalNonChatFailure,
         }).catch(() => undefined)
         return
       }
@@ -1307,7 +1309,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
       })
       await sendTelegramMessage(input.bot, {
         chat_id: chatId,
-        text: "I could not grade that recording. Send another voice message to try again.",
+        text: copy.voiceTemporaryFailure,
       }).catch(() => undefined)
       return
     }
@@ -1327,7 +1329,7 @@ export async function handleTelegramStudyVoiceMessage(input: {
         })
         await sendTelegramMessage(input.bot, {
           chat_id: chatId,
-          text: "Your answer was saved, but I could not continue the session. Send /study to resume.",
+          text: copy.voiceContinuationFailure,
         }).catch(() => undefined)
       })
       return
@@ -1340,13 +1342,13 @@ export async function handleTelegramStudyVoiceMessage(input: {
     await sendTelegramMessage(input.bot, {
       chat_id: chatId,
       text: result.outcome === "correct"
-        ? "Correct. Continue studying in the Mini App."
-        : "Not quite. Continue studying to review the line.",
+        ? copy.miniAppCorrect
+        : copy.miniAppIncorrect,
       ...(studyUrl
         ? {
             reply_markup: {
               inline_keyboard: [[{
-                text: "Continue studying",
+                text: copy.continueStudying,
                 web_app: { url: studyUrl },
               }]],
             },
