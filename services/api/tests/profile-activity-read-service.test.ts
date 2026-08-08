@@ -145,14 +145,19 @@ describe("getProfileActivity", () => {
       await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN last_checkpoint_at TEXT")
       await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN attempt_started_at TEXT")
       await addColumnIfMissing(db.client, "ALTER TABLE community_jobs ADD COLUMN attempt_deadline_at TEXT")
+      await db.client.execute("UPDATE communities SET karaoke_enabled = 1")
       const publicPost = await insertPost({
         client: db.client,
         communityId,
         authorUserId: "usr_alice",
         body: {
-          post_type: "text",
+          post_type: "song",
           title: "Public profile post",
           body: "Visible on profile",
+          song_artifact_bundle: "profile_song",
+          song_mode: "original",
+          rights_basis: "original",
+          license_preset: "commercial-use",
           idempotency_key: "profile-public-post",
         },
         createdAt: "2026-05-12T10:04:00.000Z",
@@ -192,6 +197,25 @@ describe("getProfileActivity", () => {
     } finally {
       db.close()
     }
+    await control.client.execute({
+      sql: `
+        INSERT INTO song_artifact_bundles (
+          song_artifact_bundle_id, community_id, creator_user_id, status,
+          primary_audio_json, instrumental_audio_json, alignment_status,
+          timed_lyrics_json, created_at, updated_at
+        ) VALUES (
+          'profile_song', ?1, 'usr_owner', 'ready',
+          ?2, ?3, 'completed', ?4, ?5, ?5
+        )
+      `,
+      args: [
+        communityId,
+        JSON.stringify({ storage_ref: "https://media.test/profile-original.mp3", mime_type: "audio/mpeg" }),
+        JSON.stringify({ storage_ref: "https://media.test/profile-instrumental.mp3", mime_type: "audio/mpeg" }),
+        JSON.stringify([{ start_ms: 0, end_ms: 1000, text: "Profile song" }]),
+        now,
+      ],
+    })
 
     const publicComment = await createComment({
       env,
@@ -293,6 +317,7 @@ describe("getProfileActivity", () => {
     expect(posts.posts[0]?.post.community?.community_id).toBe(communityId)
     expect(posts.posts[0]?.post.comment_count).toBe(1)
     expect(posts.posts[0]?.post.post.author_public_handle).toBe("alice.pirate")
+    expect(posts.posts[0]?.post.karaoke_capability).toEqual({ status: "ready" })
 
     const ownerPosts = await getProfileActivity({
       env,

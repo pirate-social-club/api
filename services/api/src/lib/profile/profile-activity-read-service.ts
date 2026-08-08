@@ -286,6 +286,7 @@ async function hydratePostRows(input: {
   locale?: string | null
 }): Promise<ProfileActivityPostPage[]> {
   const items: ProfileActivityPostPage[] = []
+  const songArtifactExecutor = getControlPlaneClient(input.env)
   for (const [communityId, rows] of groupByCommunity(input.rows)) {
     const community = await input.repository.getCommunityById(communityId)
     if (!isCommunityLive(community)) {
@@ -302,6 +303,7 @@ async function hydratePostRows(input: {
         communityRepository: input.repository,
       })
       const studyEnabledCache = new Map<string, Promise<boolean>>()
+      const karaokeEnabledCache = new Map<string, Promise<boolean>>()
       const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
       const communityPostResponses: LocalizedPostResponse[] = []
       for (const row of rows) {
@@ -317,6 +319,7 @@ async function hydratePostRows(input: {
         const response = await buildLocalizedPostResponse({
           executor: db.client,
           env: input.env,
+          songArtifactExecutor,
           post,
           locale: input.locale,
           metrics,
@@ -325,6 +328,7 @@ async function hydratePostRows(input: {
           studyElevenLabsCredentialResolver,
           studyArtifactWriteClient: db.client,
           studyEnabledCache,
+          karaokeEnabledCache,
           viewerUserId: input.viewerUserId,
         })
         response.community = preview
@@ -352,8 +356,10 @@ async function buildThreadRootPost(input: {
   env: Env
   profileRepository?: ProfileRepository | null
   postId: string
+  songArtifactExecutor?: Client | null
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
   studyEnabledCache?: Map<string, Promise<boolean>>
+  karaokeEnabledCache?: Map<string, Promise<boolean>>
   viewerUserId: string | null
   locale?: string | null
 }): Promise<LocalizedPostResponse | null> {
@@ -369,6 +375,7 @@ async function buildThreadRootPost(input: {
   const response = await buildLocalizedPostResponse({
     executor: input.client,
     env: input.env,
+    songArtifactExecutor: input.songArtifactExecutor,
     post,
     locale: input.locale,
     metrics,
@@ -377,6 +384,7 @@ async function buildThreadRootPost(input: {
     studyElevenLabsCredentialResolver: input.studyElevenLabsCredentialResolver,
     studyArtifactWriteClient: input.client,
     studyEnabledCache: input.studyEnabledCache,
+    karaokeEnabledCache: input.karaokeEnabledCache,
     viewerUserId: input.viewerUserId,
   })
   await hydrateAuthorPublicHandlesForResponses({
@@ -396,6 +404,7 @@ async function hydrateCommentRows(input: {
 }): Promise<ProfileActivityCommentPage[]> {
   const items: ProfileActivityCommentPage[] = []
   const seenCommentIds = new Set<string>()
+  const songArtifactExecutor = getControlPlaneClient(input.env)
   for (const [communityId, rows] of groupByCommunity(input.rows)) {
     const community = await input.repository.getCommunityById(communityId)
     if (!isCommunityLive(community)) {
@@ -412,6 +421,7 @@ async function hydrateCommentRows(input: {
         communityRepository: input.repository,
       })
       const studyEnabledCache = new Map<string, Promise<boolean>>()
+      const karaokeEnabledCache = new Map<string, Promise<boolean>>()
       const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
       const threadRoots = new Map<string, LocalizedPostResponse | null>()
       const communityCommentItems: CommentListItem[] = []
@@ -431,8 +441,10 @@ async function hydrateCommentRows(input: {
               env: input.env,
               profileRepository: input.profileRepository,
               postId: row.thread_root_post_id,
+              songArtifactExecutor,
               studyElevenLabsCredentialResolver,
               studyEnabledCache,
+              karaokeEnabledCache,
               viewerUserId: input.viewerUserId,
               locale: input.locale,
             })
