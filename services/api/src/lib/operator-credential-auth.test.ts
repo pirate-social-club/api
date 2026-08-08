@@ -182,6 +182,38 @@ describe("authenticateOperatorCredential", () => {
     }
   })
 
+  test("accepts a JSON-quoted ISO expiry returned by a Postgres date adapter", async () => {
+    const executor: DbExecutor = {
+      execute: async (query) => {
+        const sql = typeof query === "string" ? query : query.sql
+        if (sql.includes("FROM operator_credentials")) {
+          return {
+            rows: [{
+              operator_credential_id: "opc_quoted_expiry",
+              operator_actor_id: "svc_settlement_operator",
+              secret_hash: hashOperatorCredentialSecret(SECRET),
+              secret_hash_algo: "sha256",
+              secret_hash_version: 1,
+              scopes_json: JSON.stringify([BOOKING_SETTLEMENT_RESOLVE_SCOPE]),
+              status: "active",
+              expires_at: JSON.stringify("2026-07-28T00:00:00.000Z"),
+              last_used_at: null,
+            }],
+          }
+        }
+        return { rows: [] }
+      },
+    } as DbExecutor
+
+    const actor = await authenticateOperatorCredential({
+      env: {} as Env,
+      executor,
+      authorization: `Operator opc_quoted_expiry.${SECRET}`,
+      now: () => Date.parse("2026-06-29T00:00:00.000Z"),
+    })
+    expect(actor.operatorCredentialId).toBe("opc_quoted_expiry")
+  })
+
   test("rejects bad secret, revoked, and expired credentials", async () => {
     const badSecret = await setup()
     await seedCredential(badSecret.client)
