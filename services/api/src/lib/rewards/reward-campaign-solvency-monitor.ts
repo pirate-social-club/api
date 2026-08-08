@@ -32,13 +32,42 @@ export const REWARD_CAMPAIGN_LIABILITY_SQL = `
         GROUP BY reward_campaign_funding_effect_id
       ) a ON a.reward_campaign_funding_effect_id = f.reward_campaign_funding_effect_id
       WHERE f.status = 'confirmed'
+        AND f.chain_id = ?1
+        AND LOWER(f.token_address) = LOWER(?2)
+        AND LOWER(f.treasury_address) = LOWER(?3)
     ), 0) AS contribution_liability_cents,
     GREATEST(
-      COALESCE((SELECT SUM(amount_cents) FROM reward_events), 0)
+      COALESCE((
+        SELECT SUM(e.amount_cents)
+        FROM reward_events e
+        WHERE e.reward_campaign_id IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM reward_campaign_funding_effects asset_funding
+            WHERE asset_funding.reward_campaign_id = e.reward_campaign_id
+              AND asset_funding.status = 'confirmed'
+              AND asset_funding.chain_id = ?1
+              AND LOWER(asset_funding.token_address) = LOWER(?2)
+              AND LOWER(asset_funding.treasury_address) = LOWER(?3)
+          )
+      ), 0)
         - COALESCE((
-          SELECT SUM(amount_cents)
-          FROM reward_payout_allocations
-          WHERE status = 'confirmed'
+          SELECT SUM(a.amount_cents)
+          FROM reward_payout_allocations a
+          JOIN reward_events e ON e.reward_event_id = a.reward_event_id
+          WHERE a.status = 'confirmed'
+            AND (
+              e.reward_campaign_id IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM reward_campaign_funding_effects asset_funding
+                WHERE asset_funding.reward_campaign_id = e.reward_campaign_id
+                  AND asset_funding.status = 'confirmed'
+                  AND asset_funding.chain_id = ?1
+                  AND LOWER(asset_funding.token_address) = LOWER(?2)
+                  AND LOWER(asset_funding.treasury_address) = LOWER(?3)
+              )
+            )
         ), 0),
       0
     ) AS credited_unpaid_liability_cents,
@@ -46,6 +75,9 @@ export const REWARD_CAMPAIGN_LIABILITY_SQL = `
       SELECT SUM(CAST(received_amount_atomic AS NUMERIC))
       FROM reward_campaign_funding_effects
       WHERE status = 'refund_pending'
+        AND chain_id = ?1
+        AND LOWER(token_address) = LOWER(?2)
+        AND LOWER(treasury_address) = LOWER(?3)
     ), 0) AS pending_refund_atomic
 `
 
@@ -96,8 +128,14 @@ function bigintValue(value: unknown): bigint {
   return /^-?\d+$/.test(normalized) ? BigInt(normalized) : 0n
 }
 
-export async function readRewardCampaignLiability(client: Client): Promise<RewardCampaignLiability> {
-  const result = await client.execute(REWARD_CAMPAIGN_LIABILITY_SQL)
+export async function readRewardCampaignLiability(
+  client: Client,
+  asset: Pick<SolvencyConfig, "chainId" | "tokenAddress" | "treasuryAddress">,
+): Promise<RewardCampaignLiability> {
+  const result = await client.execute({
+    sql: REWARD_CAMPAIGN_LIABILITY_SQL,
+    args: [asset.chainId, asset.tokenAddress, asset.treasuryAddress],
+  })
   const row = result.rows[0]
   const contributionLiabilityCents = bigintValue(rowValue(row, "contribution_liability_cents"))
   const creditedUnpaidLiabilityCents = bigintValue(rowValue(row, "credited_unpaid_liability_cents"))
@@ -246,7 +284,7 @@ export async function monitorRewardCampaignTreasurySolvency(input: {
     rpcUrl: asset.rpcUrl,
     chainId: asset.chainId,
   }
-  const liability = await readRewardCampaignLiability(input.client)
+  const liability = await readRewardCampaignLiability(input.client, config)
   const balanceAtomic = await (input.readBalance ?? readTreasuryBalance)(config)
   const solvent = balanceAtomic >= liability.totalAtomic
   const observedAt = new Date().toISOString()

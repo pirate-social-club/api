@@ -28,13 +28,22 @@ const env = {
   REWARDS_CAMPAIGN_RPC_URL: "https://base-sepolia.example.test",
 } as Env
 
+const liabilityAsset = {
+  chainId: 84532,
+  tokenAddress: "0x1000000000000000000000000000000000000001" as `0x${string}`,
+  treasuryAddress: "0x2000000000000000000000000000000000000002" as `0x${string}`,
+}
+
 describe("reward campaign treasury solvency monitor", () => {
   test("combines unconsumed contribution lots, credited-unpaid balances, and exact pending refunds", async () => {
-    const liability = await readRewardCampaignLiability(clientWithRow({
-      contribution_liability_cents: "100",
-      credited_unpaid_liability_cents: "25",
-      pending_refund_atomic: "12345",
-    }))
+    const liability = await readRewardCampaignLiability(
+      clientWithRow({
+        contribution_liability_cents: "100",
+        credited_unpaid_liability_cents: "25",
+        pending_refund_atomic: "12345",
+      }),
+      liabilityAsset,
+    )
 
     expect(liability).toEqual({
       contributionLiabilityCents: 100n,
@@ -42,6 +51,35 @@ describe("reward campaign treasury solvency monitor", () => {
       pendingRefundAtomic: 12_345n,
       totalAtomic: 1_262_345n,
     })
+  })
+
+  test("binds every liability component to the configured settlement asset", async () => {
+    let captured: { sql: string; args?: unknown[] } | undefined
+    const client = {
+      execute: async (statement: string | { sql: string; args?: unknown[] }) => {
+        if (typeof statement === "string") throw new Error("expected parameterized liability query")
+        captured = statement
+        return {
+          rows: [{
+            contribution_liability_cents: "0",
+            credited_unpaid_liability_cents: "0",
+            pending_refund_atomic: "0",
+          }],
+          columns: [],
+        }
+      },
+    } as unknown as Client
+
+    await readRewardCampaignLiability(client, liabilityAsset)
+
+    expect(captured?.args).toEqual([
+      liabilityAsset.chainId,
+      liabilityAsset.tokenAddress,
+      liabilityAsset.treasuryAddress,
+    ])
+    expect(captured?.sql.match(/chain_id = \?1/gu)).toHaveLength(4)
+    expect(captured?.sql.match(/token_address\) = LOWER\(\?2\)/gu)).toHaveLength(4)
+    expect(captured?.sql.match(/treasury_address\) = LOWER\(\?3\)/gu)).toHaveLength(4)
   })
 
   test("alerts with the exact shortfall while reward feature flags are dark", async () => {
