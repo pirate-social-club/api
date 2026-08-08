@@ -34,6 +34,8 @@ import type { CommunityAssistantAudience } from "./context-builder"
 const MAX_USER_MESSAGE_LENGTH = 4000
 const MAX_HISTORY_MESSAGES = 12
 const DEFAULT_ASSISTANT_TIMEOUT_MS = 30_000
+export const COMMUNITY_ASSISTANT_LANGUAGE_MATCH_INSTRUCTION =
+  "Reply in the same language as the user's latest message. Do not switch languages unless the user asks you to."
 
 export type CommunityAssistantChatBody = {
   message?: unknown
@@ -822,7 +824,12 @@ async function sendCommunityAssistantUserMessage(input: {
     const openRouterMessages: OpenRouterChatMessage[] = [
       {
         role: "system",
-        content: `${policy.systemPrompt}\n\n${context}${telegramInstruction}`,
+        content: [
+          policy.systemPrompt,
+          COMMUNITY_ASSISTANT_LANGUAGE_MATCH_INSTRUCTION,
+          context,
+          telegramInstruction,
+        ].filter(Boolean).join("\n\n"),
       },
       ...history.map((item) => ({
         role: item.role as "user" | "assistant",
@@ -997,7 +1004,11 @@ export async function sendCommunityAssistantGroupMessage(input: {
         messages: [
           {
             role: "system",
-            content: `${groupPolicy.systemPrompt}\n\n${context}`,
+            content: [
+              groupPolicy.systemPrompt,
+              COMMUNITY_ASSISTANT_LANGUAGE_MATCH_INSTRUCTION,
+              context,
+            ].join("\n\n"),
           },
           {
             role: "user",

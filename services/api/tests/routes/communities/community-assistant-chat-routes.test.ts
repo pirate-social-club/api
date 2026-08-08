@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { getCommunityRepository } from "../../../src/lib/communities/db-community-repository"
+import { sendCommunityAssistantGroupMessage } from "../../../src/lib/communities/assistant-policy/chat-service"
 import type { Env } from "../../../src/env"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -357,9 +359,28 @@ describe("community assistant chat routes", () => {
       expect(calls[0]?.body.model).toBe("test/community-assistant-model")
       const systemContent = calls[0]?.body.messages?.[0]?.content ?? ""
       expect(systemContent).toContain("You are the runtime community assistant.")
+      expect(systemContent).toContain("Reply in the same language as the user's latest message.")
+      expect(systemContent).toContain("Do not switch languages unless the user asks you to.")
+      // The instruction is trusted system content; the user message must not
+      // be able to supply or override it.
+      expect(calls[0]?.body.messages?.find((message) => message.role === "user")?.content)
+        .not.toContain("Reply in the same language as the user's latest message.")
       expect(systemContent).toContain("Be useful")
       expect(systemContent).toContain("Welcome thread")
       expect(systemContent).toContain("Top comment says moderators should own prompts and keys.")
+
+      const groupAnswer = await sendCommunityAssistantGroupMessage({
+        env: ctx.env,
+        communityRepository: getCommunityRepository(ctx.env),
+        communityId,
+        message: "What is this board about?",
+      })
+      expect(groupAnswer.content).toBe("Use the rules and the welcome thread.")
+      expect(calls).toHaveLength(2)
+      const groupSystemContent = calls[1]?.body.messages?.[0]?.content ?? ""
+      expect(groupSystemContent).toContain("Reply in the same language as the user's latest message.")
+      expect(calls[1]?.body.messages?.find((message) => message.role === "user")?.content)
+        .not.toContain("Reply in the same language as the user's latest message.")
     })
   })
 
