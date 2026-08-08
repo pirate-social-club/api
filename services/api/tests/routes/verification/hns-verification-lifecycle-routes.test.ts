@@ -351,7 +351,7 @@ describe("hns verification lifecycle routes", () => {
     })
   })
 
-  test("hns verification stays challenge_pending while TXT is still propagating and reuses the same challenge", async () => {
+  test("hns verification moves from pending to verified when the matching resource is observed", async () => {
     const ctx = await createRouteTestContext({
       HNS_VERIFIER_BASE_URL: "http://hns-verifier.test",
       HNS_CHALLENGE_TTL_HOURS: "24",
@@ -389,7 +389,7 @@ describe("hns verification lifecycle routes", () => {
             "piratependingroot",
             challengeTxtValue,
             parentObservationCount === 1 ? 1000 : parentObservationCount === 2 ? 1040 : 1080,
-            parentObservationCount > 1,
+            parentObservationCount > 2,
           ))
         }
         if (url.endsWith("/verify-txt-public")) {
@@ -475,16 +475,6 @@ describe("hns verification lifecycle routes", () => {
       expect(pendingBody.namespace_verification).toBeNull()
       expect(pendingBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
       expect(pendingBody.failure_reason).toBeNull()
-
-      const postBoundaryPending = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      expect(postBoundaryPending.status).toBe(200)
-      const postBoundaryPendingBody = await json(postBoundaryPending) as { status: string }
-      expect(postBoundaryPendingBody.status).toBe("challenge_pending")
 
       const verifiedCompletion = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}/complete`,

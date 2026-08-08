@@ -224,7 +224,7 @@ describe("completeNamespaceVerificationSession", () => {
     }
   })
 
-  test("shows pending tree commit only after the complete UPDATE is observed", async () => {
+  test("does not invent a tree wait when the first matching resource is late", async () => {
     const originalFetch = globalThis.fetch
     const payload = makeImportPayload()
     globalThis.fetch = (async () => parentObservation(payload.publish_plan.replacement_records, 1_001)) as never
@@ -243,14 +243,13 @@ describe("completeNamespaceVerificationSession", () => {
       })
 
       expect(result?.challenge_payload).toMatchObject({
-        update_observed_height: 1_001,
-        target_tree_boundary: 1_008,
         observation: {
-          state: "pending_tree_commit",
+          state: "delegation_not_secure",
           current_height: 1_001,
-          target_tree_boundary: 1_008,
         },
       })
+      expect(result?.challenge_payload).not.toHaveProperty("update_observed_height")
+      expect(result?.challenge_payload).not.toHaveProperty("target_tree_boundary")
     } finally {
       globalThis.fetch = originalFetch
     }

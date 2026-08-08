@@ -434,15 +434,9 @@ membership_mode: "request",
         ctx.env,
         session.accessToken,
       )
-      const firstPending = await json(firstCompleted) as { namespace_verification: string | null }
-      expect(firstPending.namespace_verification).toBeNull()
-      const firstVerified = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      return json(firstVerified) as Promise<{ namespace_verification: string }>
+      const firstVerified = await json(firstCompleted) as { namespace_verification: string | null }
+      expect(typeof firstVerified.namespace_verification).toBe("string")
+      return firstVerified as { namespace_verification: string }
     })
 
     const firstAttach = await requestJson(
@@ -467,17 +461,11 @@ membership_mode: "request",
         ctx.env,
         session.accessToken,
       )
-      const secondPending = await json(secondCompleted) as { namespace_verification: string | null }
-      expect(secondPending.namespace_verification).toBeNull()
-      const secondVerified = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
+      const secondVerified = await json(secondCompleted) as { namespace_verification: string | null }
+      expect(typeof secondVerified.namespace_verification).toBe("string")
       return {
         session: secondNamespaceSessionBody.id,
-        completed: await json(secondVerified) as { namespace_verification: string },
+        completed: secondVerified as { namespace_verification: string },
       }
     })
     const secondCompletedBody = secondNamespace.completed
@@ -543,16 +531,9 @@ membership_mode: "request",
         ctx.env,
         session.accessToken,
       )
-      const pending = await json(completed) as { namespace_verification: string | null }
-      expect(pending.namespace_verification).toBeNull()
-      const verified = await requestJson(
-        `http://pirate.test/namespace-verification-sessions/${startedBody.id}/complete`,
-        { acknowledged_resource_replacement: true },
-        ctx.env,
-        session.accessToken,
-      )
-      const completedBody = await json(verified) as { namespace_verification: string }
-      return completedBody.namespace_verification
+      const completedBody = await json(completed) as { namespace_verification: string | null }
+      expect(typeof completedBody.namespace_verification).toBe("string")
+      return completedBody.namespace_verification as string
     }
 
     const { primaryVerification, mirrorVerification } = await withHnsVerifierMock(ctx.env, async () => ({
