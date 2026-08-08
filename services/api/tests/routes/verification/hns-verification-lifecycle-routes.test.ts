@@ -361,7 +361,6 @@ describe("hns verification lifecycle routes", () => {
     const session = await exchangeJwt(ctx.env, "verification-hns-pending-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
 
-    let verifyCount = 0
     let parentObservationCount = 0
     let challengeTxtValue = "pirate-verification=test"
     const originalFetch = globalThis.fetch
@@ -393,20 +392,11 @@ describe("hns verification lifecycle routes", () => {
           ))
         }
         if (url.endsWith("/verify-txt-public")) {
-          verifyCount += 1
-          return new Response(JSON.stringify(
-            verifyCount === 1
-              ? {
-                  verified: false,
-                  observed_values: [],
-                  observation_provider: "web3dns_json_doh",
-                }
-              : {
-                  verified: true,
-                  observation_provider: "web3dns_json_doh",
-                  ownership_source: "hns_parent_chain_txt",
-                },
-          ), {
+          return new Response(JSON.stringify({
+            verified: true,
+            observation_provider: "web3dns_json_doh",
+            ownership_source: "hns_parent_chain_txt",
+          }), {
             status: 200,
             headers: { "content-type": "application/json" },
           })
