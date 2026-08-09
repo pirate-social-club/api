@@ -419,7 +419,12 @@ export function createRewardSettlementResolutionHandler(
     if (effectKind !== "cashout" && effectKind !== "funding_refund") {
       throw badRequestError("Invalid rewards settlement effect kind")
     }
-    if (resolution !== "confirmed" && resolution !== "failed_onchain" && resolution !== "failed_prebroadcast") {
+    if (
+      resolution !== "confirmed"
+      && resolution !== "failed_onchain"
+      && resolution !== "failed_prebroadcast"
+      && resolution !== "failed_nonce_invalidated"
+    ) {
       throw badRequestError("Invalid rewards settlement resolution")
     }
     const result = await services.resolveSettlement({

@@ -76,7 +76,7 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
 
 async function effects(stub: Stub): Promise<Array<Record<string, unknown>>> {
   return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, nonce, tx_hash, state, version, attempt_count, next_attempt_at, preparation_stage, preparation_transport_category, preparation_http_status, preparation_lit_error_token, preparation_latency_ms, preparation_classified_at, rehearsal_scenario, settlement_revert_selector, settlement_revert_name, settlement_transaction_hash, settlement_block_hash, settlement_classified_at FROM effects ORDER BY nonce").toArray(),
+    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, signed_tx, nonce, tx_hash, state, version, attempt_count, next_attempt_at, preparation_stage, preparation_transport_category, preparation_http_status, preparation_lit_error_token, preparation_latency_ms, preparation_classified_at, rehearsal_scenario, settlement_revert_selector, settlement_revert_name, settlement_transaction_hash, settlement_block_hash, settlement_classified_at FROM effects ORDER BY nonce").toArray(),
   )
 }
 
@@ -247,6 +247,62 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
         stage: "broadcast",
       },
     })
+  })
+
+  it("parks EOA reward broadcasts after three ambiguous failures and requires mined nonce invalidation", async () => {
+    const stub = freshStub()
+    const request = rewardsReq({ payoutEffectId: "rpe_ambiguous", idempotencyKey: "reward:ambiguous" })
+    await injectChain(stub, {
+      pending: 2,
+      latest: 2,
+      liveness: { "0xhash_2": "absent" },
+      broadcastError: "request timeout after send",
+    })
+    await stub.settle(request)
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (attempt > 1) await stub.reconcile(request)
+      await runDurableObjectAlarm(stub)
+    }
+
+    expect((await effects(stub))[0]).toMatchObject({
+      state: "preparation_parked",
+      signed_tx: "signed_2",
+      tx_hash: "0xhash_2",
+      nonce: 2,
+      attempt_count: 3,
+      next_attempt_at: null,
+      preparation_stage: "broadcast",
+    })
+
+    await expect(stub.resolveRewardInvalidatedBroadcast({
+      idempotencyKey: JSON.stringify(["reward_payout", "reward:ambiguous"]),
+      expectedTxHash: "0xhash_2",
+      expectedNonce: 2,
+      reason: "Replacement transaction has not mined yet.",
+      operatorActorId: "reward-operator",
+    })).rejects.toThrow("nonce is mined by a replacement")
+
+    await injectChain(stub, {
+      pending: 3,
+      latest: 3,
+      liveness: { "0xhash_2": "absent" },
+    })
+    const resolved = await stub.resolveRewardInvalidatedBroadcast({
+      idempotencyKey: JSON.stringify(["reward_payout", "reward:ambiguous"]),
+      expectedTxHash: "0xhash_2",
+      expectedNonce: 2,
+      reason: "Replacement transaction mined at nonce two.",
+      operatorActorId: "reward-operator",
+    })
+
+    expect(resolved).toMatchObject({
+      state: "preparation_parked",
+      txHash: "0xhash_2",
+      nonce: 2,
+      manualResolution: { resolution: "failed_nonce_invalidated" },
+    })
+    expect((await effects(stub))[0].signed_tx).toBeNull()
   })
 
   it("atomically persists bounded preparation diagnostics with the retry increment", async () => {

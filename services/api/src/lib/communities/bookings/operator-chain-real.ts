@@ -1,4 +1,4 @@
-import { Contract, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
+import { Contract, FetchRequest, JsonRpcProvider, Transaction, Wallet, getAddress } from "ethers"
 
 import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
@@ -58,6 +58,7 @@ const REWARD_VAULT_CAPACITY_ABI = [
   "function epochDuration() view returns (uint64)",
   "function settlementOperator() view returns (address)",
 ] as const
+const SETTLEMENT_RPC_TIMEOUT_MS = 15_000
 
 function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
   backend: RewardsSettlementBackend
@@ -135,7 +136,9 @@ export function createStaticSettlementProvider(rpcUrl: string, chainId: number):
   // static so ethers does not prepend an eth_chainId detection request to
   // every short-lived Worker provider; that probe intermittently fails at the
   // public Base RPC before the requested nonce/read call is attempted.
-  return new JsonRpcProvider(rpcUrl, chainId, { staticNetwork: true })
+  const request = new FetchRequest(rpcUrl)
+  request.timeout = SETTLEMENT_RPC_TIMEOUT_MS
+  return new JsonRpcProvider(request, chainId, { staticNetwork: true })
 }
 
 function providerFor(config: Pick<ReturnType<typeof resolveConfig>, "rpcUrl" | "chainId">): JsonRpcProvider {
