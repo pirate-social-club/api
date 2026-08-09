@@ -126,7 +126,7 @@ describe("Telegram account linking", () => {
     expect(replayBody.code).toBe("telegram_account_link_expired")
   })
 
-  test("refuses to merge a Telegram identity once it has meaningful state", async () => {
+  test("merges allowed Telegram membership activity into the canonical account", async () => {
     const ctx = await createRouteTestContext({
       PIRATE_WEB_PUBLIC_ORIGIN: "https://pirate.test",
     })
@@ -190,6 +190,21 @@ describe("Telegram account linking", () => {
       `,
       args: [sourceUserId, now],
     })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO wallet_attachments (
+          wallet_attachment_id, user_id, chain_namespace,
+          wallet_address_normalized, wallet_address_display,
+          attachment_kind, is_primary, status, attached_at, created_at, updated_at
+        ) VALUES (
+          'wal_telegram_source', ?1, 'eip155:1',
+          '0x1111111111111111111111111111111111111111',
+          '0x1111111111111111111111111111111111111111',
+          'external', 0, 'active', ?2, ?2, ?2
+        )
+      `,
+      args: [sourceUserId, now],
+    })
 
     const created = await post(
       "http://pirate.test/users/me/telegram-account-link-intents",
@@ -205,8 +220,31 @@ describe("Telegram account linking", () => {
       target.accessToken,
       ctx.env,
     )
-    expect(consumed.status).toBe(409)
-    const body = await json(consumed) as { code: string }
-    expect(body.code).toBe("telegram_account_link_conflict")
+    expect(consumed.status).toBe(200)
+    expect(await json(consumed)).toEqual({ linked: true })
+
+    const projection = await ctx.client.execute({
+      sql: `
+        SELECT user_id, membership_state
+        FROM community_membership_projections
+        WHERE community_id = 'cmt_conflict_link'
+      `,
+    })
+    expect(projection.rows).toHaveLength(1)
+    expect(String(projection.rows[0]?.user_id)).toBe(target.userId)
+    expect(String(projection.rows[0]?.membership_state)).toBe("member")
+
+    const alias = await ctx.client.execute({
+      sql: `SELECT canonical_user_id FROM user_account_aliases WHERE source_user_id = ?1`,
+      args: [sourceUserId],
+    })
+    expect(String(alias.rows[0]?.canonical_user_id)).toBe(target.userId)
+
+    // Attaching a cashout wallet must not block consolidation and must not
+    // silently transfer wallet authority to the canonical account.
+    const sourceWallet = await ctx.client.execute({
+      sql: `SELECT user_id FROM wallet_attachments WHERE wallet_attachment_id = 'wal_telegram_source'`,
+    })
+    expect(String(sourceWallet.rows[0]?.user_id)).toBe(sourceUserId)
   })
 })

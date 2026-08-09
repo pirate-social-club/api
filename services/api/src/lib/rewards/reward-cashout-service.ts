@@ -289,8 +289,21 @@ async function currentBalanceCents(exec: Pick<Client | Transaction, "execute">, 
   const result = await exec.execute({
     sql: `
       SELECT
-        COALESCE((SELECT SUM(amount_cents) FROM reward_events WHERE user_id = ?1), 0)
-        - COALESCE((SELECT SUM(amount_cents) FROM reward_payout_effects WHERE user_id = ?1 AND status IN ('submitted', 'confirmed')), 0)
+        COALESCE((
+          SELECT SUM(event.amount_cents)
+          FROM reward_events event
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = event.user_id
+          WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
+        ), 0)
+        - COALESCE((
+          SELECT SUM(payout.amount_cents)
+          FROM reward_payout_effects payout
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = payout.user_id
+          WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
+            AND payout.status IN ('submitted', 'confirmed')
+        ), 0)
         AS balance_cents
     `,
     args: [userId],
@@ -345,15 +358,21 @@ async function reservePayoutAllocations(input: {
       SELECT
         COALESCE((
           SELECT SUM(amount_cents)
-          FROM reward_payout_effects
-          WHERE user_id = ?1 AND status = 'confirmed'
+          FROM reward_payout_effects payout
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = payout.user_id
+          WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
+            AND payout.status = 'confirmed'
         ), 0) AS confirmed_payout_cents,
         COALESCE((
           SELECT SUM(allocation.amount_cents)
           FROM reward_payout_allocations allocation
           JOIN reward_payout_effects payout
             ON payout.reward_payout_effect_id = allocation.reward_payout_effect_id
-          WHERE payout.user_id = ?1 AND allocation.status = 'confirmed'
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = payout.user_id
+          WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
+            AND allocation.status = 'confirmed'
         ), 0) AS confirmed_allocated_cents
     `,
     args: [input.userId],
@@ -372,9 +391,11 @@ async function reservePayoutAllocations(input: {
           CASE WHEN allocation.status IN ('submitted', 'confirmed') THEN allocation.amount_cents ELSE 0 END
         ), 0) AS available_cents
       FROM reward_events event
+      LEFT JOIN reward_ownership_transfers transfer
+        ON transfer.source_user_id = event.user_id
       LEFT JOIN reward_payout_allocations allocation
         ON allocation.reward_event_id = event.reward_event_id
-      WHERE event.user_id = ?1
+      WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
       GROUP BY event.reward_event_id, event.reward_campaign_id, event.amount_cents, event.created_at
       HAVING event.amount_cents - COALESCE(SUM(
         CASE WHEN allocation.status IN ('submitted', 'confirmed') THEN allocation.amount_cents ELSE 0 END
