@@ -10,7 +10,7 @@ CREATE TABLE user_account_merges (
     status TEXT NOT NULL CHECK (
         status IN ('migrating', 'finalizing', 'completed', 'blocked')
     ),
-    block_reason TEXT CHECK (
+    block_reason TEXT CONSTRAINT user_account_merges_block_reason_value_check CHECK (
         block_reason IS NULL OR block_reason IN (
             'distinct_verified_humans',
             'community_authority',
@@ -29,7 +29,7 @@ CREATE TABLE user_account_merges (
     updated_at TIMESTAMPTZ NOT NULL,
     CONSTRAINT user_account_merges_distinct_users_check
         CHECK (source_user_id <> canonical_user_id),
-    CONSTRAINT user_account_merges_block_reason_check
+    CONSTRAINT user_account_merges_blocked_state_check
         CHECK ((status = 'blocked') = (block_reason IS NOT NULL)),
     CONSTRAINT user_account_merges_completed_at_check
         CHECK ((status = 'completed') = (completed_at IS NOT NULL))
