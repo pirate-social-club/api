@@ -760,7 +760,10 @@ async function advanceSubmittedPayout(input: {
   })
   const req = coordinatorRequest(attempted)
   let settled = await rewardsCoordinator(input.env).settle(req)
-  for (let i = 0; (settled.state === "prepared" || settled.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
+  // A prepared transaction has not been broadcast. Its Durable Object alarm
+  // owns the retry schedule; calling reconcile() here expedites the row and
+  // defeats its persisted exponential backoff on every payout cron pass.
+  for (let i = 0; settled.state === "reconciliation_required" && i < MAX_RECONCILE_ATTEMPTS; i++) {
     settled = await rewardsCoordinator(input.env).reconcile(req)
   }
   let effect = await updateCoordinatorMirror({
@@ -786,7 +789,12 @@ async function advanceSubmittedPayout(input: {
       nowUtc: input.nowUtc,
     })
   }
-  if (!settled.txHash || settled.state === "reserving" || settled.state === "failed_preparation") {
+  if (
+    !settled.txHash
+    || settled.state === "reserving"
+    || settled.state === "prepared"
+    || settled.state === "failed_preparation"
+  ) {
     return effect
   }
 

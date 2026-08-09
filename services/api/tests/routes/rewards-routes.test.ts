@@ -2533,6 +2533,95 @@ describe("rewards routes", () => {
     expect(Number(countRows.rows[0]?.count ?? 0)).toBe(1)
   })
 
+  test("prepared reward payouts respect the durable executor retry schedule", async () => {
+    const ctx = await createRouteTestContext({
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
+      REWARDS_IDENTITY_PROVIDER: "self",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-payout-prepared-backoff-user")
+    const now = "2026-07-09T12:00:00.000Z"
+    let settleCount = 0
+    let reconcileCount = 0
+    let confirmCount = 0
+    setRewardSettlementCoordinatorForTests({
+      settle: async (req) => {
+        settleCount += 1
+        return {
+          idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]),
+          txHash: "0xrewardprepared",
+          nonce: 9,
+          state: "prepared",
+        }
+      },
+      confirm: async (req, txHash) => {
+        confirmCount += 1
+        return {
+          idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]),
+          txHash,
+          nonce: 9,
+          state: "prepared",
+        }
+      },
+      reconcile: async (req) => {
+        reconcileCount += 1
+        return {
+          idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]),
+          txHash: "0xrewardprepared",
+          nonce: 9,
+          state: "prepared",
+        }
+      },
+    })
+
+    await addRewardEvent(ctx, session.userId, 100, now)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_payout_effects (
+          reward_payout_effect_id, user_id, amount_cents, recipient_address,
+          idempotency_key, status, settlement_ref, coordinator_state,
+          submitted_at, created_at, updated_at
+        )
+        VALUES (
+          'rpe_route_prepared_backoff', ?1, 100,
+          '0x1000000000000000000000000000000000000001',
+          'reward-cashout-prepared-backoff', 'submitted', '0xrewardprepared',
+          'prepared', ?2, ?2, ?2
+        )
+      `,
+      args: [session.userId, now],
+    })
+
+    const summary = await reconcileSubmittedRewardPayouts({
+      env: ctx.env,
+      client: ctx.client,
+      nowUtc: now,
+      limit: 10,
+      confirmPollMs: [],
+    })
+
+    expect(summary).toMatchObject({ scanned: 1, pending: 1, errors: 0 })
+    expect(settleCount).toBe(1)
+    expect(reconcileCount).toBe(0)
+    expect(confirmCount).toBe(0)
+    const rows = await ctx.client.execute({
+      sql: `
+        SELECT status, settlement_ref, coordinator_state
+        FROM reward_payout_effects
+        WHERE reward_payout_effect_id = 'rpe_route_prepared_backoff'
+      `,
+    })
+    expect(rows.rows).toEqual([{
+      status: "submitted",
+      settlement_ref: "0xrewardprepared",
+      coordinator_state: "prepared",
+    }])
+  })
+
   test("failed preparation remains submitted while the durable executor owns retry", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
