@@ -3,7 +3,10 @@ import * as BunRuntime from "bun"
 
 import type { Env } from "../src/env"
 import { resolveNewBookingIntentChainId } from "../src/lib/bookings/booking-settlement-config"
-import { resolveRewardsSettlementRpcUrl } from "../src/lib/communities/bookings/booking-chain-config"
+import {
+  resolveRewardsSettlementBroadcastRpcUrl,
+  resolveRewardsSettlementRpcUrl,
+} from "../src/lib/communities/bookings/booking-chain-config"
 import { resolvePirateCheckoutSourceChainId } from "../src/lib/communities/commerce/checkout-config"
 import { resolveRewardCampaignAssetConfig } from "../src/lib/rewards/reward-campaign-config"
 
@@ -169,5 +172,6 @@ describe("production money-path invariant", () => {
       PIRATE_REWARDS_SETTLEMENT_RPC_URL: undefined,
       BASE_MAINNET_RPC_URL: "https://keyed-mainnet.example.test",
     } as Env)).toBe("https://keyed-mainnet.example.test")
+    expect(resolveRewardsSettlementBroadcastRpcUrl(productionVars as Env)).toBe("https://mainnet.base.org")
   })
 })

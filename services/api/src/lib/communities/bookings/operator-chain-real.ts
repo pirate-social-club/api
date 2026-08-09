@@ -9,6 +9,7 @@ import {
   resolveBookingSettlementRpcUrl,
   resolveBookingSettlementUsdcTokenAddress,
   resolveRewardsSettlementChainId,
+  resolveRewardsSettlementBroadcastRpcUrl,
   resolveRewardsSettlementOperatorAddress,
   resolveRewardsSettlementOperatorPrivateKey,
   resolveRewardsSettlementRpcUrl,
@@ -19,6 +20,7 @@ import {
   type ChainPrimitives,
   type OperatorKind,
   type PreparationFailureStage,
+  type TxLiveness,
 } from "./operator-signing-coordinator-do"
 import { LitChipotleClient, LitChipotleError } from "../../rewards/lit-chipotle-client"
 import { decideRewardVaultReceipt } from "../../rewards/reward-vault-receipt-decision"
@@ -65,6 +67,7 @@ function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
   privateKey: string | null
   operatorAddress: string
   rpcUrl: string
+  broadcastRpcUrl: string
   chainId: number
   usdc: string
   operatorAddressField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS" | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS"
@@ -94,6 +97,9 @@ function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
       ? resolveRewardsSettlementOperatorAddress(env)
       : (privateKey ? getAddress(new Wallet(privateKey).address) : getAddress(expectedOperator!)),
     rpcUrl: operatorKind === "rewards" ? resolveRewardsSettlementRpcUrl(env) : resolveBookingSettlementRpcUrl(env),
+    broadcastRpcUrl: operatorKind === "rewards"
+      ? resolveRewardsSettlementBroadcastRpcUrl(env)
+      : resolveBookingSettlementRpcUrl(env),
     chainId: operatorKind === "rewards" ? resolveRewardsSettlementChainId(env) : resolveBookingSettlementChainId(env),
     usdc: operatorKind === "rewards" ? resolveRewardsSettlementUsdcTokenAddress(env) : resolveBookingSettlementUsdcTokenAddress(env),
     operatorAddressField,
@@ -149,10 +155,62 @@ let rewardVaultOperatorReaderForTests:
   | ((vaultAddress: string, config: ReturnType<typeof resolveConfig>) => Promise<string>)
   | null = null
 
+let rewardBroadcasterForTests:
+  | ((rpcUrl: string, chainId: number, signedTx: string) => Promise<string>)
+  | null = null
+
+let transactionLivenessReaderForTests:
+  | ((rpcUrl: string, chainId: number, txHash: string) => Promise<TxLiveness>)
+  | null = null
+
 export function setRewardVaultOperatorReaderForTests(
   reader: typeof rewardVaultOperatorReaderForTests,
 ): void {
   rewardVaultOperatorReaderForTests = reader
+}
+
+export function setRewardBroadcasterForTests(
+  broadcaster: typeof rewardBroadcasterForTests,
+): void {
+  rewardBroadcasterForTests = broadcaster
+}
+
+export function setTransactionLivenessReaderForTests(
+  reader: typeof transactionLivenessReaderForTests,
+): void {
+  transactionLivenessReaderForTests = reader
+}
+
+async function broadcastRewardTransaction(
+  rpcUrl: string,
+  chainId: number,
+  signedTx: string,
+): Promise<string> {
+  if (rewardBroadcasterForTests) return rewardBroadcasterForTests(rpcUrl, chainId, signedTx)
+  const provider = createStaticSettlementProvider(rpcUrl, chainId)
+  try {
+    return await provider.send("eth_sendRawTransaction", [signedTx]) as string
+  } finally {
+    void provider.destroy()
+  }
+}
+
+async function readTransactionLiveness(
+  rpcUrl: string,
+  chainId: number,
+  txHash: string,
+): Promise<TxLiveness> {
+  if (transactionLivenessReaderForTests) {
+    return transactionLivenessReaderForTests(rpcUrl, chainId, txHash)
+  }
+  const provider = createStaticSettlementProvider(rpcUrl, chainId)
+  try {
+    const receipt = await provider.getTransactionReceipt(txHash)
+    if (receipt) return receipt.status === 1 ? "success" : "failed"
+    return (await provider.getTransaction(txHash)) ? "pending" : "absent"
+  } finally {
+    void provider.destroy()
+  }
 }
 
 async function readRewardVaultOperator(
@@ -323,13 +381,43 @@ export const realChain: ChainPrimitives = {
       operationId: input.operatorKind === "rewards" ? rewardOperationId(input.effectId) : null,
     }
   },
-  broadcast: async (env, input) => { const c = resolveConfig(env, input.operatorKind); await providerFor(c).broadcastTransaction(input.signedTx) },
+  broadcast: async (env, input) => {
+    const c = resolveConfig(env, input.operatorKind)
+    if (input.operatorKind === "rewards") {
+      const expectedHash = Transaction.from(input.signedTx).hash
+      if (!expectedHash) throw new Error("signed rewards transaction is missing its hash")
+      const returnedHash = await broadcastRewardTransaction(c.broadcastRpcUrl, c.chainId, input.signedTx)
+      if (typeof returnedHash !== "string" || returnedHash.toLowerCase() !== expectedHash.toLowerCase()) {
+        throw new Error("rewards broadcast provider returned an unexpected transaction hash")
+      }
+      return
+    }
+    const provider = createStaticSettlementProvider(c.broadcastRpcUrl, c.chainId)
+    try {
+      await provider.broadcastTransaction(input.signedTx)
+    } finally {
+      void provider.destroy()
+    }
+  },
   txLiveness: async (env, txHash, operatorKind) => {
     const c = resolveConfig(env, operatorKind)
-    const provider = providerFor(c)
-    const receipt = await provider.getTransactionReceipt(txHash)
-    if (receipt) return receipt.status === 1 ? "success" : "failed"
-    return (await provider.getTransaction(txHash)) ? "pending" : "absent"
+    const rpcUrls = [...new Set([c.rpcUrl, c.broadcastRpcUrl])]
+    const results = await Promise.allSettled(
+      rpcUrls.map((rpcUrl) => readTransactionLiveness(rpcUrl, c.chainId, txHash)),
+    )
+    for (const result of results) {
+      if (result.status === "fulfilled" && (result.value === "success" || result.value === "failed")) {
+        return result.value
+      }
+    }
+    if (results.some((result) => result.status === "fulfilled" && result.value === "pending")) {
+      return "pending"
+    }
+    if (results.every((result) => result.status === "fulfilled" && result.value === "absent")) {
+      return "absent"
+    }
+    const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+    throw rejected?.reason ?? new Error("rewards transaction liveness is unavailable")
   },
   rewardVaultFailureEvidence: async (env, input) => {
     const c = resolveConfig(env, "rewards")

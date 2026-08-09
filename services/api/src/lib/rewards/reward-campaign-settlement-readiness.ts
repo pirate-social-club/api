@@ -4,6 +4,7 @@ import type { Env } from "../../env"
 import {
   assertRewardsCampaignAndSettlementChainsMatch,
   assertRewardsCampaignTreasuryMatchesSettlementOperator,
+  resolveRewardsSettlementBroadcastRpcUrl,
   resolveRewardsSettlementOperatorPrivateKey,
   resolveRewardsSettlementRpcUrl,
   resolveRewardsSettlementUsdcTokenAddress,
@@ -57,6 +58,10 @@ export function assertRewardCampaignSettlementReadiness(env: Env): RewardCampaig
     const settlementRpcUrl = resolveRewardsSettlementRpcUrl(env)
     if (!/^https:\/\//i.test(settlementRpcUrl)) {
       throw new Error('PIRATE_REWARDS_SETTLEMENT_RPC_URL must use HTTPS')
+    }
+    const broadcastRpcUrl = resolveRewardsSettlementBroadcastRpcUrl(env)
+    if (!/^https:\/\//i.test(broadcastRpcUrl)) {
+      throw new Error('PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL must use HTTPS')
     }
     assertRewardsCampaignTreasuryMatchesSettlementOperator(env)
     assertRewardsCampaignAndSettlementChainsMatch(env)
