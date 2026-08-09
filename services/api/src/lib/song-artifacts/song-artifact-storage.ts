@@ -3,7 +3,11 @@ import { sha256Hex, toArrayBuffer } from "../crypto"
 import { readFilebaseCid } from "../storage/filebase-cid"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import { fetchFilebaseWithTimeout } from "../storage/filebase-multipart"
-import { buildS3SignedRequest, EMPTY_SHA256_HEX } from "../storage/s3-signing"
+import {
+  buildS3PresignedUrl,
+  buildS3SignedRequest,
+  EMPTY_SHA256_HEX,
+} from "../storage/s3-signing"
 import type { Env } from "../../env"
 import { FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER } from "./song-artifact-storage-provider"
 
@@ -343,13 +347,28 @@ export async function fetchSongArtifactBytes(input: {
   let lastDetail = ""
 
   for (let attempt = 1; attempt <= SONG_ARTIFACT_FETCH_MAX_ATTEMPTS; attempt += 1) {
-    const request = await buildS3SignedRequest({
-      method: "GET",
-      config,
-      objectKey: input.objectKey,
-      payloadHash: EMPTY_SHA256_HEX,
-      headers: rangeHeader ? { range: rangeHeader } : undefined,
-    })
+    // Filebase accepts ordinary header-authenticated GETs from Workers but
+    // rejects header-authenticated ranged GETs with AccessDenied. Use the same
+    // presigned-range pattern as post-multipart verification: the Worker still
+    // authorizes the asset route, and the exact caller-selected range is bound
+    // into a short-lived upstream request without exposing the URL downstream.
+    const request = rangeHeader
+      ? new Request((await buildS3PresignedUrl({
+          method: "GET",
+          config,
+          objectKey: input.objectKey,
+          bodyHashMode: "unsigned",
+          headers: { range: rangeHeader },
+        })).toString(), {
+          method: "GET",
+          headers: { range: rangeHeader },
+        })
+      : await buildS3SignedRequest({
+          method: "GET",
+          config,
+          objectKey: input.objectKey,
+          payloadHash: EMPTY_SHA256_HEX,
+        })
 
     let upstream: Response
     try {
