@@ -845,6 +845,11 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     const resolved = this.cas(row.idempotency_key, row.version, {
       state: "preparation_parked",
       signed_tx: null,
+      // This branch is admitted only while the transaction is absent and the
+      // chain pending nonce is still exactly the reserved nonce. Release that
+      // reusable tail nonce; retaining it makes reserveNonce skip a safe nonce
+      // and creates a gap that blocks every later transaction behind it.
+      nonce: null,
       next_attempt_at: null,
       last_error: `operator-confirmed no broadcast: ${reason}`.slice(0, 1_000),
       manual_resolution: "failed_prebroadcast",

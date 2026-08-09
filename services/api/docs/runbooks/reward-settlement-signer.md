@@ -1,5 +1,9 @@
 # Runbook: reward settlement signer
 
+For a signed payout that does not converge on-chain, follow
+[`reward-settlement-stop-repair.md`](./reward-settlement-stop-repair.md). A
+timeout is ambiguous and must never be treated as proof of non-broadcast.
+
 The rewards settlement signer is the campaign treasury: one dedicated Base wallet receives campaign funding and signs reward cash-outs and custody refunds. Its funded balance is the payout and refund blast radius. Campaign funding must remain disabled until the runtime proves that the installed private key controls the versioned treasury/operator address and that campaign and settlement chain/token configuration match.
 
 ## Secret boundary
