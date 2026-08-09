@@ -22,7 +22,9 @@ const databaseUrl = process.env.CONTROL_PLANE_MIGRATOR_DATABASE_URL?.trim()
 if (!databaseUrl) throw new Error("CONTROL_PLANE_MIGRATOR_DATABASE_URL or CONTROL_PLANE_DATABASE_URL is required")
 
 const env = {
-  ENVIRONMENT: process.env.ENVIRONMENT ?? "production",
+  // This is a standalone operator process using the reviewed migrator URL,
+  // not a production Worker with a Hyperdrive binding.
+  ENVIRONMENT: "operator",
   CONTROL_PLANE_DATABASE_URL: databaseUrl,
 } as Env
 const result = await withStandaloneControlPlaneClient(env, async (client) => {
