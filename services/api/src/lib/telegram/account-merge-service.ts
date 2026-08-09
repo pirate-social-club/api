@@ -645,14 +645,16 @@ async function finalizeControlPlane(input: {
                 OR excluded.membership_state = 'member' THEN 'member'
               ELSE community_membership_projections.membership_state
             END,
-            source_updated_at = MAX(
-              community_membership_projections.source_updated_at,
-              excluded.source_updated_at
-            ),
-            updated_at = MAX(
-              community_membership_projections.updated_at,
-              excluded.updated_at
-            )
+            source_updated_at = CASE
+              WHEN community_membership_projections.source_updated_at >= excluded.source_updated_at
+                THEN community_membership_projections.source_updated_at
+              ELSE excluded.source_updated_at
+            END,
+            updated_at = CASE
+              WHEN community_membership_projections.updated_at >= excluded.updated_at
+                THEN community_membership_projections.updated_at
+              ELSE excluded.updated_at
+            END
         `,
         args: [input.merge.sourceUserId, input.merge.canonicalUserId, `cmp_merge_${input.merge.id}`],
       })
@@ -675,19 +677,21 @@ async function finalizeControlPlane(input: {
                 OR excluded.follow_state = 'active' THEN 'active'
               ELSE community_follow_projections.follow_state
             END,
-            source_updated_at = MAX(
-              community_follow_projections.source_updated_at,
-              excluded.source_updated_at
-            ),
+            source_updated_at = CASE
+              WHEN community_follow_projections.source_updated_at >= excluded.source_updated_at
+                THEN community_follow_projections.source_updated_at
+              ELSE excluded.source_updated_at
+            END,
             unfollowed_at = CASE
               WHEN community_follow_projections.follow_state = 'active'
                 OR excluded.follow_state = 'active' THEN NULL
               ELSE community_follow_projections.unfollowed_at
             END,
-            updated_at = MAX(
-              community_follow_projections.updated_at,
-              excluded.updated_at
-            )
+            updated_at = CASE
+              WHEN community_follow_projections.updated_at >= excluded.updated_at
+                THEN community_follow_projections.updated_at
+              ELSE excluded.updated_at
+            END
         `,
         args: [input.merge.sourceUserId, input.merge.canonicalUserId, `cfp_merge_${input.merge.id}`],
       })
