@@ -50,6 +50,7 @@ describe("real rewards Lit vault signer wiring", () => {
     const provider = createStaticSettlementProvider("https://example.invalid", 84532)
     try {
       expect((await provider.getNetwork()).chainId).toBe(84532n)
+      expect(provider._getConnection().timeout).toBe(15_000)
     } finally {
       provider.destroy()
     }

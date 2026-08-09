@@ -19,14 +19,14 @@ export type RewardSettlementManualResolutionInput = {
   effectId: string
   expectedTxHash: string
   expectedNonce?: number
-  resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast"
+  resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast" | "failed_nonce_invalidated"
   reason: string
   operatorActorId: string
 }
 
 type ManualResolutionCoordinator = Pick<
   OperatorSigningCoordinatorDO,
-  "resolveRewardReconciliation" | "resolveRewardNoBroadcast"
+  "resolveRewardReconciliation" | "resolveRewardNoBroadcast" | "resolveRewardInvalidatedBroadcast"
 >
 
 let coordinatorForTests: ManualResolutionCoordinator | null = null
@@ -84,24 +84,30 @@ export async function resolveRewardSettlementManually(
   if (mirroredTxHash.toLowerCase() !== input.expectedTxHash.trim().toLowerCase()) {
     throw conflictError("Rewards settlement manual resolution transaction hash mismatch")
   }
-  if (input.resolution === "failed_prebroadcast") {
+  if (input.resolution === "failed_prebroadcast" || input.resolution === "failed_nonce_invalidated") {
     if (input.effectKind !== "cashout") {
       throw conflictError("Pre-broadcast recovery currently supports cashouts only")
     }
-    if (stringOrNull(rowValue(row, "coordinator_state")) !== "prepared") {
-      throw conflictError("Rewards settlement mirror is not awaiting pre-broadcast recovery")
+    const expectedCoordinatorState = input.resolution === "failed_prebroadcast"
+      ? "prepared"
+      : "preparation_parked"
+    if (stringOrNull(rowValue(row, "coordinator_state")) !== expectedCoordinatorState) {
+      throw conflictError("Rewards settlement mirror is not awaiting the requested broadcast recovery")
     }
     const mirroredNonce = Number(rowValue(row, "broadcast_nonce"))
     if (!Number.isSafeInteger(input.expectedNonce) || input.expectedNonce !== mirroredNonce) {
       throw conflictError("Rewards pre-broadcast recovery nonce mismatch")
     }
-    const resolved = await coordinator(input.env).resolveRewardNoBroadcast({
+    const resolutionInput = {
       idempotencyKey,
       expectedTxHash: input.expectedTxHash,
       expectedNonce: input.expectedNonce,
       reason: input.reason,
       operatorActorId: input.operatorActorId,
-    })
+    }
+    const resolved = input.resolution === "failed_prebroadcast"
+      ? await coordinator(input.env).resolveRewardNoBroadcast(resolutionInput)
+      : await coordinator(input.env).resolveRewardInvalidatedBroadcast(resolutionInput)
     if (resolved.state !== "preparation_parked") {
       throw conflictError("Rewards coordinator did not terminalize pre-broadcast effect")
     }
@@ -111,13 +117,20 @@ export async function resolveRewardSettlementManually(
         sql: `
           UPDATE reward_payout_effects
           SET status = 'failed', coordinator_state = 'preparation_parked',
-              failure_reason = 'failed_prebroadcast', failed_at = ?2, updated_at = ?2
+              failure_reason = ?5, failed_at = ?2, updated_at = ?2
           WHERE reward_payout_effect_id = ?1 AND status = 'submitted'
-            AND coordinator_state = 'prepared' AND settlement_ref = ?3
+            AND coordinator_state = ?6 AND settlement_ref = ?3
             AND broadcast_nonce = ?4
           RETURNING reward_payout_effect_id
         `,
-        args: [effectId, new Date().toISOString(), input.expectedTxHash, input.expectedNonce],
+        args: [
+          effectId,
+          new Date().toISOString(),
+          input.expectedTxHash,
+          input.expectedNonce,
+          input.resolution,
+          expectedCoordinatorState,
+        ],
       })
       if (!updated.rows[0]) throw conflictError("Rewards payout changed during pre-broadcast recovery")
       await tx.execute({

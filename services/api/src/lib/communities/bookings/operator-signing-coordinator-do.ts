@@ -12,6 +12,7 @@ const RETRY_BASE_DELAY_MS = 5_000
 const RETRY_MAX_DELAY_MS = 5 * 60_000
 const MAX_UNSENT_PREPARATION_ATTEMPTS = 6
 const BROADCAST_FAILURE_ALERT_ATTEMPT = 3
+const BROADCAST_LIVENESS_POLL_DELAYS_MS = [0, 250, 750] as const
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
@@ -157,7 +158,7 @@ export interface OperatorSettleResult {
   preparationFailure?: PreparationFailureDiagnostic | null
   settlementFailure?: SettlementFailureDiagnostic | null
   manualResolution?: {
-    resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast"
+    resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast" | "failed_nonce_invalidated"
     reason: string
     operatorActorId: string
     resolvedAt: number
@@ -260,6 +261,23 @@ export function assertManualRewardNoBroadcastEvidence(input: {
 }): void {
   if (input.liveness !== "absent" || input.pendingNonce !== input.expectedNonce) {
     throw conflictError("Cannot fail rewards settlement without absent transaction and unchanged pending nonce")
+  }
+}
+
+export function assertManualRewardInvalidatedBroadcastEvidence(input: {
+  liveness: TxLiveness
+  latestNonce: number
+  pendingNonce: number
+  expectedNonce: number
+}): void {
+  if (
+    input.liveness !== "absent"
+    || input.latestNonce <= input.expectedNonce
+    || input.pendingNonce <= input.expectedNonce
+  ) {
+    throw conflictError(
+      "Cannot fail ambiguous rewards settlement before its nonce is mined by a replacement transaction",
+    )
   }
 }
 export interface ChainPrimitives {
@@ -463,7 +481,7 @@ interface EffectRow {
   next_attempt_at: number | null
   last_error: string | null
   reconciliation_count: number
-  manual_resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast" | null
+  manual_resolution: "confirmed" | "failed_onchain" | "failed_prebroadcast" | "failed_nonce_invalidated" | null
   manual_resolution_reason: string | null
   manual_resolved_by: string | null
   manual_resolved_at: number | null
@@ -648,7 +666,9 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     } catch (error) {
       const current = this.read(row.idempotency_key)
       const updated = current && !this.isTerminal(current) ? this.recordRetry(current, error) : current
-      if (updated?.state === "preparation_parked") {
+      const parkedBroadcast = updated?.state === "preparation_parked"
+        && updated.preparation_stage === "broadcast"
+      if (updated?.state === "preparation_parked" && !parkedBroadcast) {
         await captureScheduledWarning(
           this.env,
           "Operator settlement preparation parked",
@@ -671,7 +691,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         })
       }
       if (
-        updated?.state === "prepared"
+        (updated?.state === "prepared" || updated?.state === "preparation_parked")
         && updated.preparation_stage === "broadcast"
         && updated.attempt_count === BROADCAST_FAILURE_ALERT_ATTEMPT
       ) {
@@ -849,6 +869,79 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     ).catch((error) => {
       console.error(JSON.stringify({
         message: "manual rewards pre-broadcast resolution alert failed",
+        effect: row.idempotency_key,
+        error: errMsg(error),
+      }))
+    })
+    return this.result(resolved)
+  }
+
+  async resolveRewardInvalidatedBroadcast(input: {
+    idempotencyKey: string
+    expectedTxHash: string
+    expectedNonce: number
+    reason: string
+    operatorActorId: string
+  }): Promise<OperatorSettleResult> {
+    const row = this.read(String(input.idempotencyKey ?? ""))
+    if (!row || this.operatorKind(row) !== "rewards") {
+      throw conflictError("Rewards settlement effect not found")
+    }
+    if (row.state !== "preparation_parked" || !row.signed_tx || !row.tx_hash || row.nonce == null) {
+      throw conflictError("Rewards settlement effect is not parked after an ambiguous broadcast")
+    }
+    const expectedTxHash = String(input.expectedTxHash ?? "").trim().toLowerCase()
+    if (row.tx_hash.toLowerCase() !== expectedTxHash || row.nonce !== input.expectedNonce) {
+      throw conflictError("Rewards invalidated-broadcast recovery evidence mismatch")
+    }
+    const reason = String(input.reason ?? "").trim()
+    const operatorActorId = String(input.operatorActorId ?? "").trim()
+    if (reason.length < 10 || reason.length > 1_000) {
+      throw badRequestError("Rewards invalidated-broadcast recovery reason must be 10-1000 characters")
+    }
+    if (!operatorActorId || operatorActorId.length > 200) {
+      throw badRequestError("Rewards invalidated-broadcast resolver identity is invalid")
+    }
+    const [liveness, latestNonce, pendingNonce] = await Promise.all([
+      chain().txLiveness(this.env, expectedTxHash, "rewards"),
+      chain().latestNonce(this.env, "rewards"),
+      chain().pendingNonce(this.env, "rewards"),
+    ])
+    assertManualRewardInvalidatedBroadcastEvidence({
+      liveness,
+      latestNonce,
+      pendingNonce,
+      expectedNonce: row.nonce,
+    })
+    const resolvedAt = Date.now()
+    const resolved = this.cas(row.idempotency_key, row.version, {
+      signed_tx: null,
+      next_attempt_at: null,
+      last_error: `operator-confirmed nonce invalidation: ${reason}`.slice(0, 1_000),
+      manual_resolution: "failed_nonce_invalidated",
+      manual_resolution_reason: reason,
+      manual_resolved_by: operatorActorId,
+      manual_resolved_at: resolvedAt,
+    })
+    if (!resolved) throw conflictError("Rewards settlement effect changed during nonce invalidation recovery")
+    await captureScheduledWarning(
+      this.env,
+      "Rewards settlement ambiguous broadcast invalidated on-chain",
+      `reward_settlement_nonce_invalidation:${row.operation_id ?? row.idempotency_key}`,
+      {
+        operation_id: row.operation_id,
+        tx_hash: row.tx_hash,
+        nonce: row.nonce,
+        latest_nonce: latestNonce,
+        pending_nonce: pendingNonce,
+        resolution: "failed_nonce_invalidated",
+        operator_actor_id: operatorActorId,
+        reason,
+      },
+      { urgency: "high" },
+    ).catch((error) => {
+      console.error(JSON.stringify({
+        message: "manual rewards nonce invalidation alert failed",
         effect: row.idempotency_key,
         error: errMsg(error),
       }))
@@ -1213,8 +1306,14 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       || diagnostic.stage === "lit_response"
       || diagnostic.litErrorToken != null
     )
-    const park = isLitRewardsPreparation
-      && shouldParkUnsentPreparation(row, diagnostic, attemptCount)
+    const isRewardsBroadcast = this.operatorKind(row) === "rewards"
+      && diagnostic.stage === "broadcast"
+      && row.signed_tx != null
+      && row.tx_hash != null
+      && row.nonce != null
+    const park = isRewardsBroadcast
+      ? attemptCount >= BROADCAST_FAILURE_ALERT_ATTEMPT
+      : isLitRewardsPreparation && shouldParkUnsentPreparation(row, diagnostic, attemptCount)
     return this.cas(row.idempotency_key, row.version, {
       attempt_count: attemptCount,
       state: park ? "preparation_parked" : row.state,
@@ -1333,13 +1432,13 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     } catch (error) {
       const msg = errMsg(error).toLowerCase()
       const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
-      if (!nonceConsumed) {
+      const liveness = await this.pollBroadcastLiveness(row.tx_hash, this.operatorKind(row))
+      if (!nonceConsumed && liveness === "absent") {
         // Persist the failed phase without persisting the provider's raw error,
         // which may contain a credential-bearing RPC URL. The alarm retains the
         // signed transaction and owns the bounded retry schedule.
         throw new OperatorPreparationError("broadcast", error, Math.max(0, Date.now() - startedAt))
       }
-      const liveness = await chain().txLiveness(this.env, row.tx_hash, this.operatorKind(row))
       const rewardsVaultFailure = this.operatorKind(row) === "rewards"
         && this.usesRewardVault()
         && liveness === "failed"
@@ -1351,6 +1450,27 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         next_attempt_at: next === "failed_onchain" ? null : Date.now() + BROADCAST_RECONCILE_DELAY_MS,
       }) ?? this.read(row.idempotency_key)!
     }
+  }
+
+  private async pollBroadcastLiveness(txHash: string, operatorKind: OperatorKind): Promise<TxLiveness> {
+    let lastError: unknown = null
+    for (const delayMs of BROADCAST_LIVENESS_POLL_DELAYS_MS) {
+      if (delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+      try {
+        const liveness = await chain().txLiveness(this.env, txHash, operatorKind)
+        if (liveness !== "absent") return liveness
+      } catch (error) {
+        lastError = error
+      }
+    }
+    if (lastError) {
+      console.error(JSON.stringify({
+        message: "operator broadcast liveness check failed after send error",
+        tx_hash: txHash,
+        error: errMsg(lastError),
+      }))
+    }
+    return "absent"
   }
 
   private deriveKey(req: OperatorSettleRequest): string {
@@ -1449,7 +1569,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       reconciliation_count: Number(r.reconciliation_count ?? 0),
       manual_resolution: r.manual_resolution == null
         ? null
-        : String(r.manual_resolution) as "confirmed" | "failed_onchain" | "failed_prebroadcast",
+        : String(r.manual_resolution) as "confirmed" | "failed_onchain" | "failed_prebroadcast" | "failed_nonce_invalidated",
       manual_resolution_reason: r.manual_resolution_reason == null ? null : String(r.manual_resolution_reason),
       manual_resolved_by: r.manual_resolved_by == null ? null : String(r.manual_resolved_by),
       manual_resolved_at: r.manual_resolved_at == null ? null : Number(r.manual_resolved_at),
