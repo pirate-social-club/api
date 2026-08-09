@@ -18,7 +18,7 @@ afterEach(() => {
 })
 
 describe("fetchSongArtifactBytes", () => {
-  test("uses a presigned upstream request for the exact caller-selected range", async () => {
+  test("uses a host-only presign and forwards the exact caller-selected range", async () => {
     let observed: Request | null = null
     globalThis.fetch = async (request) => {
       observed = request instanceof Request ? request : new Request(request)
@@ -46,7 +46,7 @@ describe("fetchSongArtifactBytes", () => {
     expect(upstream.headers.get("range")).toBe("bytes=7-9")
     expect(upstream.headers.get("authorization")).toBeNull()
     expect(new URL(upstream.url).searchParams.get("X-Amz-Signature")).toMatch(/^[a-f0-9]{64}$/)
-    expect(new URL(upstream.url).searchParams.get("X-Amz-SignedHeaders")).toBe("host;range")
+    expect(new URL(upstream.url).searchParams.get("X-Amz-SignedHeaders")).toBe("host")
   })
 
   test("keeps ordinary full reads on header authentication", async () => {

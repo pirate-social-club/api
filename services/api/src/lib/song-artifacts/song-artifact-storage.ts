@@ -348,17 +348,18 @@ export async function fetchSongArtifactBytes(input: {
 
   for (let attempt = 1; attempt <= SONG_ARTIFACT_FETCH_MAX_ATTEMPTS; attempt += 1) {
     // Filebase accepts ordinary header-authenticated GETs from Workers but
-    // rejects header-authenticated ranged GETs with AccessDenied. Use the same
-    // presigned-range pattern as post-multipart verification: the Worker still
-    // authorizes the asset route, and the exact caller-selected range is bound
-    // into a short-lived upstream request without exposing the URL downstream.
+    // rejects header-authenticated ranged GETs with AccessDenied. Presign only
+    // the stable host header, then attach Range to the upstream request. Edge
+    // runtimes may normalize Range in transit, so binding it into SignedHeaders
+    // makes an otherwise valid playback request fail signature verification.
+    // The Worker still authorizes the asset route and never exposes the
+    // short-lived upstream URL downstream.
     const request = rangeHeader
       ? new Request((await buildS3PresignedUrl({
           method: "GET",
           config,
           objectKey: input.objectKey,
           bodyHashMode: "unsigned",
-          headers: { range: rangeHeader },
         })).toString(), {
           method: "GET",
           headers: { range: rangeHeader },
