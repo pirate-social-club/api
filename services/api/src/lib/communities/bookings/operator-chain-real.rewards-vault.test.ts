@@ -5,7 +5,9 @@ import type { Env } from "../../../env"
 import {
   createStaticSettlementProvider,
   realChain,
+  setRewardBroadcasterForTests,
   setRewardVaultOperatorReaderForTests,
+  setTransactionLivenessReaderForTests,
   settlementGasLimit,
 } from "./operator-chain-real"
 
@@ -24,6 +26,8 @@ afterEach(() => {
   globalThis.fetch = originalFetch
   Date.now = originalNow
   setRewardVaultOperatorReaderForTests(null)
+  setRewardBroadcasterForTests(null)
+  setTransactionLivenessReaderForTests(null)
 })
 
 function env(): Env {
@@ -60,6 +64,56 @@ describe("real rewards Lit vault signer wiring", () => {
     expect(settlementGasLimit(env(), "lit_vault")).toBe(300_000n)
     expect(settlementGasLimit(env(), "eoa_vault")).toBe(300_000n)
     expect(settlementGasLimit(env(), "local")).toBe(100_000n)
+  })
+
+  test("broadcasts reward transactions through the dedicated raw-transaction endpoint", async () => {
+    const signedTx = await SIGNER.signTransaction({
+      to: SIGNER.address,
+      nonce: 4,
+      chainId: 84532,
+      type: 2,
+      value: 0,
+      maxFeePerGas: 2_000_000_000n,
+      maxPriorityFeePerGas: 1_000_000_000n,
+      gasLimit: 21_000n,
+    })
+    const expectedHash = Transaction.from(signedTx).hash
+    const requests: Array<{ url: string; chainId: number; signedTx: string }> = []
+    setRewardBroadcasterForTests(async (url, chainId, rawTransaction) => {
+      requests.push({ url, chainId, signedTx: rawTransaction })
+      return expectedHash!
+    })
+
+    await realChain.broadcast({
+      ...env(),
+      PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL: "https://broadcast.example.test",
+    } as Env, { operatorKind: "rewards", signedTx })
+
+    expect(requests).toEqual([{
+      url: "https://broadcast.example.test",
+      chainId: 84532,
+      signedTx,
+    }])
+  })
+
+  test("checks both read and broadcast providers before declaring a reward hash absent", async () => {
+    const requests: string[] = []
+    setTransactionLivenessReaderForTests(async (url) => {
+      requests.push(url)
+      return url === "https://broadcast.example.test" ? "pending" : "absent"
+    })
+
+    const result = await realChain.txLiveness({
+      ...env(),
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://keyed.example.test",
+      PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL: "https://broadcast.example.test",
+    } as Env, "0x1234", "rewards")
+
+    expect(result).toBe("pending")
+    expect(requests).toEqual([
+      "https://keyed.example.test",
+      "https://broadcast.example.test",
+    ])
   })
 
   test("signs only verifier-bound vault calldata with the EOA backend", async () => {

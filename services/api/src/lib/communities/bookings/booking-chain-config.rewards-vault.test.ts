@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import type { Env } from "../../../env"
 import {
   assertRewardsCampaignTreasuryMatchesSettlementOperator,
+  resolveRewardsSettlementBroadcastRpcUrl,
   resolveRewardsSettlementOperatorAddress,
   resolveRewardsSettlementRpcUrlForChain,
 } from "./booking-chain-config"
@@ -48,5 +49,18 @@ describe("rewards vault custody/signer split", () => {
     })
     expect(resolveRewardsSettlementRpcUrlForChain(configured, 8453)).toBe("https://current-mainnet.example")
     expect(resolveRewardsSettlementRpcUrlForChain(configured, 84532)).toBe("https://base-sepolia.example")
+  })
+
+  test("uses a dedicated rewards broadcast RPC without changing the keyed read RPC", () => {
+    const configured = env({
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "8453",
+      PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL: "https://broadcast-mainnet.example",
+      BASE_MAINNET_RPC_URL: "https://keyed-mainnet.example",
+    })
+    expect(resolveRewardsSettlementBroadcastRpcUrl(configured)).toBe("https://broadcast-mainnet.example")
+    expect(resolveRewardsSettlementBroadcastRpcUrl({
+      ...configured,
+      PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL: undefined,
+    } as Env)).toBe("https://keyed-mainnet.example")
   })
 })

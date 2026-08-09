@@ -145,6 +145,11 @@ export function resolveRewardsSettlementRpcUrl(env: Env): string {
   return resolveSettlementRpcUrl(env, "rewards")
 }
 
+export function resolveRewardsSettlementBroadcastRpcUrl(env: Env): string {
+  const explicit = String(env.PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL || "").trim()
+  return explicit || resolveRewardsSettlementRpcUrl(env)
+}
+
 export function resolveRewardsSettlementRpcUrlForChain(env: Env, chainId: number): string {
   return resolveSettlementRpcUrl(env, "rewards", chainId)
 }
