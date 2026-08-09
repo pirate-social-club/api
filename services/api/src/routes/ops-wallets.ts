@@ -50,6 +50,7 @@ opsWallets.get("/rewards-settlement-diagnostics", async (c) => {
     coordinator_ref: result.idempotencyKey,
     state: result.state,
     nonce: result.nonce,
+    attempt_count: result.attemptCount ?? null,
     transaction_present: Boolean(result.txHash),
     transaction_hash: result.txHash ?? null,
     preparation_failure: result.preparationFailure ?? null,

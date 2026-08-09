@@ -11,6 +11,7 @@ const BROADCAST_RECONCILE_DELAY_MS = 15_000
 const RETRY_BASE_DELAY_MS = 5_000
 const RETRY_MAX_DELAY_MS = 5 * 60_000
 const MAX_UNSENT_PREPARATION_ATTEMPTS = 6
+const BROADCAST_FAILURE_ALERT_ATTEMPT = 3
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
@@ -67,6 +68,7 @@ export type OperatorSettleState =
 export type PreparationFailureStage =
   | "config_resolution"
   | "rpc_nonce_fetch"
+  | "broadcast"
   | "lit_request_dispatch"
   | "lit_response"
   | "transaction_verification"
@@ -150,6 +152,8 @@ export interface OperatorSettleResult {
   txHash: string | null
   nonce: number | null
   state: OperatorSettleState
+  /** Durable retry count; optional for legacy RPC/test adapters. */
+  attemptCount?: number
   preparationFailure?: PreparationFailureDiagnostic | null
   settlementFailure?: SettlementFailureDiagnostic | null
   manualResolution?: {
@@ -661,6 +665,33 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         ).catch((alertError) => {
           console.error(JSON.stringify({
             message: "parked operator preparation alert failed",
+            effect: updated.idempotency_key,
+            error: errMsg(alertError),
+          }))
+        })
+      }
+      if (
+        updated?.state === "prepared"
+        && updated.preparation_stage === "broadcast"
+        && updated.attempt_count === BROADCAST_FAILURE_ALERT_ATTEMPT
+      ) {
+        await captureScheduledWarning(
+          this.env,
+          "Operator settlement broadcast remains unsubmitted",
+          `operator_settlement_broadcast_failed:${updated.operation_id ?? updated.idempotency_key}`,
+          {
+            operation_id: updated.operation_id,
+            effect: updated.idempotency_key,
+            effect_kind: updated.effect_kind,
+            attempt_count: updated.attempt_count,
+            preparation_stage: updated.preparation_stage,
+            preparation_http_status: updated.preparation_http_status,
+            preparation_transport_category: updated.preparation_transport_category,
+          },
+          { urgency: "high" },
+        ).catch((alertError) => {
+          console.error(JSON.stringify({
+            message: "operator settlement broadcast alert failed",
             effect: updated.idempotency_key,
             error: errMsg(alertError),
           }))
@@ -1291,6 +1322,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   private async broadcastRow(row: EffectRow): Promise<EffectRow> {
     if (!row.signed_tx || !row.tx_hash || row.nonce == null) throw new Error("prepared effect missing signed tx/nonce")
     const fromVersion = row.version
+    const startedAt = Date.now()
     try {
       await chain().broadcast(this.env, { signedTx: row.signed_tx, operatorKind: this.operatorKind(row) })
       return this.cas(row.idempotency_key, fromVersion, {
@@ -1301,7 +1333,12 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
     } catch (error) {
       const msg = errMsg(error).toLowerCase()
       const nonceConsumed = msg.includes("already known") || msg.includes("known transaction") || msg.includes("nonce too low") || msg.includes("already imported")
-      if (!nonceConsumed) throw error // alarm records bounded backoff; signed transaction stays prepared
+      if (!nonceConsumed) {
+        // Persist the failed phase without persisting the provider's raw error,
+        // which may contain a credential-bearing RPC URL. The alarm retains the
+        // signed transaction and owns the bounded retry schedule.
+        throw new OperatorPreparationError("broadcast", error, Math.max(0, Date.now() - startedAt))
+      }
       const liveness = await chain().txLiveness(this.env, row.tx_hash, this.operatorKind(row))
       const rewardsVaultFailure = this.operatorKind(row) === "rewards"
         && this.usesRewardVault()
@@ -1442,6 +1479,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       txHash: row.tx_hash,
       nonce: row.nonce,
       state: row.state,
+      attemptCount: row.attempt_count,
       preparationFailure: row.preparation_stage && row.preparation_latency_ms != null
         && row.preparation_classified_at != null
         ? {

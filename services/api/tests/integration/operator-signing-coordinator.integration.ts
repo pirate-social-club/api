@@ -238,7 +238,15 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect(row.nonce).toBe(9)
     expect(row.tx_hash).toBe("0xhash_9")
     expect(row.attempt_count).toBe(1)
+    expect(row.preparation_stage).toBe("broadcast")
     expect(Number(row.next_attempt_at)).toBeGreaterThan(Date.now())
+    expect(await stub.lookup(req())).toMatchObject({
+      state: "prepared",
+      attemptCount: 1,
+      preparationFailure: {
+        stage: "broadcast",
+      },
+    })
   })
 
   it("atomically persists bounded preparation diagnostics with the retry increment", async () => {
