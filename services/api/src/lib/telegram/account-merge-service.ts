@@ -106,9 +106,16 @@ export async function shardBlockReason(client: Client, sourceUserId: string): Pr
   if (await hasRow(`SELECT 1 FROM posts WHERE author_user_id = ?1 LIMIT 1`)) return "authored_content"
   if (await hasRow(`SELECT 1 FROM comments WHERE author_user_id = ?1 LIMIT 1`)) return "authored_content"
   if (await hasRow(`SELECT 1 FROM purchases WHERE buyer_user_id = ?1 LIMIT 1`)) return "purchase_activity"
-  if (await hasRow(`
-    SELECT 1 FROM bookings WHERE host_user_id = ?1 OR booker_user_id = ?1 LIMIT 1
-  `)) return "booking_activity"
+  try {
+    if (await hasRow(`
+      SELECT 1 FROM bookings WHERE host_user_id = ?1 OR booker_user_id = ?1 LIMIT 1
+    `)) return "booking_activity"
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    // Older provisioned shards predate bookings. An absent table cannot hold
+    // booking activity, but every other query failure must keep the merge closed.
+    if (!/no such table:\s*(?:main\.)?bookings\b/iu.test(message)) throw error
+  }
   return null
 }
 
