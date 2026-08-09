@@ -167,7 +167,36 @@ describe("listCommunityNamespaceAttachments", () => {
 
     const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
 
-    expect(rows[0]?.hnsSetupStatus).toBe("import_complete")
+    expect(rows[0]?.hnsSetupStatus).toBe("setup_complete")
+    client.close()
+  })
+
+  test("recognizes a secure matching legacy delegation as setup complete", async () => {
+    const client = await setup()
+    await insertHns(client, { id: "nv_secure_legacy" })
+    const observedAt = new Date()
+    await client.execute({
+      sql: `
+        INSERT INTO hns_root_parent_observations (
+          parent_observation_id, normalized_root_label,
+          observed_delegation_security, parent_ds_matches_live_dnskey,
+          authoritative_dnssec_valid, observed_at, earliest_rrsig_expires_at
+        ) VALUES ('obs_secure_legacy', 'dankmeme', 'secure', 1, 1, ?1, ?2)
+      `,
+      args: [observedAt.toISOString(), new Date(observedAt.getTime() + 86_400_000).toISOString()],
+    })
+    await client.execute({
+      sql: `
+        INSERT INTO hns_root_delegation_state (
+          normalized_root_label, rollover_state, last_parent_observation_id
+        ) VALUES ('dankmeme', 'none', 'obs_secure_legacy')
+      `,
+      args: [],
+    })
+
+    const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
+
+    expect(rows[0]?.hnsSetupStatus).toBe("setup_complete")
     client.close()
   })
 })

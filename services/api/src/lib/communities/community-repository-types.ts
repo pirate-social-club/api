@@ -47,7 +47,7 @@ export type CommunityNamespaceAttachmentRow = {
   family: "hns" | "spaces"
   normalizedRootLabel: string
   verificationStatus: "verified" | "stale" | "expired" | "disputed"
-  hnsSetupStatus: "legacy_import_required" | "import_complete" | null
+  hnsSetupStatus: "legacy_import_required" | "setup_complete" | null
   delegation: DelegationResponseProjection | null
 }
 

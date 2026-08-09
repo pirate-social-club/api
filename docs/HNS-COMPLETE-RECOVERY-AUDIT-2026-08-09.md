@@ -14,13 +14,13 @@ At the inspection time, exactly three HNS roots were attached to active communit
 
 | Audit alias | Ownership / import state | Delegation state | Canonical activation | Public native registry | Required action |
 | --- | --- | --- | --- | --- | --- |
-| `.dankmeme` | Current verified import; an unrelated newer challenge exists but is not the community pending session | Secure, matching parent DS and live DNSKEY, authoritative DNSSEC valid | Enabled | Included | None. Do not clear or reset the detached challenge merely to tidy it. |
+| `.dankmeme` | Verified approval predates import-payload persistence; an unrelated newer challenge exists but is not the community pending session | Secure, matching parent DS and live DNSKEY, authoritative DNSSEC valid | Enabled | Included | None. Live cryptographic evidence proves setup complete; do not rewrite the wallet resource or clear the detached challenge merely to tidy it. |
 | legacy-approved root | Current verified approval predates signed HNS import | Unsecured; parent DS does not match a live DNSKEY and authoritative DNSSEC does not validate | Disabled | Excluded | Start a new same-root HNS import. Preserve the old approval until the new import verifies. |
-| recent-import root | Verified session contains an `hns_import` payload, including the compatibility case where `challenge_kind` still says `dns_txt` | Latest useful observations included secure results, but the latest activation window was not three clean cycles | Disabled | Incorrectly included before this patch | Deploy the registry gate fix, wait for three qualifying observations, then activate. Do not re-import or reset it. |
+| secure unactivated root | Verified approval predates import-payload persistence, but the live HNS resource already contains the working Pirate delegation | Secure, matching parent DS and live DNSKEY, authoritative DNSSEC valid | Disabled | Incorrectly included before this patch | Deploy the registry gate fix, wait for three qualifying observations, then activate. Do not re-import or reset it. |
 
 All other HNS session rows were expired, abandoned, smoke-test, or otherwise not attached to an active community. They need no mutation unless an operator intentionally revives the corresponding community.
 
-The final live re-check at approximately 07:12 UTC observed API `4798dc4...` and Web `14b91b0...`. The public native registry still contained `.dankmeme` and the recent-import root, while the legacy-approved root remained excluded. A later audit must record its own version pair and timestamp rather than assuming this snapshot is current.
+The pre-fix live check at approximately 07:12 UTC observed API `4798dc4...` and Web `14b91b0...`. The public native registry still contained `.dankmeme` and the secure unactivated root, while the legacy-approved root remained excluded. A later audit must record its own version pair and timestamp rather than assuming this snapshot is current.
 
 ## Defect 1: public routing bypassed canonical activation
 
@@ -59,7 +59,7 @@ The Web did not use that primitive. When the old primary was still verified, eve
 
 The fix has three parts:
 
-1. The community namespace read model reports `hns_setup_status` as `legacy_import_required` or `import_complete`. It recognizes an import from either `challenge_kind = 'hns_import'` or `challenge_payload.kind = 'hns_import'`; the payload check preserves compatibility with deployed sessions whose challenge kind was not rewritten.
+1. The community namespace read model reports `hns_setup_status` as `legacy_import_required` or `setup_complete`. A signed import proves completion, and a currently secure delegation with matching parent DS/live DNSKEY plus valid authoritative DNSSEC is accepted as stronger compatibility evidence for roots that predate import-payload persistence.
 2. A legacy HNS primary gets a **Complete HNS setup** action. It preselects the already-attached root and starts the normal HNS import flow. It does not detach or invalidate the current route.
 3. When the new verification completes, the Web promotes it to primary if its family and normalized root match the current primary, even when the old verification is still fresh. A different root remains a mirror.
 
@@ -125,7 +125,7 @@ WHERE c.status = 'active'
 
 For every active HNS primary, assert all of the following:
 
-- import provenance is `hns_import`, using payload kind as the compatibility authority;
+- setup completion is proved by signed-import provenance or by current matching parent DS/live DNSKEY plus valid authoritative DNSSEC for pre-provenance roots;
 - the community has no unresolved pending import session after successful replacement;
 - the active primary binding points to the new verification;
 - parent DS matches a live DNSKEY;
@@ -138,7 +138,7 @@ For every active HNS primary, assert all of the following:
 
 ## Verification performed in the change worktrees
 
-- API focused tests: 16 passed, including legacy/import provenance classification and canonical-registry withholding.
+- API focused tests: 17 passed, including legacy/import provenance classification, secure pre-provenance compatibility, and canonical-registry withholding.
 - Web focused tests: 15 passed, including the legacy upgrade action, HNS-only same-root primary promotion, unchanged Spaces behavior, unrelated-root mirror behavior, and canonical native-route withholding.
 - API focused package check passed after installing the worktree and its local shared package from their pinned lockfiles.
 - Web safe typecheck reached one unrelated karaoke contract error after the HNS error was corrected when run against the established dependency tree. A fresh worktree install subsequently omitted multiple declared packages despite reporting success, so CI should supply the authoritative full Web typecheck before merge.

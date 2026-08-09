@@ -21,6 +21,7 @@ import {
   projectDelegationResponse,
   ROOT_DELEGATION_JOIN_SQL,
   ROOT_DELEGATION_SELECT_SQL,
+  type DelegationEvaluation,
   type RootDelegationJoinRow,
 } from "@pirate/hns-delegation"
 
@@ -47,13 +48,20 @@ function delegationJoinRow(row: QueryResultRow): RootDelegationJoinRow | null {
 
 function hnsSetupStatus(
   row: QueryResultRow,
+  delegation: DelegationEvaluation | null,
 ): CommunityNamespaceAttachmentRow["hnsSetupStatus"] {
   if (row.family !== "hns") return null
-  if (row.source_challenge_kind === "hns_import") return "import_complete"
+  // Older approved roots may predate import-payload persistence while already
+  // serving the exact Pirate NS/DS resource successfully. Current matching DS
+  // and authoritative DNSSEC are stronger completion evidence than provenance.
+  if (delegation?.delegationSecurity === "secure" && delegation.componentsSecure) {
+    return "setup_complete"
+  }
+  if (row.source_challenge_kind === "hns_import") return "setup_complete"
   if (typeof row.source_challenge_payload_json === "string") {
     try {
       const payload = JSON.parse(row.source_challenge_payload_json) as { kind?: unknown }
-      if (payload.kind === "hns_import") return "import_complete"
+      if (payload.kind === "hns_import") return "setup_complete"
     } catch {
       // A malformed or pre-import payload is legacy evidence, not proof that
       // the signed HNS resource import completed.
@@ -118,20 +126,21 @@ export async function listCommunityNamespaceAttachments(
     `,
     args: [communityId, now],
   })
-  return result.rows.map((row) => ({
-    namespaceVerificationId: requiredString(row, "namespace_verification_id"),
-    namespaceRole: requiredString(row, "namespace_role") as CommunityNamespaceAttachmentRow["namespaceRole"],
-    family: requiredString(row, "family") as CommunityNamespaceAttachmentRow["family"],
-    normalizedRootLabel: requiredString(row, "normalized_root_label"),
-    verificationStatus: requiredString(row, "verification_status") as CommunityNamespaceAttachmentRow["verificationStatus"],
-    hnsSetupStatus: hnsSetupStatus(row),
-    delegation: requiredString(row, "family") === "hns"
-      ? projectDelegationResponse(evaluateJoinedRoot(
-          delegationJoinRow(row),
-          nowMs,
-        ))
-      : null,
-  }))
+  return result.rows.map((row) => {
+    const family = requiredString(row, "family") as CommunityNamespaceAttachmentRow["family"]
+    const delegation = family === "hns"
+      ? evaluateJoinedRoot(delegationJoinRow(row), nowMs)
+      : null
+    return {
+      namespaceVerificationId: requiredString(row, "namespace_verification_id"),
+      namespaceRole: requiredString(row, "namespace_role") as CommunityNamespaceAttachmentRow["namespaceRole"],
+      family,
+      normalizedRootLabel: requiredString(row, "normalized_root_label"),
+      verificationStatus: requiredString(row, "verification_status") as CommunityNamespaceAttachmentRow["verificationStatus"],
+      hnsSetupStatus: hnsSetupStatus(row, delegation),
+      delegation: delegation ? projectDelegationResponse(delegation) : null,
+    }
+  })
 }
 
 export async function listActiveCommunities(
