@@ -776,6 +776,16 @@ export async function mergeTelegramAccountIntoCanonical(input: {
       `,
       args: [merge.id, communityId, now],
     })
+    const receipt = await client.execute({
+      sql: `
+        SELECT status
+        FROM user_account_merge_shards
+        WHERE user_account_merge_id = ?1 AND community_id = ?2
+        LIMIT 1
+      `,
+      args: [merge.id, communityId],
+    })
+    if (stringOrNull(rowValue(receipt.rows[0], "status")) === "completed") continue
     const db = await openCommunityWriteClient(input.env, repository, communityId)
     try {
       await migrateShard(db.client, merge)

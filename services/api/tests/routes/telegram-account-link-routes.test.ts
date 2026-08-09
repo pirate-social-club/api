@@ -835,6 +835,14 @@ describe("Telegram account linking", () => {
         ORDER BY kind, post_id, key
       `,
     })
+    const shardReceiptBeforeReplay = await fixture.ctx.client.execute({
+      sql: `
+        SELECT status, attempt_count, completed_at
+        FROM user_account_merge_shards
+        WHERE user_account_merge_id = ?1 AND community_id = ?2
+      `,
+      args: [mergeId, fixture.communityId],
+    })
     await fixture.ctx.client.execute({
       sql: `UPDATE user_account_merges SET status = 'migrating', completed_at = NULL WHERE user_account_merge_id = ?1`,
       args: [mergeId],
@@ -859,6 +867,15 @@ describe("Telegram account linking", () => {
       `,
     })
     expect(shardStateAfterReplay.rows).toEqual(shardStateBeforeReplay.rows)
+    const shardReceiptAfterReplay = await fixture.ctx.client.execute({
+      sql: `
+        SELECT status, attempt_count, completed_at
+        FROM user_account_merge_shards
+        WHERE user_account_merge_id = ?1 AND community_id = ?2
+      `,
+      args: [mergeId, fixture.communityId],
+    })
+    expect(shardReceiptAfterReplay.rows).toEqual(shardReceiptBeforeReplay.rows)
     const receiptsAfterReplay = await fixture.shard.execute({
       sql: `SELECT COUNT(*) AS count FROM user_account_merge_receipts WHERE user_account_merge_id = ?1`,
       args: [mergeId],
