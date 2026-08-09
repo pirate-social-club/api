@@ -86,31 +86,30 @@ async function controlPlaneBlockReason(
   return cashout.rows.length > 0 ? "cashout_in_flight" : null
 }
 
-async function shardBlockReason(client: Client, sourceUserId: string): Promise<AccountMergeBlockReason | null> {
-  const result = await client.execute({
-    sql: `
-      SELECT reason FROM (
-        SELECT 'community_authority' AS reason, 1 AS priority
-        FROM community_roles
-        WHERE user_id = ?1 AND status = 'active' AND role IN ('owner', 'admin', 'moderator')
-        UNION ALL
-        SELECT 'community_authority', 1 FROM communities WHERE created_by_user_id = ?1
-        UNION ALL
-        SELECT 'authored_content', 2 FROM posts WHERE author_user_id = ?1
-        UNION ALL
-        SELECT 'authored_content', 2 FROM comments WHERE author_user_id = ?1
-        UNION ALL
-        SELECT 'purchase_activity', 3 FROM purchases WHERE buyer_user_id = ?1
-        UNION ALL
-        SELECT 'booking_activity', 4 FROM bookings
-        WHERE host_user_id = ?1 OR booker_user_id = ?1
-      ) blocked
-      ORDER BY priority ASC
-      LIMIT 1
-    `,
-    args: [sourceUserId],
-  })
-  return stringOrNull(rowValue(result.rows[0], "reason")) as AccountMergeBlockReason | null
+export async function shardBlockReason(client: Client, sourceUserId: string): Promise<AccountMergeBlockReason | null> {
+  const hasRow = async (sql: string): Promise<boolean> => {
+    const result = await client.execute({ sql, args: [sourceUserId] })
+    return result.rows.length > 0
+  }
+
+  // These shard tables may be partitioned views. Combining them with UNION
+  // expands their definitions and can exceed SQLite's compound-select limit.
+  // Keep the checks separate and ordered to preserve block-reason precedence.
+  if (await hasRow(`
+    SELECT 1 FROM community_roles
+    WHERE user_id = ?1 AND status = 'active' AND role IN ('owner', 'admin', 'moderator')
+    LIMIT 1
+  `)) return "community_authority"
+  if (await hasRow(`SELECT 1 FROM communities WHERE created_by_user_id = ?1 LIMIT 1`)) {
+    return "community_authority"
+  }
+  if (await hasRow(`SELECT 1 FROM posts WHERE author_user_id = ?1 LIMIT 1`)) return "authored_content"
+  if (await hasRow(`SELECT 1 FROM comments WHERE author_user_id = ?1 LIMIT 1`)) return "authored_content"
+  if (await hasRow(`SELECT 1 FROM purchases WHERE buyer_user_id = ?1 LIMIT 1`)) return "purchase_activity"
+  if (await hasRow(`
+    SELECT 1 FROM bookings WHERE host_user_id = ?1 OR booker_user_id = ?1 LIMIT 1
+  `)) return "booking_activity"
+  return null
 }
 
 async function markBlocked(client: Client, merge: MergeRecord, reason: AccountMergeBlockReason): Promise<never> {
