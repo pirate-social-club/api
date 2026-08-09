@@ -172,19 +172,32 @@ async function ensureMergeRecord(input: {
   return { id, sourceUserId: input.sourceUserId, canonicalUserId: input.canonicalUserId, status: "migrating", blockReason: null }
 }
 
-async function mergeMembership(tx: Transaction, sourceUserId: string, canonicalUserId: string, now: string): Promise<void> {
-  const memberships = await tx.execute({
+type MembershipMergePlan = { sourceMembershipId: string; targetMember: boolean } | null
+
+async function loadMembershipMergePlan(client: Client, sourceUserId: string, canonicalUserId: string): Promise<MembershipMergePlan> {
+  const memberships = await client.execute({
     sql: `SELECT membership_id, user_id, status FROM community_memberships WHERE user_id IN (?1, ?2)`,
     args: [sourceUserId, canonicalUserId],
   })
   const source = memberships.rows.find((row) => String(rowValue(row, "user_id")) === sourceUserId)
-  if (!source) return
+  if (!source) return null
   const targetMember = memberships.rows.some((row) =>
     String(rowValue(row, "user_id")) === canonicalUserId && String(rowValue(row, "status")) === "member")
-  if (targetMember) {
+  return { sourceMembershipId: requiredString(source, "membership_id"), targetMember }
+}
+
+async function applyMembershipMergePlan(
+  tx: Transaction,
+  plan: MembershipMergePlan,
+  sourceUserId: string,
+  canonicalUserId: string,
+  now: string,
+): Promise<void> {
+  if (!plan) return
+  if (plan.targetMember) {
     await tx.execute({
       sql: `UPDATE community_memberships SET status = 'left', left_at = ?2, updated_at = ?2 WHERE membership_id = ?1`,
-      args: [requiredString(source, "membership_id"), now],
+      args: [plan.sourceMembershipId, now],
     })
   } else {
     await tx.execute({
@@ -194,13 +207,15 @@ async function mergeMembership(tx: Transaction, sourceUserId: string, canonicalU
   }
 }
 
-async function renumberAndMoveAttempts(
-  tx: Transaction,
+type AttemptMove = { id: string; attemptNumber: number; idempotencyKey: string }
+
+async function loadAttemptMoves(
+  client: Client,
   mergeId: string,
   sourceUserId: string,
   canonicalUserId: string,
-): Promise<void> {
-  const attempts = await tx.execute({
+): Promise<AttemptMove[]> {
+  const attempts = await client.execute({
     sql: `
       SELECT id, exercise_id FROM song_study_attempt
       WHERE user_id = ?1 ORDER BY exercise_id, created_at, id
@@ -208,10 +223,11 @@ async function renumberAndMoveAttempts(
     args: [sourceUserId],
   })
   const nextByExercise = new Map<string, number>()
+  const moves: AttemptMove[] = []
   for (const row of attempts.rows) {
     const exerciseId = requiredString(row, "exercise_id")
     if (!nextByExercise.has(exerciseId)) {
-      const maximum = await tx.execute({
+      const maximum = await client.execute({
         sql: `SELECT COALESCE(MAX(attempt_number), 0) AS value FROM song_study_attempt WHERE user_id = ?1 AND exercise_id = ?2`,
         args: [canonicalUserId, exerciseId],
       })
@@ -220,13 +236,20 @@ async function renumberAndMoveAttempts(
     const id = requiredString(row, "id")
     const attemptNumber = nextByExercise.get(exerciseId)!
     nextByExercise.set(exerciseId, attemptNumber + 1)
+    moves.push({ id, attemptNumber, idempotencyKey: `merge:${mergeId}:${id}` })
+  }
+  return moves
+}
+
+async function applyAttemptMoves(tx: Transaction, moves: AttemptMove[], canonicalUserId: string): Promise<void> {
+  for (const move of moves) {
     await tx.execute({
       sql: `
         UPDATE song_study_attempt
         SET user_id = ?2, attempt_number = ?3, idempotency_key = ?4
         WHERE id = ?1
       `,
-      args: [id, canonicalUserId, attemptNumber, `merge:${mergeId}:${id}`],
+      args: [move.id, canonicalUserId, move.attemptNumber, move.idempotencyKey],
     })
   }
 }
@@ -238,16 +261,23 @@ type StreakMetadata = {
   activeUntilAt: string | null
 }
 
-async function recomputeStreakBatch(
-  tx: Transaction,
+type StreakRebuild = {
+  postId: string
+  communityId: string
+  dates: string[]
+  metadata: StreakMetadata | null
+}
+
+type StreakRebuildPlan = { affectedPostIds: string[]; rebuilds: StreakRebuild[] }
+
+async function loadStreakRebuildBatch(
+  client: Client,
   sourceUserId: string,
   canonicalUserId: string,
   affectedPostIds: string[],
-  now: string,
-): Promise<void> {
+): Promise<StreakRebuild[]> {
   const metadataPostPlaceholders = affectedPostIds.map((_, index) => `?${index + 3}`).join(", ")
-  const postPlaceholders = affectedPostIds.map((_, index) => `?${index + 2}`).join(", ")
-  const existingStreaks = await tx.execute({
+  const existingStreaks = await client.execute({
     sql: `
       SELECT user_id, post_id, created_at, timezone, timezone_updated_at, active_until_at
       FROM song_streaks
@@ -268,27 +298,70 @@ async function recomputeStreakBatch(
     })
   }
 
-  const rows = await tx.execute({
+  const rows = await client.execute({
     sql: `
       SELECT post_id, community_id, activity_date
       FROM song_engagement_days
-      WHERE user_id = ?1 AND qualified = 1 AND post_id IN (${postPlaceholders})
-      ORDER BY post_id, activity_date
+      WHERE user_id IN (?1, ?2) AND qualified = 1
+        AND post_id IN (${metadataPostPlaceholders})
+      ORDER BY post_id, activity_date, CASE WHEN user_id = ?2 THEN 0 ELSE 1 END
     `,
-    args: [canonicalUserId, ...affectedPostIds],
+    args: [sourceUserId, canonicalUserId, ...affectedPostIds],
   })
-  const byPost = new Map<string, { communityId: string; dates: string[] }>()
+  const byPost = new Map<string, { communityId: string; dates: Set<string> }>()
   for (const row of rows.rows) {
     const postId = requiredString(row, "post_id")
-    const entry = byPost.get(postId) ?? { communityId: requiredString(row, "community_id"), dates: [] }
-    entry.dates.push(requiredString(row, "activity_date"))
+    const entry = byPost.get(postId) ?? { communityId: requiredString(row, "community_id"), dates: new Set() }
+    entry.dates.add(requiredString(row, "activity_date"))
     byPost.set(postId, entry)
   }
-  await tx.execute({
-    sql: `DELETE FROM song_streaks WHERE user_id = ?1 AND post_id IN (${postPlaceholders})`,
-    args: [canonicalUserId, ...affectedPostIds],
+  return [...byPost].map(([postId, entry]) => ({
+    postId,
+    communityId: entry.communityId,
+    dates: [...entry.dates].sort(),
+    metadata: metadataByPost.get(postId) ?? null,
+  }))
+}
+
+async function loadStreakRebuildPlan(
+  client: Client,
+  sourceUserId: string,
+  canonicalUserId: string,
+): Promise<StreakRebuildPlan> {
+  const affected = await client.execute({
+    sql: `SELECT DISTINCT post_id FROM song_engagement_days WHERE user_id = ?1 ORDER BY post_id`,
+    args: [sourceUserId],
   })
-  for (const [postId, entry] of byPost) {
+  const affectedPostIds = affected.rows.map((row) => requiredString(row, "post_id"))
+  const rebuilds: StreakRebuild[] = []
+  const batchSize = 80
+  for (let offset = 0; offset < affectedPostIds.length; offset += batchSize) {
+    rebuilds.push(...await loadStreakRebuildBatch(
+      client,
+      sourceUserId,
+      canonicalUserId,
+      affectedPostIds.slice(offset, offset + batchSize),
+    ))
+  }
+  return { affectedPostIds, rebuilds }
+}
+
+async function applyStreakRebuildPlan(
+  tx: Transaction,
+  canonicalUserId: string,
+  plan: StreakRebuildPlan,
+  now: string,
+): Promise<void> {
+  const batchSize = 80
+  for (let offset = 0; offset < plan.affectedPostIds.length; offset += batchSize) {
+    const postIds = plan.affectedPostIds.slice(offset, offset + batchSize)
+    const postPlaceholders = postIds.map((_, index) => `?${index + 2}`).join(", ")
+    await tx.execute({
+      sql: `DELETE FROM song_streaks WHERE user_id = ?1 AND post_id IN (${postPlaceholders})`,
+      args: [canonicalUserId, ...postIds],
+    })
+  }
+  for (const entry of plan.rebuilds) {
     let best = entry.dates.length > 0 ? 1 : 0
     let run = best
     let runStart = entry.dates[0]
@@ -304,7 +377,7 @@ async function recomputeStreakBatch(
         best = run
       }
     }
-    const metadata = metadataByPost.get(postId)
+    const metadata = entry.metadata
     await tx.execute({
       sql: `
         INSERT INTO song_streaks (
@@ -314,7 +387,7 @@ async function recomputeStreakBatch(
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
       `,
       args: [
-        canonicalUserId, postId, entry.communityId, run, best,
+        canonicalUserId, entry.postId, entry.communityId, run, best,
         entry.dates.at(-1), runStart, entry.dates.length,
         metadata?.createdAt ?? now, now, metadata?.timezone ?? null,
         metadata?.timezoneUpdatedAt ?? null, metadata?.activeUntilAt ?? null,
@@ -323,36 +396,20 @@ async function recomputeStreakBatch(
   }
 }
 
-async function recomputeStreaks(
-  tx: Transaction,
-  sourceUserId: string,
-  canonicalUserId: string,
-  affectedPostIds: string[],
-  now: string,
-): Promise<void> {
-  const batchSize = 80
-  for (let offset = 0; offset < affectedPostIds.length; offset += batchSize) {
-    await recomputeStreakBatch(
-      tx,
-      sourceUserId,
-      canonicalUserId,
-      affectedPostIds.slice(offset, offset + batchSize),
-      now,
-    )
-  }
-}
-
-async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
+export async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
   const existing = await client.execute({
     sql: `SELECT 1 FROM user_account_merge_receipts WHERE user_account_merge_id = ?1 LIMIT 1`,
     args: [merge.id],
   })
   if (existing.rows.length > 0) return
 
+  const membershipPlan = await loadMembershipMergePlan(client, merge.sourceUserId, merge.canonicalUserId)
+  const attemptMoves = await loadAttemptMoves(client, merge.id, merge.sourceUserId, merge.canonicalUserId)
+  const streakPlan = await loadStreakRebuildPlan(client, merge.sourceUserId, merge.canonicalUserId)
   const now = nowIso()
   const tx = await client.transaction("write")
   try {
-    await mergeMembership(tx, merge.sourceUserId, merge.canonicalUserId, now)
+    await applyMembershipMergePlan(tx, membershipPlan, merge.sourceUserId, merge.canonicalUserId, now)
 
     await tx.execute({
       sql: `
@@ -390,9 +447,9 @@ async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
       sql: `UPDATE song_study_session SET user_id = ?2, updated_at = ?3 WHERE user_id = ?1`,
       args: [merge.sourceUserId, merge.canonicalUserId, now],
     })
-    await renumberAndMoveAttempts(tx, merge.id, merge.sourceUserId, merge.canonicalUserId)
+    await applyAttemptMoves(tx, attemptMoves, merge.canonicalUserId)
 
-    const mergedEngagementDays = await tx.execute({
+    await tx.execute({
       sql: `
         INSERT INTO song_engagement_days (
           user_id, post_id, community_id, activity_date, study_attempt_count,
@@ -411,15 +468,11 @@ async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
           qualified = MAX(song_engagement_days.qualified, excluded.qualified),
           updated_at = MAX(song_engagement_days.updated_at, excluded.updated_at),
           activity_timezone = COALESCE(song_engagement_days.activity_timezone, excluded.activity_timezone)
-        RETURNING post_id
       `,
       args: [merge.sourceUserId, merge.canonicalUserId],
     })
-    const affectedPostIds = [...new Set(
-      mergedEngagementDays.rows.map((row) => requiredString(row, "post_id")),
-    )]
     await tx.execute({ sql: `DELETE FROM song_engagement_days WHERE user_id = ?1`, args: [merge.sourceUserId] })
-    await recomputeStreaks(tx, merge.sourceUserId, merge.canonicalUserId, affectedPostIds, now)
+    await applyStreakRebuildPlan(tx, merge.canonicalUserId, streakPlan, now)
     await tx.execute({ sql: `DELETE FROM song_streaks WHERE user_id = ?1`, args: [merge.sourceUserId] })
 
     await tx.execute({
