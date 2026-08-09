@@ -88,6 +88,7 @@ async function insertSecureRootDelegation(
   ctx: Awaited<ReturnType<typeof createRouteTestContext>>,
   rootLabel: string,
   observedAt = new Date(),
+  canonicalRoutingEligible = 1,
 ) {
   const observationId = `obs_${rootLabel}`
   await ctx.client.execute({
@@ -110,11 +111,12 @@ async function insertSecureRootDelegation(
     sql: `
       INSERT INTO hns_root_delegation_state (
         normalized_root_label, rollover_state, pending_evidence_kind,
+        canonical_routing_eligible,
         last_parent_observation_id, last_parent_observation_outcome,
         last_parent_observation_attempt_at, state_changed_at, created_at, updated_at
-      ) VALUES (?1, 'none', NULL, ?2, 'succeeded', ?3, ?3, ?3, ?3)
+      ) VALUES (?1, 'none', NULL, ?2, ?3, 'succeeded', ?4, ?4, ?4, ?4)
     `,
-    args: [rootLabel, observationId, observedAt.toISOString()],
+    args: [rootLabel, canonicalRoutingEligible, observationId, observedAt.toISOString()],
   })
 }
 
@@ -296,6 +298,22 @@ describe("public namespace routes", () => {
       ctx.env,
     )
     expect(response.status).toBe(200)
+  })
+
+  test("root delegation gate withholds a secure root until canonical activation", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_ROOT_DELEGATION_ROUTING_ENABLED: "true",
+    })
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "dankmeme" })
+    await insertSecureRootDelegation(ctx, "dankmeme", new Date(), 0)
+
+    const response = await app.request(
+      "http://pirate.test/public-namespaces/dankmeme",
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(404)
   })
 
   test("root delegation gate filters the public namespace list", async () => {

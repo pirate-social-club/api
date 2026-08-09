@@ -45,6 +45,23 @@ function delegationJoinRow(row: QueryResultRow): RootDelegationJoinRow | null {
   }
 }
 
+function hnsSetupStatus(
+  row: QueryResultRow,
+): CommunityNamespaceAttachmentRow["hnsSetupStatus"] {
+  if (row.family !== "hns") return null
+  if (row.source_challenge_kind === "hns_import") return "import_complete"
+  if (typeof row.source_challenge_payload_json === "string") {
+    try {
+      const payload = JSON.parse(row.source_challenge_payload_json) as { kind?: unknown }
+      if (payload.kind === "hns_import") return "import_complete"
+    } catch {
+      // A malformed or pre-import payload is legacy evidence, not proof that
+      // the signed HNS resource import completed.
+    }
+  }
+  return "legacy_import_required"
+}
+
 export async function getCommunityById(client: Client, communityId: string): Promise<CommunityRow | null> {
   return getCommunityRowById(client, communityId)
 }
@@ -78,6 +95,8 @@ export async function listCommunityNamespaceAttachments(
     sql: `
       SELECT cnb.namespace_verification_id, cnb.namespace_role,
              nv.family, nv.normalized_root_label,
+             source_session.challenge_kind AS source_challenge_kind,
+             source_session.challenge_payload_json AS source_challenge_payload_json,
              ${ROOT_DELEGATION_SELECT_SQL},
              CASE
                WHEN nv.status = 'disputed' THEN 'disputed'
@@ -88,6 +107,8 @@ export async function listCommunityNamespaceAttachments(
       FROM community_namespace_bindings cnb
       JOIN namespace_verifications nv
         ON nv.namespace_verification_id = cnb.namespace_verification_id
+      LEFT JOIN namespace_verification_sessions source_session
+        ON source_session.namespace_verification_session_id = nv.source_namespace_verification_session_id
       ${ROOT_DELEGATION_JOIN_SQL}
       WHERE cnb.community_id = ?1
         AND cnb.status = 'active'
@@ -103,6 +124,7 @@ export async function listCommunityNamespaceAttachments(
     family: requiredString(row, "family") as CommunityNamespaceAttachmentRow["family"],
     normalizedRootLabel: requiredString(row, "normalized_root_label"),
     verificationStatus: requiredString(row, "verification_status") as CommunityNamespaceAttachmentRow["verificationStatus"],
+    hnsSetupStatus: hnsSetupStatus(row),
     delegation: requiredString(row, "family") === "hns"
       ? projectDelegationResponse(evaluateJoinedRoot(
           delegationJoinRow(row),

@@ -16,8 +16,16 @@ async function setup() {
     )
   `)
   await client.execute(`
+    CREATE TABLE namespace_verification_sessions (
+      namespace_verification_session_id TEXT PRIMARY KEY,
+      challenge_kind TEXT,
+      challenge_payload_json TEXT
+    )
+  `)
+  await client.execute(`
     CREATE TABLE namespace_verifications (
       namespace_verification_id TEXT PRIMARY KEY,
+      source_namespace_verification_session_id TEXT,
       family TEXT NOT NULL,
       normalized_root_label TEXT NOT NULL,
       status TEXT NOT NULL,
@@ -59,15 +67,37 @@ async function insertHns(client: Awaited<ReturnType<typeof setup>>, input: {
   expiresAt?: string
   authority?: number
   routing?: number
+  challengeKind?: string | null
+  challengePayload?: Record<string, unknown> | null
 }) {
+  const sessionId = `nvs_${input.id}`
+  await client.execute({
+    sql: `
+      INSERT INTO namespace_verification_sessions (
+        namespace_verification_session_id, challenge_kind, challenge_payload_json
+      ) VALUES (?1, ?2, ?3)
+    `,
+    args: [
+      sessionId,
+      input.challengeKind ?? "dns_txt",
+      input.challengePayload ? JSON.stringify(input.challengePayload) : null,
+    ],
+  })
   await client.execute({
     sql: `
       INSERT INTO namespace_verifications (
-        namespace_verification_id, family, normalized_root_label, status, expires_at,
+        namespace_verification_id, source_namespace_verification_session_id,
+        family, normalized_root_label, status, expires_at,
         club_attach_allowed, pirate_dns_authority_verified, pirate_web_routing_allowed
-      ) VALUES (?1, 'hns', 'dankmeme', 'verified', ?2, 1, ?3, ?4)
+      ) VALUES (?1, ?2, 'hns', 'dankmeme', 'verified', ?3, 1, ?4, ?5)
     `,
-    args: [input.id, input.expiresAt ?? "2099-01-01T00:00:00.000Z", input.authority ?? 1, input.routing ?? 1],
+    args: [
+      input.id,
+      sessionId,
+      input.expiresAt ?? "2099-01-01T00:00:00.000Z",
+      input.authority ?? 1,
+      input.routing ?? 1,
+    ],
   })
   await client.execute({
     sql: `
@@ -114,6 +144,30 @@ describe("listCommunityNamespaceAttachments", () => {
     const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
 
     expect(rows[0]?.verificationStatus).toBe("expired")
+    client.close()
+  })
+
+  test("classifies pre-import HNS approvals as requiring the signed import", async () => {
+    const client = await setup()
+    await insertHns(client, { id: "nv_legacy" })
+
+    const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
+
+    expect(rows[0]?.hnsSetupStatus).toBe("legacy_import_required")
+    client.close()
+  })
+
+  test("recognizes HNS import payloads even when the legacy challenge kind remains", async () => {
+    const client = await setup()
+    await insertHns(client, {
+      id: "nv_imported",
+      challengeKind: "dns_txt",
+      challengePayload: { kind: "hns_import", schema_version: 1 },
+    })
+
+    const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
+
+    expect(rows[0]?.hnsSetupStatus).toBe("import_complete")
     client.close()
   })
 })
