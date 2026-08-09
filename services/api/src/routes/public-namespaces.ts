@@ -21,12 +21,14 @@ function rootDelegationRoutingEnabled(env: Env): boolean {
 
 function rootDelegationAllowsRouting(row: PublicNamespaceRow, nowMs: number): boolean {
   if (typeof row.delegation_root_label !== "string") {
-    return evaluateJoinedRoot(null, nowMs).authenticatedRoutingAllowed
+    const evaluation = evaluateJoinedRoot(null, nowMs)
+    return evaluation.authenticatedRoutingAllowed && evaluation.canonicalRoutingEligible
   }
-  return evaluateJoinedRoot(
+  const evaluation = evaluateJoinedRoot(
     row as unknown as RootDelegationJoinRow,
     nowMs,
-  ).authenticatedRoutingAllowed
+  )
+  return evaluation.authenticatedRoutingAllowed && evaluation.canonicalRoutingEligible
 }
 
 function normalizePublicHnsRoot(value: string): string | null {
