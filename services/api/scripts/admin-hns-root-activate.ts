@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { activateHnsRootRouting } from "../src/lib/hns-root-observer/activation"
-import { getControlPlaneClient } from "../src/lib/runtime-deps"
+import { withStandaloneControlPlaneClient } from "../src/lib/runtime-deps"
 import type { Env } from "../src/env"
 
 function valueAfter(args: string[], flag: string): string {
@@ -25,14 +25,11 @@ const env = {
   ENVIRONMENT: process.env.ENVIRONMENT ?? "production",
   CONTROL_PLANE_DATABASE_URL: databaseUrl,
 } as Env
-const client = getControlPlaneClient(env)
-try {
-  const result = await activateHnsRootRouting(client, {
+const result = await withStandaloneControlPlaneClient(env, async (client) => {
+  return await activateHnsRootRouting(client, {
     rootLabel: valueAfter(args, "--root"),
     operatorActorId: valueAfter(args, "--actor"),
     reason: valueAfter(args, "--reason"),
   })
-  console.log(JSON.stringify(result, null, 2))
-} finally {
-  await client.close?.()
-}
+})
+console.log(JSON.stringify(result, null, 2))
