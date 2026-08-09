@@ -225,15 +225,51 @@ async function renumberAndMoveAttempts(
   }
 }
 
-async function recomputeStreaks(tx: Transaction, canonicalUserId: string, now: string): Promise<void> {
+type StreakMetadata = {
+  createdAt: string
+  timezone: string | null
+  timezoneUpdatedAt: string | null
+  activeUntilAt: string | null
+}
+
+async function recomputeStreakBatch(
+  tx: Transaction,
+  sourceUserId: string,
+  canonicalUserId: string,
+  affectedPostIds: string[],
+  now: string,
+): Promise<void> {
+  const metadataPostPlaceholders = affectedPostIds.map((_, index) => `?${index + 3}`).join(", ")
+  const postPlaceholders = affectedPostIds.map((_, index) => `?${index + 2}`).join(", ")
+  const existingStreaks = await tx.execute({
+    sql: `
+      SELECT user_id, post_id, created_at, timezone, timezone_updated_at, active_until_at
+      FROM song_streaks
+      WHERE user_id IN (?1, ?2) AND post_id IN (${metadataPostPlaceholders})
+      ORDER BY CASE WHEN user_id = ?2 THEN 0 ELSE 1 END
+    `,
+    args: [sourceUserId, canonicalUserId, ...affectedPostIds],
+  })
+  const metadataByPost = new Map<string, StreakMetadata>()
+  for (const row of existingStreaks.rows) {
+    const postId = requiredString(row, "post_id")
+    if (metadataByPost.has(postId)) continue
+    metadataByPost.set(postId, {
+      createdAt: requiredString(row, "created_at"),
+      timezone: stringOrNull(rowValue(row, "timezone")),
+      timezoneUpdatedAt: stringOrNull(rowValue(row, "timezone_updated_at")),
+      activeUntilAt: stringOrNull(rowValue(row, "active_until_at")),
+    })
+  }
+
   const rows = await tx.execute({
     sql: `
       SELECT post_id, community_id, activity_date
       FROM song_engagement_days
-      WHERE user_id = ?1 AND qualified = 1
+      WHERE user_id = ?1 AND qualified = 1 AND post_id IN (${postPlaceholders})
       ORDER BY post_id, activity_date
     `,
-    args: [canonicalUserId],
+    args: [canonicalUserId, ...affectedPostIds],
   })
   const byPost = new Map<string, { communityId: string; dates: string[] }>()
   for (const row of rows.rows) {
@@ -242,12 +278,14 @@ async function recomputeStreaks(tx: Transaction, canonicalUserId: string, now: s
     entry.dates.push(requiredString(row, "activity_date"))
     byPost.set(postId, entry)
   }
-  await tx.execute({ sql: `DELETE FROM song_streaks WHERE user_id = ?1`, args: [canonicalUserId] })
+  await tx.execute({
+    sql: `DELETE FROM song_streaks WHERE user_id = ?1 AND post_id IN (${postPlaceholders})`,
+    args: [canonicalUserId, ...affectedPostIds],
+  })
   for (const [postId, entry] of byPost) {
     let best = entry.dates.length > 0 ? 1 : 0
     let run = best
     let runStart = entry.dates[0]
-    let bestRunStart = runStart
     for (let index = 1; index < entry.dates.length; index += 1) {
       const previous = new Date(`${entry.dates[index - 1]}T00:00:00Z`)
       const current = new Date(`${entry.dates[index]}T00:00:00Z`)
@@ -258,22 +296,43 @@ async function recomputeStreaks(tx: Transaction, canonicalUserId: string, now: s
       }
       if (run > best) {
         best = run
-        bestRunStart = runStart
       }
     }
+    const metadata = metadataByPost.get(postId)
     await tx.execute({
       sql: `
         INSERT INTO song_streaks (
           user_id, post_id, community_id, current_streak, best_streak,
           last_qualified_date, streak_started_date, total_qualified_days,
-          created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+          created_at, updated_at, timezone, timezone_updated_at, active_until_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
       `,
       args: [
         canonicalUserId, postId, entry.communityId, run, best,
-        entry.dates.at(-1), bestRunStart, entry.dates.length, now,
+        entry.dates.at(-1), runStart, entry.dates.length,
+        metadata?.createdAt ?? now, now, metadata?.timezone ?? null,
+        metadata?.timezoneUpdatedAt ?? null, metadata?.activeUntilAt ?? null,
       ],
     })
+  }
+}
+
+async function recomputeStreaks(
+  tx: Transaction,
+  sourceUserId: string,
+  canonicalUserId: string,
+  affectedPostIds: string[],
+  now: string,
+): Promise<void> {
+  const batchSize = 80
+  for (let offset = 0; offset < affectedPostIds.length; offset += batchSize) {
+    await recomputeStreakBatch(
+      tx,
+      sourceUserId,
+      canonicalUserId,
+      affectedPostIds.slice(offset, offset + batchSize),
+      now,
+    )
   }
 }
 
@@ -327,7 +386,7 @@ async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
     })
     await renumberAndMoveAttempts(tx, merge.id, merge.sourceUserId, merge.canonicalUserId)
 
-    await tx.execute({
+    const mergedEngagementDays = await tx.execute({
       sql: `
         INSERT INTO song_engagement_days (
           user_id, post_id, community_id, activity_date, study_attempt_count,
@@ -346,12 +405,16 @@ async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
           qualified = MAX(song_engagement_days.qualified, excluded.qualified),
           updated_at = MAX(song_engagement_days.updated_at, excluded.updated_at),
           activity_timezone = COALESCE(song_engagement_days.activity_timezone, excluded.activity_timezone)
+        RETURNING post_id
       `,
       args: [merge.sourceUserId, merge.canonicalUserId],
     })
+    const affectedPostIds = [...new Set(
+      mergedEngagementDays.rows.map((row) => requiredString(row, "post_id")),
+    )]
     await tx.execute({ sql: `DELETE FROM song_engagement_days WHERE user_id = ?1`, args: [merge.sourceUserId] })
+    await recomputeStreaks(tx, merge.sourceUserId, merge.canonicalUserId, affectedPostIds, now)
     await tx.execute({ sql: `DELETE FROM song_streaks WHERE user_id = ?1`, args: [merge.sourceUserId] })
-    await recomputeStreaks(tx, merge.canonicalUserId, now)
 
     await tx.execute({
       sql: `
