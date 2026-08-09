@@ -305,6 +305,39 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect((await effects(stub))[0].signed_tx).toBeNull()
   })
 
+  it("reclaims the tail nonce after an evidenced no-broadcast resolution", async () => {
+    const stub = freshStub()
+    const first = rewardsReq({ payoutEffectId: "rpe_no_broadcast", idempotencyKey: "reward:no-broadcast" })
+    const second = rewardsReq({ payoutEffectId: "rpe_after_repair", idempotencyKey: "reward:after-repair" })
+    await injectChain(stub, {
+      pending: 6,
+      latest: 6,
+      liveness: { "0xhash_6": "absent" },
+      broadcastError: "provider rejected transaction before submission",
+    })
+    await stub.settle(first)
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(first)).toMatchObject({ state: "prepared", nonce: 6 })
+
+    const resolved = await stub.resolveRewardNoBroadcast({
+      idempotencyKey: JSON.stringify(["reward_payout", "reward:no-broadcast"]),
+      expectedTxHash: "0xhash_6",
+      expectedNonce: 6,
+      reason: "Provider rejected the request before transaction submission.",
+      operatorActorId: "reward-operator",
+    })
+    expect(resolved).toMatchObject({
+      state: "preparation_parked",
+      nonce: null,
+      manualResolution: { resolution: "failed_prebroadcast" },
+    })
+
+    await injectChain(stub, { pending: 6, latest: 6, liveness: {} })
+    await stub.settle(second)
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(second)).toMatchObject({ state: "broadcast", nonce: 6 })
+  })
+
   it("atomically persists bounded preparation diagnostics with the retry increment", async () => {
     const stub = freshStub()
     await injectChain(stub, {
