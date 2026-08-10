@@ -264,7 +264,7 @@ describe("rewards routes", () => {
       // The web client sends canonical public IDs from the page route.
       community: "com_cmt_rewards_route",
       post: "post_pst_reward_campaign_song",
-      reward_identity_provider: "self",
+      reward_identity_provider: "very",
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
@@ -294,7 +294,7 @@ describe("rewards routes", () => {
     expect(Number(rows.rows[0]?.count)).toBe(0)
   })
 
-  test("admits every supported pool provider independently of the legacy cashout provider", async () => {
+  test("uses the flat-bounty provider independently of the legacy cashout provider", async () => {
     const ctx = await createRouteTestContext({
       ...campaignEnv(),
       REWARDS_IDENTITY_PROVIDER: "self",
@@ -604,6 +604,7 @@ describe("rewards routes", () => {
 
     const tieredBody = campaignBody({
       default_amount_cents: 40,
+      reward_identity_provider: "self",
       payout_tiers: [
         { nationalities: ["vnm"], amount_cents: 60 },
         { nationalities: ["USA", "CAN"], amount_cents: 80 },
@@ -715,6 +716,16 @@ describe("rewards routes", () => {
         reward_period_cap_cents: 80,
         idempotency_key: "tier-very-provider",
       }),
+      campaignBody({
+        reward_identity_provider: "zkpassport",
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 80,
+        idempotency_key: "tier-zkpassport-provider",
+      }),
+      campaignBody({
+        reward_identity_provider: "self",
+        idempotency_key: "flat-self-provider",
+      }),
     ]
     for (const body of cases) {
       const response = await app.request("http://pirate.test/reward_campaigns", {
@@ -817,7 +828,7 @@ describe("rewards routes", () => {
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
       body: JSON.stringify({ ...createBody, reward_identity_provider: "zkpassport" }),
     }, ctx.env)
-    expect(changedProviderReplay.status).toBe(409)
+    expect(changedProviderReplay.status).toBe(400)
 
     const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
       method: "POST",
@@ -1094,7 +1105,7 @@ describe("rewards routes", () => {
     }, ctx.env)
     expect(firstCreate.status).toBe(201)
     const pool = await json(firstCreate) as { id: string; reward_identity_provider: string }
-    expect(pool.reward_identity_provider).toBe("self")
+    expect(pool.reward_identity_provider).toBe("very")
     const duplicatePool = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(secondBooster.accessToken), "content-type": "application/json" },
@@ -1167,7 +1178,7 @@ describe("rewards routes", () => {
       pool.id,
       100_000,
       "reward-pool-quote-second",
-      "self",
+      "very",
     )
     expect(secondQuote.status).toBe(201)
     const secondLot = await json(secondQuote) as { id: string }
@@ -1189,13 +1200,13 @@ describe("rewards routes", () => {
       funded_cents: 140_000,
       budget_cents: 140_000,
       remaining_cents: 100_000,
-      reward_identity_provider: "self",
+      reward_identity_provider: "very",
     })
     const persistedProvider = await ctx.client.execute({
       sql: "SELECT reward_identity_provider FROM reward_campaigns WHERE reward_campaign_id = ?1",
       args: [pool.id],
     })
-    expect(persistedProvider.rows[0]?.reward_identity_provider).toBe("self")
+    expect(persistedProvider.rows[0]?.reward_identity_provider).toBe("very")
     const lots = await ctx.client.execute({
       sql: `
         SELECT funder_user_id, expected_amount_cents

@@ -343,8 +343,13 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
   ) {
     throw badRequestError("reward_identity_provider is invalid")
   }
-  if (normalizedTiers.length > 0 && rewardIdentityProvider === "very") {
-    throw badRequestError("Nationality-tiered campaigns require Self or ZKPassport")
+  const requiredProvider: RewardCampaignIdentityProvider = normalizedTiers.length > 0 ? "self" : "very"
+  if (rewardIdentityProvider !== requiredProvider) {
+    throw badRequestError(
+      normalizedTiers.length > 0
+        ? "Nationality bounties require Self passport verification"
+        : "Flat bounties require Very person verification",
+    )
   }
   const normalizedDailyReward = cents(input.daily_reward_cents, "daily_reward_cents", false)
   const normalizedDefaultAmount = input.default_amount_cents === undefined
