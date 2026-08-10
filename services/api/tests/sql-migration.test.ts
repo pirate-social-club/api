@@ -288,8 +288,9 @@ describe("sql migration helpers", () => {
     ])
   })
 
-  test("splits the PostgreSQL dance consent receipt columns for sqlite", () => {
+  test("splits generic nullable multi-column additions for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
+      -- Versioned consent is stored before upload authorization.
       ALTER TABLE dance_attempt_sessions
         ADD COLUMN consent_policy_version TEXT,
         ADD COLUMN consented_at TIMESTAMPTZ,

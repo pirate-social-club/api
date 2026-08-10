@@ -5,7 +5,8 @@ import type { Client, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { danceAttemptPlaceholderObjectKey } from "./attempt-object-key"
 
-export const DANCE_ATTEMPT_MAX_BYTES = 64 * 1024 * 1024
+export const DANCE_ATTEMPT_MAX_BYTES = 19_000_000
+export const DANCE_CONSENT_POLICY_VERSION = "dance_recording_v1"
 export const DANCE_ATTEMPT_CALIBRATION_VERSION =
   "dance_calibration_gate0_provisional_v1"
 export const DANCE_ATTEMPT_CALIBRATION_CHECKSUM =
@@ -33,6 +34,9 @@ export type DanceAttemptSessionRecord = {
   terminalReason: string | null
   scoreBps: number | null
   calibrationAdmitted: boolean | null
+  consentPolicyVersion: string | null
+  consentedAt: string | null
+  consentSource: string | null
   expiresAt: string
   submittedAt: string | null
   finalizedAt: string | null
@@ -47,6 +51,9 @@ export type CreateDanceAttemptSessionInput = {
   creationIdempotencyKey: string
   activityDate: string
   activityTimezone: string
+  consentPolicyVersion: typeof DANCE_CONSENT_POLICY_VERSION
+  consentedAt: string
+  consentSource: "api" | "telegram" | "ios" | "android"
   now: string
   expiresAt: string
 }
@@ -56,7 +63,8 @@ const SESSION_SELECT = `
     host_post_id, referenced_song_post_id, dance_choreography_id,
     dance_choreography_revision_id, status, upload_object_key, maximum_bytes,
     observed_size_bytes, observed_etag, observed_content_sha256, terminal_reason,
-    score_bps, calibration_admitted, expires_at, submitted_at, finalized_at, created_at
+    score_bps, calibration_admitted, consent_policy_version, consented_at,
+    consent_source, expires_at, submitted_at, finalized_at, created_at
   FROM dance_attempt_sessions
 `
 
@@ -113,10 +121,23 @@ function toRecord(row: unknown): DanceAttemptSessionRecord {
     terminalReason: stringOrNull(rowValue(row, "terminal_reason")),
     scoreBps: nullableNumber(row, "score_bps"),
     calibrationAdmitted: nullableBoolean(row, "calibration_admitted"),
+    consentPolicyVersion: stringOrNull(rowValue(row, "consent_policy_version")),
+    consentedAt: stringOrNull(rowValue(row, "consented_at")),
+    consentSource: stringOrNull(rowValue(row, "consent_source")),
     expiresAt: requiredString(row, "expires_at"),
     submittedAt: stringOrNull(rowValue(row, "submitted_at")),
     finalizedAt: stringOrNull(rowValue(row, "finalized_at")),
     createdAt: requiredString(row, "created_at"),
+  }
+}
+
+function assertRecordingConsent(record: DanceAttemptSessionRecord): void {
+  if (
+    record.consentPolicyVersion !== DANCE_CONSENT_POLICY_VERSION
+    || !record.consentedAt
+    || !["api", "telegram", "ios", "android"].includes(record.consentSource ?? "")
+  ) {
+    throw conflictError("Dance recording consent is missing")
   }
 }
 
@@ -240,12 +261,14 @@ export async function createDanceAttemptSession(input: {
           required_calibration_version, required_calibration_checksum,
           required_fingerprint_policy_version, required_integrity_policy_version,
           mirror_policy, status, activity_date, activity_timezone,
-          creation_idempotency_key, upload_object_key, expected_mime_type,
+          creation_idempotency_key, consent_policy_version, consented_at,
+          consent_source, upload_object_key, expected_mime_type,
           maximum_bytes, expires_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
           ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
-          'initialized', ?24, ?25, ?26, ?27, 'video/mp4', ?28, ?29, ?30, ?30
+          'initialized', ?24, ?25, ?26, ?27, ?28, ?29, ?30,
+          'video/mp4', ?31, ?32, ?33, ?33
         )
         ON CONFLICT (subject_user_id, creation_idempotency_key) DO NOTHING
         RETURNING dance_attempt_session_id
@@ -277,6 +300,9 @@ export async function createDanceAttemptSession(input: {
         value.activityDate,
         value.activityTimezone,
         value.creationIdempotencyKey,
+        value.consentPolicyVersion,
+        value.consentedAt,
+        value.consentSource,
         placeholderKey,
         DANCE_ATTEMPT_MAX_BYTES,
         value.expiresAt,
@@ -297,6 +323,8 @@ export async function createDanceAttemptSession(input: {
     if (
       record.subjectUserId !== value.subjectUserId
       || record.hostPostId !== value.hostPostId
+      || record.consentPolicyVersion !== value.consentPolicyVersion
+      || record.consentSource !== value.consentSource
     ) {
       throw conflictError("Dance attempt idempotency key was reused")
     }
@@ -322,6 +350,7 @@ export async function bindDanceAttemptUploadIntent(input: {
     if (existing.subjectUserId !== input.subjectUserId) {
       throw notFoundError("Dance attempt session not found")
     }
+    assertRecordingConsent(existing)
     if (existing.status === "uploading") {
       if (
         existing.uploadObjectKey !== input.objectKey
@@ -365,6 +394,7 @@ export async function submitDanceAttemptSession(input: {
     if (existing.subjectUserId !== input.subjectUserId) {
       throw notFoundError("Dance attempt session not found")
     }
+    assertRecordingConsent(existing)
     if (existing.status === "submitted" || existing.status === "grading") {
       if (
         existing.observedContentSha256 !== input.contentSha256

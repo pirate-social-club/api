@@ -254,7 +254,7 @@ function parseVersions(value: unknown): VersionFacts {
 function parseExtraction(value: unknown): ExtractionFacts {
   const source = record(value, "extraction_metrics")
   return {
-    durationMs: integer(source.duration_ms, "extraction_metrics.duration_ms", 1, 90_000),
+    durationMs: integer(source.duration_ms, "extraction_metrics.duration_ms", 1, 30_000),
     decodedFrameCount: integer(
       source.decoded_frame_count,
       "extraction_metrics.decoded_frame_count",

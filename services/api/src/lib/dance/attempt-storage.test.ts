@@ -44,6 +44,23 @@ describe("dance attempt private storage", () => {
     expect(() => danceAttemptObjectKey("das_123", "not-a-hash")).toThrow()
   })
 
+  test("enforces the shared nineteen-million-byte V1 ceiling", async () => {
+    await expect(buildDanceAttemptUploadIntent({
+      env,
+      sessionId: "das_123",
+      contentSha256: sha,
+      sizeBytes: 19_000_000,
+      now: new Date("2026-07-30T00:00:00Z"),
+    })).resolves.toBeDefined()
+    await expect(buildDanceAttemptUploadIntent({
+      env,
+      sessionId: "das_123",
+      contentSha256: sha,
+      sizeBytes: 19_000_001,
+      now: new Date("2026-07-30T00:00:00Z"),
+    })).rejects.toMatchObject({ code: "internal_error" })
+  })
+
   test("accepts HEAD only when all signed upload facts match", async () => {
     const result = await verifyDanceAttemptUpload({
       env,
