@@ -11,7 +11,6 @@
 
 import { createHash } from "node:crypto"
 import { getAddress, keccak256, toUtf8Bytes } from "ethers"
-import { base58btc } from "multiformats/bases/base58"
 
 import { buildRewardVaultLitAction } from "../src/lib/rewards/reward-vault-lit-action"
 import { resolveFilebaseConfig } from "../src/lib/storage/filebase-config"
@@ -79,6 +78,25 @@ function varint(input: number): Uint8Array {
   return Uint8Array.from(bytes)
 }
 
+const BASE58_BTC_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+function base58BtcEncode(bytes: Uint8Array): string {
+  let value = 0n
+  for (const byte of bytes) value = (value << 8n) | BigInt(byte)
+
+  let encoded = ""
+  while (value > 0n) {
+    const remainder = Number(value % 58n)
+    encoded = `${BASE58_BTC_ALPHABET[remainder]}${encoded}`
+    value /= 58n
+  }
+  for (const byte of bytes) {
+    if (byte !== 0) break
+    encoded = `1${encoded}`
+  }
+  return encoded
+}
+
 /** CIDv0 produced by the default single-block UnixFS file importer. */
 function unixFsCidV0(bytes: Uint8Array): string {
   const unixFsData = concat([
@@ -91,7 +109,7 @@ function unixFsCidV0(bytes: Uint8Array): string {
   ])
   const dagPbNode = concat([Uint8Array.of(0x0a), varint(unixFsData.byteLength), unixFsData])
   const digest = createHash("sha256").update(dagPbNode).digest()
-  return base58btc.encode(concat([Uint8Array.of(0x12, 0x20), digest])).slice(1)
+  return base58BtcEncode(concat([Uint8Array.of(0x12, 0x20), digest]))
 }
 
 function metadata(actionSource: string): {
