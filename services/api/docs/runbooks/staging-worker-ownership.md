@@ -84,7 +84,18 @@ anything:
 
 ## Current holds
 
-None.
+- **ACTIVE — 2026-08-10T12:56:32Z — `lit_rewards_cutover_session`** — Do not
+  deploy `pirate-api-staging` or run the Web `Release` workflow. Staging is
+  intentionally left on API `bdae8fe70247fc9e9b1f68d581963864c98b4d3b`
+  with the EOA settlement backend and EOA vault operator. API main
+  `967d5f6c7e2680e80b9266abd75c9e6cb11dc1da` contains the prepared
+  `lit_vault` configuration while the on-chain operator is still the EOA, so
+  an unbracketed deploy would park reward settlement. This hold remains until
+  either the prepared config is reverted or the bracketed cutover completes:
+  disable Web `Release` after confirming no in-flight run, pause the vault,
+  rotate the operator to the PKP, deploy the prepared API SHA, preflight, and
+  deliberately unpause. Do not begin that cutover before the Lit billing
+  T+24h reading due after `2026-08-11T10:26:10Z`.
 
 ## Hold history
 
