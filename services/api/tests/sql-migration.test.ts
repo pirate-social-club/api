@@ -5,6 +5,71 @@ import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("keeps rehearsal fixture funding distinct while reconciling campaign counters", async () => {
+    const database = new Database(":memory:")
+    database.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE reward_campaigns (
+        reward_campaign_id TEXT PRIMARY KEY,
+        funded_cents INTEGER NOT NULL,
+        reserved_cents INTEGER NOT NULL,
+        credited_cents INTEGER NOT NULL,
+        refunded_cents INTEGER NOT NULL
+      );
+      CREATE TABLE reward_campaign_funding_effects (
+        reward_campaign_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        failure_reason TEXT,
+        expected_amount_cents INTEGER NOT NULL
+      );
+      CREATE TABLE reward_campaign_reservations (
+        reward_campaign_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL
+      );
+      CREATE VIEW reward_campaign_accounting_reconciliation AS
+      SELECT reward_campaign_id, 0 AS counters_match FROM reward_campaigns;
+    `)
+    const sql = await readFile(resolve(
+      import.meta.dir,
+      "../test-fixtures/db/control-plane/migrations/0202_control_plane_reward_rehearsal_fixture_audit.sql",
+    ), "utf8")
+    for (const statement of splitSqlStatements(sql)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        database.exec(sqliteStatement)
+      }
+    }
+
+    try {
+      database.exec(`
+        INSERT INTO reward_campaigns VALUES ('rcp_fixture', 50, 0, 50, 0);
+        INSERT INTO reward_campaign_reservations VALUES ('rcp_fixture', 'credited', 50);
+        INSERT INTO reward_campaign_fixture_funding_effects (
+          reward_campaign_fixture_funding_effect_id, reward_campaign_id,
+          fixture_kind, amount_cents, recorded_by, recorded_at, evidence_json
+        ) VALUES (
+          'rff_fixture', 'rcp_fixture', 'rewards_vault_rehearsal_baseline',
+          50, 'staging_fixture_test', '2026-08-10T00:00:00Z', '{}'
+        );
+      `)
+      expect(database.query(`
+        SELECT stored_funded_cents, computed_funded_cents, counters_match
+        FROM reward_campaign_accounting_reconciliation
+        WHERE reward_campaign_id = 'rcp_fixture'
+      `).get()).toEqual({
+        stored_funded_cents: 50,
+        computed_funded_cents: 50,
+        counters_match: 1,
+      })
+      expect(database.query(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name = 'reward_campaign_fixture_archives'
+      `).get()).toEqual({ name: "reward_campaign_fixture_archives" })
+    } finally {
+      database.close()
+    }
+  })
+
   test("widens HNS import challenge kinds in the SQLite control-plane mirror", async () => {
     const database = new Database(":memory:")
     const applyFixture = async (fileName: string) => {
