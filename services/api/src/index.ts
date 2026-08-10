@@ -9,6 +9,7 @@ import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
 import danceChoreographies from "./routes/dance-choreographies"
+import postDanceChoreographies from "./routes/post-dance-choreographies"
 import danceSessions from "./routes/dance-sessions"
 import danceAttempts from "./routes/dance-attempts"
 import botUsers from "./routes/bot-users"
@@ -546,6 +547,7 @@ app.route("/bookings", bookings)
 app.route("/dance-choreographies", danceChoreographies)
 app.route("/dance-sessions", danceSessions)
 app.route("/dance-attempts", danceAttempts)
+app.route("/posts", postDanceChoreographies)
 /** Operational responses are never cacheable — including error responses. */
 function applyNoStore(response: Response | undefined): void {
   if (!response) return

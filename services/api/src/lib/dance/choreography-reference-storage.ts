@@ -61,3 +61,20 @@ export async function buildDanceReferenceSignedUrls(input: {
     artifactStorageRef,
   }
 }
+
+export async function buildDanceReferencePlaybackUrl(input: {
+  env: Env
+  referenceStorageRef: string
+  now: Date
+  expiresInSeconds?: number
+}): Promise<string> {
+  const url = await buildS3PresignedUrl({
+    config: resolveFilebaseConfig(input.env),
+    method: "GET",
+    objectKey: assertDanceStorageObjectKey(input.referenceStorageRef),
+    expiresInSeconds: input.expiresInSeconds ?? 300,
+    now: input.now,
+    bodyHashMode: "unsigned",
+  })
+  return url.toString()
+}

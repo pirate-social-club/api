@@ -5,3 +5,9 @@ export function isDanceCaptureEnabled(
 ): boolean {
   return String(env.DANCE_CAPTURE_ENABLED ?? "").trim().toLowerCase() === "true"
 }
+
+export function isDanceChoreographyEnabled(
+  env: Pick<Env, "DANCE_CHOREOGRAPHY_ENABLED">,
+): boolean {
+  return String(env.DANCE_CHOREOGRAPHY_ENABLED ?? "").trim().toLowerCase() === "true"
+}

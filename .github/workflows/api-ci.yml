@@ -5,6 +5,7 @@ on:
     paths:
       - "AGENTS.md"
       - ".github/workflows/api-ci.yml"
+      - ".github/workflows/dance-grader-staging-deploy.yml"
       - ".github/workflows/staging-contract-gate.yml"
       - ".github/workflows/staging-telegram-channel-cadence.yml"
       - ".github/workflows/staging-telegram-channel-smoke.yml"
@@ -29,6 +30,7 @@ on:
     paths:
       - "AGENTS.md"
       - ".github/workflows/api-ci.yml"
+      - ".github/workflows/dance-grader-staging-deploy.yml"
       - ".github/workflows/staging-contract-gate.yml"
       - ".github/workflows/staging-telegram-channel-cadence.yml"
       - ".github/workflows/staging-telegram-channel-smoke.yml"
@@ -195,6 +197,39 @@ jobs:
       - name: Test community D1 shard
         working-directory: services/community-d1-shard
         run: bun run test
+
+  dance-grader:
+    name: Dance grader Python
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv==0.10.12
+
+      - name: Install dance grader development dependencies
+        working-directory: services/dance-grader
+        run: uv sync --frozen --extra dev
+
+      - name: Lint dance grader
+        working-directory: services/dance-grader
+        run: uv run ruff check .
+
+      - name: Check dance grader formatting
+        working-directory: services/dance-grader
+        run: uv run ruff format --check .
+
+      - name: Test dance grader
+        working-directory: services/dance-grader
+        run: uv run pytest -q
 
   story-controlled-inclusion-harness:
     needs: ci-provenance
@@ -780,6 +815,7 @@ jobs:
       - api-top-level-tests
       - bookings-repository
       - ci-provenance
+      - dance-grader
       - story-controlled-inclusion-harness
     runs-on: ubuntu-latest
     steps:
@@ -789,6 +825,7 @@ jobs:
           API_ROUTE_TESTS_RESULT: ${{ needs.api-route-tests.result }}
           API_TOP_LEVEL_TESTS_RESULT: ${{ needs.api-top-level-tests.result }}
           BOOKINGS_REPOSITORY_RESULT: ${{ needs.bookings-repository.result }}
+          DANCE_GRADER_RESULT: ${{ needs.dance-grader.result }}
           REUSE_MERGE_GROUP: ${{ needs.ci-provenance.outputs.reuse_merge_group }}
           STORY_CONTROLLED_INCLUSION_HARNESS_RESULT: ${{ needs.story-controlled-inclusion-harness.result }}
         run: |
@@ -797,6 +834,7 @@ jobs:
             test "$API_ROUTE_TESTS_RESULT" = "skipped"
             test "$API_TOP_LEVEL_TESTS_RESULT" = "skipped"
             test "$BOOKINGS_REPOSITORY_RESULT" = "skipped"
+            test "$DANCE_GRADER_RESULT" = "skipped"
             test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "skipped"
             echo "Exact-SHA merge-group verification reused; duplicate main-push jobs stayed skipped."
             exit 0
@@ -805,6 +843,7 @@ jobs:
           test "$API_ROUTE_TESTS_RESULT" = "success"
           test "$API_TOP_LEVEL_TESTS_RESULT" = "success"
           test "$BOOKINGS_REPOSITORY_RESULT" = "success"
+          test "$DANCE_GRADER_RESULT" = "success"
           test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "success"
 
   cli:

@@ -75,6 +75,9 @@ const spec = {
       "name": "Song Study"
     },
     {
+      "name": "Dance"
+    },
+    {
       "name": "Moderation"
     },
     {
@@ -179,6 +182,239 @@ const spec = {
           }
         },
         "operationId": "post_auth_session_exchange"
+      }
+    },
+    "/dance-sessions/{dance_session_id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "dance_session_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get an owned dance session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-sessions/{dance_session_id}/cancel": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "dance_session_cancel",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Cancel an owned unsubmitted dance session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-attempts/{dance_attempt_id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_attempt_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "dance_attempt_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get an owned dance attempt",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceAttempt"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_attempt_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-choreographies/{dance_choreography_id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_choreography_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "dance_choreography_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get a ready dance choreography",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceChoreography"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_choreography_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/posts/{post_id}/dance-choreography": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "post_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "post_dance_choreography_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get the ready dance choreography hosted by a post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceChoreography"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/oauth/device_authorize": {
@@ -8677,24 +8913,6 @@ const spec = {
           }
         }
       },
-      "BadRequest": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      },
-      "RateLimited": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      },
       "NotFound": {
         "content": {
           "application/json": {
@@ -8705,6 +8923,24 @@ const spec = {
         }
       },
       "Conflict": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "RateLimited": {
         "content": {
           "application/json": {
             "schema": {
@@ -8830,6 +9066,192 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/WalletAttachmentSummary"
             }
+          }
+        }
+      },
+      "DanceSession": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "attempt",
+          "post",
+          "choreography",
+          "choreography_revision",
+          "status",
+          "max_bytes",
+          "expires_at",
+          "created"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_session"
+            ]
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "choreography": {
+            "type": "string"
+          },
+          "choreography_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DanceSessionStatus"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "DanceAttempt": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "session",
+          "post",
+          "choreography_revision",
+          "status",
+          "score_bps",
+          "rank_eligible",
+          "reason",
+          "completed_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_attempt"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "choreography_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DanceAttemptStatus"
+          },
+          "score_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "rank_eligible": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DanceAttemptReason"
+          },
+          "coverage_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "pose_detection_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "duration_ratio_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 20000
+          },
+          "completed_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "DanceChoreography": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "community",
+          "post",
+          "song_post",
+          "song_artifact_bundle",
+          "creator",
+          "official",
+          "revision",
+          "mirror_policy",
+          "reference"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_choreography"
+            ]
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_post": {
+            "type": "string"
+          },
+          "song_artifact_bundle": {
+            "type": "string"
+          },
+          "creator": {
+            "type": "string"
+          },
+          "official": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "mirror_policy": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "allowed"
+            ]
+          },
+          "reference": {
+            "$ref": "#/components/schemas/DanceChoreographyReference"
           }
         }
       },
@@ -18525,6 +18947,89 @@ const spec = {
           },
           "is_primary": {
             "type": "boolean"
+          }
+        }
+      },
+      "DanceSessionStatus": {
+        "type": "string",
+        "enum": [
+          "initialized",
+          "uploading",
+          "submitted",
+          "grading",
+          "finalized",
+          "rejected",
+          "failed",
+          "expired"
+        ]
+      },
+      "DanceAttemptStatus": {
+        "type": "string",
+        "enum": [
+          "initialized",
+          "uploading",
+          "submitted",
+          "grading",
+          "passed",
+          "rejected",
+          "failed",
+          "expired"
+        ]
+      },
+      "DanceAttemptReason": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "video_invalid",
+          "upload_invalid",
+          "duration_out_of_range",
+          "insufficient_coverage",
+          "insufficient_pose_presence",
+          "multiple_people",
+          "reference_replay",
+          "duplicate_attempt",
+          "scoring_unavailable",
+          "below_platform_floor",
+          "version_mismatch",
+          "insufficient_motion",
+          "insufficient_alignment",
+          "session_expired"
+        ]
+      },
+      "DanceChoreographyReference": {
+        "type": "object",
+        "required": [
+          "url",
+          "mime_type",
+          "duration_ms",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "mime_type": {
+            "type": "string",
+            "enum": [
+              "video/mp4",
+              "video/webm",
+              "video/quicktime"
+            ]
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 90000
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

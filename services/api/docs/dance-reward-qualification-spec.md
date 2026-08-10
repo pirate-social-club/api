@@ -3,6 +3,16 @@
 Status: approved v1 design baseline. Implementation and accrual must remain dark until the
 acceptance gates in this document pass. This document does not authorize production rewards.
 
+Implementation snapshot (2026-08-10): the landed surface is a dark, write-only pipeline. It has
+session creation, upload intent, submission, durable dispatch, signed callback, terminal attempt
+persistence, and cleanup, but no client-facing reads, cancellation, Telegram session binding,
+consent receipt, start-cue implementation, admitted calibration, engagement update, or reward
+qualification. The sections below describe the target contract, not current availability.
+
+Gate 0B read-side work adds core-first contracts plus authenticated session/attempt reads,
+active-revision choreography reads, and idempotent cancellation. These remain dark until their
+Core and API changes land through their respective release paths.
+
 ## Decision summary
 
 Pirate will add `dance` as a third way to earn a song-practice reward. A rewarded dance attempt
@@ -136,6 +146,14 @@ These are implementation and rollout gates.
     logs, analytics, or reward outbox.
 12. **Fail closed.** Missing versions, missing score, invalid signature, insufficient coverage,
     unavailable duplicate checks, or uncertain reference identity cannot qualify.
+13. **Cue-aware scoring is a new contract.** Introducing or changing cue-window removal increments
+    the dance scoring contract version. The current dance schema names this `scorer_version`; do not
+    reuse an existing value or add a parallel `scoring_version` without a contract migration. The
+    cue policy/version and scored-window facts participate in the signed result digest and finalizer
+    idempotency comparison. A pre-cue job cannot be silently regraded under the cue-aware contract.
+14. **Consent precedes storage.** A versioned consent receipt must be persisted before the first
+    byte of any participant recording, including a staff calibration recording, is stored or sent
+    to the grader.
 
 ## Terminology
 
@@ -266,6 +284,9 @@ Create `dance_attempt_sessions`:
 - expected MIME type and maximum bytes;
 - observed object size, ETag, and SHA-256 after submit;
 - capture-mode declaration;
+- source channel and channel-specific capture mode;
+- consent policy version, consented timestamp, and bounded consent source;
+- randomized cue id/version, assignment timestamp, cue window, and verification outcome;
 - grading dispatch id and bounded attempt count;
 - grader result digest;
 - cleanup status in `not_required`, `pending`, `deleted`, `retrying`, `failed`;
@@ -423,10 +444,29 @@ New public resources follow the repository's resource conventions: canonical `id
 fields, Unix-second timestamps, expandable reference fields without `_id` suffixes, and no generic
 public `updated_at`.
 
+The read path in this section is greenfield. The landed dance routes are write-only; Telegram,
+browser, and native clients have no current status or choreography resource to call.
+
+### Reward opportunity reads
+
+Add `GET /reward-opportunities?activity=dance` as a core-first contract change. Do not overload
+`/public/reward_campaigns`: a campaign is a funding envelope, while an opportunity is the
+viewer-facing combination of campaign eligibility, song post, choreography revision, timing, and
+completion state.
+
+Each opportunity has an opaque id and includes the activity, song/post identity, pinned
+choreography revision, display amount/network, active window, score-policy summary, and the
+viewer's bounded availability/completion state. Availability is advisory until the existing reward
+reservation and credit transaction succeeds. Telegram, web, Android, and iOS consume the same
+resource; no channel-specific reward selection is authoritative.
+
+This resource must begin in the Core OpenAPI source, regenerate bundled OpenAPI and contracts, and
+land before API implementation. Generated contract files are never hand-edited.
+
 ### Choreography reads
 
-- `GET /posts/{post}/dance_choreography`
-- `GET /dance_choreographies/{id}`
+- `GET /posts/{post}/dance-choreography`
+- `GET /dance-choreographies/{id}`
 
 A public choreography response exposes the active ready revision, mirror policy, reference playback
 resource, expected duration, and availability. It does not expose derived feature storage.
@@ -441,7 +481,7 @@ They are not required for the first fixed-reference pilot.
 
 ### Create a dance session
 
-`POST /dance_sessions`
+`POST /dance-sessions`
 
 Request:
 
@@ -484,7 +524,7 @@ decodability are verified after upload; request headers are not trusted as conte
 
 ### Submit a session
 
-`POST /dance_sessions/{id}/submit`
+`POST /dance-sessions/{id}/submit`
 
 Request:
 
@@ -505,8 +545,14 @@ otherwise.
 
 ### Read status
 
-- `GET /dance_sessions/{id}`
-- `GET /dance_attempts/{id}`
+- `GET /dance-sessions/{id}`
+- `GET /dance-attempts/{id}`
+- `POST /dance-sessions/{id}/cancel`
+
+Cancellation is idempotent for an already-expired session and is accepted only before submission.
+It moves the session to `expired`, releases the active slot, and schedules object cleanup. Once a
+session is `submitted` or `grading`, cancellation returns a conflict rather than racing immutable
+grader evidence.
 
 The attempt resource returns status, score when available, user-facing quality/integrity reason,
 aggregate coaching dimensions, and whether the attempt was reward eligible. It never returns the raw
@@ -572,6 +618,11 @@ SHA-256(canonical body)
 The API enforces a short clock window, constant-time signature comparison, expected key version,
 session/attempt binding, and terminal-result immutability. A shared static plaintext header alone is
 not sufficient for the external grader.
+
+The dance `scorer_version` covers preprocessing that changes the scored input, including cue-window
+exclusion. A cue-aware result includes the cue policy/version, observed cue outcome, and exact
+scored-window boundary in its canonical digest material. Re-dispatch uses the session's pinned
+contract tuple; it does not select whatever grader contract happens to be newest.
 
 ### Finalization order
 
@@ -901,11 +952,12 @@ exceeds v1 risk limits.
 - Exclude the bucket from durable backup and replication unless a later privacy review explicitly
   approves them.
 
-Grading on Modal makes it a data processor for ephemeral attempt video. Before collecting the
-calibration corpus or any other real participant video: subprocessor/DPA review, documented
-participant consent, confirmation that Modal containers retain no media after a job, region
-selection where available, and verification that Modal-side logs contain no signed URLs, frames,
-or landmarks. The same review covers Telegram as the capture/data-transfer channel.
+Grading on Modal makes it a data processor for ephemeral attempt video. Gate 0B may use explicitly
+consented staff recordings in staging after the consent receipt and storage/deletion controls are
+implemented. Before collecting any non-staff recording or admitting a calibration for broader use:
+complete the subprocessor/DPA review, confirm that Modal containers retain no media after a job,
+select the approved region where available, and verify that Modal-side logs contain no signed URLs,
+frames, or landmarks. The same review covers Telegram as the capture/data-transfer channel.
 
 The product statement must promise prompt deletion after grading, not instantaneous erasure. It
 must describe the bounded cleanup fallback accurately.
@@ -1042,6 +1094,24 @@ telemetry.
 
 ## Migration and implementation surface
 
+### Gate 1 fleet migration prerequisite
+
+The community-shard schema is not currently protected by an authoritative multi-pool migration
+ledger, and production fleet ledger state is known to drift. Before reward-enabling dance code is
+scheduled, choose and approve one of these paths:
+
+1. make the reviewed multi-pool ledger and migration runner authoritative for the complete fleet;
+   or
+2. publish a one-time operator-run protocol using supported migration tooling, with a manifest of
+   every target shard, per-shard migration evidence, retry/resume behavior, and a full-fleet
+   read-only schema scan proving the constraint before code rollout.
+
+Raw production database writes are not an approved substitute. The community outbox CHECK must be
+verified across the complete fleet before code can emit `dance`. The remaining Gate 1 change set is
+indivisible: widen the activity guards, freeze all three legacy `either` predicates to
+`study|karaoke`, and add the dance score/calibration gate together. A partial deployment must fail
+closed, and `terms_version` must not be treated as an activity-resolution mechanism.
+
 ### Community template
 
 - Add an ungated migration for `dance_attempts`.
@@ -1068,6 +1138,7 @@ telemetry.
 - Extend reward activity unions and reconciler score extraction.
 - Branch campaign prerequisite validation explicitly by activity.
 - Update public reward offers and campaign capabilities.
+- Add the core-first `/reward-opportunities` source contract and regenerate all derived contracts.
 - Update source contracts and regenerate OpenAPI/contracts output; do not hand-edit generated files.
 - Add operator diagnostics for attempt, job, fingerprint decision, and cleanup state without media
   access.
@@ -1158,8 +1229,21 @@ input distribution.
 
 ### Gate 0B: staff-only Telegram ingestion
 
-- Modal/Telegram data-processing and retention review is approved before collecting participant
-  recordings;
+- Python tests and lint run in CI for every grader change;
+- staging deployment is codified, version-tagged, configuration-checked, and rollback-documented;
+- session, attempt, choreography, and cancellation reads exist before client orchestration;
+- a versioned consent receipt is persisted before any participant recording, including staff
+  calibration media;
+- the Telegram byte/duration contract is reconciled with direct-upload limits, and every Telegram
+  download requires an explicit maximum byte count;
+- randomized cue assignment, persistence, verification, score-window exclusion, dance
+  `scorer_version` bump, and digest/idempotency binding are implemented together;
+- Telegram uses an explicit per-chat session state machine with exact sender, private-chat, and
+  `reply_to_message.message_id` binding, action/revision fencing, and `file_unique_id` dedupe;
+- missing dispatcher configuration fails loudly; cleanup exhaustion alerts; the bucket lifecycle
+  rule provides a tested one-day backstop;
+- consented-staff staging use is allowed before the broader Modal DPA/region/no-retention review is
+  complete, but no non-staff recording may be collected until those privacy gates pass;
 - Telegram choreography prompt and private ingestion flow available only to staff/pilot allowlist;
 - grading runs with rewards disabled;
 - raw deletion and lifecycle backstop verified;
@@ -1168,6 +1252,7 @@ input distribution.
 
 ### Gate 0C: channel-matched calibration admission
 
+- the core-first reward-opportunity contract and read model are available to all channel adapters;
 - calibration and held-out recordings are collected through the production Telegram bot media
   path, with the default `video` path represented and delivery mode recorded;
 - calibration artifact and thresholds are reviewed on a held-out dataset;

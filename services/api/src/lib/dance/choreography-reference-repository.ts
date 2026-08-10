@@ -44,6 +44,23 @@ export type DanceChoreographyRevisionRecord = {
   referenceDispatchId: string | null
 }
 
+export type ReadyDanceChoreographyRecord = {
+  danceChoreographyId: string
+  danceChoreographyRevisionId: string
+  communityId: string
+  hostPostId: string
+  referencedSongPostId: string
+  songArtifactBundleId: string
+  creatorUserId: string
+  official: boolean
+  referenceStorageRef: string
+  referenceMimeType: "video/mp4" | "video/webm" | "video/quicktime"
+  referenceDurationMs: number
+  referenceWidth: number
+  referenceHeight: number
+  mirrorPolicy: "strict" | "allowed"
+}
+
 export type FinalizeDanceReferenceResult =
   | { kind: "finalized"; record: DanceChoreographyRevisionRecord }
   | { kind: "idempotent"; record: DanceChoreographyRevisionRecord }
@@ -123,6 +140,65 @@ function toRecord(row: unknown): DanceChoreographyRevisionRecord {
       stringOrNull(rowValue(row, "reference_dispatch_claim_token")),
     referenceDispatchId: stringOrNull(rowValue(row, "reference_dispatch_id")),
   }
+}
+
+function toReadyRecord(row: unknown): ReadyDanceChoreographyRecord {
+  const official = requiredNumber(row, "official")
+  if (official !== 0 && official !== 1) {
+    throw internalError("Dance choreography has invalid official state")
+  }
+  return {
+    danceChoreographyId: requiredString(row, "dance_choreography_id"),
+    danceChoreographyRevisionId: requiredString(row, "dance_choreography_revision_id"),
+    communityId: requiredString(row, "community_id"),
+    hostPostId: requiredString(row, "host_post_id"),
+    referencedSongPostId: requiredString(row, "referenced_song_post_id"),
+    songArtifactBundleId: requiredString(row, "song_artifact_bundle_id"),
+    creatorUserId: requiredString(row, "creator_user_id"),
+    official: official === 1,
+    referenceStorageRef: requiredString(row, "reference_storage_ref"),
+    referenceMimeType: requiredString(row, "reference_mime_type") as
+      ReadyDanceChoreographyRecord["referenceMimeType"],
+    referenceDurationMs: requiredNumber(row, "reference_duration_ms"),
+    referenceWidth: requiredNumber(row, "reference_width"),
+    referenceHeight: requiredNumber(row, "reference_height"),
+    mirrorPolicy: requiredString(row, "mirror_policy") as "strict" | "allowed",
+  }
+}
+
+const READY_CHOREOGRAPHY_SELECT = `
+  SELECT c.dance_choreography_id, c.community_id, c.host_post_id,
+    c.referenced_song_post_id, c.song_artifact_bundle_id, c.creator_user_id,
+    c.official, r.dance_choreography_revision_id, r.reference_storage_ref,
+    r.reference_mime_type, r.reference_duration_ms, r.reference_width,
+    r.reference_height, r.mirror_policy
+  FROM dance_choreographies c
+  JOIN dance_choreography_revisions r
+    ON r.dance_choreography_id = c.dance_choreography_id
+    AND r.dance_choreography_revision_id = c.active_revision_id
+  WHERE c.status = 'ready' AND r.status = 'ready'
+`
+
+export async function getReadyDanceChoreographyById(input: {
+  client: Client
+  danceChoreographyId: string
+}): Promise<ReadyDanceChoreographyRecord | null> {
+  const row = await executeFirst(input.client, {
+    sql: `${READY_CHOREOGRAPHY_SELECT} AND c.dance_choreography_id = ?1`,
+    args: [input.danceChoreographyId],
+  })
+  return row ? toReadyRecord(row) : null
+}
+
+export async function getReadyDanceChoreographyByHostPost(input: {
+  client: Client
+  hostPostId: string
+}): Promise<ReadyDanceChoreographyRecord | null> {
+  const row = await executeFirst(input.client, {
+    sql: `${READY_CHOREOGRAPHY_SELECT} AND c.host_post_id = ?1`,
+    args: [input.hostPostId],
+  })
+  return row ? toReadyRecord(row) : null
 }
 
 function terminalFactsFromRow(row: unknown): DanceReferenceTerminalFacts {

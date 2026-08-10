@@ -33,6 +33,7 @@ ATTEMPT_REJECTION_CODE_MAP = {
     "insufficient_motion": "insufficient_motion",
 }
 
+
 class DownloadVerificationError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
