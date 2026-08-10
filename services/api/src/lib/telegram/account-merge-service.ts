@@ -549,28 +549,26 @@ export async function migrateShard(client: Client, merge: MergeRecord): Promise<
   await migrateShardData(client, merge, true)
 }
 
-const MIGRATABLE_SOURCE_ROWS_SQL = `
-  SELECT 1 FROM (
-    SELECT 1 FROM community_memberships WHERE user_id = ?1 AND status <> 'left'
-    UNION ALL SELECT 1 FROM song_study_review_state WHERE user_id = ?1
-    UNION ALL SELECT 1 FROM song_study_session WHERE user_id = ?1
-    UNION ALL SELECT 1 FROM song_study_attempt WHERE user_id = ?1
-    UNION ALL SELECT 1 FROM song_engagement_days WHERE user_id = ?1
-    UNION ALL SELECT 1 FROM song_streaks WHERE user_id = ?1
-    UNION ALL SELECT 1 FROM reward_qualification_outbox WHERE user_id = ?1
-  ) residuals
-  LIMIT 1
-`
+// Do not combine these probes with UNION ALL. Several community tables are
+// partitioned views, and SQLite expands their definitions before enforcing its
+// compound-select term limit. Seven bounded statements are still one bulk RPC
+// operation, while remaining safe on the largest deployed view expansion.
+const MIGRATABLE_SOURCE_ROW_STATEMENTS = [
+  `SELECT 1 FROM community_memberships WHERE user_id = ?1 AND status <> 'left' LIMIT 1`,
+  `SELECT 1 FROM song_study_review_state WHERE user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM song_study_session WHERE user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM song_study_attempt WHERE user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM song_engagement_days WHERE user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM song_streaks WHERE user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM reward_qualification_outbox WHERE user_id = ?1 LIMIT 1`,
+] as const
 
 export async function shardHasMigratableSourceRows(client: Client, sourceUserId: string): Promise<boolean> {
-  // These are seven concrete tables, not partitioned views. Keeping this as a
-  // small compound query bounds fleet round trips without approaching D1's
-  // compound-select limit that the merge preflight previously encountered.
-  const result = await client.execute({
-    sql: MIGRATABLE_SOURCE_ROWS_SQL,
-    args: [sourceUserId],
-  })
-  return result.rows.length > 0
+  for (const sql of MIGRATABLE_SOURCE_ROW_STATEMENTS) {
+    const result = await client.execute({ sql, args: [sourceUserId] })
+    if (result.rows.length > 0) return true
+  }
+  return false
 }
 
 export async function migrateShardResiduals(client: Client, merge: MergeRecord): Promise<void> {
@@ -592,10 +590,12 @@ async function bulkCommunitiesWithMigratableSourceRows(input: {
     input.repository,
     input.communityIds.map((communityId) => ({
       communityId,
-      statements: [{ sql: MIGRATABLE_SOURCE_ROWS_SQL, args: [input.sourceUserId] }],
+      statements: MIGRATABLE_SOURCE_ROW_STATEMENTS.map((sql) => ({ sql, args: [input.sourceUserId] })),
     })),
   )
-  return new Set(input.communityIds.filter((communityId) => rowsByCommunity.get(communityId)?.[0]?.rows.length))
+  return new Set(input.communityIds.filter((communityId) =>
+    rowsByCommunity.get(communityId)?.some((result) => result.rows.length > 0),
+  ))
 }
 
 // Residual repair and its completion gate are read-heavy scans over the whole
