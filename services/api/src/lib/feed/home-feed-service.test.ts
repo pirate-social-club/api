@@ -3,6 +3,7 @@ import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, Co
 import {
   filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
+  homeFeedCorpusMemberCommunityIds,
   listHomeFeedCommunityViewCounts,
   mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
@@ -599,6 +600,14 @@ describe("filterVisibleHomeFeedProjections", () => {
     ], new Set<string>(["cmt_beta"]))
 
     expect(result.map((row) => row.source_post_id)).toEqual(["pst_public", "pst_private"])
+  })
+})
+
+describe("homeFeedCorpusMemberCommunityIds", () => {
+  test("removes membership from corpus selection for viewer-aware public feeds", () => {
+    const memberships = new Set(["cmt_member"])
+    expect(homeFeedCorpusMemberCommunityIds(memberships, true)).toEqual(new Set())
+    expect(homeFeedCorpusMemberCommunityIds(memberships, false)).toBe(memberships)
   })
 })
 

@@ -635,6 +635,13 @@ export function filterVisibleHomeFeedProjections(
   return rows.filter((row) => row.visibility === "public" || memberCommunityIds.has(row.community_id))
 }
 
+export function homeFeedCorpusMemberCommunityIds(
+  memberCommunityIds: Set<string>,
+  publicCorpusOnly: boolean,
+): Set<string> {
+  return publicCorpusOnly ? new Set() : memberCommunityIds
+}
+
 export type CommunityAggregate = {
   totalScore: number
   bestRank: number
@@ -884,6 +891,8 @@ export async function listHomeFeed(input: {
   profileRepository?: ProfileRepository | null
   waitUntil?: HomeFeedWaitUntil
   contentKind?: "video" | null
+  /** Keep selection and visibility identical to the anonymous corpus while hydrating viewer state. */
+  publicCorpusOnly?: boolean
 }): Promise<HomeFeedResponseWithTiming> {
   const requestStartedAt = performance.now()
   const phaseTimings: Record<string, number> = {}
@@ -909,6 +918,10 @@ export async function listHomeFeed(input: {
     membershipRows,
     userId: input.userId,
   }))
+  const corpusMemberCommunityIdSet = homeFeedCorpusMemberCommunityIds(
+    memberCommunityIdSet,
+    input.publicCorpusOnly === true,
+  )
   const communityIds = resolveHomeFeedCandidateCommunityIds({
     activeCommunities,
     allowOverride: input.env.ENVIRONMENT === "staging",
@@ -984,7 +997,7 @@ export async function listHomeFeed(input: {
           cursor: input.cursor,
           env: input.env,
           includeProjectedPayload: shadowControlPlane,
-          memberCommunityIdSet,
+          memberCommunityIdSet: corpusMemberCommunityIdSet,
           now,
           selectionPolicy,
           timeRange,
@@ -1004,7 +1017,7 @@ export async function listHomeFeed(input: {
       env: input.env,
       communityIds,
     }),
-    memberCommunityIdSet,
+    corpusMemberCommunityIdSet,
   )
 
   const cutoffMs = getTimeRangeCutoffMs(timeRange, now)
@@ -1116,7 +1129,7 @@ export async function listHomeFeed(input: {
             cursor: videoPage.nextCursor,
             env: input.env,
             includeProjectedPayload: shadowControlPlane,
-            memberCommunityIdSet,
+            memberCommunityIdSet: corpusMemberCommunityIdSet,
             now,
             orderedRows: videoPage.bestOrderedRows,
             priorRows: deliveredVideoRows,
@@ -1134,7 +1147,7 @@ export async function listHomeFeed(input: {
             sort,
             timeRange,
           })
-      const nextRows = filterVisibleHomeFeedProjections(videoPage.rows, memberCommunityIdSet)
+      const nextRows = filterVisibleHomeFeedProjections(videoPage.rows, corpusMemberCommunityIdSet)
       candidatesScanned += videoPage.rows.length
       allRows = [...allRows, ...nextRows]
       pageRows = [...pageRows, ...nextRows]
@@ -1230,6 +1243,7 @@ export async function listCommunityVideoFeed(input: {
     env: input.env,
     locale: input.locale,
     profileRepository: input.profileRepository,
+    publicCorpusOnly: true,
     sort: input.sort,
     timeRange: input.timeRange,
     userId: input.userId,
