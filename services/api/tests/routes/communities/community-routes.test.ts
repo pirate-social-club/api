@@ -107,7 +107,6 @@ describe("community routes", () => {
     expect(policy.included_surfaces).toEqual({
       community_identity: true,
       community_stats: true,
-      video_feed: true,
       thread_cards: true,
       thread_bodies: true,
       top_comments: true,
@@ -148,7 +147,6 @@ describe("community routes", () => {
     expect(patchedPolicy.included_surfaces).toEqual({
       community_identity: true,
       community_stats: false,
-      video_feed: true,
       thread_cards: true,
       thread_bodies: true,
       top_comments: false,
@@ -224,14 +222,15 @@ describe("community routes", () => {
     })
 
     const disabled = await requestJson(
-      `http://pirate.test/communities/${communityId}/machine-access-policy`,
-      { included_surfaces: { video_feed: false } },
+      `http://pirate.test/communities/${communityId}/presentation`,
+      { video_feed_enabled: false },
       ctx.env,
       session.accessToken,
     )
     expect(disabled.status).toBe(200)
     expect(await json(disabled)).toMatchObject({
-      included_surfaces: { video_feed: false },
+      default_surface: "threads",
+      video_feed_enabled: false,
     })
 
     const stored = await getCommunityControlPlaneState(ctx.env, communityId)
@@ -249,7 +248,7 @@ describe("community routes", () => {
     )
     expect(rejected.status).toBe(400)
     expect(await json(rejected)).toMatchObject({
-      message: "default_surface cannot be videos while video_feed is disabled",
+      message: "default_surface cannot be videos while the video feed is disabled",
     })
   })
 
