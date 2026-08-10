@@ -137,8 +137,12 @@ export async function activateHnsRootRouting(
         SET canonical_routing_eligible = 1,
             updated_at = ?2
         WHERE normalized_root_label = ?1
-          AND canonical_routing_eligible = 0
-          AND routing_hard_denied = 0
+          -- Legacy rows created before the non-null defaults were enforced
+          -- can still carry NULL. Treat it as the existing false read value.
+          -- TODO(2026-09-01, control-plane schema owner): remove COALESCE after
+          -- the production constraint audit confirms no nullable rows remain.
+          AND COALESCE(canonical_routing_eligible, 0) = 0
+          AND COALESCE(routing_hard_denied, 0) = 0
       `,
       args: [normalizedRootLabel, now],
     })
