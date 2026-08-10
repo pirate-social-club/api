@@ -15,7 +15,7 @@ const POSE_MODEL_VERSION = "pose_landmarker_full_float16_v1"
 const POSE_MODEL_SHA256 =
   "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1"
 const FEATURE_SCHEMA_VERSION = "dance_pose_2d_gate0_v1"
-const SCORER_VERSION = "dance_scorer_gate0_v1"
+const SCORER_VERSION = "dance_scorer_gate0_v2"
 const CLAIM_TTL_MS = 2 * 60_000
 const REQUEST_TIMEOUT_MS = 15_000
 const CALLBACK_DEADLINE_MS = 10 * 60_000

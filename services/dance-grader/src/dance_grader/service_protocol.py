@@ -31,6 +31,7 @@ ATTEMPT_REJECTION_CODE_MAP = {
     "insufficient_pose_presence": "insufficient_pose_presence",
     "insufficient_coverage": "insufficient_coverage",
     "insufficient_motion": "insufficient_motion",
+    "start_cue_mismatch": "start_cue_mismatch",
 }
 
 

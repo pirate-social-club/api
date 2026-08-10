@@ -15,6 +15,16 @@ export const DANCE_ATTEMPT_FINGERPRINT_POLICY_VERSION =
   "dance_motion_fingerprint_gate0_v1"
 export const DANCE_ATTEMPT_INTEGRITY_POLICY_VERSION =
   "dance_integrity_gate0_v1"
+export const DANCE_SCORER_VERSION = "dance_scorer_gate0_v2"
+export const DANCE_START_CUE_POLICY_VERSION = "dance_start_cue_gross_body_v1"
+export const DANCE_START_CUE_MINIMUM_HOLD_MS = 500
+export const DANCE_START_CUE_OBSERVATION_WINDOW_MS = 2500
+export const DANCE_START_CUE_KINDS = [
+  "hands_on_head",
+  "arms_t",
+  "hands_on_hips",
+] as const
+export type DanceStartCueKind = typeof DANCE_START_CUE_KINDS[number]
 
 export type DanceAttemptSessionRecord = {
   sessionId: string
@@ -37,6 +47,10 @@ export type DanceAttemptSessionRecord = {
   consentPolicyVersion: string | null
   consentedAt: string | null
   consentSource: string | null
+  startCuePolicyVersion?: string | null
+  startCueKind?: string | null
+  startCueMinimumHoldMs?: number | null
+  startCueObservationWindowMs?: number | null
   expiresAt: string
   submittedAt: string | null
   finalizedAt: string | null
@@ -54,6 +68,7 @@ export type CreateDanceAttemptSessionInput = {
   consentPolicyVersion: typeof DANCE_CONSENT_POLICY_VERSION
   consentedAt: string
   consentSource: "api" | "telegram" | "ios" | "android"
+  startCueKind?: DanceStartCueKind
   now: string
   expiresAt: string
 }
@@ -64,7 +79,9 @@ const SESSION_SELECT = `
     dance_choreography_revision_id, status, upload_object_key, maximum_bytes,
     observed_size_bytes, observed_etag, observed_content_sha256, terminal_reason,
     score_bps, calibration_admitted, consent_policy_version, consented_at,
-    consent_source, expires_at, submitted_at, finalized_at, created_at
+    consent_source, start_cue_policy_version, start_cue_kind,
+    start_cue_minimum_hold_ms, start_cue_observation_window_ms,
+    expires_at, submitted_at, finalized_at, created_at
   FROM dance_attempt_sessions
 `
 
@@ -124,6 +141,10 @@ function toRecord(row: unknown): DanceAttemptSessionRecord {
     consentPolicyVersion: stringOrNull(rowValue(row, "consent_policy_version")),
     consentedAt: stringOrNull(rowValue(row, "consented_at")),
     consentSource: stringOrNull(rowValue(row, "consent_source")),
+    startCuePolicyVersion: stringOrNull(rowValue(row, "start_cue_policy_version")),
+    startCueKind: stringOrNull(rowValue(row, "start_cue_kind")),
+    startCueMinimumHoldMs: nullableNumber(row, "start_cue_minimum_hold_ms"),
+    startCueObservationWindowMs: nullableNumber(row, "start_cue_observation_window_ms"),
     expiresAt: requiredString(row, "expires_at"),
     submittedAt: stringOrNull(rowValue(row, "submitted_at")),
     finalizedAt: stringOrNull(rowValue(row, "finalized_at")),
@@ -241,9 +262,10 @@ export async function createDanceAttemptSession(input: {
           AND r.status = 'ready'
           AND c.status = 'ready'
           AND c.active_revision_id = r.dance_choreography_revision_id
+          AND r.scorer_version = ?2
         FOR UPDATE
       `,
-      args: [value.hostPostId],
+      args: [value.hostPostId, DANCE_SCORER_VERSION],
     })
     if (!revision) throw notFoundError("Active dance choreography revision not found")
 
@@ -262,13 +284,16 @@ export async function createDanceAttemptSession(input: {
           required_fingerprint_policy_version, required_integrity_policy_version,
           mirror_policy, status, activity_date, activity_timezone,
           creation_idempotency_key, consent_policy_version, consented_at,
-          consent_source, upload_object_key, expected_mime_type,
+          consent_source, start_cue_policy_version, start_cue_kind,
+          start_cue_minimum_hold_ms, start_cue_observation_window_ms,
+          upload_object_key, expected_mime_type,
           maximum_bytes, expires_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
           ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
-          'initialized', ?24, ?25, ?26, ?27, ?28, ?29, ?30,
-          'video/mp4', ?31, ?32, ?33, ?33
+          'initialized', ?24, ?25, ?26, ?27, ?28, ?29,
+          ?30, ?31, ?32, ?33, ?34,
+          'video/mp4', ?35, ?36, ?37, ?37
         )
         ON CONFLICT (subject_user_id, creation_idempotency_key) DO NOTHING
         RETURNING dance_attempt_session_id
@@ -303,6 +328,10 @@ export async function createDanceAttemptSession(input: {
         value.consentPolicyVersion,
         value.consentedAt,
         value.consentSource,
+        DANCE_START_CUE_POLICY_VERSION,
+        value.startCueKind ?? "hands_on_head",
+        DANCE_START_CUE_MINIMUM_HOLD_MS,
+        DANCE_START_CUE_OBSERVATION_WINDOW_MS,
         placeholderKey,
         DANCE_ATTEMPT_MAX_BYTES,
         value.expiresAt,

@@ -385,6 +385,15 @@ used by the bot and future clients; they are not a promise of a general public u
 6. The bot sends or edits a terminal message with score, pass/rejection, concise corrective
    feedback, and reward status when rewards are enabled.
 
+The first implemented cue contract is `dance_start_cue_gross_body_v1`: one of `hands_on_head`,
+`arms_t`, or `hands_on_hips`, selected with cryptographic randomness at session creation, held for
+at least 500 ms inside the opening 2,500 ms. The assignment is database-immutable. The grader
+records `passed` plus the exact scored-window boundary, or rejects with `start_cue_mismatch`; the
+cue evidence is included in the callback digest and immutable aggregate attempt evidence. Scoring
+after cue-window exclusion is `dance_scorer_gate0_v2`. Session creation selects only v2 reference
+revisions, so v1 references fail closed until reprocessed instead of being silently graded under a
+different input contract.
+
 Only one nonterminal dance session may exist per Telegram account. `/cancel` expires it and releases
 the slot. Sessions also expire automatically. Telegram webhook redelivery, repeated button presses,
 repeated media updates, dispatch retry, and result delivery are idempotent.

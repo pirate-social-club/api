@@ -23,6 +23,10 @@ export type DanceAttemptDispatchRecord = {
   fingerprintPolicyVersion: string
   integrityPolicyVersion: string
   mirrorPolicy: string
+  startCuePolicyVersion: string
+  startCueKind: string
+  startCueMinimumHoldMs: number
+  startCueObservationWindowMs: number
   dispatchAttemptCount: number
 }
 
@@ -61,6 +65,10 @@ function toRecord(row: unknown): DanceAttemptDispatchRecord {
     fingerprintPolicyVersion: required(row, "required_fingerprint_policy_version"),
     integrityPolicyVersion: required(row, "required_integrity_policy_version"),
     mirrorPolicy: required(row, "mirror_policy"),
+    startCuePolicyVersion: required(row, "start_cue_policy_version"),
+    startCueKind: required(row, "start_cue_kind"),
+    startCueMinimumHoldMs: integer(row, "start_cue_minimum_hold_ms"),
+    startCueObservationWindowMs: integer(row, "start_cue_observation_window_ms"),
     dispatchAttemptCount: integer(row, "grading_dispatch_attempt_count"),
   }
 }

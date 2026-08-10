@@ -72,7 +72,7 @@ class PoseSequence:
 
 @dataclass(frozen=True)
 class ScorerConfig:
-    version: str = "dance_scorer_gate0_v1"
+    version: str = "dance_scorer_gate0_v2"
     feature_schema_version: str = "dance_pose_2d_gate0_v1"
     fingerprint_version: str = "dance_motion_fingerprint_gate0_v1"
     target_fps: float = 15.0

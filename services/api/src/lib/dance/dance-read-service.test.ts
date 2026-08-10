@@ -189,6 +189,7 @@ describe("dance read service", () => {
       created: 1_786_320_000,
       consent_policy_version: "dance_recording_v1",
       consented_at: 1_786_320_000,
+      start_cue: null,
     })
     expect(JSON.stringify(serialized)).not.toContain("private/object.mp4")
   })
