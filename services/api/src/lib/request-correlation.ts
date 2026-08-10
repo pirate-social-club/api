@@ -12,6 +12,7 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024
 type RequestCorrelationVariables = {
   requestId: string
   actor?: ActorContext | AdminActorContext
+  hnsWalletOriginAllowed?: boolean
 }
 
 export type RequestCorrelationEnv = {

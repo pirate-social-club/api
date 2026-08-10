@@ -25,6 +25,7 @@ Mounted in `services/api/src/index.ts`:
 - `/admin/bot-users`
 - `/admin/debug`
 - `/admin/ops`
+- `/admin/ops/hns-wallet-origins`
 - `/admin/ops/telegram`
 - `/internal/hns-edge-alerts`
 - `/operator/story-settlement`
@@ -66,6 +67,7 @@ Mounted in `services/api/src/index.ts`:
 | `/admin/bot-users` | `src/routes/bot-users.ts` | `tests/routes/bot-users-routes.test.ts` | direct | Bot-user management endpoints. |
 | `/admin/debug/post-pipeline` | `src/routes/debug-pipeline.ts` | `tests/routes/debug-pipeline-routes.test.ts` | direct | Admin-only diagnostic endpoint for post translation/summary pipeline state. |
 | `/admin/ops/wallets` | `src/routes/ops-wallets.ts` | `tests/routes/ops-wallets-routes.test.ts` | direct | Admin-only operator-wallet balance report (Story runtime signers + runtime funding watchdog wallets). |
+| `/admin/ops/hns-wallet-origins/*` | `src/routes/hns-wallet-origin-ops.ts` | `tests/routes/hns-wallet-origin-ops-routes.test.ts` | direct | Admin-only durable registration, revocation, and fail-closed hard-deny projection for activated HNS wallet origins. |
 | `/admin/ops/telegram/uncertain-deliveries` | `src/routes/ops-telegram-deliveries.ts` | `tests/routes/ops-telegram-deliveries-routes.test.ts` | direct | Admin-only surface for Telegram channel deliveries stranded in `uncertain`; covers the admin-token boundary on read and resolve, the empty roll-up, and action validation. Resolution semantics (CAS idempotency, evidence requirements, retry rollback) are covered in `src/lib/telegram/uncertain-delivery-ops-service.test.ts`. |
 | `/internal/hns-edge-alerts` | `src/routes/hns-edge-alerts.ts` | `tests/routes/hns-edge-alerts.test.ts` | direct | Dedicated bearer-authenticated VPS alert ingress; covers authorization, payload validation, sink forwarding, and fail-closed delivery. |
 | `/operator/story-settlement/*` | `src/routes/story-settlement-ops.ts` | `src/routes/story-settlement-ops.test.ts` | direct | Scoped operator-credential routes for journaled abandoned-nonce repair and staging-only alert-sink probing. |

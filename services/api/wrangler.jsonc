@@ -67,6 +67,10 @@
       {
         "name": "COMMENT_CREATE_RATE_LIMITER",
         "class_name": "CommentCreateRateLimiterDO"
+      },
+      {
+        "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+        "class_name": "HnsWalletOriginAuthorityDO"
       }
     ]
   },
@@ -94,6 +98,10 @@
     {
       "tag": "v1_story_settlement_wallet_coordinator",
       "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+    },
+    {
+      "tag": "v1_hns_wallet_origin_authority",
+      "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
     }
   ],
   "vars": {
@@ -213,6 +221,10 @@
           {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
+          },
+          {
+            "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+            "class_name": "HnsWalletOriginAuthorityDO"
           }
         ]
       },
@@ -240,6 +252,10 @@
         {
           "tag": "v1_story_settlement_wallet_coordinator",
           "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+        },
+        {
+          "tag": "v1_hns_wallet_origin_authority",
+          "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
         }
       ],
       "services": [
@@ -420,6 +436,10 @@
           {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
+          },
+          {
+            "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+            "class_name": "HnsWalletOriginAuthorityDO"
           }
         ]
       },
@@ -447,6 +467,10 @@
         {
           "tag": "v1_story_settlement_wallet_coordinator",
           "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+        },
+        {
+          "tag": "v1_hns_wallet_origin_authority",
+          "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
         }
       ],
       "services": [
@@ -684,6 +708,10 @@
           {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
+          },
+          {
+            "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+            "class_name": "HnsWalletOriginAuthorityDO"
           }
         ]
       },
@@ -711,6 +739,10 @@
         {
           "tag": "v1_story_settlement_wallet_coordinator",
           "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+        },
+        {
+          "tag": "v1_hns_wallet_origin_authority",
+          "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
         }
       ],
       "services": [
