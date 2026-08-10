@@ -11,8 +11,6 @@ import {
   type CommunityPresentation,
   type CommunityPresentationPatch,
 } from "./community-presentation"
-import { resolveEffectiveCommunityMachineAccessPolicy } from "./community-machine-access-service"
-import { badRequestError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import { publicCommunityId } from "../public-ids"
@@ -46,22 +44,12 @@ export async function updateCommunityPresentation(input: {
   })
   const current = communityPresentationFromRow(community)
   const next = assertCommunityPresentationPatch(input.body, current)
-  if (next.default_surface === "videos") {
-    const policy = await resolveEffectiveCommunityMachineAccessPolicy({
-      communityId: input.communityId,
-      communityRepository: input.communityRepository,
-      env: input.env,
-    })
-    if (!policy.included_surfaces.video_feed) {
-      throw badRequestError("default_surface cannot be videos while video_feed is disabled")
-    }
-  }
-
   const updatedAt = nowIso()
   await input.communityRepository.updateCommunityPresentation({
     brandingJson: JSON.stringify(next.branding),
     communityId: input.communityId,
     defaultSurface: next.default_surface,
+    videoFeedEnabled: next.video_feed_enabled,
     updatedAt,
   })
   await writeAuditEventForEnv(input.env, {
@@ -75,6 +63,7 @@ export async function updateCommunityPresentation(input: {
     metadata: {
       default_surface: next.default_surface,
       branding: next.branding,
+      video_feed_enabled: next.video_feed_enabled,
     },
     targetId: input.communityId,
     targetType: "community",

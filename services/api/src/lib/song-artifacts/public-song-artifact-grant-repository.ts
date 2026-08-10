@@ -1,12 +1,17 @@
 import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
 import type { Client } from "../sql-client"
-import { decodePublicSongArtifactUploadId } from "../public-ids"
+import { decodePublicCommunityId, decodePublicSongArtifactUploadId } from "../public-ids"
 import { rowValue } from "../sql-row"
 import { withTransaction } from "../transactions"
 
-const ARTIFACT_CONTENT_PATH = /\/song-artifact-uploads\/([^/?#]+)\/content(?:[?#]|$)/gu
+const TRUSTED_ARTIFACT_HOST = /(?:^|\.)pirate(?:\.sc)?$/u
 
-export function projectedPublicSongArtifactUploadIds(projectedPayloadJson: string): string[] {
+function missingGrantTable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /(?:no such table|relation .* does not exist).*public_song_artifact_grants/iu.test(message)
+}
+
+export function projectedPublicSongArtifactUploadIds(projectedPayloadJson: string, communityId: string): string[] {
   let payload: { media_refs?: unknown };
   try {
     payload = JSON.parse(projectedPayloadJson) as { media_refs?: unknown }
@@ -20,14 +25,20 @@ export function projectedPublicSongArtifactUploadIds(projectedPayloadJson: strin
     if (!mediaRef || typeof mediaRef !== "object") continue
     const storageRef = (mediaRef as { storage_ref?: unknown }).storage_ref
     if (typeof storageRef !== "string") continue
-    for (const match of storageRef.matchAll(ARTIFACT_CONTENT_PATH)) {
-      const encodedUploadId = match[1]
-      if (!encodedUploadId) continue
-      try {
-        uploadIds.add(decodePublicSongArtifactUploadId(decodeURIComponent(encodedUploadId)))
-      } catch {
-        // A malformed reference cannot grant public byte access.
-      }
+    try {
+      const url = new URL(storageRef)
+      if (!/^https?:$/u.test(url.protocol) || !TRUSTED_ARTIFACT_HOST.test(url.hostname)) continue
+      const segments = url.pathname.split("/").filter(Boolean).map(decodeURIComponent)
+      if (
+        segments.length !== 5
+        || !["communities", "public-communities"].includes(segments[0] ?? "")
+        || decodePublicCommunityId(segments[1] ?? "") !== communityId
+        || segments[2] !== "song-artifact-uploads"
+        || segments[4] !== "content"
+      ) continue
+      uploadIds.add(decodePublicSongArtifactUploadId(segments[3] ?? ""))
+    } catch {
+      // A malformed or non-Pirate reference cannot grant public byte access.
     }
   }
   return [...uploadIds]
@@ -50,9 +61,10 @@ export async function syncPublicSongArtifactGrantsForProjection(
   projection: CommunityPostProjectionRow,
 ): Promise<void> {
   const uploadIds = projectionCanGrantPublicArtifactAccess(projection)
-    ? projectedPublicSongArtifactUploadIds(projection.projected_payload_json)
+    ? projectedPublicSongArtifactUploadIds(projection.projected_payload_json, projection.community_id)
     : []
-  await withTransaction(client, "write", async (tx) => {
+  try {
+    await withTransaction(client, "write", async (tx) => {
     await tx.execute({
       sql: "DELETE FROM public_song_artifact_grants WHERE community_id = ?1 AND source_post_id = ?2",
       args: [projection.community_id, projection.source_post_id],
@@ -68,7 +80,10 @@ export async function syncPublicSongArtifactGrantsForProjection(
       `,
       args: [projection.community_id, uploadId, projection.source_post_id, projection.updated_at],
     })))
-  })
+    })
+  } catch (error) {
+    if (!missingGrantTable(error)) throw error
+  }
 }
 
 export async function hasPublicSongArtifactGrant(input: {
@@ -76,17 +91,36 @@ export async function hasPublicSongArtifactGrant(input: {
   communityId: string
   songArtifactUploadId: string
 }): Promise<boolean> {
-  const result = await input.client.execute({
-    sql: `
-      SELECT 1 AS granted
-      FROM public_song_artifact_grants
-      WHERE community_id = ?1
-        AND song_artifact_upload_id = ?2
-      LIMIT 1
-    `,
-    args: [input.communityId, input.songArtifactUploadId],
-  })
-  return rowValue(result.rows[0], "granted") === 1
+  try {
+    const result = await input.client.execute({
+      sql: `
+        SELECT 1 AS granted
+        FROM public_song_artifact_grants AS grant_row
+        INNER JOIN community_post_projections AS projection
+          ON projection.community_id = grant_row.community_id
+          AND projection.source_post_id = grant_row.source_post_id
+        INNER JOIN communities AS community ON community.community_id = grant_row.community_id
+        WHERE grant_row.community_id = ?1
+          AND grant_row.song_artifact_upload_id = ?2
+          AND community.status = 'active'
+          AND projection.status = 'published'
+          AND json_valid(projection.projected_payload_json)
+          AND (
+            (projection.visibility = 'public' AND (
+              json_extract(projection.projected_payload_json, '$.access_mode') IS NULL
+              OR json_extract(projection.projected_payload_json, '$.access_mode') = 'public'
+            ))
+            OR json_extract(projection.projected_payload_json, '$.access_mode') = 'locked'
+          )
+        LIMIT 1
+      `,
+      args: [input.communityId, input.songArtifactUploadId],
+    })
+    return rowValue(result.rows[0], "granted") === 1
+  } catch (error) {
+    if (missingGrantTable(error)) return false
+    throw error
+  }
 }
 
 export async function recordPublicSongArtifactGrant(input: {
@@ -96,7 +130,8 @@ export async function recordPublicSongArtifactGrant(input: {
   sourcePostId: string
   updatedAt: string
 }): Promise<void> {
-  await input.client.execute({
+  try {
+    await input.client.execute({
     sql: `
       INSERT INTO public_song_artifact_grants (
         community_id, song_artifact_upload_id, source_post_id, created_at, updated_at
@@ -110,5 +145,8 @@ export async function recordPublicSongArtifactGrant(input: {
       input.sourcePostId,
       input.updatedAt,
     ],
-  })
+    })
+  } catch (error) {
+    if (!missingGrantTable(error)) throw error
+  }
 }

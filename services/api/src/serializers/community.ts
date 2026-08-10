@@ -19,6 +19,7 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
   const presentation = communityPresentationFromRow({
     branding_json: community.branding_json ?? "{}",
     default_surface: community.default_surface ?? "threads",
+    video_feed_enabled: community.video_feed_enabled ?? true,
   })
   return {
     id: publicCommunityId(community.community_id),
@@ -29,6 +30,7 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     banner_ref: community.banner_ref,
     branding: presentation.branding,
     default_surface: presentation.default_surface,
+    video_feed_enabled: presentation.video_feed_enabled,
     store_url: community.store_url,
     store_label: community.store_label,
     country_code: community.country_code,
@@ -115,6 +117,7 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     banner_ref: preview.banner_ref,
     branding: preview.branding,
     default_surface: preview.default_surface,
+    video_feed_enabled: preview.video_feed_enabled,
     store_url: preview.store_url,
     store_label: preview.store_label,
     country_code: preview.country_code,

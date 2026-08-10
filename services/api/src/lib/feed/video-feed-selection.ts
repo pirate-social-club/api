@@ -30,7 +30,7 @@ export const GLOBAL_VIDEO_FEED_SELECTION_POLICY: VideoFeedSelectionPolicy = {
 }
 
 export const SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY: VideoFeedSelectionPolicy = {
-  authorCapPerPage: AUTHOR_CAP_PER_PAGE,
+  authorCapPerPage: null,
   communityCapPerPage: null,
 }
 

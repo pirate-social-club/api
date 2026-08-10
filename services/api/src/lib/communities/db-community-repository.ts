@@ -124,6 +124,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     brandingJson: string
     communityId: string
     defaultSurface: CommunityRow["default_surface"]
+    videoFeedEnabled: boolean
     updatedAt: string
   }): Promise<CommunityRow> {
     await this.client.execute({
@@ -131,10 +132,11 @@ export class DatabaseCommunityRepository implements CommunityRepository {
         UPDATE communities
         SET branding_json = ?2,
             default_surface = ?3,
-            updated_at = ?4
+            video_feed_enabled = ?4,
+            updated_at = ?5
         WHERE community_id = ?1
       `,
-      args: [input.communityId, input.brandingJson, input.defaultSurface, input.updatedAt],
+      args: [input.communityId, input.brandingJson, input.defaultSurface, input.videoFeedEnabled ? 1 : 0, input.updatedAt],
     })
     const community = await getCommunityById(this.client, input.communityId)
     if (!community) {

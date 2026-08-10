@@ -16,6 +16,7 @@ export type CommunityRow = {
   banner_ref: string | null
   branding_json: string
   default_surface: "threads" | "videos"
+  video_feed_enabled: boolean
   status: "draft" | "active" | "frozen" | "archived" | "deleted" | "suspended"
   provisioning_state: "requested" | "provisioning" | "active" | "rotation_required" | "error"
   transfer_state: "none" | "pending" | "transferred" | "federated"
@@ -127,6 +128,7 @@ export function toCommunityRow(row: unknown): CommunityRow {
     banner_ref: stringOrNull(rowValue(row, "banner_ref")),
     branding_json: requiredString(row, "branding_json"),
     default_surface: requiredString(row, "default_surface") as CommunityRow["default_surface"],
+    video_feed_enabled: requiredNumber(row, "video_feed_enabled") !== 0,
     status: requiredString(row, "status") as CommunityRow["status"],
     provisioning_state: requiredString(row, "provisioning_state") as CommunityRow["provisioning_state"],
     transfer_state: requiredString(row, "transfer_state") as CommunityRow["transfer_state"],

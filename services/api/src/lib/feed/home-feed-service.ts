@@ -568,6 +568,7 @@ function buildCommunitySummary(
     avatar_ref: null,
     branding: presentation.branding,
     default_surface: presentation.default_surface,
+    video_feed_enabled: presentation.video_feed_enabled,
     member_count: null,
     follower_count: community.follower_count,
     view_count: communityViewCounts.get(community.community_id) ?? 0,

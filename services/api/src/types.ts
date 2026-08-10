@@ -828,6 +828,7 @@ export type Community = {
   banner_ref?: string | null
   branding_json?: string
   default_surface?: "threads" | "videos"
+  video_feed_enabled?: boolean
   store_url?: string | null
   store_label?: string | null
   country_code?: string | null
@@ -917,6 +918,7 @@ export type CommunityPreview = {
   banner_ref?: string | null
   branding: CommunityBranding
   default_surface: "threads" | "videos"
+  video_feed_enabled: boolean
   store_url?: string | null
   store_label?: string | null
   country_code?: string | null

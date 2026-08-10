@@ -3,10 +3,6 @@ import { app } from "../../../src/index"
 import publicReadApp from "../../../src/routes/public-read-app"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt, requestJson } from "./community-routes-test-helpers"
-import {
-  PUBLIC_READ_CACHE_CONTROL,
-  PUBLIC_READ_CDN_CACHE_CONTROL,
-} from "../../../src/routes/cache-headers"
 
 let cleanup: (() => Promise<void>) | null = null
 
@@ -40,9 +36,9 @@ describe("public community routes", () => {
       ctx.env,
     )
     expect(response.status).toBe(200)
-    expect(response.headers.get("cache-control")).toBe(PUBLIC_READ_CACHE_CONTROL)
-    expect(response.headers.get("cdn-cache-control")).toBe(PUBLIC_READ_CDN_CACHE_CONTROL)
-    expect(response.headers.get("cache-tag")).toContain(`community:${communityId}`)
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("cdn-cache-control")).toBe("no-store")
+    expect(response.headers.get("cache-tag")).toBeNull()
     expect(response.headers.get("server-timing")).toContain("home-feed;dur=")
     expect(response.headers.get("vary")).toBeNull()
     expect(await json(response)).toEqual({
@@ -52,8 +48,8 @@ describe("public community routes", () => {
     })
 
     const disable = await requestJson(
-      `http://pirate.test/communities/${communityId}/machine-access-policy`,
-      { included_surfaces: { video_feed: false } },
+      `http://pirate.test/communities/${communityId}/presentation`,
+      { video_feed_enabled: false },
       ctx.env,
       session.accessToken,
     )

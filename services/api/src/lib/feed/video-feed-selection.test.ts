@@ -90,11 +90,11 @@ describe("takeVideoFeedPage", () => {
     expect(page).toHaveLength(Math.min(AUTHOR_CAP_PER_PAGE, COMMUNITY_CAP_PER_PAGE))
   })
 
-  test("drops only the community cap for a single-community feed", () => {
+  test("drops community and author caps for a single-community feed", () => {
     const remaining = Array.from({ length: 6 }, (_, index) => scored({
       postId: `pst_scoped_${index}`,
       score: 1 - index / 100,
-      authorUserId: `usr_scoped_${index}`,
+      authorUserId: "usr_only_creator",
       communityId: "cmt_single",
     }))
     const page = takeVideoFeedPage(

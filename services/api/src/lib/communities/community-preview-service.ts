@@ -294,6 +294,7 @@ async function buildPreviewForViewer(input: {
       communityCreatedAt: community.created_at,
       branding: presentation.branding,
       defaultSurface: presentation.default_surface,
+      videoFeedEnabled: presentation.video_feed_enabled,
       namespaceVerificationId: community.namespace_verification_id ?? null,
       routeSlug: community.route_slug ?? null,
       locale: input.locale ?? null,
@@ -352,6 +353,7 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
     communityCreatedAt: community.created_at,
     branding: presentation.branding,
     defaultSurface: presentation.default_surface,
+    videoFeedEnabled: presentation.video_feed_enabled,
     namespaceVerificationId: community.namespace_verification_id ?? null,
     routeSlug: community.route_slug ?? null,
     locale: input.locale ?? null,
@@ -399,6 +401,7 @@ async function buildCommunityPreview(input: {
   communityCreatedAt: string
   branding: CommunityPreview["branding"]
   defaultSurface: CommunityPreview["default_surface"]
+  videoFeedEnabled: boolean
   namespaceVerificationId?: string | null
   routeSlug?: string | null
   locale?: string | null
@@ -519,6 +522,7 @@ async function buildCommunityPreview(input: {
     }),
     branding: input.branding,
     default_surface: input.defaultSurface,
+    video_feed_enabled: input.videoFeedEnabled,
     country_code: countryCode,
     membership_mode: membershipMode,
     karaoke_enabled: Number(localRow?.karaoke_enabled ?? 0) === 1,

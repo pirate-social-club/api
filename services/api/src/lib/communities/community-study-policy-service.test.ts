@@ -67,6 +67,7 @@ async function setup() {
     banner_ref: null,
     branding_json: "{}",
     default_surface: "threads",
+    video_feed_enabled: true,
     community_id: communityId,
     created_at: now,
     creator_user_id: "usr_owner",

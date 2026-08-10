@@ -242,35 +242,6 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
         },
       },
     },
-    "/communities/{community_id}/feed/videos": {
-      get: {
-        tags: ["Communities", "Feed"],
-        "x-implemented": true,
-        summary: "List a viewer-aware community video feed",
-        description: "Returns the projection-ranked vertical video feed for one public community with viewer vote, membership, and gate state overlaid for the authenticated user. Community membership is not required.",
-        parameters: [
-          { name: "community_id", in: "path", required: true, schema: { type: "string" } },
-          { $ref: "#/components/parameters/Cursor" },
-          { name: "sort", in: "query", required: false, schema: { type: "string", enum: ["best", "top", "new"], default: "best" } },
-          { name: "time_range", in: "query", required: false, schema: { type: "string", enum: ["hour", "day", "week", "month", "year", "all"], default: "all" } },
-          { name: "locale", in: "query", required: false, schema: { type: "string" } },
-        ],
-        responses: {
-          "200": {
-            description: "Viewer-aware community video feed",
-            content: {
-              "application/json": {
-                schema: { $ref: "#/components/schemas/HomeFeedResponse" },
-              },
-            },
-          },
-          "401": { $ref: "#/components/responses/Unauthorized" },
-          "403": { $ref: "#/components/responses/Forbidden" },
-          "404": { $ref: "#/components/responses/NotFound" },
-          "429": { $ref: "#/components/responses/RateLimited" },
-        },
-      },
-    },
     "/public-posts/{post_id}": implementedPath(fullSpec.paths["/public-posts/{post_id}"]),
     "/public-posts/{post_id}/top-comments": implementedPath(fullSpec.paths["/public-posts/{post_id}/top-comments"]),
     "/public-comments/{comment_id}/replies": {

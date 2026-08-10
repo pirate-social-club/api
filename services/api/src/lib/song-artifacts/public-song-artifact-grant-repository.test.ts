@@ -44,10 +44,12 @@ describe("public song artifact grants", () => {
     expect(projectedPublicSongArtifactUploadIds(JSON.stringify({
       body: "/song-artifact-uploads/sau_not_media/content",
       media_refs: [
-        { storage_ref: "https://api.pirate/public-communities/com_test/song-artifact-uploads/sau_sau_video/content?download=1" },
-        { storage_ref: "https://api.pirate/communities/com_test/song-artifact-uploads/sau_audio/content" },
+        { storage_ref: "https://api.pirate/public-communities/com_cmt_music/song-artifact-uploads/sau_sau_video/content?download=1" },
+        { storage_ref: "https://api.pirate/communities/cmt_music/song-artifact-uploads/sau_audio/content" },
+        { storage_ref: "https://api.pirate/public-communities/com_cmt_other/song-artifact-uploads/sau_cross_community/content" },
+        { storage_ref: "https://example.invalid/public-communities/com_cmt_music/song-artifact-uploads/sau_untrusted_host/content" },
       ],
-    }))).toEqual(["sau_video", "sau_audio"])
+    }), "cmt_music")).toEqual(["sau_video", "sau_audio"])
   })
 
   test("adds and revokes indexed grants with projection visibility", async () => {
@@ -65,7 +67,28 @@ describe("public song artifact grants", () => {
           PRIMARY KEY (community_id, song_artifact_upload_id, source_post_id)
         )
       `)
+      await sqlite.execute("CREATE TABLE communities (community_id TEXT PRIMARY KEY, status TEXT NOT NULL)")
+      await sqlite.execute(`
+        CREATE TABLE community_post_projections (
+          community_id TEXT NOT NULL,
+          source_post_id TEXT NOT NULL,
+          status TEXT NOT NULL,
+          visibility TEXT NOT NULL,
+          projected_payload_json TEXT NOT NULL,
+          PRIMARY KEY (community_id, source_post_id)
+        )
+      `)
       const published = projection()
+      await sqlite.execute({
+        sql: "INSERT INTO communities (community_id, status) VALUES (?1, 'active')",
+        args: [published.community_id],
+      })
+      await sqlite.execute({
+        sql: `INSERT INTO community_post_projections (
+          community_id, source_post_id, status, visibility, projected_payload_json
+        ) VALUES (?1, ?2, ?3, ?4, ?5)`,
+        args: [published.community_id, published.source_post_id, published.status, published.visibility, published.projected_payload_json],
+      })
       await syncPublicSongArtifactGrantsForProjection(client, published)
       expect(await hasPublicSongArtifactGrant({
         client,
@@ -73,12 +96,48 @@ describe("public song artifact grants", () => {
         songArtifactUploadId: "sau_video",
       })).toBe(true)
 
+      await sqlite.execute({
+        sql: "UPDATE community_post_projections SET visibility = 'members_only' WHERE community_id = ?1 AND source_post_id = ?2",
+        args: [published.community_id, published.source_post_id],
+      })
+      expect(await hasPublicSongArtifactGrant({ client, communityId: published.community_id, songArtifactUploadId: "sau_video" })).toBe(false)
+      await sqlite.execute({
+        sql: "UPDATE community_post_projections SET visibility = 'public' WHERE community_id = ?1 AND source_post_id = ?2",
+        args: [published.community_id, published.source_post_id],
+      })
+      await sqlite.execute({
+        sql: "UPDATE communities SET status = 'archived' WHERE community_id = ?1",
+        args: [published.community_id],
+      })
+      expect(await hasPublicSongArtifactGrant({ client, communityId: published.community_id, songArtifactUploadId: "sau_video" })).toBe(false)
+      await sqlite.execute({
+        sql: "UPDATE communities SET status = 'active' WHERE community_id = ?1",
+        args: [published.community_id],
+      })
+
       await syncPublicSongArtifactGrantsForProjection(client, projection({ status: "removed" }))
       expect(await hasPublicSongArtifactGrant({
         client,
         communityId: published.community_id,
         songArtifactUploadId: "sau_video",
       })).toBe(false)
+    } finally {
+      sqlite.close()
+      rmSync(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("falls back safely before the grant migration is applied", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "public-artifact-grants-legacy-"))
+    const sqlite = createClient({ url: `file:${join(directory, "grants.db")}` })
+    const client = sqlite as unknown as Client
+    try {
+      expect(await hasPublicSongArtifactGrant({
+        client,
+        communityId: "cmt_music",
+        songArtifactUploadId: "sau_video",
+      })).toBe(false)
+      await expect(syncPublicSongArtifactGrantsForProjection(client, projection())).resolves.toBeUndefined()
     } finally {
       sqlite.close()
       rmSync(directory, { force: true, recursive: true })

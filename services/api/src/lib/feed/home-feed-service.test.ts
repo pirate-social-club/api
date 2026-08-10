@@ -217,9 +217,9 @@ describe("best video candidate selection", () => {
     expect(second.hasMore).toBe(false)
   })
 
-  test("keeps cursor continuity when the feed is scoped to one community", () => {
+  test("keeps cursor continuity for a sovereign feed with one creator", () => {
     const candidates = Array.from({ length: 12 }, (_, index) => videoCandidateRow({
-      authorUserId: `usr_${index}`,
+      authorUserId: "usr_only_creator",
       communityId: "cmt_sovereign",
       postId: `pst_sovereign_${String(index).padStart(2, "0")}`,
       upvotes: 12 - index,
@@ -359,6 +359,7 @@ function createCommunityRow(input: {
     banner_ref: null,
     branding_json: "{}",
     default_surface: "threads",
+    video_feed_enabled: true,
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",
@@ -700,6 +701,7 @@ function createCommunitySummary(input: {
       theme: "system",
     },
     default_surface: "threads",
+    video_feed_enabled: true,
     member_count: null,
     follower_count: null,
     view_count: input.viewCount ?? null,

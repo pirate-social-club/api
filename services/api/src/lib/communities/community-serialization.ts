@@ -365,6 +365,7 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
     }),
     branding_json: row.branding_json,
     default_surface: row.default_surface,
+    video_feed_enabled: row.video_feed_enabled,
     store_url: store.store_url,
     store_label: store.store_label,
     country_code: countryCode,

@@ -8750,92 +8750,6 @@ const spec = {
         "operationId": "get_public_communities_by_community_id_feed_videos"
       }
     },
-    "/communities/{community_id}/feed/videos": {
-      "get": {
-        "tags": [
-          "Communities",
-          "Feed"
-        ],
-        "x-implemented": true,
-        "summary": "List a viewer-aware community video feed",
-        "parameters": [
-          {
-            "name": "community_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "$ref": "#/components/parameters/Cursor"
-          },
-          {
-            "name": "sort",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "best",
-                "top",
-                "new"
-              ],
-              "default": "best"
-            }
-          },
-          {
-            "name": "time_range",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "enum": [
-                "hour",
-                "day",
-                "week",
-                "month",
-                "year",
-                "all"
-              ],
-              "default": "all"
-            }
-          },
-          {
-            "name": "locale",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HomeFeedResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "403": {
-            "$ref": "#/components/responses/Forbidden"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimited"
-          }
-        },
-        "operationId": "get_communities_by_community_id_feed_videos"
-      }
-    },
     "/public-posts/{post_id}": {
       "get": {
         "tags": [
@@ -11913,8 +11827,6 @@ const spec = {
           "id",
           "object",
           "display_name",
-          "branding",
-          "default_surface",
           "status",
           "provisioning_state",
           "membership_mode",
@@ -11979,6 +11891,9 @@ const spec = {
               "threads",
               "videos"
             ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           },
           "namespace_verification": {
             "type": "string",
@@ -12625,6 +12540,9 @@ const spec = {
               "threads",
               "videos"
             ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -12636,7 +12554,8 @@ const spec = {
           "object",
           "community",
           "branding",
-          "default_surface"
+          "default_surface",
+          "video_feed_enabled"
         ],
         "properties": {
           "id": {
@@ -12663,6 +12582,9 @@ const spec = {
               "threads",
               "videos"
             ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -13736,8 +13658,6 @@ const spec = {
           "id",
           "object",
           "display_name",
-          "branding",
-          "default_surface",
           "membership_mode",
           "human_verification_lane",
           "moderators",
@@ -13789,6 +13709,9 @@ const spec = {
               "threads",
               "videos"
             ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           },
           "store_url": {
             "type": "string",
@@ -22167,9 +22090,7 @@ const spec = {
         "required": [
           "id",
           "object",
-          "display_name",
-          "branding",
-          "default_surface"
+          "display_name"
         ],
         "properties": {
           "id": {
@@ -22203,6 +22124,9 @@ const spec = {
               "threads",
               "videos"
             ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           },
           "member_count": {
             "type": "integer",

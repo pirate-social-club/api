@@ -24,6 +24,7 @@ describe("public read cache invalidation", () => {
     await schedulePublicCommunityCachePurge({
       env: {
         CLOUDFLARE_CACHE_PURGE_ZONE_ID: "zone_123",
+        CLOUDFLARE_WEB_CACHE_PURGE_ZONE_ID: "zone_web",
         CLOUDFLARE_CACHE_PURGE_API_TOKEN: "token_abc",
       } satisfies Env,
       communityId: "cmt_1",
@@ -37,8 +38,15 @@ describe("public read cache invalidation", () => {
     })
     await scheduled
 
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(2)
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://api.cloudflare.com/client/v4/zones/zone_123/purge_cache",
+      "https://api.cloudflare.com/client/v4/zones/zone_web/purge_cache",
+    ])
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      tags: ["community:com_cmt_1"],
+    })
+    expect(JSON.parse(String(calls[1]?.init?.body))).toEqual({
       tags: ["community:com_cmt_1"],
     })
   })

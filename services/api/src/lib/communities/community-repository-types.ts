@@ -246,6 +246,7 @@ export interface CommunityMutationRepository {
     brandingJson: string
     communityId: string
     defaultSurface: CommunityRow["default_surface"]
+    videoFeedEnabled: boolean
     updatedAt: string
   }): Promise<CommunityRow>
   updateCommunitySeoProjection(input: {

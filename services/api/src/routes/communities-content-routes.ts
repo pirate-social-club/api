@@ -5,7 +5,7 @@ import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write
 import { trackApiEvent } from "../lib/analytics/track"
 import { createComment, listPostComments } from "../lib/comments/comment-service"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
-import { badRequestError, eligibilityFailed, structuredSurfaceDisabled } from "../lib/errors"
+import { badRequestError, eligibilityFailed } from "../lib/errors"
 import { enforceRateLimit } from "../lib/rate-limit"
 import { enforceCommentCreateRateLimit } from "../lib/comment-create-rate-limit"
 import {
@@ -40,14 +40,6 @@ import {
   submitTraceRequestFields,
   withSubmitTraceTiming,
 } from "../lib/observability/submit-trace"
-import {
-  omittedSurfaceForPolicy,
-  resolveEffectiveCommunityMachineAccessPolicy,
-} from "../lib/communities/community-machine-access-service"
-import {
-  HOME_FEED_SERVER_TIMING,
-  listCommunityVideoFeed,
-} from "../lib/feed/home-feed-service"
 
 type ComposerLinkPreviewResponse = {
   kind: "embed" | "link"
@@ -87,39 +79,6 @@ function serializeComposerLinkPreview(preview: ComposerLinkPreviewResult): Compo
 }
 
 export function registerCommunityContentRoutes(communities: Hono<AuthenticatedEnv>): void {
-  communities.get("/:communityId/feed/videos", async (c) => {
-    const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
-    const policy = await resolveEffectiveCommunityMachineAccessPolicy({
-      env: c.env,
-      communityRepository,
-      communityId,
-    })
-    if (!policy.included_surfaces.video_feed) {
-      const omittedSurface = omittedSurfaceForPolicy(policy, "video_feed")
-      throw structuredSurfaceDisabled("The video feed is not available for structured access", {
-        community: publicCommunityId(communityId),
-        surface: "video_feed",
-        reason: omittedSurface?.reason ?? "community_opt_out",
-      })
-    }
-    const result = await listCommunityVideoFeed({
-      communityId,
-      communityRepository,
-      cursor: c.req.query("cursor"),
-      env: c.env,
-      locale: c.req.query("locale"),
-      profileRepository,
-      sort: c.req.query("sort"),
-      timeRange: c.req.query("time_range"),
-      userId: actor.userId,
-      userRepository,
-      waitUntil: getWaitUntil(c),
-    })
-    const serverTiming = result[HOME_FEED_SERVER_TIMING]
-    if (serverTiming) c.header("Server-Timing", serverTiming)
-    return c.json(result, 200)
-  })
-
   communities.post("/:communityId/posts", async (c) => {
     const { actor, communityId, communityRepository, userRepository, profileRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<CreatePostRequest>(c, "Invalid post create payload")

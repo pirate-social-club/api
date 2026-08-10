@@ -7,6 +7,7 @@ import {
 const current = communityPresentationFromRow({
   branding_json: "{}",
   default_surface: "threads",
+  video_feed_enabled: true,
 })
 
 describe("community presentation", () => {
@@ -18,6 +19,7 @@ describe("community presentation", () => {
         tagline: "  Community video, independently published.  ",
       },
       default_surface: "videos",
+      video_feed_enabled: true,
     }, current)).toEqual({
       branding: {
         accent_color: "#767676",
@@ -26,6 +28,7 @@ describe("community presentation", () => {
         theme: "system",
       },
       default_surface: "videos",
+      video_feed_enabled: true,
     })
   })
 
@@ -48,6 +51,22 @@ describe("community presentation", () => {
         theme: "arbitrary",
       }),
       default_surface: "threads",
+      video_feed_enabled: true,
     })).toEqual(current)
+  })
+
+  test("atomically resets a video default when the video feed is disabled", () => {
+    expect(assertCommunityPresentationPatch({ video_feed_enabled: false }, {
+      ...current,
+      default_surface: "videos",
+    })).toEqual({
+      ...current,
+      default_surface: "threads",
+      video_feed_enabled: false,
+    })
+    expect(() => assertCommunityPresentationPatch({
+      default_surface: "videos",
+      video_feed_enabled: false,
+    }, current)).toThrow("default_surface cannot be videos")
   })
 })

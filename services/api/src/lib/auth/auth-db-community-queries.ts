@@ -16,21 +16,41 @@ import {
 } from "./auth-db-rows"
 import { firstRow } from "./auth-db-query-helpers"
 
-const COMMUNITY_ROW_COLUMNS = `
-  community_id, creator_user_id, display_name, description, avatar_ref, banner_ref, branding_json,
-  default_surface, status, provisioning_state,
+const COMMUNITY_ROW_BASE_COLUMNS = `
+  community_id, creator_user_id, display_name, description, avatar_ref, banner_ref,
+  status, provisioning_state,
   transfer_state, route_slug, namespace_verification_id, pending_namespace_verification_session_id,
   follower_count, created_at, updated_at
 `
 
-function communityRowColumns(tableAlias?: string): string {
-  if (!tableAlias) {
-    return COMMUNITY_ROW_COLUMNS
+function communityRowColumns(tableAlias?: string, legacyPresentation = false): string {
+  const qualify = (columns: string) => tableAlias
+    ? columns.split(",").map((column) => `${tableAlias}.${column.trim()}`).join(", ")
+    : columns
+  const base = qualify(COMMUNITY_ROW_BASE_COLUMNS)
+  if (legacyPresentation) {
+    return `${base}, '{}' AS branding_json, 'threads' AS default_surface, 1 AS video_feed_enabled`
   }
-  return COMMUNITY_ROW_COLUMNS
-    .split(",")
-    .map((column) => `${tableAlias}.${column.trim()}`)
-    .join(", ")
+  return `${base}, ${qualify("branding_json, default_surface, video_feed_enabled")}`
+}
+
+function missingCommunityPresentationColumns(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /(?:no such column|unknown column|column .*\b(?:branding_json|default_surface|video_feed_enabled)\b.* does not exist)/iu.test(message)
+}
+
+async function executeCommunityRows(
+  executor: DbExecutor,
+  buildSql: (columns: string) => string,
+  args: unknown[],
+  tableAlias?: string,
+) {
+  try {
+    return await executor.execute({ sql: buildSql(communityRowColumns(tableAlias)), args })
+  } catch (error) {
+    if (!missingCommunityPresentationColumns(error)) throw error
+    return executor.execute({ sql: buildSql(communityRowColumns(tableAlias, true)), args })
+  }
 }
 
 async function firstCommunityRow(
@@ -38,21 +58,17 @@ async function firstCommunityRow(
   buildSql: (columns: string) => string,
   args: unknown[],
 ): Promise<unknown | null> {
-  return firstRow(executor, {
-    sql: buildSql(COMMUNITY_ROW_COLUMNS),
-    args,
-  })
+  const result = await executeCommunityRows(executor, buildSql, args)
+  return result.rows[0] ?? null
 }
 
 async function listCommunityRows(
   executor: DbExecutor,
   buildSql: (columns: string) => string,
   args: unknown[] = [],
+  tableAlias?: string,
 ): Promise<CommunityRow[]> {
-  const result = await executor.execute({
-    sql: buildSql(COMMUNITY_ROW_COLUMNS),
-    args,
-  })
+  const result = await executeCommunityRows(executor, buildSql, args, tableAlias)
   return result.rows.map((row) => toCommunityRow(row))
 }
 
@@ -89,9 +105,8 @@ export async function getCommunityRowByRouteSlug(
     return toCommunityRow(primaryRow)
   }
 
-  const mirrorRow = await firstRow(executor, {
-    sql: `
-      SELECT ${communityRowColumns("c")}
+  const mirrorResult = await executeCommunityRows(executor, (columns) => `
+      SELECT ${columns}
       FROM communities c
       JOIN community_namespace_bindings cnb
         ON cnb.community_id = c.community_id
@@ -103,9 +118,8 @@ export async function getCommunityRowByRouteSlug(
               ELSE nv.normalized_root_label
             END = ?1
       LIMIT 1
-    `,
-    args: [routeSlug],
-  })
+    `, [routeSlug], "c")
+  const mirrorRow = mirrorResult.rows[0] ?? null
 
   return mirrorRow ? toCommunityRow(mirrorRow) : null
 }
@@ -120,15 +134,12 @@ export async function getCommunityRowByIdentifierCandidates(
   }
 
   const placeholders = normalizedCandidates.map((_, index) => `?${index + 1}`).join(", ")
-  const primaryResult = await executor.execute({
-    sql: `
-      SELECT ${COMMUNITY_ROW_COLUMNS}
+  const primaryResult = await executeCommunityRows(executor, (columns) => `
+      SELECT ${columns}
       FROM communities
       WHERE community_id IN (${placeholders})
          OR route_slug IN (${placeholders})
-    `,
-    args: normalizedCandidates,
-  })
+    `, normalizedCandidates)
   const primaryRows = primaryResult.rows.map((row) => toCommunityRow(row))
 
   for (const candidate of normalizedCandidates) {
@@ -143,9 +154,8 @@ export async function getCommunityRowByIdentifierCandidates(
     }
   }
 
-  const mirrorResult = await executor.execute({
-    sql: `
-      SELECT ${communityRowColumns("c")},
+  const mirrorResult = await executeCommunityRows(executor, (columns) => `
+      SELECT ${columns},
         CASE
           WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
           ELSE nv.normalized_root_label
@@ -160,9 +170,7 @@ export async function getCommunityRowByIdentifierCandidates(
               WHEN nv.family = 'spaces' THEN '@' || nv.normalized_root_label
               ELSE nv.normalized_root_label
             END IN (${placeholders})
-    `,
-    args: normalizedCandidates,
-  })
+    `, normalizedCandidates, "c")
 
   for (const candidate of normalizedCandidates) {
     const namespaceMatch = mirrorResult.rows.find((row) => row.matched_namespace_route === candidate)
@@ -192,18 +200,16 @@ export async function getCommunityRowByNamespaceVerificationId(
     return toCommunityRow(primaryRow)
   }
 
-  const mirrorRow = await firstRow(executor, {
-    sql: `
-      SELECT ${communityRowColumns("c")}
+  const mirrorResult = await executeCommunityRows(executor, (columns) => `
+      SELECT ${columns}
       FROM communities c
       JOIN community_namespace_bindings cnb
         ON cnb.community_id = c.community_id
        AND cnb.status = 'active'
       WHERE cnb.namespace_verification_id = ?1
       LIMIT 1
-    `,
-    args: [namespaceVerificationId],
-  })
+    `, [namespaceVerificationId], "c")
+  const mirrorRow = mirrorResult.rows[0] ?? null
 
   return mirrorRow ? toCommunityRow(mirrorRow) : null
 }
@@ -245,8 +251,8 @@ export async function listActiveCommunityRows(
     : `?${(communityIds?.length ?? 0) + 1}`
   return listCommunityRows(
     executor,
-    () => `
-      SELECT ${communityRowColumns(input?.requireReadyRouting ? "c" : undefined)}
+    (columns) => `
+      SELECT ${columns}
       FROM communities${input?.requireReadyRouting ? " c" : ""}
       ${input?.requireReadyRouting
         ? `
@@ -265,6 +271,7 @@ export async function listActiveCommunityRows(
       ...(communityIds ?? []),
       ...(input?.limit === undefined ? [] : [input.limit]),
     ],
+    input?.requireReadyRouting ? "c" : undefined,
   )
 }
 

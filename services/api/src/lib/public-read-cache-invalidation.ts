@@ -45,15 +45,16 @@ export function publicCommunityCacheTags(communityId: string): string[] {
   return [`community:${publicCommunityId(communityId)}`]
 }
 
-function cloudflareCachePurgeConfig(env: Env): { zoneId: string; token: string } | null {
-  const zoneId = env.CLOUDFLARE_CACHE_PURGE_ZONE_ID?.trim()
-    || env.CLOUDFLARE_ZONE_ID?.trim()
+function cloudflareCachePurgeConfigs(env: Env): Array<{ zoneId: string; token: string }> {
+  const zoneIds = [
+    env.CLOUDFLARE_CACHE_PURGE_ZONE_ID?.trim() || env.CLOUDFLARE_ZONE_ID?.trim(),
+    env.CLOUDFLARE_WEB_CACHE_PURGE_ZONE_ID?.trim(),
+  ].filter((zoneId): zoneId is string => Boolean(zoneId))
   const token = env.CLOUDFLARE_CACHE_PURGE_API_TOKEN?.trim()
     || env.CLOUDFLARE_API_TOKEN?.trim()
-  if (!zoneId || !token) {
-    return null
-  }
-  return { zoneId, token }
+  return token
+    ? [...new Set(zoneIds)].map((zoneId) => ({ zoneId, token }))
+    : []
 }
 
 /**
@@ -85,37 +86,36 @@ async function purgeZoneCacheTags(input: {
   tags: string[]
   fetcher?: typeof fetch
 }): Promise<void> {
-  const config = cloudflareCachePurgeConfig(input.env)
-  if (!config) {
+  const configs = cloudflareCachePurgeConfigs(input.env)
+  if (configs.length === 0) {
     return
   }
-
-  const response = await (input.fetcher ?? fetch)(
-    `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(config.zoneId)}/purge_cache`,
-    {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${config.token}`,
-        "Content-Type": "application/json",
+  await Promise.all(configs.map(async (config) => {
+    const response = await (input.fetcher ?? fetch)(
+      `https://api.cloudflare.com/client/v4/zones/${encodeURIComponent(config.zoneId)}/purge_cache`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${config.token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ tags: [...new Set(input.tags)] }),
       },
-      body: JSON.stringify({ tags: [...new Set(input.tags)] }),
-    },
-  )
-  const bodyText = await response.text().catch(() => "")
-  if (!response.ok) {
-    throw new Error(`Cloudflare cache purge failed with ${response.status}${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
-  }
-
-  let body: { success?: unknown; errors?: unknown } | null = null
-  try {
-    body = bodyText ? JSON.parse(bodyText) as { success?: unknown; errors?: unknown } : null
-  } catch {
-    throw new Error(`Cloudflare cache purge returned invalid JSON${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
-  }
-
-  if (!body || body.success !== true) {
-    throw new Error(`Cloudflare cache purge did not report success${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
-  }
+    )
+    const bodyText = await response.text().catch(() => "")
+    if (!response.ok) {
+      throw new Error(`Cloudflare cache purge failed with ${response.status}${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
+    }
+    let body: { success?: unknown; errors?: unknown } | null = null
+    try {
+      body = bodyText ? JSON.parse(bodyText) as { success?: unknown; errors?: unknown } : null
+    } catch {
+      throw new Error(`Cloudflare cache purge returned invalid JSON${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
+    }
+    if (!body || body.success !== true) {
+      throw new Error(`Cloudflare cache purge did not report success${bodyText ? `: ${bodyText.slice(0, 500)}` : ""}`)
+    }
+  }))
 }
 
 export async function purgePublicReadCacheTags(input: {

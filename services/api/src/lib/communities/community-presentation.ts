@@ -8,10 +8,11 @@ export type CommunityDefaultSurface = "threads" | "videos"
 export type CommunityPresentation = {
   branding: CommunityBranding
   default_surface: CommunityDefaultSurface
+  video_feed_enabled: boolean
 }
 
 const BRANDING_KEYS = new Set(["accent_color", "header_style", "tagline", "theme"])
-const PRESENTATION_KEYS = new Set(["branding", "default_surface"])
+const PRESENTATION_KEYS = new Set(["branding", "default_surface", "video_feed_enabled"])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value))
@@ -81,6 +82,9 @@ export function assertCommunityPresentationPatch(
   if (value.default_surface !== undefined && value.default_surface !== "threads" && value.default_surface !== "videos") {
     throw badRequestError("default_surface is invalid")
   }
+  if (value.video_feed_enabled !== undefined && typeof value.video_feed_enabled !== "boolean") {
+    throw badRequestError("video_feed_enabled is invalid")
+  }
   if (value.branding !== undefined && !isRecord(value.branding)) {
     throw badRequestError("branding is invalid")
   }
@@ -115,6 +119,11 @@ export function assertCommunityPresentationPatch(
     throw badRequestError("branding.tagline must be at most 120 characters")
   }
 
+  const videoFeedEnabled = value.video_feed_enabled ?? current.video_feed_enabled
+  const requestedDefaultSurface = value.default_surface ?? current.default_surface
+  if (value.default_surface === "videos" && !videoFeedEnabled) {
+    throw badRequestError("default_surface cannot be videos while the video feed is disabled")
+  }
   return {
     branding: {
       accent_color: normalizedAccentColor,
@@ -122,16 +131,19 @@ export function assertCommunityPresentationPatch(
       tagline: normalizedTagline,
       theme,
     },
-    default_surface: value.default_surface ?? current.default_surface,
+    default_surface: videoFeedEnabled ? requestedDefaultSurface : "threads",
+    video_feed_enabled: videoFeedEnabled,
   }
 }
 
 export function communityPresentationFromRow(input: {
   branding_json: string
   default_surface: CommunityDefaultSurface
+  video_feed_enabled: boolean
 }): CommunityPresentation {
   return {
     branding: normalizeCommunityBranding(input.branding_json),
-    default_surface: input.default_surface === "videos" ? "videos" : "threads",
+    default_surface: input.video_feed_enabled && input.default_surface === "videos" ? "videos" : "threads",
+    video_feed_enabled: input.video_feed_enabled,
   }
 }

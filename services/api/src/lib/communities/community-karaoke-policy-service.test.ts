@@ -69,6 +69,7 @@ async function setup() {
     banner_ref: null,
     branding_json: "{}",
     default_surface: "threads",
+    video_feed_enabled: true,
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",

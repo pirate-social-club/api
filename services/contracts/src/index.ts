@@ -777,8 +777,9 @@ export type Community = {
   description?: string | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
-  branding: CommunityBranding;
-  default_surface: "threads" | "videos";
+  branding?: CommunityBranding;
+  default_surface?: "threads" | "videos";
+  video_feed_enabled?: boolean;
   namespace_verification?: string | null;
   route_slug?: string | null;
   pending_namespace_verification_session?: string | null;
@@ -2687,8 +2688,9 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
-  branding: CommunityBranding;
-  default_surface: "threads" | "videos";
+  branding?: CommunityBranding;
+  default_surface?: "threads" | "videos";
+  video_feed_enabled?: boolean;
   store_url?: string | null;
   store_label?: string | null;
   country_code?: string | null;
@@ -2743,11 +2745,13 @@ export type CommunityPresentation = {
   community: string;
   branding: CommunityBranding;
   default_surface: "threads" | "videos";
+  video_feed_enabled: boolean;
 };
 
 export type CommunityPresentationPatch = {
   branding?: CommunityBrandingPatch;
   default_surface?: "threads" | "videos";
+  video_feed_enabled?: boolean;
 };
 
 export type JoinEligibility = {
@@ -2815,8 +2819,9 @@ export type HomeFeedCommunitySummary = {
   display_name: string;
   route_slug?: string | null;
   avatar_ref?: string | null;
-  branding: CommunityBranding;
-  default_surface: "threads" | "videos";
+  branding?: CommunityBranding;
+  default_surface?: "threads" | "videos";
+  video_feed_enabled?: boolean;
   member_count?: number | null;
   follower_count?: number | null;
   view_count?: number | null;
