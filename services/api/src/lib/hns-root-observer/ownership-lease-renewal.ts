@@ -27,6 +27,19 @@ type RenewalCandidate = {
   status: "verified" | "stale"
 }
 
+export type HnsOwnershipLeaseFleetResult = {
+  applyRenewals: boolean
+  counts: Record<
+    HnsOwnershipLeaseRenewalResult["outcome"] | "error",
+    number
+  >
+  results: Array<
+    | { normalizedRootLabel: string; result: HnsOwnershipLeaseRenewalResult }
+    | { normalizedRootLabel: string; error: string }
+  >
+  rootsDiscovered: number
+}
+
 export type HnsOwnershipLeaseRenewalResult = {
   applied: boolean
   namespaceVerificationId: string
@@ -65,6 +78,7 @@ function parseCandidate(row: QueryResultRow): RenewalCandidate {
 async function selectCandidate(
   executor: DbExecutor,
   normalizedRootLabel: string,
+  allowActivated = false,
 ): Promise<RenewalCandidate> {
   const result = await executor.execute({
     sql: `
@@ -103,16 +117,18 @@ async function selectCandidate(
         -- Both cases have always rendered as inactive at read time.
         -- TODO(2026-09-01, control-plane schema owner): remove COALESCE after
         -- the production constraint audit confirms no nullable rows remain.
-        AND COALESCE(delegation.canonical_routing_eligible, 0) = 0
+        AND (?2 = 1 OR COALESCE(delegation.canonical_routing_eligible, 0) = 0)
         AND COALESCE(delegation.routing_hard_denied, 0) = 0
       ORDER BY verification.updated_at DESC
       LIMIT 2
     `,
-    args: [normalizedRootLabel],
+    args: [normalizedRootLabel, allowActivated ? 1 : 0],
   })
   if (result.rows.length === 0) {
     throw verificationRequired(
-      "HNS root has no inactive, attached ownership verification eligible for renewal",
+      allowActivated
+        ? "HNS root has no attached ownership verification eligible for renewal"
+        : "HNS root has no inactive, attached ownership verification eligible for renewal",
     )
   }
   if (result.rows.length !== 1) {
@@ -125,6 +141,21 @@ function parsedTime(value: string, label: string): number {
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed)) throw conflictError(`${label} is invalid`)
   return parsed
+}
+
+function validatedOperatorContext(
+  operatorActorIdInput: string,
+  reasonInput: string,
+): { operatorActorId: string; reason: string } {
+  const operatorActorId = operatorActorIdInput.trim()
+  if (!/^[a-z][a-z0-9_]{2,63}$/u.test(operatorActorId)) {
+    throw conflictError("HNS ownership lease renewal actor is invalid")
+  }
+  const reason = reasonInput.trim()
+  if (reason.length < 3 || reason.length > 500) {
+    throw conflictError("HNS ownership lease renewal reason is invalid")
+  }
+  return { operatorActorId, reason }
 }
 
 function isRecentlyRenewed(candidate: RenewalCandidate, nowMs: number): boolean {
@@ -212,8 +243,9 @@ async function assertCandidateUnchanged(
   tx: Transaction,
   normalizedRootLabel: string,
   expected: RenewalCandidate,
+  allowActivated: boolean,
 ): Promise<void> {
-  const current = await selectCandidate(tx, normalizedRootLabel)
+  const current = await selectCandidate(tx, normalizedRootLabel, allowActivated)
   if (
     current.namespaceVerificationId !== expected.namespaceVerificationId
     || current.sessionId !== expected.sessionId
@@ -226,6 +258,7 @@ async function assertCandidateUnchanged(
 }
 
 async function applyRenewal(input: {
+  allowActivated: boolean
   candidate: RenewalCandidate
   client: Client
   normalizedRootLabel: string
@@ -236,7 +269,12 @@ async function applyRenewal(input: {
   verification: HnsVerifyTxtResult
 }): Promise<void> {
   await withTransaction(input.client, "write", async (tx) => {
-    await assertCandidateUnchanged(tx, input.normalizedRootLabel, input.candidate)
+    await assertCandidateUnchanged(
+      tx,
+      input.normalizedRootLabel,
+      input.candidate,
+      input.allowActivated,
+    )
     const evidenceBundleId = makeId("nev")
     await tx.execute(evidenceInsert({
       candidate: input.candidate,
@@ -351,6 +389,7 @@ async function applyRenewal(input: {
 }
 
 async function applyDefinitiveNegative(input: {
+  allowActivated: boolean
   candidate: RenewalCandidate
   client: Client
   normalizedRootLabel: string
@@ -360,7 +399,12 @@ async function applyDefinitiveNegative(input: {
   verification: HnsVerifyTxtResult
 }): Promise<void> {
   await withTransaction(input.client, "write", async (tx) => {
-    await assertCandidateUnchanged(tx, input.normalizedRootLabel, input.candidate)
+    await assertCandidateUnchanged(
+      tx,
+      input.normalizedRootLabel,
+      input.candidate,
+      input.allowActivated,
+    )
     const evidenceBundleId = makeId("nev")
     await tx.execute(evidenceInsert({
       candidate: input.candidate,
@@ -434,7 +478,9 @@ async function applyDefinitiveNegative(input: {
 }
 
 export async function renewHnsOwnershipLease(input: {
+  allowActivated?: boolean
   apply: boolean
+  applyDefinitiveNegative?: boolean
   client: Client
   env: Env
   now?: string
@@ -444,17 +490,14 @@ export async function renewHnsOwnershipLease(input: {
 }): Promise<HnsOwnershipLeaseRenewalResult> {
   const normalizedRootLabel = normalizeHnsRootLabel(input.rootLabel)
   assertHnsRootLabel(normalizedRootLabel)
-  const operatorActorId = input.operatorActorId.trim()
-  if (!/^[a-z][a-z0-9_]{2,63}$/u.test(operatorActorId)) {
-    throw conflictError("HNS ownership lease renewal actor is invalid")
-  }
-  const reason = input.reason.trim()
-  if (reason.length < 3 || reason.length > 500) {
-    throw conflictError("HNS ownership lease renewal reason is invalid")
-  }
+  const { operatorActorId, reason } = validatedOperatorContext(
+    input.operatorActorId,
+    input.reason,
+  )
   const now = input.now ?? new Date().toISOString()
   const nowMs = parsedTime(now, "HNS ownership lease renewal time")
-  const candidate = await selectCandidate(input.client, normalizedRootLabel)
+  const allowActivated = input.allowActivated === true
+  const candidate = await selectCandidate(input.client, normalizedRootLabel, allowActivated)
 
   if (isRecentlyRenewed(candidate, nowMs)) {
     return {
@@ -491,8 +534,11 @@ export async function renewHnsOwnershipLease(input: {
   }
 
   if (observation.outcome === "definitive_negative") {
-    if (input.apply) {
+    const shouldApplyDefinitiveNegative = input.apply
+      && input.applyDefinitiveNegative !== false
+    if (shouldApplyDefinitiveNegative) {
       await applyDefinitiveNegative({
+        allowActivated,
         candidate,
         client: input.client,
         normalizedRootLabel,
@@ -503,7 +549,7 @@ export async function renewHnsOwnershipLease(input: {
       })
     }
     return {
-      applied: input.apply,
+      applied: shouldApplyDefinitiveNegative,
       namespaceVerificationId: candidate.namespaceVerificationId,
       normalizedRootLabel,
       outcome: observation.outcome,
@@ -516,6 +562,7 @@ export async function renewHnsOwnershipLease(input: {
   const renewedExpiresAt = new Date(nowMs + OWNERSHIP_LEASE_VALIDITY_MS).toISOString()
   if (input.apply) {
     await applyRenewal({
+      allowActivated,
       candidate,
       client: input.client,
       normalizedRootLabel,
@@ -534,5 +581,96 @@ export async function renewHnsOwnershipLease(input: {
     previousExpiresAt: candidate.expiresAt,
     renewedExpiresAt,
     reasonCode: observation.reasonCode,
+  }
+}
+
+async function listFleetRootLabels(client: Client): Promise<string[]> {
+  const result = await client.execute({
+    sql: `
+      SELECT DISTINCT verification.normalized_root_label
+      FROM namespace_verifications AS verification
+      JOIN namespace_verification_sessions AS session
+        ON session.namespace_verification_session_id = verification.source_namespace_verification_session_id
+      JOIN community_namespace_bindings AS binding
+        ON binding.namespace_verification_id = verification.namespace_verification_id
+       AND binding.status = 'active'
+      JOIN communities AS community
+        ON community.community_id = binding.community_id
+       AND community.status = 'active'
+      LEFT JOIN hns_root_delegation_state AS delegation
+        ON delegation.normalized_root_label = verification.normalized_root_label
+      WHERE verification.family = 'hns'
+        AND verification.status IN ('verified', 'stale')
+        AND COALESCE(delegation.routing_hard_denied, 0) = 0
+      ORDER BY verification.normalized_root_label
+    `,
+    args: [],
+  })
+  return result.rows.map((row) => requiredText(row, "normalized_root_label"))
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error && error.message.trim()
+    ? error.message
+    : "unknown verifier or control-plane failure"
+}
+
+/**
+ * Revalidates every active HNS attachment sequentially. Fleet mode deliberately
+ * applies positive renewals only: a present-but-different ownership nonce is
+ * reported for operator review because revoking an activated root also requires
+ * the routing authority's audited hard-deny operation.
+ */
+export async function renewHnsOwnershipLeaseFleet(input: {
+  applyRenewals: boolean
+  client: Client
+  env: Env
+  now?: string
+  operatorActorId: string
+  reason: string
+}): Promise<HnsOwnershipLeaseFleetResult> {
+  const { operatorActorId, reason } = validatedOperatorContext(
+    input.operatorActorId,
+    input.reason,
+  )
+  const now = input.now ?? new Date().toISOString()
+  parsedTime(now, "HNS ownership lease fleet renewal time")
+  const rootLabels = await listFleetRootLabels(input.client)
+  const counts: HnsOwnershipLeaseFleetResult["counts"] = {
+    already_current: 0,
+    renewable: 0,
+    renewed: 0,
+    indeterminate: 0,
+    definitive_negative: 0,
+    error: 0,
+  }
+  const results: HnsOwnershipLeaseFleetResult["results"] = []
+
+  for (const normalizedRootLabel of rootLabels) {
+    try {
+      const result = await renewHnsOwnershipLease({
+        allowActivated: true,
+        apply: input.applyRenewals,
+        applyDefinitiveNegative: false,
+        client: input.client,
+        env: input.env,
+        now,
+        operatorActorId,
+        reason,
+        rootLabel: normalizedRootLabel,
+      })
+      counts[result.outcome] += 1
+      results.push({ normalizedRootLabel, result })
+    } catch (error) {
+      counts.error += 1
+      results.push({ normalizedRootLabel, error: errorMessage(error) })
+    }
+  }
+
+  return {
+    applyRenewals: input.applyRenewals,
+    counts,
+    results,
+    rootsDiscovered: rootLabels.length,
   }
 }
