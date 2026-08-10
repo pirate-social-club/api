@@ -252,6 +252,38 @@ describe("public community routes", () => {
     })
   })
 
+  test("does not cache a public preview when its owner summary is unavailable", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "public-community-missing-owner-summary-user")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Owner Summary Retry Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const communityId = ((await json(create)) as { community: { id: string } }).community.id
+
+    // The community and its owner role remain valid. Removing only the public
+    // profile linkage simulates the control-plane summary lookup returning no
+    // row after the shard preview has otherwise completed successfully.
+    await ctx.client.execute({
+      sql: "UPDATE profiles SET global_handle_id = NULL WHERE user_id = ?1",
+      args: [session.userId],
+    })
+
+    const response = await app.request(
+      `http://pirate.test/public-communities/${communityId}`,
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect((await json(response) as { owner: unknown }).owner).toBeNull()
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("cdn-cache-control")).toBe("no-store")
+  })
+
   test("archived community is hidden from the public single-community preview, restored on unarchive", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

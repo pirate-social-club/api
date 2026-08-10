@@ -595,6 +595,9 @@ publicCommunities.get("/:communityId", async (c) => {
   if (isDegradedPreview) {
     return communityPreviewUnavailableResponse(c)
   }
+  // A missing or unavailable owner authority summary is still a compatible
+  // public response, but it must not become a durable negative cache entry.
+  const hasIncompleteOwnerSummary = result.owner === null
   const effectivePolicy = policy ?? defaultCommunityMachineAccessPolicy({
     communityId,
     updatedAt: community.updated_at,
@@ -609,20 +612,30 @@ publicCommunities.get("/:communityId", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
-    setPublicReadCacheHeaders(c, {
-      vary: ["Accept"],
-      cacheTags: [`community:${publicCommunityId(communityId)}`],
-    })
+    if (hasIncompleteOwnerSummary) {
+      c.header("Cache-Control", "no-store")
+      c.header("CDN-Cache-Control", "no-store")
+    } else {
+      setPublicReadCacheHeaders(c, {
+        vary: ["Accept"],
+        cacheTags: [`community:${publicCommunityId(communityId)}`],
+      })
+    }
     return markdownResponse(communityMarkdown({
       preview: responseBody,
       links,
       omittedSurfaces,
     }), links)
   }
-  setPublicReadCacheHeaders(c, {
-    vary: ["Accept"],
-    cacheTags: [`community:${publicCommunityId(communityId)}`],
-  })
+  if (hasIncompleteOwnerSummary) {
+    c.header("Cache-Control", "no-store")
+    c.header("CDN-Cache-Control", "no-store")
+  } else {
+    setPublicReadCacheHeaders(c, {
+      vary: ["Accept"],
+      cacheTags: [`community:${publicCommunityId(communityId)}`],
+    })
+  }
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
 })
