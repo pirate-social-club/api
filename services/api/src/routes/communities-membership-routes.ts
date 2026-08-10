@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import { parseListLimit } from "../lib/list-limit"
 import {
@@ -22,6 +22,16 @@ import {
 } from "./communities-route-helpers"
 import { decodePublicMembershipRequestId, publicCommunityId } from "../lib/public-ids"
 import { ALTCHA_HEADER, readAltchaProof } from "../lib/verification/altcha-provider"
+import { schedulePublicCommunityCachePurge } from "../lib/public-read-cache-invalidation"
+import { getWaitUntil } from "./execution-context"
+
+async function purgePublicCommunityPreview(c: Context<AuthenticatedEnv>, communityId: string): Promise<void> {
+  await schedulePublicCommunityCachePurge({
+    env: c.env,
+    communityId,
+    waitUntil: getWaitUntil(c),
+  })
+}
 
 export function registerCommunityMembershipRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.get("/:communityId/preview", async (c) => {
@@ -73,6 +83,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
         userId: actor.userId,
         communityId,
       })
+      await purgePublicCommunityPreview(c, communityId)
     }
     return c.json(result, 200)
   })
@@ -102,6 +113,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
       communityRepository,
       profileRepository,
     })
+    await purgePublicCommunityPreview(c, communityId)
     return c.json(result, 200)
   })
 
@@ -133,6 +145,7 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
         userId: actor.userId,
         communityId,
       })
+      await purgePublicCommunityPreview(c, communityId)
     }
     return c.json(result, 200)
   })
@@ -145,6 +158,9 @@ export function registerCommunityMembershipRoutes(communities: Hono<Authenticate
       communityId,
       communityRepository,
     })
+    if (!result.following) {
+      await purgePublicCommunityPreview(c, communityId)
+    }
     return c.json(result, 200)
   })
 }
