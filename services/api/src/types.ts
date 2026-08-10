@@ -232,12 +232,21 @@ export type RewardsSummaryResponse = {
 
 export type RewardPayoutStatus = "submitted" | "confirmed" | "failed"
 
+export type RewardSettlementStage =
+  | "reserved"
+  | "signed"
+  | "broadcast"
+  | "needs_review"
+  | "confirmed"
+  | "failed"
+
 export type RewardPayoutSummary = {
   id: string
   chain_id: number
   amount_cents: number
   recipient_address: string
   status: RewardPayoutStatus
+  settlement_stage: RewardSettlementStage
   settlement_ref: string | null
   failure_reason: string | null
 }

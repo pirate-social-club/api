@@ -20,6 +20,7 @@ import type {
   RewardsSummaryResponse,
   RewardVerificationState,
 } from "../../types"
+import { rewardPayoutPublicStage } from "./reward-payout-public-stage"
 
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
 
@@ -71,6 +72,10 @@ function serializeRewardPayout(row: QueryResultRow, chainId: number): RewardPayo
     amount_cents: requiredNumber(row, "amount_cents"),
     recipient_address: requiredString(row, "recipient_address"),
     status,
+    settlement_stage: rewardPayoutPublicStage({
+      coordinatorState: stringOrNull(rowValue(row, "coordinator_state")),
+      status,
+    }),
     settlement_ref: stringOrNull(rowValue(row, "settlement_ref")),
     failure_reason: stringOrNull(rowValue(row, "failure_reason")),
   }
@@ -222,7 +227,8 @@ export async function getRewardsSummaryForUser(input: {
     }),
     executeFirst(client, {
       sql: `
-        SELECT reward_payout_effect_id, amount_cents, recipient_address, status, settlement_ref, failure_reason
+        SELECT reward_payout_effect_id, amount_cents, recipient_address, status,
+          coordinator_state, settlement_ref, failure_reason
         FROM reward_payout_effects
         WHERE user_id = ?1 AND status = 'submitted'
         ORDER BY updated_at DESC, reward_payout_effect_id DESC
