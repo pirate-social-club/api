@@ -131,10 +131,13 @@ staging ownership hold is unresolved or before the negative-cache protection in
 `d2c634668` is deployed there. Rollback disables enqueue and consumption; cron
 requires no change.
 
-Queue and DLQ creation plus environment-specific producer/consumer bindings are
-a separate authorized rollout step. Runtime code may land with optional bindings
-and absent flags, but no Queue consumer is attached merely by merging this
-implementation.
+Staging and production use distinct Queue/DLQ pairs. Each consumer is bounded to
+five messages per batch, a one-second batch wait, one concurrent invocation, and
+six retries before the message enters its environment's DLQ. Explicit consumer
+retries use the existing exponential delay capped at 300 seconds; an unexpected
+batch-level failure uses the same 300-second platform retry delay. The Queue
+binding alone does not activate the producer or reconciliation: the two literal-
+`true` flags and a non-empty community allowlist remain separate rollout gates.
 
 ## Observability
 

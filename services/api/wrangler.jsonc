@@ -372,6 +372,27 @@
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
+      // Provisioned dormant: the enqueue/consumer flags and canary allowlist
+      // remain absent until a separately reviewed staging rollout.
+      "queues": {
+        "producers": [
+          {
+            "binding": "REWARD_QUALIFICATION_WAKEUPS",
+            "queue": "reward-wakeup-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "reward-wakeup-staging",
+            "max_batch_size": 5,
+            "max_batch_timeout": 1,
+            "max_retries": 6,
+            "dead_letter_queue": "reward-wakeup-staging-dlq",
+            "max_concurrency": 1,
+            "retry_delay": 300
+          }
+        ]
+      },
       "cache": {
         "enabled": true
       },
@@ -637,6 +658,27 @@
       ],
       "triggers": {
         "crons": ["*/1 * * * *"]
+      },
+      // Provisioned dormant: the enqueue/consumer flags and canary allowlist
+      // remain absent until a separately reviewed production rollout.
+      "queues": {
+        "producers": [
+          {
+            "binding": "REWARD_QUALIFICATION_WAKEUPS",
+            "queue": "reward-wakeup-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "reward-wakeup-production",
+            "max_batch_size": 5,
+            "max_batch_timeout": 1,
+            "max_retries": 6,
+            "dead_letter_queue": "reward-wakeup-production-dlq",
+            "max_concurrency": 1,
+            "retry_delay": 300
+          }
+        ]
       },
       "hyperdrive": [
         {
