@@ -22,6 +22,9 @@ describe("gradeSayItBack phonetic acceptance", () => {
     { reference: "But you are all I love, what I said", transcript: "But you are all I love, what I say" },
     { reference: "hold me close", transcript: "hold me closed" },
     { reference: "love", transcript: "loved" },
+    { reference: "He has my frown just fallin' down", transcript: "He has my frown just fallen down" },
+    { reference: "Say mum's the word, don't let it out", transcript: "Say mom's the word. Don't let it out" },
+    { reference: "There's no slippin' when he once takes hold", transcript: "There's no slipping when he once takes hold" },
   ]
 
   for (const { reference, transcript } of acceptRows) {
