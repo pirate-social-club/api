@@ -25,6 +25,10 @@ import {
 import type { Env } from "../../env"
 import type { CreateSongArtifactUploadRequest, SongArtifactUpload } from "../../types"
 import type { SongArtifactCommunityRepository } from "./song-artifact-types"
+import {
+  hasPublicSongArtifactGrant,
+  recordPublicSongArtifactGrant,
+} from "./public-song-artifact-grant-repository"
 
 function assertUploadRequest(input: CreateSongArtifactUploadRequest): void {
   const kind = input.artifact_kind as SongArtifactKind
@@ -186,8 +190,15 @@ export async function fetchPublishedPublicSongArtifactContent(input: {
   origin: string
   rangeHeader?: string | null
 }): Promise<Response> {
-  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
-  try {
+  const controlPlane = getControlPlaneClient(input.env)
+  const granted = await hasPublicSongArtifactGrant({
+    client: controlPlane,
+    communityId: input.communityId,
+    songArtifactUploadId: input.songArtifactUploadId,
+  })
+  if (!granted) {
+    const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
+    try {
     const publicStorageRef = buildPublicSongArtifactContentUrl(
       input.origin,
       input.communityId,
@@ -223,11 +234,20 @@ export async function fetchPublishedPublicSongArtifactContent(input: {
         input.songArtifactUploadId,
       ],
     })
-    if (!rowValue(result.rows[0], "post_id")) {
-      throw notFoundError("Song artifact content not found")
+      const sourcePostId = String(rowValue(result.rows[0], "post_id") ?? "").trim()
+      if (!sourcePostId) {
+        throw notFoundError("Song artifact content not found")
+      }
+      await recordPublicSongArtifactGrant({
+        client: controlPlane,
+        communityId: input.communityId,
+        songArtifactUploadId: input.songArtifactUploadId,
+        sourcePostId,
+        updatedAt: nowIso(),
+      })
+    } finally {
+      db.close()
     }
-  } finally {
-    db.close()
   }
 
   return await fetchSongArtifactContent({
