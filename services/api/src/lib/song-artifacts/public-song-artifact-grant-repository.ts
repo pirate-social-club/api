@@ -44,7 +44,10 @@ export function projectedPublicSongArtifactUploadIds(projectedPayloadJson: strin
   return [...uploadIds]
 }
 
-function projectionCanGrantPublicArtifactAccess(projection: CommunityPostProjectionRow): boolean {
+function projectionCanGrantPublicArtifactAccess(projection: Pick<
+  CommunityPostProjectionRow,
+  "projected_payload_json" | "status" | "visibility"
+>): boolean {
   if (projection.status !== "published") return false
   let accessMode: unknown = null
   try {
@@ -94,7 +97,10 @@ export async function hasPublicSongArtifactGrant(input: {
   try {
     const result = await input.client.execute({
       sql: `
-        SELECT 1 AS granted
+        SELECT
+          projection.status,
+          projection.visibility,
+          projection.projected_payload_json
         FROM public_song_artifact_grants AS grant_row
         INNER JOIN community_post_projections AS projection
           ON projection.community_id = grant_row.community_id
@@ -103,20 +109,14 @@ export async function hasPublicSongArtifactGrant(input: {
         WHERE grant_row.community_id = ?1
           AND grant_row.song_artifact_upload_id = ?2
           AND community.status = 'active'
-          AND projection.status = 'published'
-          AND json_valid(projection.projected_payload_json)
-          AND (
-            (projection.visibility = 'public' AND (
-              json_extract(projection.projected_payload_json, '$.access_mode') IS NULL
-              OR json_extract(projection.projected_payload_json, '$.access_mode') = 'public'
-            ))
-            OR json_extract(projection.projected_payload_json, '$.access_mode') = 'locked'
-          )
-        LIMIT 1
       `,
       args: [input.communityId, input.songArtifactUploadId],
     })
-    return rowValue(result.rows[0], "granted") === 1
+    return result.rows.some((row) => projectionCanGrantPublicArtifactAccess({
+      projected_payload_json: String(rowValue(row, "projected_payload_json") ?? ""),
+      status: rowValue(row, "status") as CommunityPostProjectionRow["status"],
+      visibility: rowValue(row, "visibility") as CommunityPostProjectionRow["visibility"],
+    }))
   } catch (error) {
     if (missingGrantTable(error)) return false
     throw error
