@@ -401,7 +401,10 @@ The hosted Bot API `getFile` limit is 20 MB. The channel-neutral V1 contract acc
 19,000,000 bytes and 30 seconds for both choreographies and attempts. Session creation persists the
 accepted consent policy and timestamp before upload authorization; legacy sessions without that
 receipt cannot obtain or reuse an upload intent. The API, storage signer, callback contracts, and
-grader enforce the shared envelope. The Telegram adapter must additionally reject an oversized
+grader enforce the shared envelope. Consent receipt columns are database-immutable after insert;
+legacy all-null rows cannot be retroactively consented. Persisted session limits are capped at
+19,000,000 bytes, and ready references above 30 seconds are retired and disabled rather than
+remaining selectable but impossible to complete. The Telegram adapter must additionally reject an oversized
 reported file before download and pass an explicit 19,000,000-byte ceiling to its bounded download
 helper; that adapter work remains pending. Limits may be configured downward, but raising either
 requires evidence that the hosted Bot API and grader budgets still hold. V1 does not operate a

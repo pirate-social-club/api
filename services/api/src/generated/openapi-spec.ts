@@ -236,6 +236,12 @@ const spec = {
           },
           "401": {
             "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         }
       }
@@ -272,6 +278,9 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -321,6 +330,9 @@ const spec = {
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -380,6 +392,12 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -440,8 +458,14 @@ const spec = {
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
           "422": {
             "$ref": "#/components/responses/ValidationError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -488,6 +512,9 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -534,6 +561,9 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -580,6 +610,9 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
           }
         },
         "parameters": [
@@ -9224,7 +9257,7 @@ const spec = {
           }
         }
       },
-      "NotFound": {
+      "Conflict": {
         "content": {
           "application/json": {
             "schema": {
@@ -9233,7 +9266,16 @@ const spec = {
           }
         }
       },
-      "Conflict": {
+      "ServiceUnavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
         "content": {
           "application/json": {
             "schema": {
