@@ -3928,9 +3928,9 @@ type CreateMultisigCommunityRequest = (CreateCommunityRequestBase & {
   governance_backend: MultisigGovernanceAttachmentInput;
 });
 
-type DanceAttemptReason = "video_invalid" | "upload_invalid" | "duration_out_of_range" | "insufficient_coverage" | "insufficient_pose_presence" | "multiple_people" | "reference_replay" | "duplicate_attempt" | "scoring_unavailable" | "below_platform_floor" | "version_mismatch" | "insufficient_motion" | "insufficient_alignment" | "session_expired" | null;
+type DanceAttemptReason = "video_invalid" | "upload_invalid" | "duration_out_of_range" | "insufficient_coverage" | "insufficient_pose_presence" | "multiple_people" | "reference_replay" | "duplicate_attempt" | "scoring_unavailable" | "below_platform_floor" | "version_mismatch" | "insufficient_motion" | "insufficient_alignment" | "session_expired" | "cancelled" | null;
 
-type DanceAttemptStatus = "initialized" | "uploading" | "submitted" | "grading" | "passed" | "rejected" | "failed" | "expired";
+type DanceAttemptStatus = "initialized" | "uploading" | "submitted" | "grading" | "passed" | "rejected" | "failed" | "expired" | "cancelled";
 
 type DanceChoreographyReference = {
   url: string;
@@ -3940,7 +3940,7 @@ type DanceChoreographyReference = {
   height: number;
 };
 
-type DanceSessionStatus = "initialized" | "uploading" | "submitted" | "grading" | "finalized" | "rejected" | "failed" | "expired";
+type DanceSessionStatus = "initialized" | "uploading" | "submitted" | "grading" | "finalized" | "rejected" | "failed" | "expired" | "cancelled";
 
 type DisclosedQualifierSnapshot = {
   qualifier_template: string;

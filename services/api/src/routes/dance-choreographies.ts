@@ -17,6 +17,7 @@ import {
 } from "../lib/dance/choreography-reference-repository"
 import { verifyDanceGraderCallback } from "../lib/dance/grader-callback-auth"
 import { danceReferenceFeatureStorageRef } from "../lib/dance/choreography-reference-storage"
+import { assertDanceReferenceMediaObjectKey } from "../lib/dance/choreography-reference-storage"
 import { buildDanceReferencePlaybackUrl as realBuildDanceReferencePlaybackUrl } from "../lib/dance/choreography-reference-storage"
 import { isDanceChoreographyEnabled } from "../lib/dance/capture-policy"
 import { badRequestError, HttpError, notFoundError } from "../lib/errors"
@@ -29,6 +30,7 @@ import { getControlPlaneClient as realGetControlPlaneClient } from "../lib/runti
 import {
   decodePublicPostId,
   publicCommunityId,
+  publicId,
   publicPostId,
 } from "../lib/public-ids"
 
@@ -127,7 +129,9 @@ function parseSeed(body: Record<string, unknown>, now: string): OperatorDanceCho
     songArtifactBundleId: stringField(body, "song_artifact_bundle_id", 100),
     creatorUserId: stringField(body, "creator_user_id", 100),
     official: body.official,
-    referenceStorageRef: stringField(body, "reference_storage_ref", 500),
+    referenceStorageRef: assertDanceReferenceMediaObjectKey(
+      stringField(body, "reference_storage_ref", 500),
+    ),
     referenceContentSha256,
     referenceMimeType: referenceMimeType as OperatorDanceChoreographySeed["referenceMimeType"],
     referenceSizeBytes: integerField(body, "reference_size_bytes", 64 * 1024 * 1024),
@@ -158,7 +162,7 @@ function assertChoreographyEnabled(env: AuthenticatedEnv["Bindings"]): void {
   }
 }
 
-async function choreographyResponse(
+export async function choreographyResponse(
   env: AuthenticatedEnv["Bindings"],
   record: NonNullable<Awaited<ReturnType<typeof realGetReadyDanceChoreographyById>>>,
   now: number,
@@ -176,8 +180,8 @@ async function choreographyResponse(
     community: publicCommunityId(record.communityId),
     post: publicPostId(record.hostPostId),
     song_post: publicPostId(record.referencedSongPostId),
-    song_artifact_bundle: record.songArtifactBundleId,
-    creator: record.creatorUserId,
+    song_artifact_bundle: publicId(record.songArtifactBundleId, "sab"),
+    creator: publicId(record.creatorUserId, "usr"),
     official: record.official,
     revision: record.danceChoreographyRevisionId,
     mirror_policy: record.mirrorPolicy,

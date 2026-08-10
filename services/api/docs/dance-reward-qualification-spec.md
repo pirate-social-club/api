@@ -3,15 +3,12 @@
 Status: approved v1 design baseline. Implementation and accrual must remain dark until the
 acceptance gates in this document pass. This document does not authorize production rewards.
 
-Implementation snapshot (2026-08-10): the landed surface is a dark, write-only pipeline. It has
-session creation, upload intent, submission, durable dispatch, signed callback, terminal attempt
-persistence, and cleanup, but no client-facing reads, cancellation, Telegram session binding,
-consent receipt, start-cue implementation, admitted calibration, engagement update, or reward
-qualification. The sections below describe the target contract, not current availability.
-
-Gate 0B read-side work adds core-first contracts plus authenticated session/attempt reads,
-active-revision choreography reads, and idempotent cancellation. These remain dark until their
-Core and API changes land through their respective release paths.
+Implementation snapshot (2026-08-10): the landed surface remains dark but now includes authenticated
+session/attempt reads, active-revision choreography reads, and cancellation in addition to session
+creation, upload, dispatch, signed callback, terminal persistence, and cleanup. Telegram session
+binding, consent receipts, start cues, admitted calibration, engagement updates, and reward
+qualification remain unimplemented. The sections below describe the target contract, not current
+availability.
 
 ## Decision summary
 
@@ -226,7 +223,8 @@ Create `dance_choreography_revisions`:
 - `dance_choreography_revision_id TEXT PRIMARY KEY`;
 - `dance_choreography_id TEXT NOT NULL`;
 - positive `revision_number`;
-- immutable `reference_storage_ref`;
+- immutable `reference_storage_ref`, constrained to the dedicated
+  `dance/reference-media/` object-key namespace before seed persistence and every media presign;
 - immutable `reference_content_sha256`;
 - `reference_mime_type`, `reference_size_bytes`, `reference_duration_ms`;
 - `reference_width`, `reference_height`, `reference_fps`;
@@ -549,14 +547,17 @@ otherwise.
 - `GET /dance-attempts/{id}`
 - `POST /dance-sessions/{id}/cancel`
 
-Cancellation is idempotent for an already-expired session and is accepted only before submission.
-It moves the session to `expired`, releases the active slot, and schedules object cleanup. Once a
-session is `submitted` or `grading`, cancellation returns a conflict rather than racing immutable
-grader evidence.
+Cancellation is idempotent for an already-terminal session and is accepted as a state transition
+only before submission. It moves the session to the distinct `cancelled` status with `cancelled`
+reason and releases the active slot. Cleanup is scheduled only after an upload intent replaced the
+placeholder object key; create-then-cancel never consumes the deletion sweep budget. Once a session
+is `submitted` or `grading`, cancellation returns a conflict rather than racing immutable grader
+evidence.
 
 The attempt resource returns status, score when available, user-facing quality/integrity reason,
-aggregate coaching dimensions, and whether the attempt was reward eligible. It never returns the raw
-video or fingerprint hashes.
+aggregate coaching dimensions, and whether a terminal attempt was reward eligible. Nonterminal
+attempts return `rank_eligible: null`; they never project a provisional false value. It never returns
+the raw video or fingerprint hashes.
 
 Terminal rejections distinguish at least:
 

@@ -6,11 +6,14 @@ import { errorResponse } from "../lib/errors"
 import { DANCE_CHOREOGRAPHY_SEED_SCOPE } from "../lib/operator-credential-auth"
 import { signDanceGraderRequest } from "../lib/dance/grader-callback-auth"
 import danceChoreographies, {
+  choreographyResponse,
   setDanceChoreographyRouteServicesForTests,
 } from "./dance-choreographies"
+import postDanceChoreographies from "./post-dance-choreographies"
 
 const dummyClient = {} as never
 const env: Env = {
+  DANCE_CHOREOGRAPHY_ENABLED: "true",
   DANCE_GRADER_CALLBACK_HMAC_KEY: "callback-secret-at-least-32-bytes",
   DANCE_GRADER_CALLBACK_KEY_VERSION: "v1",
 }
@@ -18,6 +21,7 @@ const env: Env = {
 function testApp() {
   const app = new Hono<{ Bindings: Env }>()
   app.route("/dance-choreographies", danceChoreographies)
+  app.route("/posts", postDanceChoreographies)
   app.onError((error, c) => {
     const response = errorResponse(error)
     return c.json(response.body, response.status as 400)
@@ -30,6 +34,53 @@ afterEach(() => {
 })
 
 describe("dance choreography routes", () => {
+  test("requires authentication for choreography reads", async () => {
+    const response = await testApp().request(
+      "http://test/dance-choreographies/dch_1",
+      {},
+      env,
+    )
+    expect(response.status).toBe(401)
+
+    const postAlias = await testApp().request(
+      "http://test/posts/pst_1/dance-choreography",
+      {},
+      env,
+    )
+    expect(postAlias.status).toBe(401)
+  })
+
+  test("serializes creator and bundle identifiers with public prefixes", async () => {
+    setDanceChoreographyRouteServicesForTests({
+      getControlPlaneClient: () => dummyClient,
+      authenticateOperatorCredential: async () => { throw new Error("not used") },
+      seedOperatorDanceChoreography: async () => { throw new Error("not used") },
+      finalizeDanceChoreographyReference: async () => { throw new Error("not used") },
+      buildDanceReferencePlaybackUrl: async () => "https://media.test/reference.mp4",
+      now: () => Date.parse("2026-07-29T00:00:00.000Z"),
+    })
+    const response = await choreographyResponse(env, {
+      danceChoreographyId: "dch_1",
+      danceChoreographyRevisionId: "dcr_1",
+      communityId: "1",
+      hostPostId: "2",
+      referencedSongPostId: "3",
+      songArtifactBundleId: "4",
+      creatorUserId: "5",
+      official: false,
+      referenceStorageRef: "dance/reference-media/dcr_1.mp4",
+      referenceMimeType: "video/mp4",
+      referenceDurationMs: 10_000,
+      referenceWidth: 1080,
+      referenceHeight: 1920,
+      mirrorPolicy: "allowed",
+    }, Date.parse("2026-07-29T00:00:00.000Z"))
+    expect(response).toMatchObject({
+      song_artifact_bundle: "sab_4",
+      creator: "usr_5",
+    })
+  })
+
   test("operator seed requires the dedicated scope and passes bounded facts", async () => {
     const calls: unknown[] = []
     setDanceChoreographyRouteServicesForTests({
@@ -50,7 +101,7 @@ describe("dance choreography routes", () => {
             choreographyStatus: "processing",
             revisionStatus: "processing",
             failureCode: null,
-            referenceStorageRef: "references/dcr_1.mp4",
+            referenceStorageRef: "dance/reference-media/dcr_1.mp4",
             referenceContentSha256: "c".repeat(64),
             referenceMimeType: "video/mp4",
             referenceSizeBytes: 4096,
@@ -85,7 +136,7 @@ describe("dance choreography routes", () => {
           song_artifact_bundle_id: "sab_1",
           creator_user_id: "usr_1",
           official: false,
-          reference_storage_ref: "references/dcr_1.mp4",
+          reference_storage_ref: "dance/reference-media/dcr_1.mp4",
           reference_content_sha256: "c".repeat(64),
           reference_mime_type: "video/mp4",
           reference_size_bytes: 4096,
@@ -125,7 +176,7 @@ describe("dance choreography routes", () => {
             choreographyStatus: "failed",
             revisionStatus: "failed",
             failureCode: "multiple_people",
-            referenceStorageRef: "references/dcr_1.mp4",
+            referenceStorageRef: "dance/reference-media/dcr_1.mp4",
             referenceContentSha256: "c".repeat(64),
             referenceMimeType: "video/mp4",
             referenceSizeBytes: 4096,

@@ -19,7 +19,7 @@ export type DanceAttemptReadRecord = {
   sessionId: string
   hostPostId: string
   choreographyRevisionId: string
-  status: "initialized" | "uploading" | "submitted" | "grading" | "passed" | "rejected" | "failed" | "expired"
+  status: "initialized" | "uploading" | "submitted" | "grading" | "passed" | "rejected" | "failed" | "expired" | "cancelled"
   scoreBps: number | null
   rankEligible: boolean | null
   reason: string | null
@@ -49,6 +49,7 @@ function pendingAttempt(session: DanceAttemptSessionRecord): DanceAttemptReadRec
     "rejected",
     "failed",
     "expired",
+    "cancelled",
     "passed",
   ].includes(status)) {
     throw internalError("Dance attempt session has invalid public status")
@@ -60,7 +61,7 @@ function pendingAttempt(session: DanceAttemptSessionRecord): DanceAttemptReadRec
     choreographyRevisionId: session.choreographyRevisionId,
     status: status as DanceAttemptReadRecord["status"],
     scoreBps: session.scoreBps,
-    rankEligible: session.calibrationAdmitted === null ? null : false,
+    rankEligible: null,
     reason: session.terminalReason,
     coverageBps: null,
     poseDetectionBps: null,

@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
 import {
   assertDanceStorageObjectKey,
+  assertDanceReferenceMediaObjectKey,
   buildDanceReferencePlaybackUrl,
   buildDanceReferenceSignedUrls,
   danceReferenceFeatureStorageRef,
@@ -20,13 +21,13 @@ describe("dance choreography reference storage", () => {
   test("uses deterministic private feature keys and bounded presigned object URLs", async () => {
     const signed = await buildDanceReferenceSignedUrls({
       env,
-      referenceStorageRef: "references/dcr_1.mp4",
+      referenceStorageRef: "dance/reference-media/dcr_1.mp4",
       danceChoreographyRevisionId: "dcr_1",
       now: new Date("2026-07-29T00:00:00.000Z"),
     })
 
     expect(signed.artifactStorageRef).toBe("dance/reference-features/dcr_1.json")
-    expect(new URL(signed.mediaGetUrl).pathname).toBe("/media/references/dcr_1.mp4")
+    expect(new URL(signed.mediaGetUrl).pathname).toBe("/media/dance/reference-media/dcr_1.mp4")
     const put = new URL(signed.artifactPutUrl)
     expect(put.pathname).toBe("/media/dance/reference-features/dcr_1.json")
     expect(put.searchParams.get("X-Amz-SignedHeaders")).toContain("content-type")
@@ -37,6 +38,10 @@ describe("dance choreography reference storage", () => {
     expect(() => assertDanceStorageObjectKey("../reference.mp4")).toThrow()
     expect(() => assertDanceStorageObjectKey("/reference.mp4")).toThrow()
     expect(() => assertDanceStorageObjectKey("https://example.com/reference.mp4")).toThrow()
+    expect(() => assertDanceReferenceMediaObjectKey("dance/users/private/video.mp4")).toThrow()
+    expect(assertDanceReferenceMediaObjectKey("dance/reference-media/reference.mp4")).toBe(
+      "dance/reference-media/reference.mp4",
+    )
     expect(danceReferenceFeatureStorageRef("dcr_1")).toBe(
       "dance/reference-features/dcr_1.json",
     )
@@ -45,10 +50,10 @@ describe("dance choreography reference storage", () => {
   test("creates a read-only bounded playback URL", async () => {
     const value = new URL(await buildDanceReferencePlaybackUrl({
       env,
-      referenceStorageRef: "references/dcr_1.mp4",
+      referenceStorageRef: "dance/reference-media/dcr_1.mp4",
       now: new Date("2026-07-29T00:00:00.000Z"),
     }))
-    expect(value.pathname).toBe("/media/references/dcr_1.mp4")
+    expect(value.pathname).toBe("/media/dance/reference-media/dcr_1.mp4")
     expect(value.searchParams.get("X-Amz-Expires")).toBe("300")
     expect(value.searchParams.get("X-Amz-SignedHeaders")).toBe("host")
   })

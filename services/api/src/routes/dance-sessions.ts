@@ -138,6 +138,7 @@ danceSessions.post("/", async (c) => {
 })
 
 danceSessions.get("/:sessionId", async (c) => {
+  assertCaptureEnabled(c.env)
   const record = await getDanceAttemptSession({
     client: getControlPlaneClient(c.env),
     sessionId: c.req.param("sessionId"),
@@ -149,6 +150,7 @@ danceSessions.get("/:sessionId", async (c) => {
 })
 
 danceSessions.post("/:sessionId/cancel", async (c) => {
+  assertCaptureEnabled(c.env)
   const result = await cancelDanceAttemptSession({
     client: getControlPlaneClient(c.env),
     sessionId: c.req.param("sessionId"),

@@ -18960,7 +18960,8 @@ const spec = {
           "finalized",
           "rejected",
           "failed",
-          "expired"
+          "expired",
+          "cancelled"
         ]
       },
       "DanceAttemptStatus": {
@@ -18973,7 +18974,8 @@ const spec = {
           "passed",
           "rejected",
           "failed",
-          "expired"
+          "expired",
+          "cancelled"
         ]
       },
       "DanceAttemptReason": {
@@ -18993,7 +18995,8 @@ const spec = {
           "version_mismatch",
           "insufficient_motion",
           "insufficient_alignment",
-          "session_expired"
+          "session_expired",
+          "cancelled"
         ]
       },
       "DanceChoreographyReference": {

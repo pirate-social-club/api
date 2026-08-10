@@ -4,12 +4,14 @@ import { buildS3PresignedUrl } from "../storage/s3-signing"
 import type { Env } from "../../env"
 
 const MAX_OBJECT_KEY_LENGTH = 1024
+export const DANCE_REFERENCE_MEDIA_PREFIX = "dance/reference-media/"
 
 export function assertDanceStorageObjectKey(value: string): string {
   const normalized = value.trim()
   if (
     !normalized
     || normalized.length > MAX_OBJECT_KEY_LENGTH
+    || !normalized.startsWith("dance/")
     || normalized.startsWith("/")
     || normalized.includes("://")
     || normalized.split("/").some((segment) => segment === ".." || segment === "")
@@ -19,10 +21,20 @@ export function assertDanceStorageObjectKey(value: string): string {
   return normalized
 }
 
+export function assertDanceReferenceMediaObjectKey(value: string): string {
+  const normalized = assertDanceStorageObjectKey(value)
+  if (!normalized.startsWith(DANCE_REFERENCE_MEDIA_PREFIX)) {
+    throw badRequestError("Dance reference media object key is invalid")
+  }
+  return normalized
+}
+
 export function danceReferenceFeatureStorageRef(revisionId: string): string {
-  return assertDanceStorageObjectKey(
-    `dance/reference-features/${revisionId}.json`,
-  )
+  const normalized = revisionId.trim()
+  if (!normalized || normalized.includes("/") || normalized.includes("..")) {
+    throw badRequestError("Dance reference revision ID is invalid")
+  }
+  return `dance/reference-features/${normalized}.json`
 }
 
 export async function buildDanceReferenceSignedUrls(input: {
@@ -46,7 +58,7 @@ export async function buildDanceReferenceSignedUrls(input: {
     buildS3PresignedUrl({
       ...common,
       method: "GET",
-      objectKey: assertDanceStorageObjectKey(input.referenceStorageRef),
+      objectKey: assertDanceReferenceMediaObjectKey(input.referenceStorageRef),
     }),
     buildS3PresignedUrl({
       ...common,
@@ -71,7 +83,7 @@ export async function buildDanceReferencePlaybackUrl(input: {
   const url = await buildS3PresignedUrl({
     config: resolveFilebaseConfig(input.env),
     method: "GET",
-    objectKey: assertDanceStorageObjectKey(input.referenceStorageRef),
+    objectKey: assertDanceReferenceMediaObjectKey(input.referenceStorageRef),
     expiresInSeconds: input.expiresInSeconds ?? 300,
     now: input.now,
     bodyHashMode: "unsigned",
