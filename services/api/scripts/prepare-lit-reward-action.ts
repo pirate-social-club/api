@@ -14,6 +14,10 @@ import { getAddress, keccak256, toUtf8Bytes } from "ethers"
 import { base58btc } from "multiformats/bases/base58"
 
 import { buildRewardVaultLitAction } from "../src/lib/rewards/reward-vault-lit-action"
+import { resolveFilebaseConfig } from "../src/lib/storage/filebase-config"
+import { headObject } from "../src/lib/storage/filebase-multipart"
+import { buildS3SignedRequest } from "../src/lib/storage/s3-signing"
+import type { Env } from "../src/env"
 
 const POLICY_1_SHA256 = "59b65894559e6feb454586f5aae6342f35f2100018a72889f8fcc55d9dd20155"
 const POLICY_1_CID = "QmR9EqhLEK7jE1wp44wLanmeJwK3Wr3kPtsfD4pjAmogm7"
@@ -21,11 +25,13 @@ const POLICY_1_BYTE_LENGTH = 4_121
 const POLICY_2_VERSION = 2n
 const GATEWAYS = ["https://ipfs.io/ipfs", "https://dweb.link/ipfs"] as const
 
-type Command = "source" | "manifest" | "verify-gateways"
+type Command = "source" | "manifest" | "publish" | "verify-gateways"
 
 function command(argv: string[]): { command: Command; cid: string | null } {
   const selected = argv[0] ?? "manifest"
-  if (selected === "source" || selected === "manifest") return { command: selected, cid: null }
+  if (selected === "source" || selected === "manifest" || selected === "publish") {
+    return { command: selected, cid: null }
+  }
   if (selected === "verify-gateways") {
     const cid = argv[1] ?? ""
     if (!/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/u.test(cid)) {
@@ -33,7 +39,7 @@ function command(argv: string[]): { command: Command; cid: string | null } {
     }
     return { command: selected, cid }
   }
-  throw new Error("usage: prepare-lit-reward-action.ts [source|manifest|verify-gateways <cid>]")
+  throw new Error("usage: prepare-lit-reward-action.ts [source|manifest|publish|verify-gateways <cid>]")
 }
 
 function source(policyVersion: bigint): string {
@@ -140,6 +146,45 @@ async function verifyGateways(cid: string, expected: ReturnType<typeof metadata>
   console.log(JSON.stringify({ cid, verified_at: new Date().toISOString(), observations }, null, 2))
 }
 
+async function publish(actionSource: string, prepared: ReturnType<typeof metadata>): Promise<void> {
+  if (process.env.LIT_ACTION_PUBLISH_CONFIRMED !== "true") {
+    throw new Error("publish requires LIT_ACTION_PUBLISH_CONFIRMED=true")
+  }
+  const env = process.env as unknown as Env
+  const config = resolveFilebaseConfig(env)
+  const objectKey = `lit-actions/${prepared.expected_cid}.js`
+  const body = new TextEncoder().encode(actionSource)
+  const response = await fetch(await buildS3SignedRequest({
+    method: "PUT",
+    config,
+    objectKey,
+    headers: { "content-type": "application/javascript" },
+    body,
+  }))
+  const responseText = await response.text().catch(() => "")
+  if (!response.ok) {
+    throw new Error(`Filebase action publication failed with HTTP ${response.status}: ${responseText.slice(0, 300)}`)
+  }
+  const putCid = response.headers.get("x-amz-meta-cid")?.trim() ?? null
+  const stored = await headObject({ env, config, objectKey })
+  if (
+    putCid !== prepared.expected_cid
+    || stored.cid !== prepared.expected_cid
+    || stored.contentLength !== prepared.byte_length
+  ) {
+    throw new Error("Filebase publication did not reproduce the expected CID and byte length")
+  }
+  console.log(JSON.stringify({
+    published_at: new Date().toISOString(),
+    object_key: objectKey,
+    put_status: response.status,
+    put_cid: putCid,
+    head_cid: stored.cid,
+    byte_length: stored.contentLength,
+    sha256: prepared.sha256,
+  }, null, 2))
+}
+
 async function main(): Promise<void> {
   verifyArchivedBaseline()
   const selected = command(process.argv.slice(2))
@@ -151,6 +196,10 @@ async function main(): Promise<void> {
   }
   if (selected.command === "verify-gateways") {
     await verifyGateways(selected.cid as string, prepared)
+    return
+  }
+  if (selected.command === "publish") {
+    await publish(actionSource, prepared)
     return
   }
   console.log(JSON.stringify({
