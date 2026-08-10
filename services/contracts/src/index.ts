@@ -2326,6 +2326,51 @@ export type DanceSession = {
   max_bytes: number;
   expires_at: number;
   created: number;
+  consent_policy_version: string | null;
+  consented_at: number | null;
+};
+
+export type DanceSessionMutationResponse = (DanceSession & {
+  idempotent: boolean;
+});
+
+export type DanceSessionCreateRequest = {
+  post: string;
+  consent: DanceConsentAcceptance;
+};
+
+export type DanceConsentAcceptance = {
+  policy_version: "dance_recording_v1";
+  accepted: true;
+};
+
+export type DanceSessionUploadIntentRequest = {
+  mime_type: "video/mp4";
+  content_sha256: string;
+  size_bytes: number;
+};
+
+export type DanceSessionUploadIntent = {
+  id: string;
+  object: "dance_session_upload_intent";
+  method: "PUT";
+  url: string;
+  headers: Record<string, string>;
+  expires_at: number;
+  idempotent: boolean;
+};
+
+export type DanceSessionSubmitRequest = {
+  capture_mode: "in_app_camera";
+  content_sha256: string;
+  size_bytes: number;
+};
+
+export type DanceSessionSubmission = {
+  id: string;
+  object: "dance_session_submission";
+  attempt: string;
+  status: DanceSessionStatus;
   idempotent: boolean;
 };
 
@@ -4731,8 +4776,11 @@ export const apiRoutes = {
   communityPostKaraokeLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/leaderboard`,
   communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
   karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
+  danceSessions: "/dance-sessions",
   danceSession: (danceSessionId: string) => `/dance-sessions/${danceSessionId}`,
   danceSessionCancel: (danceSessionId: string) => `/dance-sessions/${danceSessionId}/cancel`,
+  danceSessionUploadIntent: (danceSessionId: string) => `/dance-sessions/${danceSessionId}/upload-intent`,
+  danceSessionSubmit: (danceSessionId: string) => `/dance-sessions/${danceSessionId}/submit`,
   danceAttempt: (danceAttemptId: string) => `/dance-attempts/${danceAttemptId}`,
   danceChoreography: (danceChoreographyId: string) => `/dance-choreographies/${danceChoreographyId}`,
   postDanceChoreography: (postId: string) => `/posts/${postId}/dance-choreography`,

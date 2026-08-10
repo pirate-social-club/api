@@ -111,7 +111,7 @@ export function parseDanceReferenceTerminalFacts(
       "reference_feature_size_bytes",
       16 * 1024 * 1024,
     ),
-    durationMs: positiveInteger(metricRecord.duration_ms, "duration_ms", 90_000),
+    durationMs: positiveInteger(metricRecord.duration_ms, "duration_ms", 30_000),
     width: positiveInteger(metricRecord.width, "width", 2_160),
     height: positiveInteger(metricRecord.height, "height", 2_160),
     fpsMillihertz: positiveInteger(

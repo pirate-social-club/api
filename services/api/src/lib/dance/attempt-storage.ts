@@ -3,10 +3,10 @@ import { buildS3PresignedUrl, buildS3SignedRequest } from "../storage/s3-signing
 import type { Env } from "../../env"
 import type { S3SigningConfig } from "../storage/s3-signing"
 import { DANCE_ATTEMPT_MEDIA_PREFIX } from "./attempt-object-key"
+import { DANCE_ATTEMPT_MAX_BYTES } from "./attempt-session-repository"
 
 const SHA256 = /^[0-9a-f]{64}$/
 const SESSION_ID = /^[a-zA-Z0-9_-]{1,100}$/
-const MAX_ATTEMPT_BYTES = 64 * 1024 * 1024
 
 export class DanceAttemptUploadInvalidError extends Error {
   readonly code = "upload_invalid"
@@ -51,7 +51,7 @@ export async function buildDanceAttemptUploadIntent(input: {
   putUrl: string
   requiredHeaders: Record<string, string>
 }> {
-  if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > MAX_ATTEMPT_BYTES) {
+  if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 1 || input.sizeBytes > DANCE_ATTEMPT_MAX_BYTES) {
     throw internalError("Dance attempt size is invalid")
   }
   const objectKey = danceAttemptObjectKey(input.sessionId, input.contentSha256)

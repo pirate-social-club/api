@@ -168,6 +168,9 @@ describe("dance read service", () => {
       terminalReason: null,
       scoreBps: null,
       calibrationAdmitted: null,
+      consentPolicyVersion: "dance_recording_v1",
+      consentedAt: "2026-08-10T00:00:00.000Z",
+      consentSource: "api",
       expiresAt: "2026-08-10T00:30:00.000Z",
       submittedAt: null,
       finalizedAt: null,
@@ -184,6 +187,8 @@ describe("dance read service", () => {
       max_bytes: 1024,
       expires_at: 1_786_321_800,
       created: 1_786_320_000,
+      consent_policy_version: "dance_recording_v1",
+      consented_at: 1_786_320_000,
     })
     expect(JSON.stringify(serialized)).not.toContain("private/object.mp4")
   })

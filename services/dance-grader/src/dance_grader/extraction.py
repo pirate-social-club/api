@@ -20,7 +20,7 @@ class ExtractionError(ValueError):
 
 @dataclass(frozen=True)
 class ExtractionCaps:
-    max_duration_sec: float = 90.0
+    max_duration_sec: float = 30.0
     max_decoded_frames: int = 5_400
     max_width: int = 2_160
     max_height: int = 2_160

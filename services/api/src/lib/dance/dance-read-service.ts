@@ -167,6 +167,8 @@ export function serializeDanceSession(record: DanceAttemptSessionRecord) {
     choreography_revision: record.choreographyRevisionId,
     status: record.status,
     max_bytes: record.maximumBytes,
+    consent_policy_version: record.consentPolicyVersion,
+    consented_at: epochSeconds(record.consentedAt),
     expires_at: epochSeconds(record.expiresAt),
     created: epochSeconds(record.createdAt),
   }

@@ -9,6 +9,7 @@ import {
   cancelDanceAttemptSession,
   createDanceAttemptSession,
   DANCE_ATTEMPT_MAX_BYTES,
+  DANCE_CONSENT_POLICY_VERSION,
   getDanceAttemptSession,
   submitDanceAttemptSession,
   type DanceAttemptSessionRecord,
@@ -82,6 +83,16 @@ function idempotencyKey(value: string | undefined): string {
   return key
 }
 
+function consentAcceptance(value: Record<string, unknown>): void {
+  const consent = bodyRecord(value.consent)
+  if (
+    consent.policy_version !== DANCE_CONSENT_POLICY_VERSION
+    || consent.accepted !== true
+  ) {
+    throw badRequestError("Versioned dance recording consent is required")
+  }
+}
+
 function assertUnexpired(expiresAt: string, nowMs: number): void {
   if (Date.parse(expiresAt) <= nowMs) {
     throw conflictError("Dance session has expired")
@@ -116,9 +127,41 @@ export function danceSessionCreateResponse(
   return { ...serializeDanceSession(record), idempotent }
 }
 
+export function danceUploadIntentResponse(input: {
+  sessionId: string
+  putUrl: string
+  requiredHeaders: Record<string, string>
+  expiresAt: number
+  idempotent: boolean
+}) {
+  return {
+    id: input.sessionId,
+    object: "dance_session_upload_intent" as const,
+    method: "PUT" as const,
+    url: input.putUrl,
+    headers: input.requiredHeaders,
+    expires_at: input.expiresAt,
+    idempotent: input.idempotent,
+  }
+}
+
+export function danceSubmissionResponse(
+  record: DanceAttemptSessionRecord,
+  idempotent: boolean,
+) {
+  return {
+    id: record.sessionId,
+    object: "dance_session_submission" as const,
+    attempt: record.attemptId,
+    status: record.status,
+    idempotent,
+  }
+}
+
 danceSessions.post("/", async (c) => {
   assertCaptureEnabled(c.env)
   const body = bodyRecord(await c.req.json().catch(() => null))
+  consentAcceptance(body)
   const postId = decodePublicPostId(stringField(body, "post", 200))
   const nowMs = Date.now()
   const now = new Date(nowMs).toISOString()
@@ -134,6 +177,9 @@ danceSessions.post("/", async (c) => {
       creationIdempotencyKey: idempotencyKey(c.req.header("idempotency-key")),
       activityDate: studyActivityDate(now, STUDY_FALLBACK_TIMEZONE),
       activityTimezone: STUDY_FALLBACK_TIMEZONE,
+      consentPolicyVersion: DANCE_CONSENT_POLICY_VERSION,
+      consentedAt: now,
+      consentSource: "api",
       now,
       expiresAt: new Date(nowMs + SESSION_TTL_MS).toISOString(),
     },
@@ -204,15 +250,13 @@ danceSessions.post("/:sessionId/upload-intent", async (c) => {
     sizeBytes,
     now: now.toISOString(),
   })
-  return c.json({
-    id: sessionId,
-    object: "dance_session_upload_intent",
-    method: "PUT",
-    url: intent.putUrl,
-    headers: intent.requiredHeaders,
-    expires_at: Math.floor(now.getTime() / 1000) + 300,
+  return c.json(danceUploadIntentResponse({
+    sessionId,
+    putUrl: intent.putUrl,
+    requiredHeaders: intent.requiredHeaders,
+    expiresAt: Math.floor(now.getTime() / 1000) + 300,
     idempotent: bound.kind === "idempotent",
-  }, 200)
+  }), 200)
 })
 
 danceSessions.post("/:sessionId/submit", async (c) => {
@@ -261,13 +305,10 @@ danceSessions.post("/:sessionId/submit", async (c) => {
     etag: verified.etag,
     now: now.toISOString(),
   })
-  return c.json({
-    id: sessionId,
-    object: "dance_session",
-    attempt: submitted.record.attemptId,
-    status: submitted.record.status,
-    idempotent: submitted.kind === "idempotent",
-  }, 202)
+  return c.json(danceSubmissionResponse(
+    submitted.record,
+    submitted.kind === "idempotent",
+  ), 202)
 })
 
 export default danceSessions
