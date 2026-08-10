@@ -43,6 +43,13 @@ describe("community membership routes", () => {
   test("request membership lifecycle supports list, approval, rejection, and pending eligibility", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
+    const purgedCacheTags: string[][] = []
+    ctx.env.PUBLIC_READ_CACHE = {
+      purgeCacheTags: async (tags: string[]) => {
+        purgedCacheTags.push(tags)
+        return { success: true, errors: [] }
+      },
+    }
 
     const creator = await exchangeJwt(ctx.env, "community-request-lifecycle-creator")
 
@@ -158,6 +165,7 @@ describe("community membership routes", () => {
     )
     expect(approve.status).toBe(200)
     expect((await json(approve) as { status: string }).status).toBe("approved")
+    expect(purgedCacheTags).toContainEqual([`community:${communityId}`])
 
     const doubleApprove = await app.request(
       `http://pirate.test/communities/${communityId}/membership-requests/${requestId}/approve`,

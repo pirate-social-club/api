@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
@@ -114,6 +114,16 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
       clearTimeout(timeout)
     }
   }
+}
+
+export function communityPreviewUnavailableResponse(c: Context): Response {
+  c.header("Cache-Control", "no-store")
+  c.header("CDN-Cache-Control", "no-store")
+  return c.json({
+    error: "community_preview_unavailable",
+    message: "Community preview is temporarily unavailable",
+    retryable: true,
+  }, 503)
 }
 
 function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
@@ -582,6 +592,9 @@ publicCommunities.get("/:communityId", async (c) => {
     }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS),
   ])
   const isDegradedPreview = policy === null || result === null
+  if (isDegradedPreview) {
+    return communityPreviewUnavailableResponse(c)
+  }
   const effectivePolicy = policy ?? defaultCommunityMachineAccessPolicy({
     communityId,
     updatedAt: community.updated_at,
@@ -596,30 +609,20 @@ publicCommunities.get("/:communityId", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
-    if (isDegradedPreview) {
-      c.header("Cache-Control", "no-store")
-      c.header("CDN-Cache-Control", "no-store")
-    } else {
-      setPublicReadCacheHeaders(c, {
-        vary: ["Accept"],
-        cacheTags: [`community:${publicCommunityId(communityId)}`],
-      })
-    }
+    setPublicReadCacheHeaders(c, {
+      vary: ["Accept"],
+      cacheTags: [`community:${publicCommunityId(communityId)}`],
+    })
     return markdownResponse(communityMarkdown({
       preview: responseBody,
       links,
       omittedSurfaces,
     }), links)
   }
-  if (isDegradedPreview) {
-    c.header("Cache-Control", "no-store")
-    c.header("CDN-Cache-Control", "no-store")
-  } else {
-    setPublicReadCacheHeaders(c, {
-      vary: ["Accept"],
-      cacheTags: [`community:${publicCommunityId(communityId)}`],
-    })
-  }
+  setPublicReadCacheHeaders(c, {
+    vary: ["Accept"],
+    cacheTags: [`community:${publicCommunityId(communityId)}`],
+  })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
 })
