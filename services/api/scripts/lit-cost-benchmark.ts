@@ -6,10 +6,17 @@
  * This script never broadcasts a signed transaction. The `benchmark` command
  * requires an explicit registered CID and policy, isolates one warm-up from ten
  * measured successes, and brackets both phases with stable balance readings.
+ * Chipotle requires the exact action source to be submitted once per cache
+ * lifetime; `prime-cache` isolates that inline setup call from the benchmark.
  *
  * Usage:
  *   infisical run --env=dev --path=/spikes/lit-runtime-validation -- \
  *     bun services/api/scripts/lit-cost-benchmark.ts balance
+ *
+ *   infisical run --env=dev --path=/spikes/lit-runtime-validation -- \
+ *     LIT_COST_ACTION_IPFS_ID=... LIT_COST_POLICY_VERSION=2 \
+ *     LIT_COST_CACHE_PRIME_CONFIRMED=true LIT_COST_EVIDENCE_PATH=... \
+ *     bun services/api/scripts/lit-cost-benchmark.ts prime-cache
  *
  *   infisical run --env=dev --path=/spikes/lit-runtime-validation -- \
  *     LIT_COST_ACTION_IPFS_ID=... LIT_COST_POLICY_VERSION=2 \
@@ -26,7 +33,11 @@ import {
   verifySignedRewardVaultTransaction,
 } from "../src/lib/rewards/reward-vault-transaction"
 import { LitChipotleClient, LitChipotleError } from "../src/lib/rewards/lit-chipotle-client"
-import { createProductionLitRewardVaultExecutor } from "../src/lib/rewards/lit-reward-vault-executor"
+import { buildRewardVaultLitAction } from "../src/lib/rewards/reward-vault-lit-action"
+import {
+  createLitRewardVaultExecutor,
+  createProductionLitRewardVaultExecutor,
+} from "../src/lib/rewards/lit-reward-vault-executor"
 
 const DEFAULT_BASE_URL = "https://api.chipotle.litprotocol.com"
 const DEFAULT_RPC_URL = "https://sepolia.base.org"
@@ -42,7 +53,7 @@ const DEFAULT_SETTLEMENT_WAIT_SECONDS = 180
 const REQUIRED_STABLE_READS = 2
 const MEASURED_EXECUTIONS = 10
 
-type Command = "balance" | "execute" | "probe-402" | "benchmark"
+type Command = "balance" | "execute" | "probe-402" | "prime-cache" | "benchmark"
 
 type BenchmarkConfig = {
   actionIpfsId: string
@@ -52,7 +63,8 @@ type BenchmarkConfig = {
 
 type BalanceReading = {
   observed_at: string
-  balance_cents: number
+  balance_cents_raw: number
+  available_credit_cents: number
   balance_display: string
   request_id: string | null
   latency_ms: number
@@ -74,10 +86,16 @@ function requiredApiKey(): string {
 
 function command(argv: string[]): Command {
   const value = argv[0] ?? "balance"
-  if (value === "balance" || value === "execute" || value === "probe-402" || value === "benchmark") {
+  if (
+    value === "balance"
+    || value === "execute"
+    || value === "probe-402"
+    || value === "prime-cache"
+    || value === "benchmark"
+  ) {
     return value
   }
-  throw new Error("usage: lit-cost-benchmark.ts [balance|execute|probe-402|benchmark]")
+  throw new Error("usage: lit-cost-benchmark.ts [balance|execute|probe-402|prime-cache|benchmark]")
 }
 
 function benchmarkConfig(selected: Command): BenchmarkConfig | null {
@@ -93,15 +111,21 @@ function benchmarkConfig(selected: Command): BenchmarkConfig | null {
   if (selected === "benchmark" && process.env.LIT_COST_ACCOUNT_IDLE_CONFIRMED !== "true") {
     throw new Error("benchmark requires LIT_COST_ACCOUNT_IDLE_CONFIRMED=true")
   }
-  if (selected === "benchmark" && actionIpfsId === RETIRED_POLICY_1_ACTION_IPFS_ID) {
-    throw new Error("benchmark refuses the retired policy-1 action CID")
+  if (selected === "prime-cache" && process.env.LIT_COST_CACHE_PRIME_CONFIRMED !== "true") {
+    throw new Error("prime-cache requires LIT_COST_CACHE_PRIME_CONFIRMED=true")
   }
-  if (selected === "benchmark" && rawPolicyVersion !== "2") {
-    throw new Error("staging benchmark requires the live vault policy version 2")
+  if (
+    (selected === "benchmark" || selected === "prime-cache")
+    && actionIpfsId === RETIRED_POLICY_1_ACTION_IPFS_ID
+  ) {
+    throw new Error(`${selected} refuses the retired policy-1 action CID`)
+  }
+  if ((selected === "benchmark" || selected === "prime-cache") && rawPolicyVersion !== "2") {
+    throw new Error(`staging ${selected} requires the live vault policy version 2`)
   }
   const evidencePath = process.env.LIT_COST_EVIDENCE_PATH?.trim() || null
-  if (selected === "benchmark" && evidencePath === null) {
-    throw new Error("benchmark requires LIT_COST_EVIDENCE_PATH for durable evidence")
+  if ((selected === "benchmark" || selected === "prime-cache") && evidencePath === null) {
+    throw new Error(`${selected} requires LIT_COST_EVIDENCE_PATH for durable evidence`)
   }
   return { actionIpfsId, policyVersion: BigInt(rawPolicyVersion), evidencePath }
 }
@@ -145,14 +169,15 @@ async function balance(apiKey: string, baseUrl: string): Promise<BalanceReading>
   })
   const decoded = await response.json().catch(() => null) as Record<string, unknown> | null
   if (!response.ok || !decoded) throw new Error(`Lit balance request failed with HTTP ${response.status}`)
-  const balanceCents = Number(decoded.balance_cents)
+  const balanceCentsRaw = Number(decoded.balance_cents)
   const balanceDisplay = decoded.balance_display
-  if (!Number.isSafeInteger(balanceCents) || typeof balanceDisplay !== "string") {
+  if (!Number.isSafeInteger(balanceCentsRaw) || balanceCentsRaw > 0 || typeof balanceDisplay !== "string") {
     throw new Error("Lit balance response was invalid")
   }
   return {
     observed_at: new Date().toISOString(),
-    balance_cents: balanceCents,
+    balance_cents_raw: balanceCentsRaw,
+    available_credit_cents: Math.abs(balanceCentsRaw),
     balance_display: balanceDisplay,
     request_id: response.headers.get("x-request-id"),
     latency_ms: roundedMilliseconds(startedAt),
@@ -186,6 +211,7 @@ async function executeOnce(
   config: BenchmarkConfig,
   effectId: string,
   observation: ActionObservation,
+  source: "registered_cid" | "inline_cache_prime" = "registered_cid",
 ): Promise<{ tx_hash: string }> {
   const fetchImpl: typeof fetch = async (input, init) => {
     const startedAt = performance.now()
@@ -202,10 +228,21 @@ async function executeOnce(
     timeoutMs: 20_000,
     fetchImpl,
   })
-  const execute = createProductionLitRewardVaultExecutor(client, config.actionIpfsId, {
-    policyVersion: config.policyVersion,
-    maxDeadlineSeconds: ACTION_MAX_DEADLINE_SECONDS,
-  })
+  const execute = source === "registered_cid"
+    ? createProductionLitRewardVaultExecutor(client, config.actionIpfsId, {
+      policyVersion: config.policyVersion,
+      maxDeadlineSeconds: ACTION_MAX_DEADLINE_SECONDS,
+    })
+    : createLitRewardVaultExecutor(client, { code: buildRewardVaultLitAction({
+      vaultAddress: VAULT_ADDRESS,
+      signerAddress: SIGNER_ADDRESS,
+      chainId: CHAIN_ID,
+      policyVersion: config.policyVersion,
+      maxDeadlineSeconds: ACTION_MAX_DEADLINE_SECONDS,
+      maxFeePerGasWei: 50_000_000_000n,
+      maxPriorityFeePerGasWei: 25_000_000_000n,
+      maxGasLimit: 300_000n,
+    }) })
   const now = Date.now()
   const input: RewardVaultTransactionInput = {
     effectKind: "reward_cashout",
@@ -244,14 +281,14 @@ async function settledBalances(
   const deadline = Date.now() + maximumWaitMs
   let changed = false
   let stableReads = 0
-  let previous = before.balance_cents
+  let previous = before.available_credit_cents
   while (Date.now() < deadline) {
     await sleep(BALANCE_POLL_INTERVAL_MS)
     const reading = await balance(apiKey, baseUrl)
     readings.push(reading)
-    if (reading.balance_cents !== before.balance_cents) changed = true
-    stableReads = reading.balance_cents === previous ? stableReads + 1 : 0
-    previous = reading.balance_cents
+    if (reading.available_credit_cents !== before.available_credit_cents) changed = true
+    stableReads = reading.available_credit_cents === previous ? stableReads + 1 : 0
+    previous = reading.available_credit_cents
     if (changed && stableReads >= REQUIRED_STABLE_READS - 1) break
   }
   return readings
@@ -269,8 +306,8 @@ async function stableBalances(
   while (Date.now() < deadline) {
     const reading = await balance(apiKey, baseUrl)
     readings.push(reading)
-    stableReads = reading.balance_cents === previous ? stableReads + 1 : 1
-    previous = reading.balance_cents
+    stableReads = reading.available_credit_cents === previous ? stableReads + 1 : 1
+    previous = reading.available_credit_cents
     if (stableReads >= REQUIRED_STABLE_READS) return readings
     await sleep(BALANCE_POLL_INTERVAL_MS)
   }
@@ -306,7 +343,7 @@ async function runBenchmark(
   const startedAt = new Date().toISOString()
   const initialReadings = await stableBalances(apiKey, baseUrl, settlementWaitMs())
   const initial = initialReadings.at(-1) as BalanceReading
-  if (initial.balance_cents === 0) throw new Error("refusing paid benchmark: Lit balance is zero")
+  if (initial.available_credit_cents === 0) throw new Error("refusing paid benchmark: Lit balance is zero")
 
   const runId = Date.now()
   const warmup = await successfulExecution(
@@ -323,7 +360,7 @@ async function runBenchmark(
     settlementWaitMs(),
   )
   const measuredBefore = warmupBillingReadings.at(-1) as BalanceReading
-  if (measuredBefore.balance_cents === initial.balance_cents) {
+  if (measuredBefore.available_credit_cents === initial.available_credit_cents) {
     throw new Error("warm-up billing did not settle; refusing to contaminate the measured bracket")
   }
 
@@ -345,10 +382,10 @@ async function runBenchmark(
     settlementWaitMs(),
   )
   const measuredAfter = measuredBillingReadings.at(-1) as BalanceReading
-  if (measuredAfter.balance_cents === measuredBefore.balance_cents) {
+  if (measuredAfter.available_credit_cents === measuredBefore.available_credit_cents) {
     throw new Error("measured billing did not settle inside the configured window")
   }
-  const observedChargeCents = measuredBefore.balance_cents - measuredAfter.balance_cents
+  const observedChargeCents = measuredBefore.available_credit_cents - measuredAfter.available_credit_cents
   if (observedChargeCents < 0) throw new Error("Lit balance increased during the measured bracket")
 
   const evidence = {
@@ -359,7 +396,8 @@ async function runBenchmark(
     account_idle_attested: true,
     action_ipfs_id: config.actionIpfsId,
     registered_cid_path: true,
-    inline_code_used: false,
+    provider_cache_precondition: "satisfied_before_benchmark",
+    inline_code_used_in_benchmark: false,
     chain_id: CHAIN_ID,
     policy_version: config.policyVersion.toString(),
     vault_address: VAULT_ADDRESS,
@@ -405,10 +443,10 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ command: selected, before }, null, 2))
     return
   }
-  if (selected === "execute" && before.balance_cents === 0) {
+  if ((selected === "execute" || selected === "prime-cache") && before.available_credit_cents === 0) {
     throw new Error("refusing paid benchmark: Lit balance is zero")
   }
-  if (selected === "probe-402" && before.balance_cents !== 0) {
+  if (selected === "probe-402" && before.available_credit_cents !== 0) {
     throw new Error("refusing 402 probe: Lit balance is non-zero")
   }
 
@@ -429,6 +467,7 @@ async function main(): Promise<void> {
       config as BenchmarkConfig,
       `lit_cost_single_${Date.now()}`,
       observation,
+      selected === "prime-cache" ? "inline_cache_prime" : "registered_cid",
     )
     action = { outcome: "success", observation, ...result }
   } catch (error) {
@@ -449,21 +488,29 @@ async function main(): Promise<void> {
     ? await settledBalances(apiKey, baseUrl, before, settlementWaitMs())
     : [await balance(apiKey, baseUrl)]
   const after = afterReadings.at(-1) as BalanceReading
-  const observedChargeCents = Math.abs(after.balance_cents - before.balance_cents)
-  console.log(JSON.stringify({
+  const observedChargeCents = Math.abs(after.available_credit_cents - before.available_credit_cents)
+  const evidence = {
+    schema_version: 1,
+    protocol: selected === "prime-cache" ? "inline_cache_prime_double_stable_v1" : "single_execution_v1",
     command: selected,
     action_ipfs_id: config?.actionIpfsId ?? null,
     chain_id: CHAIN_ID,
     policy_version: config?.policyVersion.toString() ?? null,
     transaction_broadcast: false,
+    execution_path: selected === "prime-cache" ? "inline_cache_prime" : "registered_cid",
     before,
     action,
     after_readings: afterReadings,
     billing: {
       observed_charge_cents: observedChargeCents,
-      settled: action.outcome !== "success" || after.balance_cents !== before.balance_cents,
+      settled: action.outcome !== "success"
+        || after.available_credit_cents !== before.available_credit_cents,
     },
-  }, null, 2))
+  }
+  if (selected === "prime-cache") {
+    await writeEvidence((config as BenchmarkConfig).evidencePath as string, evidence)
+  }
+  console.log(JSON.stringify(evidence, null, 2))
 }
 
 await main()

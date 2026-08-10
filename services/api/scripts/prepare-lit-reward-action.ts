@@ -224,6 +224,8 @@ async function main(): Promise<void> {
       "pin under the expected CID",
       "verify both public gateways",
       "register the policy-2 CID and remove the retired CID from group 1",
+      "prime the provider cache once with the exact reviewed source and retain separate billing evidence",
+      "run the registered-CID warm-up and measured benchmark",
     ],
   }, null, 2))
 }

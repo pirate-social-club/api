@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "protocol": "registered_cid_warmup_plus_10_double_stable_v1",
+  "started_at": "2026-08-10T10:25:35.382Z",
+  "completed_at": "2026-08-10T10:26:10.102Z",
+  "account_idle_attested": true,
+  "action_ipfs_id": "QmQ7mBbjbd4KgGfiKbYRv1p4kbcs8ebSz6ruAYfLeN8v9d",
+  "registered_cid_path": true,
+  "provider_cache_precondition": {
+    "required": true,
+    "satisfied_by": "inline_cache_prime",
+    "evidence_file": "lit-cost-cache-prime-policy2-2026-08-10.json",
+    "completed_before_benchmark": true
+  },
+  "inline_code_used_in_benchmark": false,
+  "chain_id": 84532,
+  "policy_version": "2",
+  "vault_address": "0x01c84e513CC823255A9651885Fb59E363B47d55a",
+  "signer_address": "0x6a1C1a6C780E9F2eb23E564C04B6316864468c46",
+  "transaction_broadcast": false,
+  "billing_endpoint": "/core/v1/billing/balance",
+  "initial_stable_readings": [
+    {
+      "observed_at": "2026-08-10T10:25:36.490Z",
+      "balance_cents_raw": -496,
+      "available_credit_cents": 496,
+      "balance_display": "$4.96 credit",
+      "request_id": "a5fcb647-851d-447c-95a6-573f718e2542",
+      "latency_ms": 1108
+    },
+    {
+      "observed_at": "2026-08-10T10:25:41.752Z",
+      "balance_cents_raw": -496,
+      "available_credit_cents": 496,
+      "balance_display": "$4.96 credit",
+      "request_id": "17d0e5d8-9540-4d44-bcce-cee08df15f36",
+      "latency_ms": 261
+    }
+  ],
+  "warmup": {
+    "outcome": "success",
+    "observation": {
+      "status": 200,
+      "request_id": "351b06fb-de97-483b-9c28-7d98825295ed",
+      "latency_ms": 394
+    },
+    "tx_hash": "0x135bb36fc96fa9ff6fee51168eebbb97ecd23b21d31368c2e9e2200e1b8358e4"
+  },
+  "warmup_billing_readings": [
+    {
+      "observed_at": "2026-08-10T10:25:48.085Z",
+      "balance_cents_raw": -495,
+      "available_credit_cents": 495,
+      "balance_display": "$4.95 credit",
+      "request_id": "943127a2-680f-4643-9557-9326c9abbf99",
+      "latency_ms": 262
+    },
+    {
+      "observed_at": "2026-08-10T10:25:53.349Z",
+      "balance_cents_raw": -495,
+      "available_credit_cents": 495,
+      "balance_display": "$4.95 credit",
+      "request_id": "0dced3a0-88b6-443d-9368-4ba51f3600f2",
+      "latency_ms": 262
+    }
+  ],
+  "measured_executions": [
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "b94db08b-7ce0-4ca6-bc1d-7c4558d1eedc",
+        "latency_ms": 424
+      },
+      "tx_hash": "0xdb97216488bb4433c799f5f811bc38afa1d3ff558fd6389a9b472762b579a765"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "aaeed464-caf7-4440-b78f-a4d32298a7a8",
+        "latency_ms": 398
+      },
+      "tx_hash": "0x043b4fd914589978e78984eee9d9cd86ae9ecd4eec6b0053f766ed97b06221e5"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "19c32dab-a0e3-4702-879a-962aa313c4e3",
+        "latency_ms": 400
+      },
+      "tx_hash": "0x4e913fe6e6ad85f74d1b5c8ccb1c07eb6967cf65c3c9dd6011ceacb5b48e7a61"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "cd69a197-3fa3-42b2-bef5-695fee64fa39",
+        "latency_ms": 395
+      },
+      "tx_hash": "0x798e65229344fae14791a5146fc874c94be335bf39acb0582e9bbcc0c40a159c"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "83f64288-2c27-4f9a-9eed-e6425185bc16",
+        "latency_ms": 442
+      },
+      "tx_hash": "0x27b8588e49f21064d613c3cea2ca95724fd16226f2664921682d9cdfd465cb07"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "5ddbfb1b-3031-478c-9485-ebac5a626ab6",
+        "latency_ms": 436
+      },
+      "tx_hash": "0x9ebe8f3afea970c5134008f550a0b2755574e0d2d31b2754bfbe16633b4df61f"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "72d69ef9-40d4-441d-91da-c22af8f45abc",
+        "latency_ms": 424
+      },
+      "tx_hash": "0x4de1e2a5f45c9c6fa4be5383123e9a564aef667a451d3af4204954a6b22a1f0e"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "108f2210-906f-4526-9abc-cfdb6bae8e25",
+        "latency_ms": 429
+      },
+      "tx_hash": "0xbdfc9cb64ed46249b456af96d30c436c097a4d6a0e01317e12d8723949d885c1"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "98404eeb-5c1e-4da1-872a-b2bff1f6af65",
+        "latency_ms": 427
+      },
+      "tx_hash": "0x9f72a55ba28561fe0b07286e34b7c51ef83d0eeecfec2c30bd38b67f73131eaf"
+    },
+    {
+      "outcome": "success",
+      "observation": {
+        "status": 200,
+        "request_id": "a4ad6009-5c10-4f84-9e54-d906ded093ee",
+        "latency_ms": 438
+      },
+      "tx_hash": "0xe86afb2ba5fb16b9fa5cd4d83b1f1c988357f5224a1905d851837f99eec294fc"
+    }
+  ],
+  "measured_billing_readings": [
+    {
+      "observed_at": "2026-08-10T10:26:04.839Z",
+      "balance_cents_raw": -485,
+      "available_credit_cents": 485,
+      "balance_display": "$4.85 credit",
+      "request_id": "9f23d29f-573a-45f6-94ef-1c61ec9443d0",
+      "latency_ms": 260
+    },
+    {
+      "observed_at": "2026-08-10T10:26:10.102Z",
+      "balance_cents_raw": -485,
+      "available_credit_cents": 485,
+      "balance_display": "$4.85 credit",
+      "request_id": "681ba641-2b77-4b3c-9571-699518e9e803",
+      "latency_ms": 261
+    }
+  ],
+  "billing": {
+    "observed_charge_cents": 10,
+    "measured_successes": 10,
+    "average_charge_cents": 1,
+    "below_original_50_cent_floor": true,
+    "at_or_below_documented_1_cent_rate": true
+  },
+  "reconciliation": {
+    "request_ids": [
+      "351b06fb-de97-483b-9c28-7d98825295ed",
+      "b94db08b-7ce0-4ca6-bc1d-7c4558d1eedc",
+      "aaeed464-caf7-4440-b78f-a4d32298a7a8",
+      "19c32dab-a0e3-4702-879a-962aa313c4e3",
+      "cd69a197-3fa3-42b2-bef5-695fee64fa39",
+      "83f64288-2c27-4f9a-9eed-e6425185bc16",
+      "5ddbfb1b-3031-478c-9485-ebac5a626ab6",
+      "72d69ef9-40d4-441d-91da-c22af8f45abc",
+      "108f2210-906f-4526-9abc-cfdb6bae8e25",
+      "98404eeb-5c1e-4da1-872a-b2bff1f6af65",
+      "a4ad6009-5c10-4f84-9e54-d906ded093ee"
+    ],
+    "required": true,
+    "status": "pending_vendor_reconciliation"
+  }
+}
