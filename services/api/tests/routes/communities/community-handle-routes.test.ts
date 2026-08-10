@@ -324,6 +324,113 @@ async function countLocalHandleQuotes(input: {
 }
 
 describe("community handle routes", () => {
+  test("claim stays bound to the quoted namespace when the community primary changes", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "quoted-namespace-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const quoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "deckhand" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as { id: string }
+    const local = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    let quotedNamespaceId = ""
+    try {
+      const quoted = await local.execute({
+        sql: `
+          SELECT namespace_id
+          FROM community_handle_claim_quotes
+          WHERE handle_claim_quote_id = ?1
+        `,
+        args: [rawHandleQuoteId(quote.id)],
+      })
+      quotedNamespaceId = String(quoted.rows[0]?.namespace_id ?? "")
+      expect(quotedNamespaceId).not.toBe("")
+      const now = new Date().toISOString()
+      await local.execute({
+        sql: `
+          UPDATE namespace_bindings
+          SET namespace_role = 'mirror', updated_at = ?2
+          WHERE namespace_id = ?1
+        `,
+        args: [quotedNamespaceId, now],
+      })
+      await local.execute({
+        sql: `
+          INSERT INTO namespace_bindings (
+            namespace_id, community_id, namespace_verification_id,
+            display_label, normalized_label, resolver_label, route_family,
+            status, created_at, updated_at, namespace_role
+          ) VALUES (
+            'ns_replacement_primary', ?1, 'namespace_replacement_primary',
+            'replacement-root', 'replacement-root', 'replacement-root', 'hns',
+            'active', ?2, ?2, 'primary'
+          )
+        `,
+        args: [communityId, now],
+      })
+      await local.execute({
+        sql: `
+          INSERT INTO namespace_handle_policies (
+            namespace_handle_policy_id, community_id, namespace_id,
+            policy_template, pricing_model, membership_required_for_claim,
+            settings_json, created_at, updated_at, claims_enabled,
+            claim_gate_mode, claim_gate_expression_ref, eligibility_timing,
+            revision
+          )
+          SELECT 'nhp_replacement_primary', community_id, 'ns_replacement_primary',
+                 policy_template, pricing_model, membership_required_for_claim,
+                 settings_json, ?2, ?2, claims_enabled,
+                 claim_gate_mode, claim_gate_expression_ref, eligibility_timing,
+                 revision
+          FROM namespace_handle_policies
+          WHERE namespace_id = ?1
+        `,
+        args: [quotedNamespaceId, now],
+      })
+    } finally {
+      local.close()
+    }
+
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      { quote: quote.id },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(claimResponse.status).toBe(200)
+
+    const readback = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      const claimed = await readback.execute({
+        sql: `
+          SELECT namespace_id
+          FROM community_handles
+          WHERE handle_claim_quote_id = ?1
+        `,
+        args: [rawHandleQuoteId(quote.id)],
+      })
+      expect(claimed.rows[0]?.namespace_id).toBe(quotedNamespaceId)
+      expect(claimed.rows[0]?.namespace_id).not.toBe("ns_replacement_primary")
+    } finally {
+      readback.close()
+    }
+  })
+
   test("member can quote and claim a free namespace handle", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

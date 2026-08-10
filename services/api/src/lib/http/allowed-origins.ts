@@ -1,6 +1,10 @@
 import type { Env } from "../../env"
 
 const DEFAULT_ANDROID_KARAOKE_ORIGIN = "https://android.pirate.sc"
+const LEGACY_WALLET_ENABLED_HNS_ORIGINS = new Set([
+  "https://app.dankmeme",
+  "https://app.jazleeuw",
+])
 
 function commaSeparatedValues(value: string | undefined): string[] {
   return String(value || "")
@@ -40,7 +44,22 @@ function normalizeExactOrigin(value: string): string | null {
   }
 }
 
-function isTrustedHnsWebOrigin(origin: string): boolean {
+export function importedHnsAppRoot(origin: string): string | null {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null
+  const labels = url.hostname.toLowerCase().split(".")
+  if (labels.length !== 2 || labels[0] !== "app") return null
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(labels[1] ?? "")
+    ? labels[1]!
+    : null
+}
+
+function isTrustedHnsWebOrigin(origin: string, importedAppAllowed: boolean): boolean {
   let url: URL
   try {
     url = new URL(origin)
@@ -68,15 +87,20 @@ function isTrustedHnsWebOrigin(origin: string): boolean {
   // Imported HNS roots use the dashboard-compatible app.<root> origin. The
   // API remains the canonical HNS service, so these origins need the same
   // CORS treatment as app.pirate without requiring one config entry per root.
-  const labels = hostname.split(".")
-  return labels.length === 2 && labels[0] === "app" && /^[a-z0-9-]+$/u.test(labels[1])
+  return importedAppAllowed && importedHnsAppRoot(origin) !== null
 }
 
 export function configuredCorsOrigin(
   origin: string,
   env: Pick<Env, "CORS_ALLOWED_ORIGINS"> | undefined,
+  importedHnsAppAllowed = false,
 ): string | null {
-  if (isTrustedHnsWebOrigin(origin)) {
+  if (
+    isTrustedHnsWebOrigin(
+      origin,
+      importedHnsAppAllowed || LEGACY_WALLET_ENABLED_HNS_ORIGINS.has(origin.toLowerCase()),
+    )
+  ) {
     return origin
   }
 

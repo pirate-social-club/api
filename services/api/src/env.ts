@@ -2,6 +2,7 @@ import type { ShardRpc } from "@pirate/api-shared"
 import type { RateLimiterBinding } from "./lib/rate-limit"
 import type { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
 import type { StorySettlementWalletCoordinatorDO } from "./lib/story/story-settlement-wallet-coordinator-do"
+import type { HnsWalletOriginAuthorityDO } from "./lib/hns-wallet-origin-authority-do"
 
 /** RPC surface of the `CachedPublicReads` entrypoint, reached via self-binding. */
 export type PublicReadCacheRpc = {
@@ -19,6 +20,7 @@ export type Env = {
   CONTROL_PLANE_DATABASE_URL?: string
   CONTROL_PLANE_HYPERDRIVE?: Hyperdrive
   HNS_ROOT_DELEGATION_ROUTING_ENABLED?: string
+  HNS_WALLET_ORIGIN_AUTHORITY?: DurableObjectNamespace<HnsWalletOriginAuthorityDO>
   CORS_ALLOWED_ORIGINS?: string
   PIRATE_ANDROID_KARAOKE_ORIGINS?: string
   MATERIALIZED_PUBLIC_HOME_FEED_LOCALES?: string

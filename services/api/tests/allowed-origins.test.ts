@@ -29,13 +29,16 @@ describe("allowed origins", () => {
     })).toBeNull()
   })
 
-  test("allows imported HNS app origins for general CORS", () => {
+  test("allows legacy and dynamically authorized HNS app origins for general CORS", () => {
     expect(configuredCorsOrigin("https://app.dankmeme", {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",
     })).toBe("https://app.dankmeme")
     expect(configuredCorsOrigin("https://app.xn--pokmon-dva", {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",
-    })).toBe("https://app.xn--pokmon-dva")
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://app.xn--pokmon-dva", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    }, true)).toBe("https://app.xn--pokmon-dva")
   })
 
   test("does not treat arbitrary nested origins as imported HNS apps", () => {

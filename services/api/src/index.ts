@@ -17,6 +17,7 @@ import debugPipeline from "./routes/debug-pipeline"
 import opsTelegramDeliveries from "./routes/ops-telegram-deliveries"
 import opsWallets from "./routes/ops-wallets"
 import hnsEdgeAlerts from "./routes/hns-edge-alerts"
+import hnsWalletOriginOps from "./routes/hns-wallet-origin-ops"
 import communityMedia from "./routes/community-media"
 import comments from "./routes/comments"
 import communities from "./routes/communities"
@@ -86,7 +87,11 @@ import {
   resolveCommunityAllocationShard,
 } from "./lib/communities/community-shard-registry"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
-import { configuredCorsOrigin as configuredCorsOriginForEnv } from "./lib/http/allowed-origins"
+import {
+  configuredCorsOrigin as configuredCorsOriginForEnv,
+  importedHnsAppRoot,
+} from "./lib/http/allowed-origins"
+import { hnsWalletOriginAuthorityStub } from "./lib/hns-wallet-origin-authority-do"
 import { mirrorResponseToRequestHost } from "./lib/http/request-host-mirror"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
@@ -149,6 +154,7 @@ import {
 } from "./lib/story/story-settlement-wallet-coordinator-do"
 import { storySettlementRealChain } from "./lib/story/story-settlement-chain-real"
 import { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
+import { HnsWalletOriginAuthorityDO } from "./lib/hns-wallet-origin-authority-do"
 import { realChain as operatorRealChain } from "./lib/communities/bookings/operator-chain-real"
 import type { Env } from "./env"
 import publicReadApp from "./routes/public-read-app"
@@ -165,6 +171,7 @@ export { ScheduledCronLockDO }
 export { OperatorSigningCoordinatorDO }
 export { StorySettlementWalletCoordinatorDO }
 export { CommentCreateRateLimiterDO }
+export { HnsWalletOriginAuthorityDO }
 // Wire the ethers-backed signer into the coordinator DO at worker load. Keeping this out of the DO
 // module itself means test worker bundles (which omit this entry) never pull ethers/`ws`.
 registerOperatorChainPrimitives(operatorRealChain)
@@ -277,9 +284,39 @@ async function buildVersionPayload(env: Env) {
   }
 }
 
-function configuredCorsOrigin(origin: string, c: { env: Env }): string | null {
-  return configuredCorsOriginForEnv(origin, c.env)
+function configuredCorsOrigin(
+  origin: string,
+  c: { env: Env; get(name: "hnsWalletOriginAllowed"): boolean | undefined },
+): string | null {
+  const importedHnsAppAllowed = Boolean(c.get("hnsWalletOriginAllowed"))
+  return configuredCorsOriginForEnv(origin, c.env, importedHnsAppAllowed)
 }
+
+async function resolveHnsWalletOriginAllowed(origin: string | null, env: Env): Promise<boolean> {
+  if (!origin) return false
+  const rootLabel = importedHnsAppRoot(origin)
+  if (!rootLabel) return false
+  try {
+    const snapshot = await hnsWalletOriginAuthorityStub(env)?.readSnapshot(rootLabel)
+    return snapshot?.effective === true
+      && snapshot.originHostname === `app.${rootLabel}`
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "hns_wallet_origin_authority_read_failed",
+      root_label: rootLabel,
+      error: error instanceof Error ? error.message : String(error),
+    }))
+    return false
+  }
+}
+
+app.use("/*", async (c, next) => {
+  c.set(
+    "hnsWalletOriginAllowed",
+    await resolveHnsWalletOriginAllowed(c.req.header("origin") ?? null, c.env),
+  )
+  await next()
+})
 
 app.use(
   "/*",
@@ -613,6 +650,7 @@ app.route("/notifications", notifications)
 app.route("/oauth", oauth)
 app.route("/royalties", royalties)
 app.route("/operator/story-settlement", storySettlementOps)
+app.route("/admin/ops/hns-wallet-origins", hnsWalletOriginOps)
 app.route("/posts", posts)
 app.route("/public-agents", publicAgents)
 app.route("/public-names", publicNames)
@@ -723,7 +761,7 @@ function appendCommaSeparatedHeader(headers: Headers, name: string, value: strin
   }
 }
 
-function applyCorsHeaders(request: Request, response: Response, env: Env): Response {
+async function applyCorsHeaders(request: Request, response: Response, env: Env): Promise<Response> {
   if (response.headers.has("Access-Control-Allow-Origin")) {
     if ((response.headers.get("Access-Control-Expose-Headers") ?? "")
       .split(",")
@@ -740,7 +778,11 @@ function applyCorsHeaders(request: Request, response: Response, env: Env): Respo
     return response
   }
 
-  const allowedOrigin = configuredCorsOrigin(origin, { env })
+  const allowedOrigin = configuredCorsOriginForEnv(
+    origin,
+    env,
+    await resolveHnsWalletOriginAllowed(origin, env),
+  )
   if (!allowedOrigin) {
     return response
   }
@@ -760,7 +802,7 @@ async function fetchApi(req: Request, env: Env, ctx: ExecutionContext): Promise<
   // after the (potentially cache-fronted) inner fetch, so cached and stored
   // payloads always keep the canonical origin.
   const mirrored = await mirrorResponseToRequestHost({ request: req, response, env })
-  return applyCorsHeaders(req, mirrored, env)
+  return await applyCorsHeaders(req, mirrored, env)
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {
