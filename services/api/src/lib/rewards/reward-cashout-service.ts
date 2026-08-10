@@ -26,6 +26,7 @@ import {
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
 import type { RewardCashoutResponse, RewardPayoutStatus, UpstreamIdentity } from "../../types"
+import { rewardPayoutPublicStage } from "./reward-payout-public-stage"
 import { captureScheduledWarning } from "../ops-alerts/scheduled"
 import {
   fitsPayoutCapacity,
@@ -733,6 +734,10 @@ function serializeCashout(effect: RewardPayoutEffect, balanceCents: number, chai
       amount_cents: effect.amountCents,
       recipient_address: effect.recipientAddress,
       status: effect.status,
+      settlement_stage: rewardPayoutPublicStage({
+        coordinatorState: effect.coordinatorState,
+        status: effect.status,
+      }),
       settlement_ref: effect.settlementRef,
       failure_reason: effect.failureReason,
     },
