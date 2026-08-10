@@ -153,6 +153,19 @@ def test_multiple_people_fails_closed_and_closes_detector() -> None:
     assert detector.closed is True
 
 
+def test_v1_duration_cap_rejects_video_over_thirty_seconds() -> None:
+    metadata, frames, outputs = _fixture(duration_sec=30.1)
+
+    with pytest.raises(ExtractionError, match="duration") as error:
+        extract_pose_sequence(
+            Path("fixture.mp4"),
+            decoder=FakeDecoder(metadata, frames),
+            detector=FakeDetector(outputs),
+        )
+
+    assert error.value.code == "video_limits_exceeded"
+
+
 def test_decoder_frames_are_sampled_before_pose_inference() -> None:
     sequence = make_sequence(duration_sec=4.0, fps=30.0)
     frames = tuple(

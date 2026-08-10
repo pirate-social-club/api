@@ -397,12 +397,15 @@ but must not see an earned-reward claim.
 
 ### Telegram media contract
 
-The hosted Bot API `getFile` limit is 20 MB. Gate 0B will reject reported files at or above a
-conservative 19 MB application limit before download and limit choreographies and attempts to 30
-seconds. These limits are specified but not yet implemented: the current direct-upload path still
-allows 64 MiB and the grader contract still accepts longer input. Once implemented, the limits are
-configurable downward, but raising either requires evidence that the hosted Bot API and grader
-budgets still hold. V1 does not operate a local Bot API server.
+The hosted Bot API `getFile` limit is 20 MB. The channel-neutral V1 contract accepts at most
+19,000,000 bytes and 30 seconds for both choreographies and attempts. Session creation persists the
+accepted consent policy and timestamp before upload authorization; legacy sessions without that
+receipt cannot obtain or reuse an upload intent. The API, storage signer, callback contracts, and
+grader enforce the shared envelope. The Telegram adapter must additionally reject an oversized
+reported file before download and pass an explicit 19,000,000-byte ceiling to its bounded download
+helper; that adapter work remains pending. Limits may be configured downward, but raising either
+requires evidence that the hosted Bot API and grader budgets still hold. V1 does not operate a
+local Bot API server.
 
 Both Telegram `video` and video `document` messages are accepted. `file_id` is used to download;
 `file_unique_id` and the observed media metadata are retained as bounded exact-replay signals.

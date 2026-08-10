@@ -217,7 +217,7 @@ const spec = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DanceSession"
+                  "$ref": "#/components/schemas/DanceSessionMutationResponse"
                 }
               }
             }
@@ -226,7 +226,7 @@ const spec = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DanceSession"
+                  "$ref": "#/components/schemas/DanceSessionMutationResponse"
                 }
               }
             }
@@ -308,7 +308,7 @@ const spec = {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DanceSession"
+                  "$ref": "#/components/schemas/DanceSessionMutationResponse"
                 }
               }
             }
@@ -321,6 +321,127 @@ const spec = {
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-sessions/{dance_session_id}/upload-intent": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "dance_session_upload_intent_create",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Bind a private upload intent to an owned dance session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DanceSessionUploadIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionUploadIntent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-sessions/{dance_session_id}/submit": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "dance_session_submit",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Submit an uploaded dance attempt for grading",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DanceSessionSubmitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionSubmission"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
           }
         },
         "parameters": [
@@ -9128,13 +9249,35 @@ const spec = {
       "DanceSessionCreateRequest": {
         "type": "object",
         "required": [
-          "post"
+          "post",
+          "consent"
         ],
         "properties": {
           "post": {
             "type": "string"
+          },
+          "consent": {
+            "$ref": "#/components/schemas/DanceConsentAcceptance"
           }
         }
+      },
+      "DanceSessionMutationResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DanceSession"
+          },
+          {
+            "type": "object",
+            "required": [
+              "idempotent"
+            ],
+            "properties": {
+              "idempotent": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
       },
       "DanceSession": {
         "type": "object",
@@ -9149,7 +9292,8 @@ const spec = {
           "max_bytes",
           "expires_at",
           "created",
-          "idempotent"
+          "consent_policy_version",
+          "consented_at"
         ],
         "properties": {
           "id": {
@@ -9179,7 +9323,8 @@ const spec = {
           "max_bytes": {
             "type": "integer",
             "format": "int64",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 19000000
           },
           "expires_at": {
             "type": "integer",
@@ -9188,6 +9333,138 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          },
+          "consent_policy_version": {
+            "type": "string",
+            "nullable": true
+          },
+          "consented_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "DanceSessionUploadIntentRequest": {
+        "type": "object",
+        "required": [
+          "mime_type",
+          "content_sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "mime_type": {
+            "type": "string",
+            "enum": [
+              "video/mp4"
+            ]
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 19000000
+          }
+        }
+      },
+      "DanceSessionUploadIntent": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "method",
+          "url",
+          "headers",
+          "expires_at",
+          "idempotent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_session_upload_intent"
+            ]
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "PUT"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "idempotent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DanceSessionSubmitRequest": {
+        "type": "object",
+        "required": [
+          "capture_mode",
+          "content_sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "capture_mode": {
+            "type": "string",
+            "enum": [
+              "in_app_camera"
+            ]
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 19000000
+          }
+        }
+      },
+      "DanceSessionSubmission": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "attempt",
+          "status",
+          "idempotent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_session_submission"
+            ]
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DanceSessionStatus"
           },
           "idempotent": {
             "type": "boolean"
@@ -19021,6 +19298,27 @@ const spec = {
           }
         }
       },
+      "DanceConsentAcceptance": {
+        "type": "object",
+        "required": [
+          "policy_version",
+          "accepted"
+        ],
+        "properties": {
+          "policy_version": {
+            "type": "string",
+            "enum": [
+              "dance_recording_v1"
+            ]
+          },
+          "accepted": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
       "DanceSessionStatus": {
         "type": "string",
         "enum": [
@@ -19095,7 +19393,7 @@ const spec = {
           "duration_ms": {
             "type": "integer",
             "minimum": 1000,
-            "maximum": 90000
+            "maximum": 30000
           },
           "width": {
             "type": "integer",

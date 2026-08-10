@@ -945,6 +945,27 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  // PostgreSQL permits several ADD COLUMN clauses in one ALTER TABLE while
+  // SQLite accepts exactly one. Keep specialized rebuild/type-conversion cases
+  // above this generic nullable-column fallback.
+  const multiAddColumn = stripLeadingComments(statement).match(
+    /^\s*ALTER\s+TABLE\s+([^\s]+)\s+([\s\S]*?)\s*;?\s*$/iu,
+  )
+  if (multiAddColumn) {
+    const clauses = multiAddColumn[2]
+      ?.replace(/;\s*$/u, "")
+      .split(/\s*,\s*(?=ADD\s+COLUMN\s+)/iu)
+    if (
+      clauses
+      && clauses.length > 1
+      && clauses.every((clause) => /^ADD\s+COLUMN\s+/iu.test(clause.trim()))
+    ) {
+      return clauses.flatMap((clause) => toSqliteCompatibleStatements(
+        `ALTER TABLE ${multiAddColumn[1]} ${clause.trim()};`,
+      ))
+    }
+  }
+
   let sqliteCompat = statement
   if (
     normalized.startsWith("UPDATE EFP_FOLLOW_WRITE_INTENTS ")

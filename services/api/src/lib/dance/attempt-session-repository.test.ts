@@ -46,18 +46,21 @@ function fakeClient() {
         dance_choreography_revision_id:
           revision.dance_choreography_revision_id,
         status: "initialized",
-        upload_object_key: args[26],
-        maximum_bytes: args[27],
+        consent_policy_version: args[26],
+        consented_at: args[27],
+        consent_source: args[28],
+        upload_object_key: args[29],
+        maximum_bytes: args[30],
         observed_size_bytes: null,
         observed_etag: null,
         observed_content_sha256: null,
         terminal_reason: null,
         score_bps: null,
         calibration_admitted: null,
-        expires_at: args[28],
+        expires_at: args[31],
         submitted_at: null,
         finalized_at: null,
-        created_at: args[29],
+        created_at: args[32],
       }
       return { rows: [{ dance_attempt_session_id: args[0] }] }
     }
@@ -109,6 +112,14 @@ function fakeClient() {
     setStatus: (status: string, terminalReason: string | null) => {
       session = { ...session, status, terminal_reason: terminalReason }
     },
+    clearConsent: () => {
+      session = {
+        ...session,
+        consent_policy_version: null,
+        consented_at: null,
+        consent_source: null,
+      }
+    },
   }
 }
 
@@ -125,6 +136,9 @@ describe("dance attempt durable session repository", () => {
         creationIdempotencyKey: "idem_1",
         activityDate: "2026-07-30",
         activityTimezone: "UTC",
+        consentPolicyVersion: "dance_recording_v1",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        consentSource: "api",
         now: "2026-07-30T00:00:00.000Z",
         expiresAt: "2026-07-30T00:30:00.000Z",
       },
@@ -178,6 +192,9 @@ describe("dance attempt durable session repository", () => {
         creationIdempotencyKey: "idem_cancel",
         activityDate: "2026-07-30",
         activityTimezone: "UTC",
+        consentPolicyVersion: "dance_recording_v1",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        consentSource: "api",
         now: "2026-07-30T00:00:00.000Z",
         expiresAt: "2026-07-30T00:30:00.000Z",
       },
@@ -207,6 +224,37 @@ describe("dance attempt durable session repository", () => {
     expect(replay.kind).toBe("idempotent")
   })
 
+  test("refuses upload authorization for a legacy session without consent", async () => {
+    const { client, clearConsent } = fakeClient()
+    await createDanceAttemptSession({
+      client,
+      value: {
+        sessionId: "dse_unconsented",
+        attemptId: "dat_unconsented",
+        subjectUserId: "usr_1",
+        hostPostId: "post_1",
+        creationIdempotencyKey: "idem_unconsented",
+        activityDate: "2026-07-30",
+        activityTimezone: "UTC",
+        consentPolicyVersion: "dance_recording_v1",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        consentSource: "api",
+        now: "2026-07-30T00:00:00.000Z",
+        expiresAt: "2026-07-30T00:30:00.000Z",
+      },
+    })
+    clearConsent()
+
+    await expect(bindDanceAttemptUploadIntent({
+      client,
+      sessionId: "dse_unconsented",
+      subjectUserId: "usr_1",
+      objectKey: `dance/attempt-media/dse_unconsented/${"d".repeat(64)}.mp4`,
+      sizeBytes: 2048,
+      now: "2026-07-30T00:01:00.000Z",
+    })).rejects.toMatchObject({ status: 409, code: "conflict" })
+  })
+
   test("queues cleanup when cancelling a bound real upload key", async () => {
     const { client, getSession } = fakeClient()
     await createDanceAttemptSession({
@@ -219,6 +267,9 @@ describe("dance attempt durable session repository", () => {
         creationIdempotencyKey: "idem_cancel_bound",
         activityDate: "2026-07-30",
         activityTimezone: "UTC",
+        consentPolicyVersion: "dance_recording_v1",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        consentSource: "api",
         now: "2026-07-30T00:00:00.000Z",
         expiresAt: "2026-07-30T00:30:00.000Z",
       },
@@ -259,6 +310,9 @@ describe("dance attempt durable session repository", () => {
         creationIdempotencyKey: "idem_rejected",
         activityDate: "2026-07-30",
         activityTimezone: "UTC",
+        consentPolicyVersion: "dance_recording_v1",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        consentSource: "api",
         now: "2026-07-30T00:00:00.000Z",
         expiresAt: "2026-07-30T00:30:00.000Z",
       },
@@ -289,6 +343,9 @@ describe("dance attempt durable session repository", () => {
         creationIdempotencyKey: "idem_owned",
         activityDate: "2026-07-30",
         activityTimezone: "UTC",
+        consentPolicyVersion: "dance_recording_v1",
+        consentedAt: "2026-07-30T00:00:00.000Z",
+        consentSource: "api",
         now: "2026-07-30T00:00:00.000Z",
         expiresAt: "2026-07-30T00:30:00.000Z",
       },
