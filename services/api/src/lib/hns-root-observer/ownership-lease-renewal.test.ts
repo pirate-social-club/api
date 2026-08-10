@@ -6,7 +6,10 @@ import {
   createControlPlaneTestClient,
   withMockedFetch,
 } from "../../../tests/helpers"
-import { renewHnsOwnershipLease } from "./ownership-lease-renewal"
+import {
+  renewHnsOwnershipLease,
+  renewHnsOwnershipLeaseFleet,
+} from "./ownership-lease-renewal"
 
 const NOW = "2026-08-11T00:00:00.000Z"
 const EXPIRED = "2026-08-01T00:00:00.000Z"
@@ -185,6 +188,17 @@ function operation(client: Client, apply: boolean) {
   })
 }
 
+function fleetOperation(client: Client, applyRenewals: boolean) {
+  return renewHnsOwnershipLeaseFleet({
+    applyRenewals,
+    client,
+    env: env(),
+    now: NOW,
+    operatorActorId: "operator_hns",
+    reason: "scheduled HNS ownership lease lifecycle",
+  })
+}
+
 describe("renewHnsOwnershipLease", () => {
   test("dry-runs an exact stored challenge without mutating the lease", async () => {
     const client = await setup()
@@ -324,5 +338,114 @@ describe("renewHnsOwnershipLease", () => {
       outcome: "renewable",
       normalizedRootLabel: ROOT,
     })
+  })
+})
+
+describe("renewHnsOwnershipLeaseFleet", () => {
+  test("renews an activated root from the same exact trusted evidence", async () => {
+    const client = await setup()
+    await client.execute({
+      sql: `
+        UPDATE hns_root_delegation_state
+        SET canonical_routing_eligible = 1
+        WHERE normalized_root_label = ?1
+      `,
+      args: [ROOT],
+    })
+
+    const result = await withVerification(
+      verification(),
+      () => fleetOperation(client, true),
+    )
+
+    expect(result.rootsDiscovered).toBe(1)
+    expect(result.counts.renewed).toBe(1)
+    expect(result.results[0]).toMatchObject({
+      normalizedRootLabel: ROOT,
+      result: { applied: true, outcome: "renewed" },
+    })
+    expect((await readRow(client, "namespace_verifications"))?.expires_at)
+      .toBe(EXPECTED_RENEWAL)
+    expect((await readRow(client, "hns_root_delegation_state"))?.canonical_routing_eligible)
+      .toBe(1)
+  })
+
+  test("reports a definitive negative without mutating an activated root", async () => {
+    const client = await setup()
+    await client.execute({
+      sql: `
+        UPDATE hns_root_delegation_state
+        SET canonical_routing_eligible = 1
+        WHERE normalized_root_label = ?1
+      `,
+      args: [ROOT],
+    })
+
+    const result = await withVerification(
+      verification({
+        verified: false,
+        observed_values: ["pirate-verification=another_session"],
+        root_control_verified: false,
+      }),
+      () => fleetOperation(client, true),
+    )
+
+    expect(result.counts.definitive_negative).toBe(1)
+    expect(result.results[0]).toMatchObject({
+      normalizedRootLabel: ROOT,
+      result: {
+        applied: false,
+        outcome: "definitive_negative",
+        reasonCode: "stored_challenge_replaced",
+      },
+    })
+    expect((await readRow(client, "namespace_verifications"))?.root_control_verified).toBe(1)
+    expect((await readRow(client, "hns_root_delegation_state"))?.canonical_routing_eligible)
+      .toBe(1)
+    expect((await client.execute("SELECT * FROM audit_log")).rows).toHaveLength(0)
+  })
+
+  test("excludes hard-denied roots without calling the verifier", async () => {
+    const client = await setup()
+    await client.execute({
+      sql: `
+        UPDATE hns_root_delegation_state
+        SET routing_hard_denied = 1
+        WHERE normalized_root_label = ?1
+      `,
+      args: [ROOT],
+    })
+    let fetched = false
+
+    const result = await withMockedFetch(
+      () => async () => {
+        fetched = true
+        throw new Error("unexpected verifier call")
+      },
+      () => fleetOperation(client, true),
+    )
+
+    expect(result.rootsDiscovered).toBe(0)
+    expect(result.results).toEqual([])
+    expect(fetched).toBe(false)
+    expect((await client.execute("SELECT * FROM audit_log")).rows).toHaveLength(0)
+  })
+
+  test("isolates verifier failures without changing ownership state", async () => {
+    const client = await setup()
+    const result = await withMockedFetch(
+      () => async () => new Response("unavailable", { status: 503 }),
+      () => fleetOperation(client, true),
+    )
+
+    expect(result.rootsDiscovered).toBe(1)
+    expect(result.counts.error).toBe(1)
+    expect(result.results[0]).toMatchObject({
+      normalizedRootLabel: ROOT,
+    })
+    expect("error" in (result.results[0] ?? {})).toBe(true)
+    expect((await readRow(client, "namespace_verifications"))?.root_control_verified).toBe(1)
+    expect((await readRow(client, "namespace_verifications"))?.expires_at).toBe(EXPIRED)
+    expect((await client.execute("SELECT * FROM audit_log")).rows).toHaveLength(0)
   })
 })
