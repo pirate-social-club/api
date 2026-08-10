@@ -8,6 +8,8 @@ import {
   resetPoolCacheForTests,
   resolveD1,
   runShardBatch,
+  runShardBulkRead,
+  runShardBulkWrite,
   runShardBind,
   runShardDecommission,
   runShardGetPoolRow,
@@ -404,6 +406,33 @@ describe("runShardBatch (returns ShardResult — step 2.5)", () => {
     })
     expect(r).toMatchObject({ ok: false, code: "shard_read_only_violation" })
     expect(db.calls).toHaveLength(0)
+  })
+})
+
+describe("bulk shard RPCs", () => {
+  test("authorizes and executes independent read batches in one bulk request", async () => {
+    const db = fakeD1([{ n: 1 }])
+    const response = await runShardBulkRead(envWith(db), {
+      operations: [{
+        communityId: "cmt_1",
+        bindingName: "DB_CMTY_PILOT",
+        statements: [{ sql: "SELECT 1 AS n" }],
+      }],
+    })
+    expect(response.operations).toHaveLength(1)
+    expect(response.operations[0]?.result).toMatchObject({ ok: true, value: [{ rows: [{ n: 1 }] }] })
+  })
+
+  test("keeps each bulk write operation atomic and independently authorized", async () => {
+    const db = fakeD1()
+    const response = await runShardBulkWrite(envWith(db), {
+      operations: [{
+        communityId: "cmt_1",
+        bindingName: "DB_CMTY_PILOT",
+        statements: [{ sql: "UPDATE t SET n = 1" }],
+      }],
+    })
+    expect(response.operations[0]?.result).toMatchObject({ ok: true })
   })
 })
 

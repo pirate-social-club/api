@@ -13,6 +13,10 @@ import type {
   ShardAdminResetRequest,
   ShardAdminResetResponse,
   ShardBatchReadRequest,
+  ShardBulkReadRequest,
+  ShardBulkReadResponse,
+  ShardBulkWriteRequest,
+  ShardBulkWriteResponse,
   ShardBindRequest,
   ShardBindResponse,
   ShardLoadSnapshotRequest,
@@ -28,6 +32,8 @@ import type {
 import type { Env } from "./env"
 import {
   runShardBatch,
+  runShardBulkRead,
+  runShardBulkWrite,
   runShardBind,
   runShardGetPoolRow,
   runShardDecommission,
@@ -84,9 +90,19 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     return runShardBatch(this.env, input)
   }
 
+  /** One service invocation containing independently authorized reads. */
+  bulkRead(input: ShardBulkReadRequest): Promise<ShardBulkReadResponse> {
+    return runShardBulkRead(this.env, input)
+  }
+
   /** Atomic write batch (one buffered community write transaction). */
   batchWrite(input: ShardWriteRequest): Promise<ShardResult<ShardQueryResult[]>> {
     return runShardWrite(this.env, input)
+  }
+
+  /** One service invocation containing independently atomic community writes. */
+  bulkWrite(input: ShardBulkWriteRequest): Promise<ShardBulkWriteResponse> {
+    return runShardBulkWrite(this.env, input)
   }
 
   /**
