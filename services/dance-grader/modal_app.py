@@ -171,6 +171,7 @@ def grade_attempt(payload: dict) -> None:
         ReferenceFeatureArtifact,
         ScorerConfig,
         grade_dance_against_features,
+        verify_and_exclude_start_cue,
     )
     from dance_grader.service_protocol import attempt_failure_reason, download_verified
 
@@ -211,10 +212,17 @@ def grade_attempt(payload: dict) -> None:
             if artifact.pose_model_sha256 != MODEL_SHA256:
                 raise ValueError("reference artifact model checksum is unsupported")
             extraction = _extract(attempt_path)
+            scored_sequence, cue = verify_and_exclude_start_cue(
+                extraction.pose_sequence,
+                policy_version=payload["start_cue_policy_version"],
+                kind=payload["start_cue_kind"],
+                minimum_hold_ms=int(payload["start_cue_minimum_hold_ms"]),
+                observation_window_ms=int(payload["start_cue_observation_window_ms"]),
+            )
             grade = grade_dance_against_features(
                 artifact.to_feature_sequence(),
                 artifact.duration_ms / 1000,
-                extraction.pose_sequence,
+                scored_sequence,
                 mirror_policy=MirrorPolicy(payload["mirror_policy"]),
                 config=config,
                 reference_versions={
@@ -231,6 +239,7 @@ def grade_attempt(payload: dict) -> None:
                 "reason": grade.reason,
                 "grade": grade.to_dict(),
                 "extraction_metrics": extraction.metrics.__dict__,
+                "start_cue": cue.__dict__,
             }
     except Exception as error:  # noqa: BLE001 - terminal job boundary must callback on all failures
         reason = attempt_failure_reason(error)
@@ -239,6 +248,13 @@ def grade_attempt(payload: dict) -> None:
             "outcome": "failed" if reason == "scoring_unavailable" else "rejected",
             "reason": reason,
         }
+        if reason == "start_cue_mismatch":
+            result["start_cue"] = {
+                "policy_version": payload["start_cue_policy_version"],
+                "kind": payload["start_cue_kind"],
+                "outcome": "failed",
+                "scored_window_start_ms": None,
+            }
     _callback(payload, result)
 
 

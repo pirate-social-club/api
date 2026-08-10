@@ -97,6 +97,31 @@ describe("dance attempt callback contract", () => {
     })
   })
 
+  test("binds scorer v2 to passed cue evidence and the scored-window boundary", () => {
+    const value = signedResult()
+    delete value.result_digest
+    const grade = value.grade as Record<string, unknown>
+    ;(grade.versions as Record<string, unknown>).scorer = "dance_scorer_gate0_v2"
+    value.start_cue = {
+      policy_version: "dance_start_cue_gross_body_v1",
+      kind: "hands_on_head",
+      outcome: "passed",
+      scored_window_start_ms: 533,
+    }
+    const facts = parseDanceAttemptTerminalFacts(withDigest(value))
+    expect(facts.startCue).toEqual({
+      policyVersion: "dance_start_cue_gross_body_v1",
+      kind: "hands_on_head",
+      outcome: "passed",
+      scoredWindowStartMs: 533,
+    })
+
+    delete value.start_cue
+    expect(() => parseDanceAttemptTerminalFacts(withDigest(value))).toThrow(
+      "passed start cue evidence",
+    )
+  })
+
   test("rejects tampering after the grader computed its result digest", () => {
     const value = signedResult()
     ;(value.grade as Record<string, unknown>).score_bps = 9000

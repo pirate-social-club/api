@@ -27,6 +27,8 @@ export type DanceAttemptReadRecord = {
   poseDetectionBps: number | null
   durationRatioBps: number | null
   completedAt: string | null
+  startCueOutcome: string | null
+  scoredWindowStartMs: number | null
 }
 
 function nullableInteger(row: unknown, field: string): number | null {
@@ -67,6 +69,8 @@ function pendingAttempt(session: DanceAttemptSessionRecord): DanceAttemptReadRec
     poseDetectionBps: null,
     durationRatioBps: null,
     completedAt: session.finalizedAt,
+    startCueOutcome: null,
+    scoredWindowStartMs: null,
   }
 }
 
@@ -97,6 +101,8 @@ function terminalAttempt(
     poseDetectionBps: nullableInteger(row, "pose_detection_bps"),
     durationRatioBps: nullableInteger(row, "duration_ratio_bps"),
     completedAt,
+    startCueOutcome: stringOrNull(rowValue(row, "start_cue_outcome")),
+    scoredWindowStartMs: nullableInteger(row, "scored_window_start_ms"),
   }
 }
 
@@ -136,7 +142,8 @@ export async function getDanceAttemptForUser(input: {
     const row = await executeFirst(handle.client, {
       sql: `
         SELECT status, score_bps, rank_eligible, reason_code,
-          coverage_bps, pose_detection_bps, duration_ratio_bps, completed_at
+          coverage_bps, pose_detection_bps, duration_ratio_bps, completed_at,
+          start_cue_outcome, scored_window_start_ms
         FROM dance_attempt
         WHERE dance_attempt_id = ?1 AND user_id = ?2
       `,
@@ -169,6 +176,16 @@ export function serializeDanceSession(record: DanceAttemptSessionRecord) {
     max_bytes: record.maximumBytes,
     consent_policy_version: record.consentPolicyVersion,
     consented_at: epochSeconds(record.consentedAt),
+    start_cue: record.startCuePolicyVersion && record.startCueKind
+      && record.startCueMinimumHoldMs != null
+      && record.startCueObservationWindowMs != null
+      ? {
+        policy_version: record.startCuePolicyVersion,
+        kind: record.startCueKind,
+        minimum_hold_ms: record.startCueMinimumHoldMs,
+        observation_window_ms: record.startCueObservationWindowMs,
+      }
+      : null,
     expires_at: epochSeconds(record.expiresAt),
     created: epochSeconds(record.createdAt),
   }
@@ -188,6 +205,8 @@ export function serializeDanceAttempt(record: DanceAttemptReadRecord) {
     coverage_bps: record.coverageBps,
     pose_detection_bps: record.poseDetectionBps,
     duration_ratio_bps: record.durationRatioBps,
+    start_cue_outcome: record.startCueOutcome,
+    scored_window_start_ms: record.scoredWindowStartMs,
     completed_at: epochSeconds(record.completedAt),
   }
 }

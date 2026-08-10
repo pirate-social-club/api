@@ -9469,7 +9469,8 @@ const spec = {
           "expires_at",
           "created",
           "consent_policy_version",
-          "consented_at"
+          "consented_at",
+          "start_cue"
         ],
         "properties": {
           "id": {
@@ -9517,6 +9518,14 @@ const spec = {
           "consented_at": {
             "type": "integer",
             "format": "int64",
+            "nullable": true
+          },
+          "start_cue": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DanceStartCue"
+              }
+            ],
             "nullable": true
           }
         }
@@ -9713,6 +9722,20 @@ const spec = {
             "nullable": true,
             "minimum": 0,
             "maximum": 20000
+          },
+          "start_cue_outcome": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "scored_window_start_ms": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 5000
           },
           "completed_at": {
             "type": "integer",
@@ -19596,6 +19619,41 @@ const spec = {
           "cancelled"
         ]
       },
+      "DanceStartCue": {
+        "type": "object",
+        "required": [
+          "policy_version",
+          "kind",
+          "minimum_hold_ms",
+          "observation_window_ms"
+        ],
+        "properties": {
+          "policy_version": {
+            "type": "string",
+            "enum": [
+              "dance_start_cue_gross_body_v1"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hands_on_head",
+              "arms_t",
+              "hands_on_hips"
+            ]
+          },
+          "minimum_hold_ms": {
+            "type": "integer",
+            "minimum": 250,
+            "maximum": 2000
+          },
+          "observation_window_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 5000
+          }
+        }
+      },
       "DanceAttemptStatus": {
         "type": "string",
         "enum": [
@@ -19627,6 +19685,7 @@ const spec = {
           "version_mismatch",
           "insufficient_motion",
           "insufficient_alignment",
+          "start_cue_mismatch",
           "session_expired",
           "cancelled"
         ]

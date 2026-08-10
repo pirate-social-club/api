@@ -10,6 +10,7 @@ import {
   createDanceAttemptSession,
   DANCE_ATTEMPT_MAX_BYTES,
   DANCE_CONSENT_POLICY_VERSION,
+  DANCE_START_CUE_KINDS,
   getDanceAttemptSession,
   submitDanceAttemptSession,
   type DanceAttemptSessionRecord,
@@ -180,6 +181,9 @@ danceSessions.post("/", async (c) => {
       consentPolicyVersion: DANCE_CONSENT_POLICY_VERSION,
       consentedAt: now,
       consentSource: "api",
+      startCueKind: DANCE_START_CUE_KINDS[
+        crypto.getRandomValues(new Uint32Array(1))[0] % DANCE_START_CUE_KINDS.length
+      ],
       now,
       expiresAt: new Date(nowMs + SESSION_TTL_MS).toISOString(),
     },
