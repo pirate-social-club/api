@@ -113,7 +113,11 @@ export async function getDanceAttemptForUser(input: {
     subjectUserId: input.subjectUserId,
   })
   if (!session) return null
-  if (!session.finalizedAt || session.status === "expired") {
+  if (
+    !session.finalizedAt
+    || session.status === "expired"
+    || session.status === "cancelled"
+  ) {
     return pendingAttempt(session)
   }
 

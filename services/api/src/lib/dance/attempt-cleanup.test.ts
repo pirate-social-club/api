@@ -33,7 +33,12 @@ describe("dance attempt cleanup", () => {
       sql.includes("FROM dance_attempt_sessions")
     )
     expect(claim).toContain(
-      "status IN ('finalized', 'rejected', 'failed', 'expired')",
+      "status IN ('finalized', 'rejected', 'failed', 'expired', 'cancelled')",
     )
+    const expiry = statements.find((sql) =>
+      sql.includes("SET status = 'expired'")
+    )
+    expect(expiry).toContain("THEN 'not_required'")
+    expect(expiry).toContain("THEN NULL")
   })
 })

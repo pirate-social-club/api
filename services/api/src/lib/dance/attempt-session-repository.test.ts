@@ -207,6 +207,46 @@ describe("dance attempt durable session repository", () => {
     expect(replay.kind).toBe("idempotent")
   })
 
+  test("queues cleanup when cancelling a bound real upload key", async () => {
+    const { client, getSession } = fakeClient()
+    await createDanceAttemptSession({
+      client,
+      value: {
+        sessionId: "dse_cancel_bound",
+        attemptId: "dat_cancel_bound",
+        subjectUserId: "usr_1",
+        hostPostId: "post_1",
+        creationIdempotencyKey: "idem_cancel_bound",
+        activityDate: "2026-07-30",
+        activityTimezone: "UTC",
+        now: "2026-07-30T00:00:00.000Z",
+        expiresAt: "2026-07-30T00:30:00.000Z",
+      },
+    })
+    await bindDanceAttemptUploadIntent({
+      client,
+      sessionId: "dse_cancel_bound",
+      subjectUserId: "usr_1",
+      objectKey: `dance/attempt-media/dse_cancel_bound/${"d".repeat(64)}.mp4`,
+      sizeBytes: 2048,
+      now: "2026-07-30T00:01:00.000Z",
+    })
+
+    const cancelled = await cancelDanceAttemptSession({
+      client,
+      sessionId: "dse_cancel_bound",
+      subjectUserId: "usr_1",
+      now: "2026-07-30T00:02:00.000Z",
+    })
+
+    expect(cancelled.kind).toBe("cancelled")
+    expect(getSession()).toMatchObject({
+      status: "cancelled",
+      cleanup_status: "pending",
+      cleanup_next_attempt_at: "2026-07-30T00:02:00.000Z",
+    })
+  })
+
   test("treats an already-terminal rejection as an idempotent cancellation", async () => {
     const { client, setStatus } = fakeClient()
     await createDanceAttemptSession({

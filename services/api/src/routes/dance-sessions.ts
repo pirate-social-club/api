@@ -11,6 +11,7 @@ import {
   DANCE_ATTEMPT_MAX_BYTES,
   getDanceAttemptSession,
   submitDanceAttemptSession,
+  type DanceAttemptSessionRecord,
 } from "../lib/dance/attempt-session-repository"
 import {
   buildDanceAttemptUploadIntent,
@@ -101,6 +102,13 @@ function assertCaptureEnabled(env: AuthenticatedEnv["Bindings"]): void {
   }
 }
 
+export function danceCancellationResponse(
+  record: DanceAttemptSessionRecord,
+  idempotent: boolean,
+) {
+  return { ...serializeDanceSession(record), idempotent }
+}
+
 danceSessions.post("/", async (c) => {
   assertCaptureEnabled(c.env)
   const body = bodyRecord(await c.req.json().catch(() => null))
@@ -158,7 +166,10 @@ danceSessions.post("/:sessionId/cancel", async (c) => {
     now: new Date().toISOString(),
   })
   c.header("Cache-Control", "private, no-store")
-  return c.json(serializeDanceSession(result.record))
+  return c.json(danceCancellationResponse(
+    result.record,
+    result.kind === "idempotent",
+  ))
 })
 
 danceSessions.post("/:sessionId/upload-intent", async (c) => {

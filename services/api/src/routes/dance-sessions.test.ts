@@ -3,7 +3,7 @@ import { Hono } from "hono"
 
 import type { Env } from "../env"
 import { errorResponse } from "../lib/errors"
-import danceSessions from "./dance-sessions"
+import danceSessions, { danceCancellationResponse } from "./dance-sessions"
 
 const env: Env = { DANCE_CAPTURE_ENABLED: "true" }
 
@@ -34,5 +34,33 @@ describe("dance session routes", () => {
       env,
     )
     expect(response.status).toBe(401)
+  })
+
+  test("reports whether cancellation was idempotent", () => {
+    const response = danceCancellationResponse({
+      sessionId: "dse_1",
+      attemptId: "dat_1",
+      subjectUserId: "usr_1",
+      communityId: "cmty_1",
+      hostPostId: "1",
+      referencedSongPostId: "post_song",
+      choreographyId: "dch_1",
+      choreographyRevisionId: "dcr_1",
+      status: "cancelled",
+      uploadObjectKey: "dance/attempt-media/dse_1/pending.mp4",
+      maximumBytes: 1024,
+      observedSizeBytes: null,
+      observedEtag: null,
+      observedContentSha256: null,
+      terminalReason: "cancelled",
+      scoreBps: null,
+      calibrationAdmitted: null,
+      expiresAt: "2026-08-10T00:30:00.000Z",
+      submittedAt: null,
+      finalizedAt: "2026-08-10T00:01:00.000Z",
+      createdAt: "2026-08-10T00:00:00.000Z",
+    }, true)
+
+    expect(response).toMatchObject({ status: "cancelled", idempotent: true })
   })
 })
