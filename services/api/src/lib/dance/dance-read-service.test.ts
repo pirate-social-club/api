@@ -49,7 +49,7 @@ describe("dance read service", () => {
       env: {} as Env,
       attemptId: "dat_1",
       subjectUserId: "usr_1",
-      controlClient: controlClient(sessionRow()),
+      controlClient: controlClient(sessionRow({ calibration_admitted: 1 })),
       openCommunityRead: async () => {
         shardOpened = true
         throw new Error("must not open shard")

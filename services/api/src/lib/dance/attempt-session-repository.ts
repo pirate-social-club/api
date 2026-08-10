@@ -14,6 +14,10 @@ export const DANCE_ATTEMPT_FINGERPRINT_POLICY_VERSION =
 export const DANCE_ATTEMPT_INTEGRITY_POLICY_VERSION =
   "dance_integrity_gate0_v1"
 
+function placeholderUploadObjectKey(sessionId: string): string {
+  return `dance/attempt-media/${sessionId}/pending.mp4`
+}
+
 export type DanceAttemptSessionRecord = {
   sessionId: string
   attemptId: string
@@ -168,21 +172,27 @@ export async function cancelDanceAttemptSession(input: {
     if (existing.subjectUserId !== input.subjectUserId) {
       throw notFoundError("Dance attempt session not found")
     }
-    if (existing.status === "expired") {
+    if (["cancelled", "expired", "finalized", "rejected", "failed"].includes(existing.status)) {
       return { kind: "idempotent", record: existing }
     }
     if (existing.status !== "initialized" && existing.status !== "uploading") {
       throw conflictError("Submitted dance session cannot be cancelled")
     }
+    const cleanupRequired = existing.uploadObjectKey !== placeholderUploadObjectKey(existing.sessionId)
     await tx.execute({
       sql: `
         UPDATE dance_attempt_sessions
-        SET status = 'expired', terminal_reason = 'session_expired',
-          finalized_at = ?2, cleanup_status = 'pending',
-          cleanup_next_attempt_at = ?2, updated_at = ?2
+        SET status = 'cancelled', terminal_reason = 'cancelled',
+          finalized_at = ?2, cleanup_status = ?3,
+          cleanup_next_attempt_at = ?4, updated_at = ?2
         WHERE dance_attempt_session_id = ?1
       `,
-      args: [input.sessionId, input.now],
+      args: [
+        input.sessionId,
+        input.now,
+        cleanupRequired ? "pending" : "not_required",
+        cleanupRequired ? input.now : null,
+      ],
     })
     const updated = await selectSessionForUpdate(tx, input.sessionId)
     if (!updated) throw internalError("Cancelled dance attempt session is missing")
@@ -218,8 +228,7 @@ export async function createDanceAttemptSession(input: {
     })
     if (!revision) throw notFoundError("Active dance choreography revision not found")
 
-    const placeholderKey =
-      `dance/attempt-media/${value.sessionId}/pending.mp4`
+    const placeholderKey = placeholderUploadObjectKey(value.sessionId)
     const inserted = await tx.execute({
       sql: `
         INSERT INTO dance_attempt_sessions (

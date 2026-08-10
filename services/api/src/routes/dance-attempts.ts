@@ -14,6 +14,8 @@ import {
 } from "../lib/dance/dance-read-service"
 import { verifyDanceGraderCallback } from "../lib/dance/grader-callback-auth"
 import { badRequestError, notFoundError } from "../lib/errors"
+import { HttpError } from "../lib/errors"
+import { isDanceCaptureEnabled } from "../lib/dance/capture-policy"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 
 const MAX_CALLBACK_BODY_BYTES = 64 * 1024
@@ -49,7 +51,19 @@ function parseBody(bytes: Uint8Array): Record<string, unknown> {
 
 const danceAttempts = new Hono<AuthenticatedEnv>()
 
+function assertCaptureEnabled(env: AuthenticatedEnv["Bindings"]): void {
+  if (!isDanceCaptureEnabled(env)) {
+    throw new HttpError(
+      503,
+      "dance_capture_disabled",
+      "Dance capture is unavailable",
+      false,
+    )
+  }
+}
+
 danceAttempts.get("/:attemptId", authenticate, async (c) => {
+  assertCaptureEnabled(c.env)
   const record = await getDanceAttemptForUser({
     env: c.env,
     attemptId: c.req.param("attemptId"),

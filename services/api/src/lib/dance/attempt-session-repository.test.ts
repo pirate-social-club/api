@@ -81,12 +81,14 @@ function fakeClient() {
       }
       return { rows: [] }
     }
-    if (sql.includes("SET status = 'expired'")) {
+    if (sql.includes("SET status = 'cancelled'")) {
       session = {
         ...session,
-        status: "expired",
-        terminal_reason: "session_expired",
+        status: "cancelled",
+        terminal_reason: "cancelled",
         finalized_at: args[1],
+        cleanup_status: args[2],
+        cleanup_next_attempt_at: args[3],
       }
       return { rows: [] }
     }
@@ -101,7 +103,13 @@ function fakeClient() {
     rollback: async () => {},
     close: () => {},
   })
-  return { client: { execute, transaction } as never }
+  return {
+    client: { execute, transaction } as never,
+    getSession: () => session,
+    setStatus: (status: string, terminalReason: string | null) => {
+      session = { ...session, status, terminal_reason: terminalReason }
+    },
+  }
 }
 
 describe("dance attempt durable session repository", () => {
@@ -159,7 +167,7 @@ describe("dance attempt durable session repository", () => {
   })
 
   test("cancels an owned unsubmitted session idempotently", async () => {
-    const { client } = fakeClient()
+    const { client, getSession } = fakeClient()
     await createDanceAttemptSession({
       client,
       value: {
@@ -183,7 +191,11 @@ describe("dance attempt durable session repository", () => {
     })
     expect(cancelled).toMatchObject({
       kind: "cancelled",
-      record: { status: "expired", terminalReason: "session_expired" },
+      record: { status: "cancelled", terminalReason: "cancelled" },
+    })
+    expect(getSession()).toMatchObject({
+      cleanup_status: "not_required",
+      cleanup_next_attempt_at: null,
     })
 
     const replay = await cancelDanceAttemptSession({
@@ -193,6 +205,36 @@ describe("dance attempt durable session repository", () => {
       now: "2026-07-30T00:02:00.000Z",
     })
     expect(replay.kind).toBe("idempotent")
+  })
+
+  test("treats an already-terminal rejection as an idempotent cancellation", async () => {
+    const { client, setStatus } = fakeClient()
+    await createDanceAttemptSession({
+      client,
+      value: {
+        sessionId: "dse_rejected",
+        attemptId: "dat_rejected",
+        subjectUserId: "usr_1",
+        hostPostId: "post_1",
+        creationIdempotencyKey: "idem_rejected",
+        activityDate: "2026-07-30",
+        activityTimezone: "UTC",
+        now: "2026-07-30T00:00:00.000Z",
+        expiresAt: "2026-07-30T00:30:00.000Z",
+      },
+    })
+    setStatus("rejected", "video_invalid")
+
+    const result = await cancelDanceAttemptSession({
+      client,
+      sessionId: "dse_rejected",
+      subjectUserId: "usr_1",
+      now: "2026-07-30T00:01:00.000Z",
+    })
+    expect(result).toMatchObject({
+      kind: "idempotent",
+      record: { status: "rejected", terminalReason: "video_invalid" },
+    })
   })
 
   test("hides ownership and refuses cancellation after submission", async () => {

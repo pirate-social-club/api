@@ -11,6 +11,7 @@ import danceAttempts, {
 
 const now = Date.parse("2026-07-30T00:00:00.000Z")
 const env: Env = {
+  DANCE_CAPTURE_ENABLED: "true",
   DANCE_GRADER_CALLBACK_HMAC_KEY: "callback-secret-at-least-32-bytes",
   DANCE_GRADER_CALLBACK_KEY_VERSION: "v1",
 }
@@ -34,6 +35,15 @@ function app() {
 afterEach(() => setDanceAttemptRouteServicesForTests(null))
 
 describe("dance attempt callback", () => {
+  test("requires authentication for attempt reads", async () => {
+    const response = await app().request(
+      "http://test/dance-attempts/dat_1",
+      {},
+      env,
+    )
+    expect(response.status).toBe(401)
+  })
+
   test("authenticates exact bytes and forwards parsed terminal facts", async () => {
     const sessionId = "dse_1"
     const unsigned = {
