@@ -43,6 +43,20 @@ const HIRAGANA_KATAKANA_RE = /[\u3040-\u30FF]/
 const HAN_CHAR_RE = /[\u3400-\u9FFF]/
 const TRADITIONAL_HAN_HINT_RE = /[體國臺萬與專業樂網說歡龍後這個們]/u
 const LATIN_LETTER_RE = /[A-Za-zÀ-ÿ]/
+const LATIN_SCRIPT_CHAR_RE = /\p{Script=Latin}/u
+const CYRILLIC_SCRIPT_CHAR_RE = /\p{Script=Cyrillic}/u
+const WORD_CHAR_SEQUENCE_RE = /[\p{Letter}\p{Mark}]+/gu
+
+// A copied lyric can contain Cyrillic homoglyphs that are visually identical to
+// Latin letters (most often Cyrillic "е" inside an otherwise English word).
+// Only rewrite a token when it contains both scripts; real Cyrillic words remain
+// byte-for-byte unchanged.
+const CYRILLIC_TO_LATIN_LOOKALIKE = new Map<string, string>([
+  ["А", "A"], ["В", "B"], ["Е", "E"], ["К", "K"], ["М", "M"], ["Н", "H"],
+  ["О", "O"], ["Р", "P"], ["С", "C"], ["Т", "T"], ["Х", "X"],
+  ["а", "a"], ["е", "e"], ["о", "o"], ["р", "p"], ["с", "c"], ["х", "x"], ["у", "y"],
+  ["І", "I"], ["і", "i"], ["Ј", "J"], ["ј", "j"],
+])
 
 const DETECTION_RULES: Array<{ locale: string; pattern: RegExp }> = [
   { locale: "es", pattern: /\b(hola|gracias|que|para|con|una|las|los|del|est[aá])\b/giu },
@@ -117,18 +131,47 @@ function countMatches(text: string, pattern: RegExp): number {
   return matches ? matches.length : 0
 }
 
+function countScriptCharacters(text: string, pattern: RegExp): number {
+  let count = 0
+  for (const character of text) {
+    if (pattern.test(character)) count += 1
+  }
+  return count
+}
+
+function hasMeaningfulNonLatinScript(text: string, pattern: RegExp): boolean {
+  const scriptCount = countScriptCharacters(text, pattern)
+  if (scriptCount === 0) return false
+  const latinCount = countScriptCharacters(text, LATIN_SCRIPT_CHAR_RE)
+  // Pure-script snippets should still detect from a single character. In mixed
+  // text, require enough evidence that an isolated pasted character cannot label
+  // an entire Latin-script song as another language.
+  return latinCount === 0 || (scriptCount >= 3 && scriptCount / (scriptCount + latinCount) >= 0.1)
+}
+
+export function normalizeLatinTokenCyrillicLookalikes(value: string): string {
+  return value.replace(WORD_CHAR_SEQUENCE_RE, (token) => {
+    if (!LATIN_SCRIPT_CHAR_RE.test(token) || !CYRILLIC_SCRIPT_CHAR_RE.test(token)) {
+      return token
+    }
+    return Array.from(token, (character) => CYRILLIC_TO_LATIN_LOOKALIKE.get(character) ?? character).join("")
+  })
+}
+
 export function detectSourceLanguageFromText(parts: Array<string | null | undefined>): string | null {
-  const text = parts
+  const rawText = parts
     .map((part) => String(part ?? "").trim())
     .filter(Boolean)
     .join("\n")
 
-  if (!text) {
+  if (!rawText) {
     return null
   }
 
+  const text = normalizeLatinTokenCyrillicLookalikes(rawText)
+
   if (ARABIC_CHAR_RE.test(text)) return "ar"
-  if (CYRILLIC_CHAR_RE.test(text)) return "ru"
+  if (CYRILLIC_CHAR_RE.test(text) && hasMeaningfulNonLatinScript(text, CYRILLIC_CHAR_RE)) return "ru"
   if (DEVANAGARI_CHAR_RE.test(text)) return "hi"
   if (HANGUL_CHAR_RE.test(text)) return "ko"
   if (HIRAGANA_KATAKANA_RE.test(text)) return "ja"
@@ -162,4 +205,22 @@ export function detectSourceLanguageFromText(parts: Array<string | null | undefi
   }
 
   return "en"
+}
+
+/**
+ * Correct the narrow legacy failure where Cyrillic lookalikes in Latin words
+ * caused an English post to be persisted as Russian. Other stored language
+ * choices remain authoritative, including genuine Russian and transliteration.
+ */
+export function resolveStoredSourceLanguage(
+  storedLanguage: string | null | undefined,
+  parts: Array<string | null | undefined>,
+): string | null {
+  const stored = normalizeContentLocale(storedLanguage)
+  const detected = detectSourceLanguageFromText(parts)
+  if (!stored) return null
+  if (stored !== "ru" || !detected || detected === "ru") return stored
+
+  const rawText = parts.map((part) => String(part ?? "")).join("\n")
+  return normalizeLatinTokenCyrillicLookalikes(rawText) !== rawText ? detected : stored
 }

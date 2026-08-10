@@ -592,6 +592,52 @@ async function seedNonEnglishSongPost(): Promise<void> {
   `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW])
 }
 
+async function seedLegacyMixedScriptSongPost(): Promise<void> {
+  const lyrics = [
+    "He has my frown just fallin' down",
+    "There's no slippin' whеn he once takes hold",
+    "There's no slippin' when he once takes hold",
+  ].join("\n")
+  await exec(`
+    INSERT INTO posts (
+      post_id, community_id, author_user_id, identity_mode, post_type,
+      status, song_mode, title, lyrics, source_language, rights_basis,
+      analysis_state, content_safety_state, age_gate_policy, created_at,
+      updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
+    )
+    VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
+            'Recall Fixture', ?4, 'ru',
+            'original', 'allow', 'safe', 'none', ?5, ?5, 'public', 'ast_song',
+            'public', 'Recall Fixture', 'ipfs://cover')
+  `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, lyrics, NOW])
+  await exec(`
+    INSERT INTO song_study_unit (
+      id, post_id, line_id, line_index, source_language, prompt_text,
+      reference_text, say_it_back_status, unit_version, max_attempts,
+      created_at, updated_at
+    )
+    VALUES
+      ('stu_legacy_1', ?1, 'line_001', 0, 'ru',
+       'He has my frown just fallin'' down',
+       'He has my frown just fallin'' down', 'ready', 2, 2, ?2, ?2),
+      ('stu_legacy_2', ?1, 'line_002', 1, 'ru',
+       'There''s no slippin'' whеn he once takes hold',
+       'There''s no slippin'' whеn he once takes hold', 'ready', 2, 2, ?2, ?2),
+      ('stu_legacy_3', ?1, 'line_003', 2, 'ru',
+       'There''s no slippin'' when he once takes hold',
+       'There''s no slippin'' when he once takes hold', 'ready', 2, 2, ?2, ?2)
+  `, [POST_ID, NOW])
+  await exec(`
+    INSERT INTO song_study_review_state (
+      user_id, post_id, line_id, exercise_type, target_language, state,
+      stability, difficulty, due_at, last_reviewed_at, reps, lapses,
+      fsrs_params_version, updated_at
+    )
+    VALUES (?1, ?2, 'line_002', 'say_it_back', 'ru', 'learning',
+            1.5, 5, ?3, ?3, 2, 1, 1, ?3)
+  `, [LEARNER_ID, POST_ID, NOW])
+}
+
 async function seedJapaneseSongPost(): Promise<void> {
   await exec(`
     INSERT INTO posts (
@@ -3615,6 +3661,104 @@ describe("post study service", () => {
 
     const row = await client!.execute("SELECT feedback_json, fsrs_rating FROM song_study_attempt LIMIT 1")
     expect(row.rows[0]).toMatchObject({ feedback_json: null, fsrs_rating: "hard" })
+  })
+
+  test("mixed-script legacy metadata self-heals and English phonetic grading applies", async () => {
+    await seedLegacyMixedScriptSongPost()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+    expect(payload.source_language).toBe("en")
+    const repairedPost = await client!.execute(
+      "SELECT source_language, lyrics FROM posts WHERE post_id = ?1",
+      [POST_ID],
+    )
+    expect(repairedPost.rows[0]?.source_language).toBe("en")
+    expect(String(repairedPost.rows[0]?.lyrics)).not.toMatch(/\p{Script=Cyrillic}/u)
+    const reviewState = await client!.execute(`
+      SELECT target_language, reps, lapses
+      FROM song_study_review_state
+      WHERE post_id = ?1 AND line_id = 'line_002'
+    `, [POST_ID])
+    expect(reviewState.rows[0]).toMatchObject({ target_language: "en", reps: 2, lapses: 1 })
+    const units = await client!.execute(`
+      SELECT source_language, prompt_text
+      FROM song_study_unit
+      WHERE post_id = ?1
+      ORDER BY line_index
+    `, [POST_ID])
+    expect(units.rows).toHaveLength(2)
+    expect(units.rows.every((row) => row.source_language === "en")).toBe(true)
+    expect(units.rows.map((row) => String(row.prompt_text))).toEqual([
+      "He has my frown just fallin' down",
+      "There's no slippin' when he once takes hold",
+    ])
+
+    const exercise = payload.exercises.find((candidate) =>
+      candidate.type === "say_it_back" && candidate.reference_text.includes("fallin' down"),
+    )
+    if (!exercise) throw new Error("expected repaired say-it-back exercise")
+    const result = await submitPostStudyAttempt({
+      actor: learnerActor,
+      body: {
+        attempt_number: 1,
+        exercise_id: exercise.id,
+        idempotency_key: "study-attempt-mixed-script-repair",
+        transcript: "He has my frown just fallen down",
+        type: "say_it_back",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env(),
+      postId: POST_ID,
+    })
+    expect(result.outcome).toBe("correct")
+    expect(result.next_review_hint).toBe("hard")
+    expect(result.feedback).toBeUndefined()
+  })
+
+  test("public capability resolution repairs mixed-script metadata without opening Study", async () => {
+    await seedLegacyMixedScriptSongPost()
+    const storedPost = await client!.execute(
+      "SELECT lyrics FROM posts WHERE post_id = ?1",
+      [POST_ID],
+    )
+    const capability = await resolvePostStudyCapability({
+      artifactWriteClient: client!,
+      client: client!,
+      env: env(),
+      hasActiveElevenLabsCredential: async () => true,
+      post: {
+        access_mode: "public",
+        asset_id: "ast_song",
+        author_user_id: AUTHOR_ID,
+        community_id: COMMUNITY_ID,
+        lyrics: String(storedPost.rows[0]?.lyrics ?? ""),
+        post_id: POST_ID,
+        post_type: "song",
+        source_language: "ru",
+      },
+      targetLanguage: "en",
+      viewerUserId: LEARNER_ID,
+    })
+    expect(capability?.source_language).toBe("en")
+    const repairedPost = await client!.execute(
+      "SELECT source_language, lyrics FROM posts WHERE post_id = ?1",
+      [POST_ID],
+    )
+    expect(repairedPost.rows[0]?.source_language).toBe("en")
+    expect(String(repairedPost.rows[0]?.lyrics)).not.toMatch(/\p{Script=Cyrillic}/u)
+    const units = await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_unit WHERE post_id = ?1 AND source_language = 'en'",
+      [POST_ID],
+    )
+    expect(Number(units.rows[0]?.count ?? 0)).toBe(2)
   })
 
   test("say-it-back keeps clearly wrong recall on again", async () => {

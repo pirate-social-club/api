@@ -5,6 +5,7 @@ import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { badRequestError, codedConflictError, conflictError, HttpError, notFoundError } from "../errors"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { envFlag, makeId, nowIso } from "../helpers"
+import { resolveStoredSourceLanguage } from "../localization/content-locale"
 import type { Client, ReadClient } from "../sql-client"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import type { CommunityJobHandlerInput } from "../communities/jobs/handler-types"
@@ -33,7 +34,13 @@ import {
   type StudyExerciseRow,
 } from "./post-study-attempt-store"
 import { classifyStudyGenerationError } from "./post-study-generation-helpers"
-import { canReadPostForStudy, canStudyPost, getStudyPostById, type StudyPost } from "./post-study-access"
+import {
+  canReadPostForStudy,
+  canStudyPost,
+  getStudyPostById,
+  repairStudyPostMetadata,
+  type StudyPost,
+} from "./post-study-access"
 import { requireAgeGateAccess } from "./age-gate-viewer-state"
 import { getUserRepository } from "../auth/repositories"
 import { getNextDueAt, listExercises } from "./post-study-exercise-query"
@@ -73,6 +80,7 @@ import {
   ensureStudyUnits,
   selectStudyUnits,
   splitLyricsForStudy,
+  studyUnitsAreCurrent,
   STUDY_UNIT_GENERATION_VERSION,
   type StudyUnitRow,
 } from "./post-study-unit-service"
@@ -119,6 +127,7 @@ type StudyCapabilityPost = {
   song_cover_art_ref?: string | null
   song_title?: string | null
   source_language?: string | null
+  stored_source_language?: string | null
   title?: string | null
 }
 
@@ -433,8 +442,11 @@ async function resolveCapabilityStudyUnits(input: {
   targetLanguage: string
 }): Promise<{ persisted: boolean; units: StudyUnitRow[] }> {
   const existing = await selectStudyUnits(input.client, input.post.post_id)
-  const unitsCurrent = existing.length > 0
-    && existing.every((unit) => unit.unit_version >= STUDY_UNIT_GENERATION_VERSION)
+  const unitsCurrent = studyUnitsAreCurrent({
+    lyrics: input.post.lyrics ?? null,
+    post_id: input.post.post_id,
+    source_language: input.post.source_language ?? null,
+  }, existing)
 
   // Capability reads drive the video-feed actions, so stale units must heal here
   // rather than waiting for someone to open the Study route. Even current units
@@ -588,24 +600,37 @@ export async function resolvePostStudyCapability(input: {
   // Keep readiness semantics in parity with Telegram's batched picker query in
   // batchReadyPostIds (chat-study-service.ts); the cross-path matrix test guards both.
   if (input.post.post_type !== "song") return null
+  const storedSourceLanguage = input.post.stored_source_language ?? input.post.source_language
+  let post: StudyCapabilityPost = {
+    ...input.post,
+    source_language: resolveStoredSourceLanguage(storedSourceLanguage, [
+      input.post.song_title,
+      input.post.title,
+      input.post.lyrics,
+    ]),
+    stored_source_language: storedSourceLanguage,
+  }
+  if (input.artifactWriteClient) {
+    post = await repairStudyPostMetadata(input.artifactWriteClient, post)
+  }
   let targetLanguage: string
   try {
     targetLanguage = normalizeStudyTargetLanguage(input.targetLanguage)
   } catch {
     return {
-      source_language: input.post.source_language,
+      source_language: post.source_language,
       status: "unavailable",
       target_language: null,
     }
   }
   const base = {
-    source_language: input.post.source_language,
+    source_language: post.source_language,
     target_language: targetLanguage,
   }
 
   if (!await canStudyCapabilityPost({
     client: input.client,
-    post: input.post,
+    post,
     viewerUserId: input.viewerUserId,
   })) {
     return {
@@ -619,7 +644,7 @@ export async function resolvePostStudyCapability(input: {
     artifactWriteClient: input.artifactWriteClient,
     client: input.client,
     env: input.env,
-    post: input.post,
+    post,
     targetLanguage,
   })
   if (units.length === 0) {
@@ -634,7 +659,7 @@ export async function resolvePostStudyCapability(input: {
     client: input.client,
     env: input.env,
     hasActiveElevenLabsCredential: input.hasActiveElevenLabsCredential,
-    post: input.post,
+    post,
     targetLanguage,
     units,
     unitsPersisted: persisted,
@@ -856,7 +881,7 @@ export async function getPostStudyPayload(input: {
   const targetLanguage = normalizeStudyTargetLanguage(input.targetLanguage)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
-    const post = await getStudyPostById(db.client, input.postId)
+    let post = await getStudyPostById(db.client, input.postId)
     if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
     if (!await canReadPostForStudy({ actor: input.actor, client: db.client, post })) {
       throw notFoundError("Post not found")
@@ -882,6 +907,7 @@ export async function getPostStudyPayload(input: {
       }
     }
 
+    post = await repairStudyPostMetadata(db.client, post)
     const units = await ensureStudyUnits(db.client, post)
     if (units.length === 0) {
       return {
@@ -1023,7 +1049,7 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
   const targetLanguage = normalizeStudyTargetLanguage(payload?.target_language)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
   try {
-    const post = await getStudyPostById(db.client, postId)
+    let post = await getStudyPostById(db.client, postId)
     if (!post || post.community_id !== input.job.community_id || post.post_type !== "song") {
       return "skipped:missing_song"
     }
@@ -1044,6 +1070,7 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
       })
       return "skipped:study_disabled"
     }
+    post = await repairStudyPostMetadata(db.client, post)
     // A queued job for a same-language pair (e.g. enqueued before this guard existed)
     // must not generate degenerate same-language translation MCQs.
     if (isSameLanguageStudyPair(post.source_language, targetLanguage)) {
@@ -1583,12 +1610,6 @@ export async function submitPostStudyAttempt(input: {
       throw badRequestError("type does not match exercise")
     }
     timingExerciseType = exercise.exercise_type
-    const transcriptionLanguageMismatch = type === "say_it_back"
-      && isClearSpeechLanguageMismatch({
-        detectedLanguage: transcriptionLanguageCode,
-        expectedLanguage: exercise.source_language,
-        probability: transcriptionLanguageProbability,
-      })
     // Refuse to grade same-language translation_choice attempts (e.g. from a client that
     // still holds an exercise id generated before this exercise type was suppressed).
     // Mirror the read-path exclusion so it reads as "not offered", not a server error.
@@ -1644,6 +1665,16 @@ export async function submitPostStudyAttempt(input: {
     parallelReadBatchMs = elapsedMs(parallelReadBatchStartedAt)
 
     if (!post || post.community_id !== input.communityId) throw notFoundError("Post not found")
+    // A session created before metadata healing may still carry an exercise id
+    // with the old language suffix. Grade and validate speech against the post's
+    // resolved language so that active sessions recover immediately too.
+    const sourceLanguage = post.source_language ?? exercise.source_language
+    const transcriptionLanguageMismatch = type === "say_it_back"
+      && isClearSpeechLanguageMismatch({
+        detectedLanguage: transcriptionLanguageCode,
+        expectedLanguage: sourceLanguage,
+        probability: transcriptionLanguageProbability,
+      })
     const accessReadBatchStartedAt = performance.now()
     const [canReadPost, canStudy] = await Promise.all([
       canReadPostForStudy({ actor: input.actor, client: db.client, post }),
@@ -1678,7 +1709,7 @@ export async function submitPostStudyAttempt(input: {
       const grade = gradeSayItBack({
         attemptNumber,
         reference,
-        sourceLanguage: exercise.source_language,
+        sourceLanguage,
         transcript,
       })
       correct = grade.correct

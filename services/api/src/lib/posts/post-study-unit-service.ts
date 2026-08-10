@@ -1,5 +1,6 @@
 import type { DbExecutor } from "../db-helpers"
 import { makeId, nowIso } from "../helpers"
+import { normalizeLatinTokenCyrillicLookalikes } from "../localization/content-locale"
 import type { Client, InStatement } from "../sql-client"
 import {
   containsSpacelessScript,
@@ -7,8 +8,9 @@ import {
   segmentSpacelessRecallTokens,
 } from "./post-study-recall-grading"
 
-// v2: strip trailing line punctuation at unit creation (see stripTrailingLinePunctuation)
-// — bumping this forces existing units to be re-split so stored text is canonicalized.
+// v2: strip trailing line punctuation at unit creation (see stripTrailingLinePunctuation).
+// Unit freshness also compares canonical content, so repairs do not require a
+// fleet-wide version bump.
 export const STUDY_UNIT_GENERATION_VERSION = 2
 
 export type StudyUnitRow = {
@@ -71,7 +73,7 @@ export function splitLyricsForStudy(lyrics: string | null): Array<{ lineId: stri
   const units: Array<{ lineId: string; lineIndex: number; text: string }> = []
   String(lyrics ?? "")
     .split(/\r?\n/u)
-    .map((line) => line.replace(/\s+/gu, " ").trim())
+    .map((line) => normalizeLatinTokenCyrillicLookalikes(line).replace(/\s+/gu, " ").trim())
     .filter(Boolean)
     .filter((line) => !/^\[[^\]]+\]$/u.test(line))
     .forEach((line, index) => {
@@ -84,6 +86,17 @@ export function splitLyricsForStudy(lyrics: string | null): Array<{ lineId: stri
       units.push({ lineId: studyLineId(index), lineIndex: index, text })
     })
   return units
+}
+
+export function studyUnitsAreCurrent(post: StudyUnitPost, existing: StudyUnitRow[]): boolean {
+  return existing.length > 0 && existing.every((unit) =>
+    unit.unit_version >= STUDY_UNIT_GENERATION_VERSION
+    // Legacy null-source posts use English units as the established pilot fallback.
+    && (unit.source_language === post.source_language
+      || (post.source_language == null && unit.source_language === "en"))
+    && unit.prompt_text === normalizeLatinTokenCyrillicLookalikes(unit.prompt_text)
+    && unit.reference_text === normalizeLatinTokenCyrillicLookalikes(unit.reference_text),
+  )
 }
 
 function mapStudyUnitRow(row: Record<string, unknown>): StudyUnitRow {
@@ -165,10 +178,10 @@ async function deleteStudyUnits(client: Client, unitIds: string[]): Promise<void
 
 export async function ensureStudyUnits(client: Client, post: StudyUnitPost): Promise<StudyUnitRow[]> {
   const existing = await selectStudyUnits(client, post.post_id)
-  // Fresh units are returned as-is. A version bump (e.g. changed line heuristics or
-  // punctuation canonicalization) makes existing units stale and forces a re-split so
-  // their stored text is regenerated — ensureStudyUnits only ran once historically.
-  if (existing.length > 0 && existing.every((unit) => unit.unit_version >= STUDY_UNIT_GENERATION_VERSION)) {
+  // Compare source language and homoglyph-canonicalized stored text as well as
+  // the generation version. This self-heals legacy Unicode contamination without
+  // treating every unrelated post/unit content mismatch as a reason to regenerate.
+  if (studyUnitsAreCurrent(post, existing)) {
     return existing
   }
 
