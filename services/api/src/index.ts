@@ -8,9 +8,8 @@ import agents from "./routes/agents"
 import analytics from "./routes/analytics"
 import auth from "./routes/auth"
 import bookings from "./routes/bookings"
-import danceChoreographies, {
-  postDanceChoreographies,
-} from "./routes/dance-choreographies"
+import danceChoreographies from "./routes/dance-choreographies"
+import postDanceChoreographies from "./routes/post-dance-choreographies"
 import danceSessions from "./routes/dance-sessions"
 import danceAttempts from "./routes/dance-attempts"
 import botUsers from "./routes/bot-users"
