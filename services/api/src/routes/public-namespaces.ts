@@ -50,6 +50,10 @@ function serializePublicNamespaceRow(row: PublicNamespaceRow, fallbackRootLabel:
 
   return {
     root_label: rootLabel,
+    wallet_interactive:
+      row.wallet_registration_status === "registered"
+      && Number(row.wallet_canonical_routing_eligible) === 1
+      && Number(row.wallet_routing_hard_denied) === 0,
     namespace_role: row.namespace_role === "mirror" ? "mirror" : "primary",
     namespace_verification: typeof row.namespace_verification_id === "string"
       ? row.namespace_verification_id.startsWith("nv_")
@@ -77,7 +81,10 @@ function publicNamespaceSelectSql(
       COALESCE(cnb.namespace_role, 'primary') AS namespace_role,
       c.community_id,
       c.display_name,
-      c.route_slug
+      c.route_slug,
+      wallet.registration_status AS wallet_registration_status,
+      wallet_state.canonical_routing_eligible AS wallet_canonical_routing_eligible,
+      wallet_state.routing_hard_denied AS wallet_routing_hard_denied
       ${useRootDelegationState ? `, ${ROOT_DELEGATION_SELECT_SQL}` : ""}
     FROM namespace_verifications AS nv
     JOIN communities AS c
@@ -93,6 +100,10 @@ function publicNamespaceSelectSql(
       ON cnb.community_id = c.community_id
      AND cnb.namespace_verification_id = nv.namespace_verification_id
      AND cnb.status = 'active'
+    LEFT JOIN hns_wallet_origin_authority AS wallet
+      ON wallet.normalized_root_label = nv.normalized_root_label
+    LEFT JOIN hns_root_delegation_state AS wallet_state
+      ON wallet_state.normalized_root_label = nv.normalized_root_label
     ${useRootDelegationState ? ROOT_DELEGATION_JOIN_SQL : ""}
     WHERE nv.family = 'hns'
       AND nv.status = 'verified'
@@ -161,7 +172,9 @@ publicNamespaces.get("/:rootLabel", async (c) => {
   }
 
   return c.json(body, 200, {
-    "cache-control": "public, max-age=60",
+    // The gateway consumes this endpoint as the wallet-interactivity authority.
+    // Do not let a CDN or browser retain an enabled answer after hard denial.
+    "cache-control": "no-store",
   })
 })
 

@@ -135,6 +135,7 @@ describe("public namespace routes", () => {
     }
     expect(body).toEqual({
       root_label: "xn--pokmon-dva",
+      wallet_interactive: false,
       namespace_role: "primary",
       namespace_verification: "nv_namespace_public_test",
       community: {
@@ -143,7 +144,7 @@ describe("public namespace routes", () => {
         route_slug: "xn--pokmon-dva",
       },
     })
-    expect(response.headers.get("cache-control")).toBe("public, max-age=60")
+    expect(response.headers.get("cache-control")).toBe("no-store")
   })
 
   test("lists verified Pirate-routed HNS roots for HNS clients", async () => {
@@ -159,6 +160,7 @@ describe("public namespace routes", () => {
     expect(body.namespaces).toEqual([
       {
         root_label: "xn--pokmon-dva",
+        wallet_interactive: false,
         namespace_role: "primary",
         namespace_verification: "nv_namespace_public_test",
         community: {
@@ -298,6 +300,34 @@ describe("public namespace routes", () => {
       ctx.env,
     )
     expect(response.status).toBe(200)
+  })
+
+  test("reports wallet interactivity only for registered activated roots", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_ROOT_DELEGATION_ROUTING_ENABLED: "true",
+    })
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({ ctx, rootLabel: "dankmeme" })
+    await insertSecureRootDelegation(ctx, "dankmeme")
+    const now = new Date().toISOString()
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO hns_wallet_origin_authority (
+          normalized_root_label, origin_hostname, registration_status,
+          authority_version, registration_reference, registered_at,
+          registered_by, created_at, updated_at
+        ) VALUES (?1, ?2, 'registered', 1, 'privy-dashboard:test', ?3, 'operator_test', ?3, ?3)
+      `,
+      args: ["dankmeme", "app.dankmeme", now],
+    })
+
+    const response = await app.request(
+      "http://pirate.test/public-namespaces/dankmeme",
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect((await json(response) as { wallet_interactive: boolean }).wallet_interactive).toBe(true)
   })
 
   test("root delegation gate withholds a secure root until canonical activation", async () => {
