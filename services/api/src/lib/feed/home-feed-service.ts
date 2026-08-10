@@ -38,13 +38,17 @@ import {
 import {
   AUTHOR_CAP_PER_PAGE,
   COMMUNITY_CAP_PER_PAGE,
+  GLOBAL_VIDEO_FEED_SELECTION_POLICY,
+  SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY,
   takeVideoFeedPage,
+  type VideoFeedSelectionPolicy,
 } from "./video-feed-selection"
 import {
   scoreVideoCandidates,
   type ScoredVideoCandidate,
   type VideoCandidateInput,
 } from "./video-scorer"
+import { communityPresentationFromRow } from "../communities/community-presentation"
 
 export { withHomeFeedCommunityIdentity } from "./home-feed-community-reader"
 export type { HomeFeedWaitUntil } from "./home-feed-community-reader"
@@ -250,24 +254,31 @@ export function selectBestVideoFeedProjectionPage(input: {
   priorRows?: readonly HomeFeedProjectionRow[]
   pageSize?: number
   rows: readonly HomeFeedProjectionRow[]
+  selectionPolicy?: VideoFeedSelectionPolicy
 }): { hasMore: boolean; nextOffset: number; rows: HomeFeedProjectionRow[] } {
   return sliceBestVideoFeedProjectionDeck({
     cursor: input.cursor,
-    orderedRows: orderBestVideoFeedProjectionRows(input.rows, input.cursor.rankedAt),
+    orderedRows: orderBestVideoFeedProjectionRows(
+      input.rows,
+      input.cursor.rankedAt,
+      input.selectionPolicy,
+    ),
     priorRows: input.priorRows,
     pageSize: input.pageSize,
+    selectionPolicy: input.selectionPolicy,
   })
 }
 
 function orderBestVideoFeedProjectionRows(
   rows: readonly HomeFeedProjectionRow[],
   rankedAt: number,
+  selectionPolicy: VideoFeedSelectionPolicy = GLOBAL_VIDEO_FEED_SELECTION_POLICY,
 ): HomeFeedProjectionRow[] {
   const rowByKey = new Map(rows.map((row) => [videoFeedProjectionKey(row), row] as const))
   const remaining = scoreVideoCandidates(rows.map(toVideoCandidateInput), rankedAt)
   const ordered: ScoredVideoCandidate[] = []
   while (remaining.length > 0) {
-    const policyPage = takeVideoFeedPage(remaining, VIDEO_FEED_PAGE_SIZE)
+    const policyPage = takeVideoFeedPage(remaining, VIDEO_FEED_PAGE_SIZE, selectionPolicy)
     if (policyPage.length === 0) break
     ordered.push(...policyPage)
   }
@@ -281,6 +292,7 @@ function sliceBestVideoFeedProjectionDeck(input: {
   orderedRows: readonly HomeFeedProjectionRow[]
   priorRows?: readonly HomeFeedProjectionRow[]
   pageSize?: number
+  selectionPolicy?: VideoFeedSelectionPolicy
 }): { hasMore: boolean; nextOffset: number; rows: HomeFeedProjectionRow[] } {
   const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
   // The deck is already partitioned by takeVideoFeedPage, which defers
@@ -313,11 +325,17 @@ function sliceBestVideoFeedProjectionDeck(input: {
     const row = input.orderedRows[nextOffset]
     nextOffset += 1
     if (!row) continue
-    if ((communityCounts.get(row.community_id) ?? 0) >= COMMUNITY_CAP_PER_PAGE) continue
+    if (
+      input.selectionPolicy?.communityCapPerPage !== null
+      && (communityCounts.get(row.community_id) ?? 0)
+        >= (input.selectionPolicy?.communityCapPerPage ?? COMMUNITY_CAP_PER_PAGE)
+    ) continue
     if (
       row.identity_mode !== "anonymous"
       && row.author_user_id
-      && (authorCounts.get(row.author_user_id) ?? 0) >= AUTHOR_CAP_PER_PAGE
+      && input.selectionPolicy?.authorCapPerPage !== null
+      && (authorCounts.get(row.author_user_id) ?? 0)
+        >= (input.selectionPolicy?.authorCapPerPage ?? AUTHOR_CAP_PER_PAGE)
     ) continue
     selected.push(row)
     countRow(row)
@@ -414,6 +432,7 @@ async function listBestVideoHomeFeedProjectionRows(input: {
   orderedRows?: readonly HomeFeedProjectionRow[]
   priorRows?: readonly HomeFeedProjectionRow[]
   pageSize?: number
+  selectionPolicy?: VideoFeedSelectionPolicy
   timeRange: HomeFeedTimeRange
 }): Promise<VideoFeedProjectionPage> {
   const cursor = parseVideoFeedCursor(input.cursor, input.now)
@@ -423,6 +442,7 @@ async function listBestVideoHomeFeedProjectionRows(input: {
       orderedRows: input.orderedRows,
       priorRows: input.priorRows,
       pageSize: input.pageSize,
+      selectionPolicy: input.selectionPolicy,
     })
     return {
       allowHydrationBackfill: true,
@@ -485,12 +505,17 @@ async function listBestVideoHomeFeedProjectionRows(input: {
     ),
     input.memberCommunityIdSet,
   )
-  const orderedRows = orderBestVideoFeedProjectionRows(candidates, cursor.rankedAt)
+  const orderedRows = orderBestVideoFeedProjectionRows(
+    candidates,
+    cursor.rankedAt,
+    input.selectionPolicy,
+  )
   const selected = sliceBestVideoFeedProjectionDeck({
     cursor,
     orderedRows,
     priorRows: input.priorRows,
     pageSize: input.pageSize,
+    selectionPolicy: input.selectionPolicy,
   })
   return {
     allowHydrationBackfill: true,
@@ -533,6 +558,7 @@ function buildCommunitySummary(
   if (!community) {
     return null
   }
+  const presentation = communityPresentationFromRow(community)
   return {
     id: `com_${community.community_id}`,
     object: "home_feed_community_summary",
@@ -540,6 +566,8 @@ function buildCommunitySummary(
     display_name: community.display_name,
     route_slug: community.route_slug,
     avatar_ref: null,
+    branding: presentation.branding,
+    default_surface: presentation.default_surface,
     member_count: null,
     follower_count: community.follower_count,
     view_count: communityViewCounts.get(community.community_id) ?? 0,
@@ -589,7 +617,12 @@ export function resolveHomeFeedCandidateCommunityIds(input: {
   membershipRows: CommunityMembershipProjectionRow[]
   userId: string | null
   override?: readonly string[]
+  scope?: readonly string[]
 }): string[] {
+  if (input.scope) {
+    const activeCommunityIds = new Set(input.activeCommunities.map((community) => community.community_id))
+    return [...new Set(input.scope)].filter((communityId) => activeCommunityIds.has(communityId))
+  }
   return input.allowOverride && input.override
     ? [...new Set(input.override)]
     : resolveHomeFeedCommunityIds(input)
@@ -840,6 +873,8 @@ export async function listHomeFeed(input: {
    * Never populate this from the public feed query string.
    */
   communityIdsOverride?: readonly string[]
+  /** Service-owned deterministic scope. Unlike the debug override, this is valid in production. */
+  communityIdsScope?: readonly string[]
   locale?: string | null
   sort?: string | null
   timeRange?: string | null
@@ -881,6 +916,7 @@ export async function listHomeFeed(input: {
     membershipRows,
     userId: input.userId,
     override: input.communityIdsOverride,
+    scope: input.communityIdsScope,
   })
 
   if (communityIds.length === 0) {
@@ -938,6 +974,9 @@ export async function listHomeFeed(input: {
   })
   const useBestVideoScorer = sort === "best"
     && resolveVideoFeedBestRankingMode(input.env.VIDEO_FEED_BEST_RANKING_MODE) === "scorer"
+  const selectionPolicy = input.communityIdsScope?.length === 1
+    ? SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY
+    : GLOBAL_VIDEO_FEED_SELECTION_POLICY
   let videoPage = input.contentKind === "video"
     ? useBestVideoScorer
       ? await listBestVideoHomeFeedProjectionRows({
@@ -947,6 +986,7 @@ export async function listHomeFeed(input: {
           includeProjectedPayload: shadowControlPlane,
           memberCommunityIdSet,
           now,
+          selectionPolicy,
           timeRange,
         })
       : await listVideoHomeFeedProjectionRows({
@@ -1081,6 +1121,7 @@ export async function listHomeFeed(input: {
             orderedRows: videoPage.bestOrderedRows,
             priorRows: deliveredVideoRows,
             pageSize: nextPageSize,
+            selectionPolicy,
             timeRange,
           })
         : await listVideoHomeFeedProjectionRows({
@@ -1165,5 +1206,32 @@ export async function listHomeFeed(input: {
   }, {
     phases: phaseTimings,
     totalMs,
+  })
+}
+
+export async function listPublicCommunityVideoFeed(input: {
+  communityId: string
+  communityRepository: HomeFeedCommunityRepository
+  cursor?: string | null
+  env: Env
+  locale?: string | null
+  profileRepository?: ProfileRepository | null
+  sort?: string | null
+  timeRange?: string | null
+  waitUntil?: HomeFeedWaitUntil
+}): Promise<HomeFeedResponseWithTiming> {
+  return listHomeFeed({
+    communityIdsScope: [input.communityId],
+    communityRepository: input.communityRepository,
+    contentKind: "video",
+    cursor: input.cursor,
+    env: input.env,
+    locale: input.locale,
+    profileRepository: input.profileRepository,
+    sort: input.sort,
+    timeRange: input.timeRange,
+    userId: null,
+    userRepository: null,
+    waitUntil: input.waitUntil,
   })
 }

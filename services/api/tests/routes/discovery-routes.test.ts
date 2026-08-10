@@ -92,6 +92,7 @@ describe("discovery routes", () => {
     expect(body.paths["/public-communities/{community_id}"]).toBeTruthy()
     expect(body.paths["/public-communities/{community_id}/capabilities"]).toBeTruthy()
     expect(body.paths["/public-communities/{community_id}/posts"]).toBeTruthy()
+    expect(body.paths["/public-communities/{community_id}/feed/videos"]).toBeTruthy()
     expect(body.paths["/public-posts/{post_id}"]).toBeTruthy()
     expect(body.paths["/public-posts/{post_id}/top-comments"]).toBeTruthy()
   })

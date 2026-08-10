@@ -34,12 +34,14 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
+import type { CommunityRow } from "../auth/auth-db-rows"
 import { notFoundError } from "../errors"
 import type {
   CommunityPreview,
   CommunityRoleSummary,
   Env,
 } from "../../types"
+import { communityPresentationFromRow } from "./community-presentation"
 import type { GatePolicy } from "./membership/gate-types"
 
 type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
@@ -170,13 +172,7 @@ function parsePreviewPreferredVerificationProvider(
 async function getActiveCommunityForPreview(
   repository: Pick<CommunityReadRepository, "getCommunityById">,
   communityId: string,
-): Promise<{
-  creator_user_id: string
-  display_name: string
-  created_at: string
-  namespace_verification_id?: string | null
-  route_slug?: string | null
-}> {
+): Promise<CommunityRow> {
   const community = await repository.getCommunityById(communityId)
   if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
@@ -279,6 +275,7 @@ async function buildPreviewForViewer(input: {
   viewer?: { userId: string } | null
 }): Promise<CommunityPreview> {
   const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
+  const presentation = communityPresentationFromRow(community)
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
@@ -295,6 +292,8 @@ async function buildPreviewForViewer(input: {
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
+      branding: presentation.branding,
+      defaultSurface: presentation.default_surface,
       namespaceVerificationId: community.namespace_verification_id ?? null,
       routeSlug: community.route_slug ?? null,
       locale: input.locale ?? null,
@@ -343,6 +342,7 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
   communityRepository: CommunityPreviewRepository
 }): Promise<CommunityPreview> {
   const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
+  const presentation = communityPresentationFromRow(community)
   const gatePolicy = await getMembershipGatePolicy(input.client, input.communityId)
   return await buildCommunityPreview({
     env: input.env,
@@ -350,6 +350,8 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
     communityId: input.communityId,
     communityDisplayName: community.display_name,
     communityCreatedAt: community.created_at,
+    branding: presentation.branding,
+    defaultSurface: presentation.default_surface,
     namespaceVerificationId: community.namespace_verification_id ?? null,
     routeSlug: community.route_slug ?? null,
     locale: input.locale ?? null,
@@ -395,6 +397,8 @@ async function buildCommunityPreview(input: {
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
+  branding: CommunityPreview["branding"]
+  defaultSurface: CommunityPreview["default_surface"]
   namespaceVerificationId?: string | null
   routeSlug?: string | null
   locale?: string | null
@@ -513,6 +517,8 @@ async function buildCommunityPreview(input: {
       displayName,
       bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
     }),
+    branding: input.branding,
+    default_surface: input.defaultSurface,
     country_code: countryCode,
     membership_mode: membershipMode,
     karaoke_enabled: Number(localRow?.karaoke_enabled ?? 0) === 1,

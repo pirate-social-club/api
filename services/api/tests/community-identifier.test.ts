@@ -18,6 +18,8 @@ function communityRow(input: {
     description: null,
     avatar_ref: null,
     banner_ref: null,
+    branding_json: "{}",
+    default_surface: "threads",
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",

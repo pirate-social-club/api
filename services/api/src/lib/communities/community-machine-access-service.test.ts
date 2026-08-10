@@ -15,6 +15,7 @@ describe("community machine access policy", () => {
       included_surfaces: {
         community_identity: true,
         community_stats: true,
+        video_feed: true,
         thread_cards: true,
         thread_bodies: false,
         top_comments: false,

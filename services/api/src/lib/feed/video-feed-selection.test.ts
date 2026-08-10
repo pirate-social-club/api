@@ -4,6 +4,7 @@ import {
   AUTHOR_CAP_PER_PAGE,
   COMMUNITY_CAP_PER_PAGE,
   NEW_CONTENT_SLOTS_PER_PAGE,
+  SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY,
   selectVideoFeedPage,
   takeVideoFeedPage,
 } from "./video-feed-selection"
@@ -87,6 +88,21 @@ describe("takeVideoFeedPage", () => {
     const remaining = ladder(6, { authorUserId: "usr_prolific", communityId: "cmt_shared" })
     const page = takeVideoFeedPage(remaining, 5)
     expect(page).toHaveLength(Math.min(AUTHOR_CAP_PER_PAGE, COMMUNITY_CAP_PER_PAGE))
+  })
+
+  test("drops only the community cap for a single-community feed", () => {
+    const remaining = Array.from({ length: 6 }, (_, index) => scored({
+      postId: `pst_scoped_${index}`,
+      score: 1 - index / 100,
+      authorUserId: `usr_scoped_${index}`,
+      communityId: "cmt_single",
+    }))
+    const page = takeVideoFeedPage(
+      remaining,
+      5,
+      SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY,
+    )
+    expect(page).toHaveLength(5)
   })
 
   test("does not cap anonymous posts against a shared author identity", () => {

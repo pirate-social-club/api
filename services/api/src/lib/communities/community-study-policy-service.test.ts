@@ -65,6 +65,8 @@ async function setup() {
   const community: CommunityRow = {
     avatar_ref: null,
     banner_ref: null,
+    branding_json: "{}",
+    default_surface: "threads",
     community_id: communityId,
     created_at: now,
     creator_user_id: "usr_owner",

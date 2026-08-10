@@ -1,5 +1,6 @@
 import type {
   CommunityDatabaseBindingRepository,
+  CommunityMutationRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
 import { badRequestError, notFoundError } from "../errors"
@@ -21,6 +22,7 @@ export type CommunityMachineAccessPolicy = {
   included_surfaces: {
     community_identity: true
     community_stats: boolean
+    video_feed: boolean
     thread_cards: boolean
     thread_bodies: boolean
     top_comments: boolean
@@ -68,10 +70,13 @@ type CommunityMachineAccessPlatformOverride = {
   expires_at: string | null
 }
 
-type CommunityMachineAccessRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
+type CommunityMachineAccessRepository = CommunityReadRepository
+  & CommunityDatabaseBindingRepository
+  & Pick<CommunityMutationRepository, "updateCommunityPresentation">
 
 const configurableSurfaces = [
   "community_stats",
+  "video_feed",
   "thread_cards",
   "thread_bodies",
   "top_comments",
@@ -323,6 +328,7 @@ export function defaultCommunityMachineAccessPolicy(input: {
     included_surfaces: {
       community_identity: true,
       community_stats: true,
+      video_feed: true,
       thread_cards: true,
       thread_bodies: true,
       top_comments: true,
@@ -419,6 +425,14 @@ export async function updateCommunityMachineAccessPolicy(input: {
       community_identity: true,
     },
     updated_at: now,
+  }
+  if (!nextPolicy.included_surfaces.video_feed && community.default_surface === "videos") {
+    await input.communityRepository.updateCommunityPresentation({
+      brandingJson: community.branding_json,
+      communityId: input.communityId,
+      defaultSurface: "threads",
+      updatedAt: now,
+    })
   }
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {

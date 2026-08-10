@@ -19,6 +19,21 @@ export const NEW_CONTENT_IMPRESSION_THRESHOLD = 50
 export const AUTHOR_CAP_PER_PAGE = 2
 export const COMMUNITY_CAP_PER_PAGE = 3
 
+export type VideoFeedSelectionPolicy = {
+  authorCapPerPage: number | null
+  communityCapPerPage: number | null
+}
+
+export const GLOBAL_VIDEO_FEED_SELECTION_POLICY: VideoFeedSelectionPolicy = {
+  authorCapPerPage: AUTHOR_CAP_PER_PAGE,
+  communityCapPerPage: COMMUNITY_CAP_PER_PAGE,
+}
+
+export const SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY: VideoFeedSelectionPolicy = {
+  authorCapPerPage: AUTHOR_CAP_PER_PAGE,
+  communityCapPerPage: null,
+}
+
 function isUnderMeasured(candidate: ScoredVideoCandidate): boolean {
   return (candidate.candidate.stats?.validImpressions ?? 0) < NEW_CONTENT_IMPRESSION_THRESHOLD
 }
@@ -34,13 +49,24 @@ function candidateKey(candidate: ScoredVideoCandidate): string {
   return `${candidate.candidate.communityId}\u0000${candidate.candidate.postId}`
 }
 
-function capsAllow(state: PageBuildState, candidate: ScoredVideoCandidate): boolean {
+function capsAllow(
+  state: PageBuildState,
+  candidate: ScoredVideoCandidate,
+  policy: VideoFeedSelectionPolicy,
+): boolean {
   const { authorUserId, communityId } = candidate.candidate
-  if ((state.communityCounts.get(communityId) ?? 0) >= COMMUNITY_CAP_PER_PAGE) return false
+  if (
+    policy.communityCapPerPage != null
+    && (state.communityCounts.get(communityId) ?? 0) >= policy.communityCapPerPage
+  ) return false
   // Anonymous posts share no author identity, so they are capped by community
   // only — otherwise every anonymous post in the corpus would contend for the
   // same two slots.
-  if (authorUserId && (state.authorCounts.get(authorUserId) ?? 0) >= AUTHOR_CAP_PER_PAGE) {
+  if (
+    authorUserId
+    && policy.authorCapPerPage != null
+    && (state.authorCounts.get(authorUserId) ?? 0) >= policy.authorCapPerPage
+  ) {
     return false
   }
   return true
@@ -67,6 +93,7 @@ function admit(state: PageBuildState, candidate: ScoredVideoCandidate): void {
 export function takeVideoFeedPage(
   remaining: ScoredVideoCandidate[],
   pageSize: number = VIDEO_FEED_PAGE_SIZE,
+  policy: VideoFeedSelectionPolicy = GLOBAL_VIDEO_FEED_SELECTION_POLICY,
 ): ScoredVideoCandidate[] {
   const state: PageBuildState = {
     authorCounts: new Map(),
@@ -81,7 +108,7 @@ export function takeVideoFeedPage(
       if (state.selected.length >= pageSize || admitted >= limit) return
       if (state.selectedIds.has(candidateKey(candidate))) continue
       if (!predicate(candidate)) continue
-      if (!capsAllow(state, candidate)) continue
+      if (!capsAllow(state, candidate, policy)) continue
       admit(state, candidate)
       admitted += 1
     }
@@ -118,6 +145,7 @@ export function takeVideoFeedPage(
 export function selectVideoFeedPage(input: {
   offset: number
   pageSize?: number
+  policy?: VideoFeedSelectionPolicy
   scored: readonly ScoredVideoCandidate[]
 }): { hasMore: boolean; items: ScoredVideoCandidate[] } {
   const pageSize = Math.max(1, input.pageSize ?? VIDEO_FEED_PAGE_SIZE)
@@ -126,7 +154,7 @@ export function selectVideoFeedPage(input: {
 
   let page: ScoredVideoCandidate[] = []
   for (let index = 0; index <= pageIndex; index += 1) {
-    page = takeVideoFeedPage(remaining, pageSize)
+    page = takeVideoFeedPage(remaining, pageSize, input.policy)
     // Caps guarantee at least one admission per page while candidates remain,
     // but an empty page still terminates the walk rather than spinning.
     if (page.length === 0) break

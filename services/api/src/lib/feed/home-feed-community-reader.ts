@@ -262,6 +262,8 @@ export function serializeHomeFeedCommunitySummary(summary: InternalHomeFeedCommu
     display_name: summary.display_name,
     route_slug: summary.route_slug,
     avatar_ref: summary.avatar_ref,
+    branding: summary.branding,
+    default_surface: summary.default_surface,
     member_count: summary.member_count,
     follower_count: summary.follower_count,
     view_count: summary.view_count,

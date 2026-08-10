@@ -18,6 +18,7 @@ export type {
   CommunityPurchaseSettlementFailureRequest,
   CommunityPurchaseSettlementRequest,
   CommunityHandle,
+  CommunityBranding,
   CommunityHandleClaimRequest,
   CommunityHandleListResponse,
   CommunityHandleMeResponse,
@@ -92,6 +93,7 @@ export type {
   VeryWidgetLaunch,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
+import type { CommunityBranding } from "@pirate/api-contracts"
 
 export type DerivativeSourceKind = "song" | "video"
 
@@ -911,6 +913,8 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  branding: CommunityBranding
+  default_surface: "threads" | "videos"
   store_url?: string | null
   store_label?: string | null
   country_code?: string | null

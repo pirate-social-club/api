@@ -67,6 +67,8 @@ async function setup() {
     description: "A community without a local row yet",
     avatar_ref: null,
     banner_ref: null,
+    branding_json: "{}",
+    default_surface: "threads",
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",

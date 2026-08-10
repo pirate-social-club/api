@@ -120,6 +120,29 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     return getCommunityByIdentifierCandidates(this.client, candidates)
   }
 
+  async updateCommunityPresentation(input: {
+    brandingJson: string
+    communityId: string
+    defaultSurface: CommunityRow["default_surface"]
+    updatedAt: string
+  }): Promise<CommunityRow> {
+    await this.client.execute({
+      sql: `
+        UPDATE communities
+        SET branding_json = ?2,
+            default_surface = ?3,
+            updated_at = ?4
+        WHERE community_id = ?1
+      `,
+      args: [input.communityId, input.brandingJson, input.defaultSurface, input.updatedAt],
+    })
+    const community = await getCommunityById(this.client, input.communityId)
+    if (!community) {
+      throw new Error("Community presentation update lost its target")
+    }
+    return community
+  }
+
   async updateCommunitySeoProjection(input: {
     communityId: string
     description: string | null

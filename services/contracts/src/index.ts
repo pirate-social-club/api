@@ -2685,6 +2685,8 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
+  branding: CommunityBranding;
+  default_surface: "threads" | "videos";
   store_url?: string | null;
   store_label?: string | null;
   country_code?: string | null;
@@ -2717,6 +2719,33 @@ export type CommunityPreview = {
   viewer_community_role?: "owner" | "admin" | "moderator" | null;
   viewer_following?: boolean | null;
   created: number;
+};
+
+export type CommunityBranding = {
+  accent_color: string | null;
+  theme: "system" | "light" | "dark";
+  header_style: "standard" | "compact" | "immersive";
+  tagline: string | null;
+};
+
+export type CommunityBrandingPatch = {
+  accent_color?: string | null;
+  theme?: "system" | "light" | "dark";
+  header_style?: "standard" | "compact" | "immersive";
+  tagline?: string | null;
+};
+
+export type CommunityPresentation = {
+  id: string;
+  object: "community_presentation";
+  community: string;
+  branding: CommunityBranding;
+  default_surface: "threads" | "videos";
+};
+
+export type CommunityPresentationPatch = {
+  branding?: CommunityBrandingPatch;
+  default_surface?: "threads" | "videos";
 };
 
 export type JoinEligibility = {
@@ -2784,6 +2813,8 @@ export type HomeFeedCommunitySummary = {
   display_name: string;
   route_slug?: string | null;
   avatar_ref?: string | null;
+  branding: CommunityBranding;
+  default_surface: "threads" | "videos";
   member_count?: number | null;
   follower_count?: number | null;
   view_count?: number | null;

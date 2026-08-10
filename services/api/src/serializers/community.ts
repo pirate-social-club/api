@@ -106,6 +106,8 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     localized_text: preview.localized_text,
     avatar_ref: preview.avatar_ref,
     banner_ref: preview.banner_ref,
+    branding: preview.branding,
+    default_surface: preview.default_surface,
     store_url: preview.store_url,
     store_label: preview.store_label,
     country_code: preview.country_code,
