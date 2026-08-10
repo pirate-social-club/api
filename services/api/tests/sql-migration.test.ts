@@ -288,6 +288,19 @@ describe("sql migration helpers", () => {
     ])
   })
 
+  test("splits the PostgreSQL dance consent receipt columns for sqlite", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN consent_policy_version TEXT,
+        ADD COLUMN consented_at TIMESTAMPTZ,
+        ADD COLUMN consent_source TEXT;
+    `)).toEqual([
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN consent_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN consented_at TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN consent_source TEXT;",
+    ])
+  })
+
   test("translates EFP recovery state and review deadlines for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       ALTER TABLE efp_follow_write_intents

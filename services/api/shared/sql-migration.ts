@@ -902,6 +902,23 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  // Migration 0206 adds a versioned consent receipt in one PostgreSQL ALTER.
+  // SQLite supports only one ADD COLUMN clause per ALTER TABLE and cannot add
+  // the table-level CHECK afterward, so preserve the three nullable columns;
+  // the canonical PostgreSQL migration remains the source of constraint truth.
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN CONSENT_POLICY_VERSION ")
+    && normalized.includes("ADD COLUMN CONSENTED_AT ")
+    && normalized.includes("ADD COLUMN CONSENT_SOURCE ")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN consent_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN consented_at TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN consent_source TEXT;",
+    ]
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
     if (
       normalized.includes("NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_CHECK")
