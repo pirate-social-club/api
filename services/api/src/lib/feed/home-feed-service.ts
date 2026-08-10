@@ -1209,7 +1209,7 @@ export async function listHomeFeed(input: {
   })
 }
 
-export async function listPublicCommunityVideoFeed(input: {
+export async function listCommunityVideoFeed(input: {
   communityId: string
   communityRepository: HomeFeedCommunityRepository
   cursor?: string | null
@@ -1218,6 +1218,8 @@ export async function listPublicCommunityVideoFeed(input: {
   profileRepository?: ProfileRepository | null
   sort?: string | null
   timeRange?: string | null
+  userId: string | null
+  userRepository?: UserRepository | null
   waitUntil?: HomeFeedWaitUntil
 }): Promise<HomeFeedResponseWithTiming> {
   return listHomeFeed({
@@ -1230,8 +1232,18 @@ export async function listPublicCommunityVideoFeed(input: {
     profileRepository: input.profileRepository,
     sort: input.sort,
     timeRange: input.timeRange,
+    userId: input.userId,
+    userRepository: input.userRepository,
+    waitUntil: input.waitUntil,
+  })
+}
+
+export async function listPublicCommunityVideoFeed(
+  input: Omit<Parameters<typeof listCommunityVideoFeed>[0], "userId" | "userRepository">,
+): Promise<HomeFeedResponseWithTiming> {
+  return listCommunityVideoFeed({
+    ...input,
     userId: null,
     userRepository: null,
-    waitUntil: input.waitUntil,
   })
 }

@@ -8750,6 +8750,92 @@ const spec = {
         "operationId": "get_public_communities_by_community_id_feed_videos"
       }
     },
+    "/communities/{community_id}/feed/videos": {
+      "get": {
+        "tags": [
+          "Communities",
+          "Feed"
+        ],
+        "x-implemented": true,
+        "summary": "List a viewer-aware community video feed",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "best",
+                "top",
+                "new"
+              ],
+              "default": "best"
+            }
+          },
+          {
+            "name": "time_range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hour",
+                "day",
+                "week",
+                "month",
+                "year",
+                "all"
+              ],
+              "default": "all"
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeFeedResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_communities_by_community_id_feed_videos"
+      }
+    },
     "/public-posts/{post_id}": {
       "get": {
         "tags": [
@@ -11827,6 +11913,8 @@ const spec = {
           "id",
           "object",
           "display_name",
+          "branding",
+          "default_surface",
           "status",
           "provisioning_state",
           "membership_mode",
@@ -11881,6 +11969,16 @@ const spec = {
           "banner_ref": {
             "type": "string",
             "nullable": true
+          },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
           },
           "namespace_verification": {
             "type": "string",
@@ -19994,6 +20092,44 @@ const spec = {
           }
         ]
       },
+      "CommunityBranding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accent_color",
+          "theme",
+          "header_style",
+          "tagline"
+        ],
+        "properties": {
+          "accent_color": {
+            "type": "string",
+            "pattern": "^#[0-9A-F]{6}$",
+            "nullable": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "header_style": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "compact",
+              "immersive"
+            ]
+          },
+          "tagline": {
+            "type": "string",
+            "maxLength": 120,
+            "nullable": true
+          }
+        }
+      },
       "HumanVerificationLane": {
         "type": "string",
         "enum": [
@@ -21062,44 +21198,6 @@ const spec = {
           "accent_color": {
             "type": "string",
             "pattern": "^#[0-9A-Fa-f]{6}$",
-            "nullable": true
-          },
-          "theme": {
-            "type": "string",
-            "enum": [
-              "system",
-              "light",
-              "dark"
-            ]
-          },
-          "header_style": {
-            "type": "string",
-            "enum": [
-              "standard",
-              "compact",
-              "immersive"
-            ]
-          },
-          "tagline": {
-            "type": "string",
-            "maxLength": 120,
-            "nullable": true
-          }
-        }
-      },
-      "CommunityBranding": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "accent_color",
-          "theme",
-          "header_style",
-          "tagline"
-        ],
-        "properties": {
-          "accent_color": {
-            "type": "string",
-            "pattern": "^#[0-9A-F]{6}$",
             "nullable": true
           },
           "theme": {
