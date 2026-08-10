@@ -1,24 +1,36 @@
 import { Hono } from "hono"
 
-import type { AuthenticatedEnv } from "../lib/auth-middleware"
+import {
+  authenticate,
+  type AuthenticatedEnv,
+} from "../lib/auth-middleware"
 import {
   parseDanceReferenceTerminalFacts,
   type DanceReferenceTerminalFacts,
 } from "../lib/dance/choreography-reference-contract"
 import {
   finalizeDanceChoreographyReference as realFinalizeDanceChoreographyReference,
+  getReadyDanceChoreographyByHostPost as realGetReadyDanceChoreographyByHostPost,
+  getReadyDanceChoreographyById as realGetReadyDanceChoreographyById,
   seedOperatorDanceChoreography as realSeedOperatorDanceChoreography,
   type OperatorDanceChoreographySeed,
 } from "../lib/dance/choreography-reference-repository"
 import { verifyDanceGraderCallback } from "../lib/dance/grader-callback-auth"
 import { danceReferenceFeatureStorageRef } from "../lib/dance/choreography-reference-storage"
-import { badRequestError } from "../lib/errors"
+import { buildDanceReferencePlaybackUrl as realBuildDanceReferencePlaybackUrl } from "../lib/dance/choreography-reference-storage"
+import { isDanceChoreographyEnabled } from "../lib/dance/capture-policy"
+import { badRequestError, HttpError, notFoundError } from "../lib/errors"
 import {
   authenticateOperatorCredential as realAuthenticateOperatorCredential,
   DANCE_CHOREOGRAPHY_SEED_SCOPE,
   requireOperatorScope,
 } from "../lib/operator-credential-auth"
 import { getControlPlaneClient as realGetControlPlaneClient } from "../lib/runtime-deps"
+import {
+  decodePublicPostId,
+  publicCommunityId,
+  publicPostId,
+} from "../lib/public-ids"
 
 const SHA256 = /^[0-9a-f]{64}$/
 const MIME_TYPES = new Set(["video/mp4", "video/webm", "video/quicktime"])
@@ -30,6 +42,9 @@ type DanceChoreographyRouteServices = {
   authenticateOperatorCredential: typeof realAuthenticateOperatorCredential
   seedOperatorDanceChoreography: typeof realSeedOperatorDanceChoreography
   finalizeDanceChoreographyReference: typeof realFinalizeDanceChoreographyReference
+  getReadyDanceChoreographyById?: typeof realGetReadyDanceChoreographyById
+  getReadyDanceChoreographyByHostPost?: typeof realGetReadyDanceChoreographyByHostPost
+  buildDanceReferencePlaybackUrl?: typeof realBuildDanceReferencePlaybackUrl
   now: () => number
 }
 
@@ -38,6 +53,9 @@ const realServices: DanceChoreographyRouteServices = {
   authenticateOperatorCredential: realAuthenticateOperatorCredential,
   seedOperatorDanceChoreography: realSeedOperatorDanceChoreography,
   finalizeDanceChoreographyReference: realFinalizeDanceChoreographyReference,
+  getReadyDanceChoreographyById: realGetReadyDanceChoreographyById,
+  getReadyDanceChoreographyByHostPost: realGetReadyDanceChoreographyByHostPost,
+  buildDanceReferencePlaybackUrl: realBuildDanceReferencePlaybackUrl,
   now: () => Date.now(),
 }
 
@@ -129,6 +147,64 @@ function parseJsonBytes(body: Uint8Array): Record<string, unknown> {
 
 const danceChoreographies = new Hono<AuthenticatedEnv>()
 
+function assertChoreographyEnabled(env: AuthenticatedEnv["Bindings"]): void {
+  if (!isDanceChoreographyEnabled(env)) {
+    throw new HttpError(
+      503,
+      "dance_choreography_disabled",
+      "Dance choreography is unavailable",
+      false,
+    )
+  }
+}
+
+async function choreographyResponse(
+  env: AuthenticatedEnv["Bindings"],
+  record: NonNullable<Awaited<ReturnType<typeof realGetReadyDanceChoreographyById>>>,
+  now: number,
+) {
+  const playbackUrl = await (
+    services().buildDanceReferencePlaybackUrl ?? realBuildDanceReferencePlaybackUrl
+  )({
+    env,
+    referenceStorageRef: record.referenceStorageRef,
+    now: new Date(now),
+  })
+  return {
+    id: record.danceChoreographyId,
+    object: "dance_choreography" as const,
+    community: publicCommunityId(record.communityId),
+    post: publicPostId(record.hostPostId),
+    song_post: publicPostId(record.referencedSongPostId),
+    song_artifact_bundle: record.songArtifactBundleId,
+    creator: record.creatorUserId,
+    official: record.official,
+    revision: record.danceChoreographyRevisionId,
+    mirror_policy: record.mirrorPolicy,
+    reference: {
+      url: playbackUrl,
+      mime_type: record.referenceMimeType,
+      duration_ms: record.referenceDurationMs,
+      width: record.referenceWidth,
+      height: record.referenceHeight,
+    },
+  }
+}
+
+danceChoreographies.get("/:choreographyId", authenticate, async (c) => {
+  assertChoreographyEnabled(c.env)
+  const routeServices = services()
+  const record = await (
+    routeServices.getReadyDanceChoreographyById ?? realGetReadyDanceChoreographyById
+  )({
+    client: routeServices.getControlPlaneClient(c.env),
+    danceChoreographyId: c.req.param("choreographyId"),
+  })
+  if (!record) throw notFoundError("Dance choreography not found")
+  c.header("Cache-Control", "private, no-store")
+  return c.json(await choreographyResponse(c.env, record, routeServices.now()))
+})
+
 danceChoreographies.post("/operator/seed", async (c) => {
   const routeServices = services()
   const operator = await routeServices.authenticateOperatorCredential({
@@ -201,3 +277,19 @@ danceChoreographies.post("/revisions/:revisionId/reference-callback", async (c) 
 })
 
 export default danceChoreographies
+
+export const postDanceChoreographies = new Hono<AuthenticatedEnv>()
+postDanceChoreographies.get("/:postId/dance-choreography", authenticate, async (c) => {
+  assertChoreographyEnabled(c.env)
+  const routeServices = services()
+  const record = await (
+    routeServices.getReadyDanceChoreographyByHostPost
+      ?? realGetReadyDanceChoreographyByHostPost
+  )({
+    client: routeServices.getControlPlaneClient(c.env),
+    hostPostId: decodePublicPostId(c.req.param("postId")),
+  })
+  if (!record) throw notFoundError("Dance choreography not found")
+  c.header("Cache-Control", "private, no-store")
+  return c.json(await choreographyResponse(c.env, record, routeServices.now()))
+})

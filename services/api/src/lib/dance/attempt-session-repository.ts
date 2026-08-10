@@ -18,7 +18,10 @@ export type DanceAttemptSessionRecord = {
   sessionId: string
   attemptId: string
   subjectUserId: string
+  communityId: string
   hostPostId: string
+  referencedSongPostId: string
+  choreographyId: string
   choreographyRevisionId: string
   status: string
   uploadObjectKey: string
@@ -26,7 +29,13 @@ export type DanceAttemptSessionRecord = {
   observedSizeBytes: number | null
   observedEtag: string | null
   observedContentSha256: string | null
+  terminalReason: string | null
+  scoreBps: number | null
+  calibrationAdmitted: boolean | null
   expiresAt: string
+  submittedAt: string | null
+  finalizedAt: string | null
+  createdAt: string
 }
 
 export type CreateDanceAttemptSessionInput = {
@@ -42,9 +51,11 @@ export type CreateDanceAttemptSessionInput = {
 }
 
 const SESSION_SELECT = `
-  SELECT dance_attempt_session_id, dance_attempt_id, subject_user_id, host_post_id,
+  SELECT dance_attempt_session_id, dance_attempt_id, subject_user_id, community_id,
+    host_post_id, referenced_song_post_id, dance_choreography_id,
     dance_choreography_revision_id, status, upload_object_key, maximum_bytes,
-    observed_size_bytes, observed_etag, observed_content_sha256, expires_at
+    observed_size_bytes, observed_etag, observed_content_sha256, terminal_reason,
+    score_bps, calibration_admitted, expires_at, submitted_at, finalized_at, created_at
   FROM dance_attempt_sessions
 `
 
@@ -64,6 +75,15 @@ function nullableNumber(row: unknown, field: string): number | null {
   return normalized
 }
 
+function nullableBoolean(row: unknown, field: string): boolean | null {
+  const value = nullableNumber(row, field)
+  if (value === null) return null
+  if (value !== 0 && value !== 1) {
+    throw internalError(`Dance attempt session has invalid ${field}`)
+  }
+  return value === 1
+}
+
 function toRecord(row: unknown): DanceAttemptSessionRecord {
   const maximumBytes = nullableNumber(row, "maximum_bytes")
   if (maximumBytes === null) {
@@ -73,7 +93,10 @@ function toRecord(row: unknown): DanceAttemptSessionRecord {
     sessionId: requiredString(row, "dance_attempt_session_id"),
     attemptId: requiredString(row, "dance_attempt_id"),
     subjectUserId: requiredString(row, "subject_user_id"),
+    communityId: requiredString(row, "community_id"),
     hostPostId: requiredString(row, "host_post_id"),
+    referencedSongPostId: requiredString(row, "referenced_song_post_id"),
+    choreographyId: requiredString(row, "dance_choreography_id"),
     choreographyRevisionId: requiredString(
       row,
       "dance_choreography_revision_id",
@@ -86,7 +109,13 @@ function toRecord(row: unknown): DanceAttemptSessionRecord {
     observedContentSha256: stringOrNull(
       rowValue(row, "observed_content_sha256"),
     ),
+    terminalReason: stringOrNull(rowValue(row, "terminal_reason")),
+    scoreBps: nullableNumber(row, "score_bps"),
+    calibrationAdmitted: nullableBoolean(row, "calibration_admitted"),
     expiresAt: requiredString(row, "expires_at"),
+    submittedAt: stringOrNull(rowValue(row, "submitted_at")),
+    finalizedAt: stringOrNull(rowValue(row, "finalized_at")),
+    createdAt: requiredString(row, "created_at"),
   }
 }
 
@@ -111,6 +140,54 @@ export async function getDanceAttemptSession(input: {
     args: [input.sessionId, input.subjectUserId],
   })
   return row ? toRecord(row) : null
+}
+
+export async function getDanceAttemptSessionByAttemptId(input: {
+  client: Client
+  attemptId: string
+  subjectUserId: string
+}): Promise<DanceAttemptSessionRecord | null> {
+  const row = await executeFirst(input.client, {
+    sql: `${SESSION_SELECT}
+      WHERE dance_attempt_id = ?1 AND subject_user_id = ?2`,
+    args: [input.attemptId, input.subjectUserId],
+  })
+  return row ? toRecord(row) : null
+}
+
+export async function cancelDanceAttemptSession(input: {
+  client: Client
+  sessionId: string
+  subjectUserId: string
+  now: string
+}): Promise<{ kind: "cancelled" | "idempotent"; record: DanceAttemptSessionRecord }> {
+  return withTransaction(input.client, "write", async (tx) => {
+    const row = await selectSessionForUpdate(tx, input.sessionId)
+    if (!row) throw notFoundError("Dance attempt session not found")
+    const existing = toRecord(row)
+    if (existing.subjectUserId !== input.subjectUserId) {
+      throw notFoundError("Dance attempt session not found")
+    }
+    if (existing.status === "expired") {
+      return { kind: "idempotent", record: existing }
+    }
+    if (existing.status !== "initialized" && existing.status !== "uploading") {
+      throw conflictError("Submitted dance session cannot be cancelled")
+    }
+    await tx.execute({
+      sql: `
+        UPDATE dance_attempt_sessions
+        SET status = 'expired', terminal_reason = 'session_expired',
+          finalized_at = ?2, cleanup_status = 'pending',
+          cleanup_next_attempt_at = ?2, updated_at = ?2
+        WHERE dance_attempt_session_id = ?1
+      `,
+      args: [input.sessionId, input.now],
+    })
+    const updated = await selectSessionForUpdate(tx, input.sessionId)
+    if (!updated) throw internalError("Cancelled dance attempt session is missing")
+    return { kind: "cancelled", record: toRecord(updated) }
+  })
 }
 
 export async function createDanceAttemptSession(input: {

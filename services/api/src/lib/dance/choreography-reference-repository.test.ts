@@ -4,6 +4,8 @@ import type { Client, InStatement, QueryResult, Transaction } from "../sql-clien
 import type { DanceReferenceReadyFacts } from "./choreography-reference-contract"
 import {
   finalizeDanceChoreographyReference,
+  getReadyDanceChoreographyByHostPost,
+  getReadyDanceChoreographyById,
   seedOperatorDanceChoreography,
 } from "./choreography-reference-repository"
 
@@ -93,6 +95,43 @@ function clientForRows(rows: unknown[], statements: InStatement[]): Client {
 }
 
 describe("dance choreography reference repository", () => {
+  test("reads only the active ready choreography by id or host post", async () => {
+    const statements: InStatement[] = []
+    const client = {
+      async execute(statement: InStatement | string) {
+        const normalized = typeof statement === "string" ? { sql: statement } : statement
+        statements.push(normalized)
+        return { rows: [row("ready")] }
+      },
+      async batch() {
+        return []
+      },
+      async transaction() {
+        throw new Error("not used")
+      },
+    } as Client
+
+    const byId = await getReadyDanceChoreographyById({
+      client,
+      danceChoreographyId: "dch_1",
+    })
+    const byPost = await getReadyDanceChoreographyByHostPost({
+      client,
+      hostPostId: "post_dance",
+    })
+
+    expect(byId).toMatchObject({
+      danceChoreographyId: "dch_1",
+      danceChoreographyRevisionId: "dcr_1",
+      referenceDurationMs: 10_000,
+      official: false,
+    })
+    expect(byPost?.hostPostId).toBe("post_dance")
+    expect(statements[0]?.sql).toContain("c.active_revision_id")
+    expect(statements[0]?.args).toEqual(["dch_1"])
+    expect(statements[1]?.args).toEqual(["post_dance"])
+  })
+
   test("rejects an operator seed replay whose immutable facts changed", async () => {
     const client = clientForRows([row("processing")], [])
 

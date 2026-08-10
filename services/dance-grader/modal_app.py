@@ -15,6 +15,12 @@ MODEL_PATH = Path("/models/pose_landmarker_full.task")
 MODEL_SHA256 = "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1"
 MODEL_VERSION = "pose_landmarker_full_float16_v1"
 APP_NAME = "pirate-dance-grader"
+REQUIRED_SERVICE_CONFIGURATION = (
+    "DANCE_GRADER_DISPATCH_HMAC_KEY",
+    "DANCE_GRADER_DISPATCH_KEY_VERSION",
+    "DANCE_GRADER_CALLBACK_HMAC_KEY",
+    "DANCE_GRADER_CALLBACK_KEY_VERSION",
+)
 
 
 def _install_pose_model() -> None:
@@ -43,6 +49,20 @@ image = (
 )
 app = modal.App(APP_NAME)
 service_secret = modal.Secret.from_name("dance-grader-service")
+
+
+@app.function(secrets=[service_secret], timeout=30)
+def validate_service_configuration() -> dict[str, str]:
+    """Fail without exposing values when the staging service secret is incomplete."""
+
+    missing = [name for name in REQUIRED_SERVICE_CONFIGURATION if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"dance-grader-service is missing required keys: {', '.join(missing)}")
+    return {
+        "status": "ok",
+        "dispatch_key_version": os.environ["DANCE_GRADER_DISPATCH_KEY_VERSION"],
+        "callback_key_version": os.environ["DANCE_GRADER_CALLBACK_KEY_VERSION"],
+    }
 
 
 def _callback(payload: dict, result: dict) -> None:

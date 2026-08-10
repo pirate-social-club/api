@@ -67,6 +67,8 @@ DANCE_GRADER_CALLBACK_KEY_VERSION=dev-v1
 DANCE_GRADER_DISPATCH_URL=
 DANCE_GRADER_DISPATCH_HMAC_KEY=replace-me-with-a-different-long-random-secret
 DANCE_GRADER_DISPATCH_KEY_VERSION=dev-v1
+DANCE_CHOREOGRAPHY_ENABLED=false
+DANCE_CAPTURE_ENABLED=false
 
 # ALTCHA proof-of-work (required when any community uses altcha_pow gates or guest comments)
 ALTCHA_HMAC_SECRET=replace-me-with-a-long-random-secret

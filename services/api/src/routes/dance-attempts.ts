@@ -1,12 +1,20 @@
 import { Hono } from "hono"
 
-import type { Env } from "../env"
+import {
+  authenticate,
+  type AuthenticatedEnv,
+} from "../lib/auth-middleware"
 import {
   parseDanceAttemptTerminalFacts,
 } from "../lib/dance/attempt-contract"
 import { finalizeDanceAttempt } from "../lib/dance/attempt-finalize-service"
+import {
+  getDanceAttemptForUser,
+  serializeDanceAttempt,
+} from "../lib/dance/dance-read-service"
 import { verifyDanceGraderCallback } from "../lib/dance/grader-callback-auth"
-import { badRequestError } from "../lib/errors"
+import { badRequestError, notFoundError } from "../lib/errors"
+import { getControlPlaneClient } from "../lib/runtime-deps"
 
 const MAX_CALLBACK_BODY_BYTES = 64 * 1024
 
@@ -39,7 +47,19 @@ function parseBody(bytes: Uint8Array): Record<string, unknown> {
   }
 }
 
-const danceAttempts = new Hono<{ Bindings: Env }>()
+const danceAttempts = new Hono<AuthenticatedEnv>()
+
+danceAttempts.get("/:attemptId", authenticate, async (c) => {
+  const record = await getDanceAttemptForUser({
+    env: c.env,
+    attemptId: c.req.param("attemptId"),
+    subjectUserId: c.get("actor").userId,
+    controlClient: getControlPlaneClient(c.env),
+  })
+  if (!record) throw notFoundError("Dance attempt not found")
+  c.header("Cache-Control", "private, no-store")
+  return c.json(serializeDanceAttempt(record))
+})
 
 danceAttempts.post("/:sessionId/callback", async (c) => {
   const routeServices = services()

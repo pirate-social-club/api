@@ -6,6 +6,7 @@ import {
 } from "../lib/auth-middleware"
 import {
   bindDanceAttemptUploadIntent,
+  cancelDanceAttemptSession,
   createDanceAttemptSession,
   DANCE_ATTEMPT_MAX_BYTES,
   getDanceAttemptSession,
@@ -18,6 +19,7 @@ import {
   verifyDanceAttemptUpload,
 } from "../lib/dance/attempt-storage"
 import { isDanceCaptureEnabled } from "../lib/dance/capture-policy"
+import { serializeDanceSession } from "../lib/dance/dance-read-service"
 import {
   badRequestError,
   conflictError,
@@ -25,7 +27,7 @@ import {
   notFoundError,
 } from "../lib/errors"
 import { studyActivityDate, STUDY_FALLBACK_TIMEZONE } from "../lib/posts/post-study-streak-time"
-import { decodePublicPostId } from "../lib/public-ids"
+import { decodePublicPostId, publicPostId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 
 const SHA256 = /^[0-9a-f]{64}$/
@@ -87,8 +89,9 @@ function assertUnexpired(expiresAt: string, nowMs: number): void {
 
 const danceSessions = new Hono<AuthenticatedEnv>()
 danceSessions.use("*", authenticate)
-danceSessions.use("*", async (c, next) => {
-  if (!isDanceCaptureEnabled(c.env)) {
+
+function assertCaptureEnabled(env: AuthenticatedEnv["Bindings"]): void {
+  if (!isDanceCaptureEnabled(env)) {
     throw new HttpError(
       503,
       "dance_capture_disabled",
@@ -96,10 +99,10 @@ danceSessions.use("*", async (c, next) => {
       false,
     )
   }
-  await next()
-})
+}
 
 danceSessions.post("/", async (c) => {
+  assertCaptureEnabled(c.env)
   const body = bodyRecord(await c.req.json().catch(() => null))
   const postId = decodePublicPostId(stringField(body, "post", 200))
   const nowMs = Date.now()
@@ -124,7 +127,8 @@ danceSessions.post("/", async (c) => {
     id: result.record.sessionId,
     object: "dance_session",
     attempt: result.record.attemptId,
-    post: result.record.hostPostId,
+    post: publicPostId(result.record.hostPostId),
+    choreography: result.record.choreographyId,
     choreography_revision: result.record.choreographyRevisionId,
     status: result.record.status,
     max_bytes: DANCE_ATTEMPT_MAX_BYTES,
@@ -133,7 +137,30 @@ danceSessions.post("/", async (c) => {
   }, result.kind === "created" ? 201 : 200)
 })
 
+danceSessions.get("/:sessionId", async (c) => {
+  const record = await getDanceAttemptSession({
+    client: getControlPlaneClient(c.env),
+    sessionId: c.req.param("sessionId"),
+    subjectUserId: c.get("actor").userId,
+  })
+  if (!record) throw notFoundError("Dance session not found")
+  c.header("Cache-Control", "private, no-store")
+  return c.json(serializeDanceSession(record))
+})
+
+danceSessions.post("/:sessionId/cancel", async (c) => {
+  const result = await cancelDanceAttemptSession({
+    client: getControlPlaneClient(c.env),
+    sessionId: c.req.param("sessionId"),
+    subjectUserId: c.get("actor").userId,
+    now: new Date().toISOString(),
+  })
+  c.header("Cache-Control", "private, no-store")
+  return c.json(serializeDanceSession(result.record))
+})
+
 danceSessions.post("/:sessionId/upload-intent", async (c) => {
+  assertCaptureEnabled(c.env)
   const body = bodyRecord(await c.req.json().catch(() => null))
   if (body.mime_type !== "video/mp4") {
     throw badRequestError("mime_type must be video/mp4")
@@ -177,6 +204,7 @@ danceSessions.post("/:sessionId/upload-intent", async (c) => {
 })
 
 danceSessions.post("/:sessionId/submit", async (c) => {
+  assertCaptureEnabled(c.env)
   const body = bodyRecord(await c.req.json().catch(() => null))
   if (body.capture_mode !== "in_app_camera") {
     throw badRequestError("capture_mode must be in_app_camera")

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   bindDanceAttemptUploadIntent,
+  cancelDanceAttemptSession,
   createDanceAttemptSession,
   submitDanceAttemptSession,
 } from "./attempt-session-repository"
@@ -38,7 +39,10 @@ function fakeClient() {
         dance_attempt_session_id: args[0],
         dance_attempt_id: args[1],
         subject_user_id: args[2],
+        community_id: revision.community_id,
         host_post_id: revision.host_post_id,
+        referenced_song_post_id: revision.referenced_song_post_id,
+        dance_choreography_id: revision.dance_choreography_id,
         dance_choreography_revision_id:
           revision.dance_choreography_revision_id,
         status: "initialized",
@@ -47,7 +51,13 @@ function fakeClient() {
         observed_size_bytes: null,
         observed_etag: null,
         observed_content_sha256: null,
+        terminal_reason: null,
+        score_bps: null,
+        calibration_admitted: null,
         expires_at: args[28],
+        submitted_at: null,
+        finalized_at: null,
+        created_at: args[29],
       }
       return { rows: [{ dance_attempt_session_id: args[0] }] }
     }
@@ -67,6 +77,16 @@ function fakeClient() {
         observed_size_bytes: args[1],
         observed_etag: args[2],
         observed_content_sha256: args[3],
+        submitted_at: args[4],
+      }
+      return { rows: [] }
+    }
+    if (sql.includes("SET status = 'expired'")) {
+      session = {
+        ...session,
+        status: "expired",
+        terminal_reason: "session_expired",
+        finalized_at: args[1],
       }
       return { rows: [] }
     }
@@ -136,5 +156,91 @@ describe("dance attempt durable session repository", () => {
       observedContentSha256: "d".repeat(64),
       observedSizeBytes: 2048,
     })
+  })
+
+  test("cancels an owned unsubmitted session idempotently", async () => {
+    const { client } = fakeClient()
+    await createDanceAttemptSession({
+      client,
+      value: {
+        sessionId: "dse_cancel",
+        attemptId: "dat_cancel",
+        subjectUserId: "usr_1",
+        hostPostId: "post_1",
+        creationIdempotencyKey: "idem_cancel",
+        activityDate: "2026-07-30",
+        activityTimezone: "UTC",
+        now: "2026-07-30T00:00:00.000Z",
+        expiresAt: "2026-07-30T00:30:00.000Z",
+      },
+    })
+
+    const cancelled = await cancelDanceAttemptSession({
+      client,
+      sessionId: "dse_cancel",
+      subjectUserId: "usr_1",
+      now: "2026-07-30T00:01:00.000Z",
+    })
+    expect(cancelled).toMatchObject({
+      kind: "cancelled",
+      record: { status: "expired", terminalReason: "session_expired" },
+    })
+
+    const replay = await cancelDanceAttemptSession({
+      client,
+      sessionId: "dse_cancel",
+      subjectUserId: "usr_1",
+      now: "2026-07-30T00:02:00.000Z",
+    })
+    expect(replay.kind).toBe("idempotent")
+  })
+
+  test("hides ownership and refuses cancellation after submission", async () => {
+    const { client } = fakeClient()
+    await createDanceAttemptSession({
+      client,
+      value: {
+        sessionId: "dse_owned",
+        attemptId: "dat_owned",
+        subjectUserId: "usr_1",
+        hostPostId: "post_1",
+        creationIdempotencyKey: "idem_owned",
+        activityDate: "2026-07-30",
+        activityTimezone: "UTC",
+        now: "2026-07-30T00:00:00.000Z",
+        expiresAt: "2026-07-30T00:30:00.000Z",
+      },
+    })
+    await expect(cancelDanceAttemptSession({
+      client,
+      sessionId: "dse_owned",
+      subjectUserId: "usr_other",
+      now: "2026-07-30T00:01:00.000Z",
+    })).rejects.toMatchObject({ status: 404 })
+
+    const objectKey = `dance/attempt-media/dse_owned/${"d".repeat(64)}.mp4`
+    await bindDanceAttemptUploadIntent({
+      client,
+      sessionId: "dse_owned",
+      subjectUserId: "usr_1",
+      objectKey,
+      sizeBytes: 2048,
+      now: "2026-07-30T00:01:00.000Z",
+    })
+    await submitDanceAttemptSession({
+      client,
+      sessionId: "dse_owned",
+      subjectUserId: "usr_1",
+      contentSha256: "d".repeat(64),
+      sizeBytes: 2048,
+      etag: "etag",
+      now: "2026-07-30T00:02:00.000Z",
+    })
+    await expect(cancelDanceAttemptSession({
+      client,
+      sessionId: "dse_owned",
+      subjectUserId: "usr_1",
+      now: "2026-07-30T00:03:00.000Z",
+    })).rejects.toMatchObject({ status: 409 })
   })
 })

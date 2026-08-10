@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
 import {
   assertDanceStorageObjectKey,
+  buildDanceReferencePlaybackUrl,
   buildDanceReferenceSignedUrls,
   danceReferenceFeatureStorageRef,
 } from "./choreography-reference-storage"
@@ -39,5 +40,16 @@ describe("dance choreography reference storage", () => {
     expect(danceReferenceFeatureStorageRef("dcr_1")).toBe(
       "dance/reference-features/dcr_1.json",
     )
+  })
+
+  test("creates a read-only bounded playback URL", async () => {
+    const value = new URL(await buildDanceReferencePlaybackUrl({
+      env,
+      referenceStorageRef: "references/dcr_1.mp4",
+      now: new Date("2026-07-29T00:00:00.000Z"),
+    }))
+    expect(value.pathname).toBe("/media/references/dcr_1.mp4")
+    expect(value.searchParams.get("X-Amz-Expires")).toBe("300")
+    expect(value.searchParams.get("X-Amz-SignedHeaders")).toBe("host")
   })
 })

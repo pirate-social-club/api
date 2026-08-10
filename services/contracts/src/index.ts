@@ -2315,6 +2315,49 @@ export type KaraokeSession = {
   scoring_policy: KaraokeScoringPolicy;
 };
 
+export type DanceSession = {
+  id: string;
+  object: "dance_session";
+  attempt: string;
+  post: string;
+  choreography: string;
+  choreography_revision: string;
+  status: DanceSessionStatus;
+  max_bytes: number;
+  expires_at: number;
+  created: number;
+};
+
+export type DanceAttempt = {
+  id: string;
+  object: "dance_attempt";
+  session: string;
+  post: string;
+  choreography_revision: string;
+  status: DanceAttemptStatus;
+  score_bps: number | null;
+  rank_eligible: boolean | null;
+  reason: DanceAttemptReason;
+  coverage_bps?: number | null;
+  pose_detection_bps?: number | null;
+  duration_ratio_bps?: number | null;
+  completed_at: number | null;
+};
+
+export type DanceChoreography = {
+  id: string;
+  object: "dance_choreography";
+  community: string;
+  post: string;
+  song_post: string;
+  song_artifact_bundle: string;
+  creator: string;
+  official: boolean;
+  revision: string;
+  mirror_policy: "strict" | "allowed";
+  reference: DanceChoreographyReference;
+};
+
 export type KaraokeAttempt = {
   id: string;
   object: "karaoke_attempt";
@@ -2941,6 +2984,7 @@ export type RewardPayoutSummary = {
   amount_cents: number;
   recipient_address: string;
   status: RewardPayoutStatus;
+  settlement_stage: RewardSettlementStage;
   settlement_ref: string | null;
   failure_reason: string | null;
 };
@@ -3884,6 +3928,20 @@ type CreateMultisigCommunityRequest = (CreateCommunityRequestBase & {
   governance_backend: MultisigGovernanceAttachmentInput;
 });
 
+type DanceAttemptReason = "video_invalid" | "upload_invalid" | "duration_out_of_range" | "insufficient_coverage" | "insufficient_pose_presence" | "multiple_people" | "reference_replay" | "duplicate_attempt" | "scoring_unavailable" | "below_platform_floor" | "version_mismatch" | "insufficient_motion" | "insufficient_alignment" | "session_expired" | null;
+
+type DanceAttemptStatus = "initialized" | "uploading" | "submitted" | "grading" | "passed" | "rejected" | "failed" | "expired";
+
+type DanceChoreographyReference = {
+  url: string;
+  mime_type: "video/mp4" | "video/webm" | "video/quicktime";
+  duration_ms: number;
+  width: number;
+  height: number;
+};
+
+type DanceSessionStatus = "initialized" | "uploading" | "submitted" | "grading" | "finalized" | "rejected" | "failed" | "expired";
+
 type DisclosedQualifierSnapshot = {
   qualifier_template: string;
   rendered_label: string;
@@ -4324,6 +4382,8 @@ type RewardPendingVerificationSummary = {
   earliest_expires_at: number | null;
 };
 
+type RewardSettlementStage = "reserved" | "signed" | "broadcast" | "needs_review" | "confirmed" | "failed";
+
 type RootPostQuotaByTrustTier = {
   new?: RootPostQuotaRule;
   established?: RootPostQuotaRule;
@@ -4670,6 +4730,11 @@ export const apiRoutes = {
   communityPostKaraokeLeaderboard: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/leaderboard`,
   communityPostKaraokeSession: (communityId: string, postId: string) => `/communities/${communityId}/posts/${postId}/karaoke/sessions`,
   karaokeSessionWebsocket: (sessionId: string) => `/karaoke/sessions/${sessionId}/websocket`,
+  danceSession: (danceSessionId: string) => `/dance-sessions/${danceSessionId}`,
+  danceSessionCancel: (danceSessionId: string) => `/dance-sessions/${danceSessionId}/cancel`,
+  danceAttempt: (danceAttemptId: string) => `/dance-attempts/${danceAttemptId}`,
+  danceChoreography: (danceChoreographyId: string) => `/dance-choreographies/${danceChoreographyId}`,
+  postDanceChoreography: (postId: string) => `/posts/${postId}/dance-choreography`,
   job: (jobId: string) => `/jobs/${jobId}`,
   post: (postId: string) => `/posts/${postId}`,
   postVote: (postId: string) => `/posts/${postId}/vote`,

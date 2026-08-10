@@ -75,10 +75,7 @@ def test_attempt_failure_contract_maps_extraction_errors_to_public_rejections() 
             self.code = code
 
     assert attempt_failure_reason(ErrorWithCode("video_invalid")) == "video_invalid"
-    assert (
-        attempt_failure_reason(ErrorWithCode("video_limits_exceeded"))
-        == "duration_out_of_range"
-    )
+    assert attempt_failure_reason(ErrorWithCode("video_limits_exceeded")) == "duration_out_of_range"
     assert attempt_failure_reason(ErrorWithCode("pose_result_invalid")) == "video_invalid"
     assert attempt_failure_reason(ErrorWithCode("multiple_people")) == "multiple_people"
     assert (
@@ -87,9 +84,7 @@ def test_attempt_failure_contract_maps_extraction_errors_to_public_rejections() 
     )
     assert attempt_failure_reason(ErrorWithCode("unknown")) == "scoring_unavailable"
     assert (
-        attempt_failure_reason(
-            DownloadVerificationError("content_hash_mismatch", "mismatch")
-        )
+        attempt_failure_reason(DownloadVerificationError("content_hash_mismatch", "mismatch"))
         == "upload_invalid"
     )
     assert attempt_failure_reason(RuntimeError("network")) == "scoring_unavailable"

@@ -20,7 +20,10 @@ SHA-256. Runtime construction verifies that checksum before importing MediaPipe.
 Run the focused suite:
 
 ```bash
-python -m pytest -q
+rtk uv sync --frozen --extra dev
+rtk uv run ruff check .
+rtk uv run ruff format --check .
+rtk uv run pytest -q
 ```
 
 Evaluate saved pose JSON:
@@ -68,3 +71,44 @@ Deploy staging and production into separate Modal Environments. Each environment
 
 The app must not be deployed beyond consented staff until the Modal subprocessor/DPA, region,
 no-media-retention, and log-content privacy gates in the approved spec pass.
+
+### Staging deployment
+
+Staging deployment is manual-dispatch only through
+`.github/workflows/dance-grader-staging-deploy.yml`. The workflow installs the locked dependencies,
+runs lint and tests, verifies that the staging `dance-grader-service` secret exists and contains all
+four required keys, deploys with the source commit as its Modal tag, and records deployment history.
+It cannot target production.
+
+Prerequisites:
+
+- the GitHub `staging` environment has `MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET` for a service user
+  limited to the Modal staging environment;
+- the Modal `staging` environment exists;
+- its `dance-grader-service` secret contains the four keys listed above;
+- a consent receipt has been recorded before any staff recording is stored or dispatched.
+
+The same guarded deploy may be run locally from this directory:
+
+```bash
+export DANCE_GRADER_DEPLOY_TAG=<full-source-commit-sha>
+rtk ./scripts/deploy_staging.sh
+```
+
+Verify the deployed revision without invoking a grading job:
+
+```bash
+rtk uv run modal app history --env staging pirate-dance-grader
+rtk uv run modal run --env staging modal_app.py::validate_service_configuration
+```
+
+Rollback is an explicit operator action. Inspect history, select the previously verified version,
+and then run:
+
+```bash
+rtk uv run modal app rollback --env staging pirate-dance-grader <version>
+```
+
+After rollback, repeat the history and configuration checks. Do not use this workflow or script for
+production. Endpoint-to-API smoke verification is added with the Gate 0B dispatcher wiring; there
+is no staging API dispatch surface to probe yet.
