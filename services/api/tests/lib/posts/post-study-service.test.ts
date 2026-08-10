@@ -162,6 +162,7 @@ async function submitPostStudyAttempt(
 // Runs the full seeded ready-pack session with every first pass correct, so
 // the completing attempt qualifies the day and materializes the streak inline.
 async function completeQualifyingStudySession(input: {
+  defer?: (task: Promise<unknown>) => void
   env: Env
   idempotencyPrefix: string
   timezone?: string
@@ -195,6 +196,7 @@ async function completeQualifyingStudySession(input: {
       },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
+      defer: input.defer,
       env: input.env,
       postId: POST_ID,
     })
@@ -2663,18 +2665,47 @@ describe("post study service", () => {
 
   test("qualifying session writes a leaderboard-visible streak through the buffered D1 write path", async () => {
     await seedSongPost()
+    await exec("UPDATE posts SET song_artifact_bundle_id = 'sab_study' WHERE post_id = ?1", [POST_ID])
     await seedReadyPack()
     // Default env: COMMUNITY_D1_SHARD routes writes through the D1 client,
     // whose write transactions buffer statements and commit them as one batch
     // (in-tx reads return empty results). Pin resolution and the grace-expiry
     // apply must therefore be read-before-tx + pure-write — this guards the
     // regression where a buffered tx silently dropped both.
-    const attemptEnv = env({ SONG_STUDY_STREAK_WRITES_ENABLED: "true" })
+    type WakeupQueue = NonNullable<Env["REWARD_QUALIFICATION_WAKEUPS"]>
+    type WakeupSendResult = Awaited<ReturnType<WakeupQueue["send"]>>
+    let releaseSend!: (value: WakeupSendResult) => void
+    let markSendStarted!: () => void
+    const sendStarted = new Promise<void>((resolve) => { markSendStarted = resolve })
+    const sendGate = new Promise<WakeupSendResult>((resolve) => { releaseSend = resolve })
+    const queue: WakeupQueue = {
+      metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+      send: async () => {
+        markSendStarted()
+        return sendGate
+      },
+      sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    }
+    const deferred: Promise<unknown>[] = []
+    const attemptEnv = env({
+      REWARD_QUALIFICATION_WAKEUPS: queue,
+      REWARD_QUALIFICATION_WAKEUP_COMMUNITY_IDS: COMMUNITY_ID,
+      REWARD_QUALIFICATION_WAKEUP_ENQUEUE_ENABLED: "true",
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_CAMPAIGNS_ENABLED: "true",
+      SONG_STUDY_STREAK_WRITES_ENABLED: "true",
+    })
     await completeQualifyingStudySession({
+      defer: (task) => { deferred.push(task) },
       env: attemptEnv,
       idempotencyPrefix: "study-streak-buffered-d1",
       timezone: "America/New_York",
     })
+    expect(deferred).toHaveLength(1)
+    expect((await client!.execute("SELECT event_id FROM reward_qualification_outbox")).rows).toHaveLength(1)
+    await sendStarted
+    releaseSend({ metadata: { metrics: { backlogCount: 1, backlogBytes: 100 } } })
+    await Promise.all(deferred)
 
     const nyToday = studyActivityDate(new Date().toISOString(), "America/New_York")
     const expectedActiveUntil = endOfGraceUtcInstant(nyToday, "America/New_York")

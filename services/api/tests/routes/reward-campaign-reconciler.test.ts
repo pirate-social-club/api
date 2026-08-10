@@ -707,6 +707,21 @@ describe("reward campaign reconciler", () => {
     expect(withoutDeliverySink.enabled).toBe(false)
     expect(listed).toBe(false)
 
+    const incompleteHint = await reconcileRewardCampaigns({
+      env: env() as never,
+      communityRepository: {
+        listActiveCommunities: async () => {
+          listed = true
+          return []
+        },
+      } as never,
+      controlPlaneClient: {} as never,
+      communityIds: ["cmt_hint"],
+      mode: "hint",
+    })
+    expect(incompleteHint.enabled).toBe(true)
+    expect(listed).toBe(false)
+
   })
 
   test("checkpoints qualifications and atomically credits one identity/song/period reward", async () => {
@@ -984,6 +999,83 @@ describe("reward campaign reconciler", () => {
         "SELECT status, credited_cents, reserved_cents FROM reward_campaigns WHERE reward_campaign_id = 'rcp_reconcile'",
       )
       expect(exhaustedCampaign.rows).toEqual([{ status: "exhausted", credited_cents: 120, reserved_cents: 0 }])
+
+      await db.client.execute({
+        sql: `
+          INSERT INTO reward_qualification_outbox (
+            event_id, user_id, community_id, post_id, song_artifact_bundle_id,
+            activity, qualified_at, reward_period_key, qualification_policy_version,
+            evidence_summary_json, created_at
+          ) VALUES
+            ('rqo_hint_target', ?1, 'cmt_campaign_reconcile', 'pst_campaign_reconcile',
+              'sab_campaign_reconcile', 'study', '2026-07-13T12:00:00.000Z',
+              '2026-07-13', 'policy-v1', '{}', '2026-07-13T12:00:00.000Z'),
+            ('rqo_hint_later', ?1, 'cmt_campaign_reconcile', 'pst_campaign_reconcile',
+              'sab_campaign_reconcile', 'study', '2026-07-14T12:00:00.000Z',
+              '2026-07-14', 'policy-v1', '{}', '2026-07-14T12:00:00.000Z')
+        `,
+        args: [session.userId],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO communities (
+            community_id, creator_user_id, display_name, membership_mode,
+            status, provisioning_state, transfer_state, created_at, updated_at
+          ) VALUES ('cmt_untargeted_checkpoint', ?1, 'Untargeted', 'open',
+            'active', 'active', 'none', ?2, ?2)
+        `,
+        args: [session.userId, now],
+      })
+      await ctx.client.execute({
+        sql: `
+          INSERT INTO reward_qualification_checkpoints (
+            community_id, last_shard_sequence, updated_at
+          ) VALUES ('cmt_untargeted_checkpoint', 77, ?1)
+        `,
+        args: [now],
+      })
+      const targeted = await reconcileRewardCampaigns({
+        env: ctx.env,
+        communityRepository: jobRepository,
+        controlPlaneClient: ctx.client,
+        communityIds: ["cmt_campaign_reconcile"],
+        eventIds: ["rqo_hint_target"],
+        mode: "hint",
+        maxCommunities: 1,
+        maxCredits: 1,
+        maxScannedQualifications: 1,
+        outboxBatchSize: 1,
+        now: "2026-07-13T12:00:01.000Z",
+      })
+      expect(targeted).toMatchObject({
+        activated_campaigns: 0,
+        ended_campaigns: 0,
+        expired_pending: 0,
+        ingested_qualifications: 1,
+      })
+      expect(targeted.scanned_qualifications).toBeLessThanOrEqual(1)
+      const targetedEvents = await ctx.client.execute({
+        sql: `
+          SELECT reward_qualification_event_id
+          FROM reward_qualification_events
+          WHERE reward_qualification_event_id IN ('rqo_hint_target', 'rqo_hint_later')
+          ORDER BY reward_qualification_event_id
+        `,
+      })
+      expect(targetedEvents.rows).toEqual([{ reward_qualification_event_id: "rqo_hint_target" }])
+      const isolatedCheckpoints = await ctx.client.execute({
+        sql: `
+          SELECT community_id, last_shard_sequence
+          FROM reward_qualification_checkpoints
+          WHERE community_id IN ('cmt_campaign_reconcile', 'cmt_untargeted_checkpoint')
+          ORDER BY community_id
+        `,
+      })
+      expect(isolatedCheckpoints.rows).toEqual([
+        { community_id: "cmt_campaign_reconcile", last_shard_sequence: 3 },
+        { community_id: "cmt_untargeted_checkpoint", last_shard_sequence: 77 },
+      ])
+
       await ctx.client.execute({
         sql: `
           INSERT INTO reward_song_owner_policies (

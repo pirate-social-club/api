@@ -67,6 +67,7 @@ import { requireMemberAccess } from "./post-access"
 import { publicCommunityId, publicPostId } from "../public-ids"
 import { withTransaction } from "../transactions"
 import { emitStudyQualificationIfComplete } from "../rewards/reward-qualification-outbox"
+import { deferRewardQualificationWakeup } from "../rewards/reward-qualification-wakeup"
 import { fsrsRatingFor, gradeSayItBack, type AttemptOutcome, type FsrsRating } from "./post-study-recall-grading"
 import {
   ensureStudyUnits,
@@ -1262,6 +1263,7 @@ export async function submitPostStudyAttempt(input: {
   body: SongStudyAttemptRequest
   communityId: string
   communityRepository: CommunityDatabaseBindingRepository
+  defer?: (task: Promise<unknown>) => void
   env: Env
   postId: string
   studyTimezone?: string
@@ -1358,6 +1360,7 @@ export async function submitPostStudyAttempt(input: {
           userId: input.actor.userId,
         })
         : null
+      let rewardQualification: Awaited<ReturnType<typeof emitStudyQualificationIfComplete>> = null
       await withTransaction(db.client, "write", async (tx) => {
         if (streakWritesEnabled && preparation) {
           await recordCompletedSessionStreak({
@@ -1374,7 +1377,7 @@ export async function submitPostStudyAttempt(input: {
           })
         }
         if (rewardQualificationWritesEnabled && summary.qualified) {
-          await emitStudyQualificationIfComplete({
+          rewardQualification = await emitStudyQualificationIfComplete({
             client: tx,
             communityId: input.communityId,
             completedExerciseCount: summary.completed_exercise_count,
@@ -1387,6 +1390,13 @@ export async function submitPostStudyAttempt(input: {
           })
         }
       })
+      if (rewardQualification) {
+        deferRewardQualificationWakeup({
+          defer: input.defer,
+          env: input.env,
+          event: rewardQualification,
+        })
+      }
     }
 
     const finalizeResponse = async (

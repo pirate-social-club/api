@@ -3,6 +3,16 @@ import type { InStatement, QueryResult } from "../sql-client"
 
 type Executor = { execute(statement: InStatement | string): Promise<QueryResult> }
 
+export type RewardQualificationOutboxCandidate = {
+  activity: "study" | "karaoke"
+  communityId: string
+  eventId: string
+  postId: string
+  qualifiedAt: string
+  rewardPeriodKey: string
+  userId: string
+}
+
 function utcPeriod(now: string): { key: string; start: string; end: string } {
   const millis = Date.parse(now)
   if (!Number.isFinite(millis)) throw new Error("Reward qualification timestamp is invalid")
@@ -21,8 +31,9 @@ async function emit(input: {
   policyVersion: string
   postId: string
   userId: string
-}): Promise<boolean> {
+}): Promise<RewardQualificationOutboxCandidate | null> {
   const period = utcPeriod(input.now)
+  const eventId = makeId("rqo")
   const result = await input.client.execute({
     sql: `
       INSERT INTO reward_qualification_outbox (
@@ -36,11 +47,23 @@ async function emit(input: {
       ON CONFLICT (user_id, post_id, activity, reward_period_key) DO NOTHING
     `,
     args: [
-      makeId("rqo"), input.userId, input.communityId, input.postId,
+      eventId, input.userId, input.communityId, input.postId,
       input.activity, input.now, period.key, input.policyVersion, JSON.stringify(input.evidence),
     ],
   })
-  return (result.rowsAffected ?? 0) > 0
+  // Routed D1 write transactions buffer statements and return an empty result
+  // before commit. Return a candidate unconditionally; post-commit confirmation
+  // verifies that this exact event ID became the authoritative uniqueness row.
+  void result
+  return {
+    activity: input.activity,
+    communityId: input.communityId,
+    eventId,
+    postId: input.postId,
+    qualifiedAt: input.now,
+    rewardPeriodKey: period.key,
+    userId: input.userId,
+  }
 }
 
 export async function emitStudyQualificationIfComplete(input: {
@@ -53,10 +76,11 @@ export async function emitStudyQualificationIfComplete(input: {
   requiredCorrectCount: number
   sessionId: string
   userId: string
-}): Promise<boolean> {
+}): Promise<RewardQualificationOutboxCandidate | null> {
   if (input.completedExerciseCount <= 0
-    || input.firstPassCorrectCount < input.requiredCorrectCount) return false
+    || input.firstPassCorrectCount < input.requiredCorrectCount) return null
   const period = utcPeriod(input.now)
+  const eventId = makeId("rqo")
   const result = await input.client.execute({
     sql: `
       INSERT INTO reward_qualification_outbox (
@@ -80,12 +104,23 @@ export async function emitStudyQualificationIfComplete(input: {
       ON CONFLICT (user_id, post_id, activity, reward_period_key) DO NOTHING
     `,
     args: [
-      makeId("rqo"), input.userId, input.communityId, input.postId, input.now,
+      eventId, input.userId, input.communityId, input.postId, input.now,
       period.key, input.sessionId, input.completedExerciseCount,
       input.firstPassCorrectCount, input.requiredCorrectCount,
     ],
   })
-  return (result.rowsAffected ?? 0) > 0
+  // See emit(): the transaction result is intentionally not used as the
+  // insertion signal on buffered D1 writes.
+  void result
+  return {
+    activity: "study",
+    communityId: input.communityId,
+    eventId,
+    postId: input.postId,
+    qualifiedAt: input.now,
+    rewardPeriodKey: period.key,
+    userId: input.userId,
+  }
 }
 
 export async function emitKaraokeQualification(input: {
@@ -99,7 +134,7 @@ export async function emitKaraokeQualification(input: {
   scoringVersion: number
   sessionId: string
   userId: string
-}): Promise<boolean> {
+}): Promise<RewardQualificationOutboxCandidate | null> {
   return emit({
     activity: "karaoke",
     client: input.client,
