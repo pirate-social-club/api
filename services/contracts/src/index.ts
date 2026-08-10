@@ -2941,6 +2941,7 @@ export type RewardPayoutSummary = {
   amount_cents: number;
   recipient_address: string;
   status: RewardPayoutStatus;
+  settlement_stage: RewardSettlementStage;
   settlement_ref: string | null;
   failure_reason: string | null;
 };
@@ -4323,6 +4324,8 @@ type RewardPendingVerificationSummary = {
   conditional_cents: number;
   earliest_expires_at: number | null;
 };
+
+type RewardSettlementStage = "reserved" | "signed" | "broadcast" | "needs_review" | "confirmed" | "failed";
 
 type RootPostQuotaByTrustTier = {
   new?: RootPostQuotaRule;

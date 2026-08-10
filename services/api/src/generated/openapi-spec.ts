@@ -23133,6 +23133,7 @@ const spec = {
           "amount_cents",
           "recipient_address",
           "status",
+          "settlement_stage",
           "settlement_ref",
           "failure_reason"
         ],
@@ -23152,6 +23153,9 @@ const spec = {
           },
           "status": {
             "$ref": "#/components/schemas/RewardPayoutStatus"
+          },
+          "settlement_stage": {
+            "$ref": "#/components/schemas/RewardSettlementStage"
           },
           "settlement_ref": {
             "type": "string",
@@ -26105,6 +26109,17 @@ const spec = {
         "type": "string",
         "enum": [
           "submitted",
+          "confirmed",
+          "failed"
+        ]
+      },
+      "RewardSettlementStage": {
+        "type": "string",
+        "enum": [
+          "reserved",
+          "signed",
+          "broadcast",
+          "needs_review",
           "confirmed",
           "failed"
         ]

@@ -1819,7 +1819,7 @@ describe("rewards routes", () => {
     const verifiedBody = await json(verified) as {
       balance_cents: number
       cashout: { eligible: boolean; min_cents: number; verification_state: string; verification_provider: string }
-      latest_in_flight_cashout: { id: string; amount_cents: number; status: string } | null
+      latest_in_flight_cashout: { id: string; amount_cents: number; status: string; settlement_stage: string } | null
     }
     expect(verifiedBody.balance_cents).toBe(90)
     expect(verifiedBody.cashout).toEqual({
@@ -1832,6 +1832,7 @@ describe("rewards routes", () => {
       id: "rpe_route_pending",
       amount_cents: 10,
       status: "submitted",
+      settlement_stage: "reserved",
     })
 
     ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
@@ -2147,13 +2148,14 @@ describe("rewards routes", () => {
     )
     expect(response.status).toBe(202)
     const body = await json(response) as {
-      payout: { id: string; amount_cents: number; status: string; settlement_ref: string | null; recipient_address: string }
+      payout: { id: string; amount_cents: number; status: string; settlement_stage: string; settlement_ref: string | null; recipient_address: string }
       balance_cents: number
     }
     expect(body.payout.amount_cents).toBe(100)
     expect((body as typeof body & { chain_id: number }).chain_id).toBe(84532)
     expect((body.payout as typeof body.payout & { chain_id: number }).chain_id).toBe(84532)
     expect(body.payout.status).toBe("confirmed")
+    expect(body.payout.settlement_stage).toBe("confirmed")
     expect(body.payout.settlement_ref).toBe("0xrewardtx")
     expect(body.payout.recipient_address).toBe("0x1000000000000000000000000000000000000001")
     expect(body.balance_cents).toBe(50)
