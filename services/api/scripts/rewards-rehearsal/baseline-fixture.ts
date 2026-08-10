@@ -2,6 +2,10 @@ import { createHash, randomUUID } from "node:crypto"
 
 import type { Client, QueryResultRow, Transaction } from "../../src/lib/sql-client"
 import { withTransaction } from "../../src/lib/transactions"
+import {
+  REHEARSAL_FIXTURE_KIND,
+  rehearsalFixtureFundingEffectId,
+} from "./fixture-audit"
 
 const USER_ID_RE = /^usr_[0-9a-f]{32}$/u
 const CAMPAIGN_ID_RE = /^rcp_[0-9a-f]{32}$/u
@@ -165,6 +169,26 @@ export async function seedRehearsalBaselineFixture(input: {
         termsHash,
         now,
         Number(source.min_score_bps ?? 7000),
+      ],
+    })
+    await tx.execute({
+      sql: `
+        INSERT INTO reward_campaign_fixture_funding_effects (
+          reward_campaign_fixture_funding_effect_id, reward_campaign_id,
+          fixture_kind, amount_cents, recorded_by, recorded_at, evidence_json
+        ) VALUES (?1, ?2, ?3, ?4, 'rewards_rehearsal_seeder', ?5, ?6)
+      `,
+      args: [
+        rehearsalFixtureFundingEffectId(campaignId),
+        campaignId,
+        REHEARSAL_FIXTURE_KIND,
+        amountCents,
+        now,
+        JSON.stringify({
+          qualification_policy_version: "rehearsal_fixture_v1",
+          scope: "settlement_path_only",
+          source_campaign_id: input.sourceCampaignId,
+        }),
       ],
     })
     await tx.execute({

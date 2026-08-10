@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "protocol": "inline_cache_prime_double_stable_v1",
+  "command": "prime-cache",
+  "action_ipfs_id": "QmQ7mBbjbd4KgGfiKbYRv1p4kbcs8ebSz6ruAYfLeN8v9d",
+  "chain_id": 84532,
+  "policy_version": "2",
+  "transaction_broadcast": false,
+  "execution_path": "inline_cache_prime",
+  "before": {
+    "observed_at": "2026-08-10T10:25:12.887Z",
+    "balance_cents_raw": -497,
+    "available_credit_cents": 497,
+    "balance_display": "$4.97 credit",
+    "request_id": "1d4dfe7f-226b-4e18-980b-55aa10cf32c3",
+    "latency_ms": 1499
+  },
+  "action": {
+    "outcome": "success",
+    "observation": {
+      "status": 200,
+      "request_id": "596ba8c8-2bf5-4d3b-8a5b-28c8897f6476",
+      "latency_ms": 489
+    },
+    "tx_hash": "0x380362522948f93beea94db241a88649ec9b35e40425e091b418989a3e059b5d"
+  },
+  "after_readings": [
+    {
+      "observed_at": "2026-08-10T10:25:19.165Z",
+      "balance_cents_raw": -496,
+      "available_credit_cents": 496,
+      "balance_display": "$4.96 credit",
+      "request_id": "2116dfba-2601-4822-99aa-01a0e6c6e364",
+      "latency_ms": 265
+    },
+    {
+      "observed_at": "2026-08-10T10:25:24.431Z",
+      "balance_cents_raw": -496,
+      "available_credit_cents": 496,
+      "balance_display": "$4.96 credit",
+      "request_id": "0b0285af-b3b3-4591-bcaf-d5e8d4042a1c",
+      "latency_ms": 265
+    }
+  ],
+  "billing": {
+    "observed_charge_cents": 1,
+    "settled": true
+  }
+}

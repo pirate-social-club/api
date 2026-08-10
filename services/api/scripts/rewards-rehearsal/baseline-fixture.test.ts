@@ -90,6 +90,9 @@ describe("seedRehearsalBaselineFixture", () => {
     expect(fixture.reservationId).toMatch(/^rcr_[0-9a-f]{32}$/)
     expect(fixture.rewardEventId).toMatch(/^rew_[0-9a-f]{32}$/)
     expect(fake.statements.some(({ sql }) => sql.includes("INSERT INTO reward_campaigns"))).toBe(true)
+    expect(fake.statements.some(({ sql }) => (
+      sql.includes("INSERT INTO reward_campaign_fixture_funding_effects")
+    ))).toBe(true)
     expect(fake.statements.some(({ sql }) => sql.includes("INSERT INTO reward_events"))).toBe(true)
     expect(fake.statements.some(({ sql }) => sql.includes("UPDATE reward_campaign_reservations"))).toBe(true)
   })
