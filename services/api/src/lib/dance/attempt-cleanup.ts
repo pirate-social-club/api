@@ -4,6 +4,10 @@ import { getControlPlaneClient } from "../runtime-deps"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
+import {
+  DANCE_ATTEMPT_MEDIA_PREFIX,
+  DANCE_ATTEMPT_PLACEHOLDER_FILENAME,
+} from "./attempt-object-key"
 import { deleteDanceAttemptUpload } from "./attempt-storage"
 
 const MAX_CLEANUPS_PER_SWEEP = 10
@@ -64,13 +68,15 @@ export async function expireDanceAttemptSessions(input: {
         finalized_at = ?1,
         cleanup_status = CASE
           WHEN upload_object_key =
-            'dance/attempt-media/' || dance_attempt_session_id || '/pending.mp4'
+            '${DANCE_ATTEMPT_MEDIA_PREFIX}' || dance_attempt_session_id
+              || '/${DANCE_ATTEMPT_PLACEHOLDER_FILENAME}'
           THEN 'not_required'
           ELSE 'pending'
         END,
         cleanup_next_attempt_at = CASE
           WHEN upload_object_key =
-            'dance/attempt-media/' || dance_attempt_session_id || '/pending.mp4'
+            '${DANCE_ATTEMPT_MEDIA_PREFIX}' || dance_attempt_session_id
+              || '/${DANCE_ATTEMPT_PLACEHOLDER_FILENAME}'
           THEN NULL
           ELSE ?1
         END,

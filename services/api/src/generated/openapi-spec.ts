@@ -184,6 +184,62 @@ const spec = {
         "operationId": "post_auth_session_exchange"
       }
     },
+    "/dance-sessions": {
+      "post": {
+        "operationId": "dance_session_create",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Create an expiring dance upload session",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DanceSessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSession"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          }
+        }
+      }
+    },
     "/dance-sessions/{dance_session_id}": {
       "parameters": [
         {
@@ -9069,6 +9125,17 @@ const spec = {
           }
         }
       },
+      "DanceSessionCreateRequest": {
+        "type": "object",
+        "required": [
+          "post"
+        ],
+        "properties": {
+          "post": {
+            "type": "string"
+          }
+        }
+      },
       "DanceSession": {
         "type": "object",
         "required": [
@@ -9081,7 +9148,8 @@ const spec = {
           "status",
           "max_bytes",
           "expires_at",
-          "created"
+          "created",
+          "idempotent"
         ],
         "properties": {
           "id": {
@@ -9120,6 +9188,9 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          },
+          "idempotent": {
+            "type": "boolean"
           }
         }
       },

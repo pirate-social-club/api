@@ -2,6 +2,7 @@ import { internalError, providerUnavailable } from "../errors"
 import { buildS3PresignedUrl, buildS3SignedRequest } from "../storage/s3-signing"
 import type { Env } from "../../env"
 import type { S3SigningConfig } from "../storage/s3-signing"
+import { DANCE_ATTEMPT_MEDIA_PREFIX } from "./attempt-object-key"
 
 const SHA256 = /^[0-9a-f]{64}$/
 const SESSION_ID = /^[a-zA-Z0-9_-]{1,100}$/
@@ -35,7 +36,7 @@ export function resolveDanceAttemptStorageConfig(env: Env): S3SigningConfig {
 export function danceAttemptObjectKey(sessionId: string, contentSha256: string): string {
   if (!SESSION_ID.test(sessionId)) throw internalError("Dance attempt session id is invalid")
   if (!SHA256.test(contentSha256)) throw internalError("Dance attempt content hash is invalid")
-  return `dance/attempt-media/${sessionId}/${contentSha256}.mp4`
+  return `${DANCE_ATTEMPT_MEDIA_PREFIX}${sessionId}/${contentSha256}.mp4`
 }
 
 export async function buildDanceAttemptUploadIntent(input: {

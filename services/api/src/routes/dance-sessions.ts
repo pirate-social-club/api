@@ -28,7 +28,7 @@ import {
   notFoundError,
 } from "../lib/errors"
 import { studyActivityDate, STUDY_FALLBACK_TIMEZONE } from "../lib/posts/post-study-streak-time"
-import { decodePublicPostId, publicPostId } from "../lib/public-ids"
+import { decodePublicPostId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 
 const SHA256 = /^[0-9a-f]{64}$/
@@ -109,6 +109,13 @@ export function danceCancellationResponse(
   return { ...serializeDanceSession(record), idempotent }
 }
 
+export function danceSessionCreateResponse(
+  record: DanceAttemptSessionRecord,
+  idempotent: boolean,
+) {
+  return { ...serializeDanceSession(record), idempotent }
+}
+
 danceSessions.post("/", async (c) => {
   assertCaptureEnabled(c.env)
   const body = bodyRecord(await c.req.json().catch(() => null))
@@ -131,18 +138,10 @@ danceSessions.post("/", async (c) => {
       expiresAt: new Date(nowMs + SESSION_TTL_MS).toISOString(),
     },
   })
-  return c.json({
-    id: result.record.sessionId,
-    object: "dance_session",
-    attempt: result.record.attemptId,
-    post: publicPostId(result.record.hostPostId),
-    choreography: result.record.choreographyId,
-    choreography_revision: result.record.choreographyRevisionId,
-    status: result.record.status,
-    max_bytes: DANCE_ATTEMPT_MAX_BYTES,
-    expires_at: Math.floor(Date.parse(result.record.expiresAt) / 1000),
-    idempotent: result.kind === "idempotent",
-  }, result.kind === "created" ? 201 : 200)
+  return c.json(danceSessionCreateResponse(
+    result.record,
+    result.kind === "idempotent",
+  ), result.kind === "created" ? 201 : 200)
 })
 
 danceSessions.get("/:sessionId", async (c) => {
