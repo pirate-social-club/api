@@ -970,9 +970,19 @@ export async function reconcileRewardCampaigns(input: {
   env: Env
   communityRepository: CommunityJobRepository
   controlPlaneClient: Client
+  /** Restricts both checkpoint ingestion and credit scans to these communities. */
+  communityIds?: string[]
+  /** Restricts credit scans to the hinted durable outbox event references. */
+  eventIds?: string[]
+  /** Hint mode skips global lifecycle and pending-expiry maintenance. */
+  mode?: "cron" | "hint"
   maxCommunities?: number
   maxCredits?: number
+  maxElapsedMs?: number
+  maxScannedQualifications?: number
   outboxBatchSize?: number
+  /** Stops work from beginning another operation after lease renewal fails. */
+  shouldContinue?: () => boolean
   now?: string
 }): Promise<RewardCampaignReconciliationSummary> {
   const campaigns = resolveRewardCampaignConfig(input.env)
@@ -982,29 +992,53 @@ export async function reconcileRewardCampaigns(input: {
   const summary = emptySummary(enabled)
   if (!enabled) return summary
   const now = input.now ?? nowIso()
-  summary.expired_pending = await expirePendingRewardQualifications({
-    client: input.controlPlaneClient,
-    now,
-  })
-  const lifecycle = await advanceRewardCampaignLifecycle({
-    client: input.controlPlaneClient,
-    now,
-    postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
-    activeSettlementAsset: campaigns,
-  })
-  summary.activated_campaigns = lifecycle.activated_campaigns
-  summary.canceled_draft_campaigns = lifecycle.canceled_draft_campaigns
-  summary.canceled_retired_funding_campaigns = lifecycle.canceled_retired_funding_campaigns
-  summary.audited_retired_funding_effects = lifecycle.audited_retired_funding_effects
-  summary.retirement_policy_anomalies = lifecycle.retirement_policy_anomalies
-  summary.ended_campaigns = lifecycle.ended_campaigns
+  const mode = input.mode ?? "cron"
+  const deadlineAt = input.maxElapsedMs == null
+    ? Number.POSITIVE_INFINITY
+    : Date.now() + Math.max(1, Math.trunc(input.maxElapsedMs))
+  const shouldContinue = input.shouldContinue ?? (() => true)
+  if (!shouldContinue()) return summary
+  if (mode === "cron") {
+    summary.expired_pending = await expirePendingRewardQualifications({
+      client: input.controlPlaneClient,
+      now,
+    })
+    if (!shouldContinue()) return summary
+    const lifecycle = await advanceRewardCampaignLifecycle({
+      client: input.controlPlaneClient,
+      now,
+      postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+      activeSettlementAsset: campaigns,
+    })
+    summary.activated_campaigns = lifecycle.activated_campaigns
+    summary.canceled_draft_campaigns = lifecycle.canceled_draft_campaigns
+    summary.canceled_retired_funding_campaigns = lifecycle.canceled_retired_funding_campaigns
+    summary.audited_retired_funding_effects = lifecycle.audited_retired_funding_effects
+    summary.retirement_policy_anomalies = lifecycle.retirement_policy_anomalies
+    summary.ended_campaigns = lifecycle.ended_campaigns
+  }
   const postgres = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 50))
-  const candidateCommunityIds = scheduleRewardCampaignCommunityIds(await listRewardCampaignCommunityIds({
-    client: input.controlPlaneClient,
-    now,
-    postgres,
-  }), maxCommunities, now)
+  const requestedCommunityIds = input.communityIds
+    ? [...new Set(input.communityIds.map((communityId) => communityId.trim()).filter(Boolean))]
+    : null
+  const requestedEventIds = input.eventIds
+    ? [...new Set(input.eventIds.map((eventId) => eventId.trim()).filter(Boolean))]
+    : null
+  if (mode === "hint" && (!requestedCommunityIds?.length || !requestedEventIds?.length)) {
+    return summary
+  }
+  const eligibleCommunityIds = requestedCommunityIds && mode === "hint"
+    ? requestedCommunityIds
+    : await listRewardCampaignCommunityIds({
+        client: input.controlPlaneClient,
+        now,
+        postgres,
+      })
+  const candidateCommunityIds = requestedCommunityIds
+    ? requestedCommunityIds.filter((communityId) => eligibleCommunityIds.includes(communityId)).slice(0, maxCommunities)
+    : scheduleRewardCampaignCommunityIds(eligibleCommunityIds, maxCommunities, now)
+  if (requestedCommunityIds && candidateCommunityIds.length === 0) return summary
   // The campaign window keeps a community eligible through the complete
   // seven-day qualification grace period. On re-entry, ingestion resumes at
   // its persisted checkpoint and catches up in bounded 500-row batches; this
@@ -1016,9 +1050,11 @@ export async function reconcileRewardCampaigns(input: {
     limit: maxCommunities,
   })).map((community) => community.community_id)
   for (const communityId of communityIds) {
+    if (!shouldContinue() || Date.now() >= deadlineAt) break
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
       db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
+      if (!shouldContinue() || Date.now() >= deadlineAt) break
       summary.scanned_communities += 1
       const ingested = await ingestCommunity({
         communityId,
@@ -1039,14 +1075,39 @@ export async function reconcileRewardCampaigns(input: {
 
   const since = rewardCampaignCandidateCutoff(now)
   const maxCredits = Math.max(1, Math.trunc(input.maxCredits ?? 500))
-  const pageSize = Math.min(500, maxCredits)
+  // Cron historically scans through non-creditable rows until it either drains
+  // the ordered candidate set or creates maxCredits. Giving cron an invocation-
+  // local scan cap would restart at the same old pending rows every minute and
+  // could starve newer qualifications forever. Only callers that supply an
+  // explicit bound (the hint consumer) cap attempted rows.
+  const maxScannedQualifications = input.maxScannedQualifications == null
+    ? Number.POSITIVE_INFINITY
+    : Math.max(1, Math.trunc(input.maxScannedQualifications))
+  const pageSize = Math.min(500, maxCredits, maxScannedQualifications)
+  const creditCommunityIds = requestedCommunityIds ? candidateCommunityIds : []
+  const creditEventIds = requestedEventIds ?? []
+  const creditFilterArgs = [...creditCommunityIds, ...creditEventIds]
+  const communityClause = creditCommunityIds.length > 0
+    ? `AND q.community_id IN (${creditCommunityIds.map((_, index) => `?${index + 3}`).join(", ")})`
+    : ""
+  const eventArgumentOffset = 3 + creditCommunityIds.length
+  const eventClause = creditEventIds.length > 0
+    ? `AND q.reward_qualification_event_id IN (${creditEventIds.map((_, index) => `?${eventArgumentOffset + index}`).join(", ")})`
+    : ""
+  const cursorArgumentOffset = 3 + creditFilterArgs.length
   let cursor: { qualifiedAt: string; communityId: string; shardSequence: number } | null = null
-  while (summary.credited_events < maxCredits) {
+  while (
+    summary.credited_events < maxCredits
+    && summary.scanned_qualifications < maxScannedQualifications
+    && Date.now() < deadlineAt
+    && shouldContinue()
+  ) {
     const cursorClause = cursor
       ? `AND (
-          q.qualified_at > ?3
-          OR (q.qualified_at = ?3 AND q.community_id > ?4)
-          OR (q.qualified_at = ?3 AND q.community_id = ?4 AND q.shard_sequence > ?5)
+          q.qualified_at > ?${cursorArgumentOffset}
+          OR (q.qualified_at = ?${cursorArgumentOffset} AND q.community_id > ?${cursorArgumentOffset + 1})
+          OR (q.qualified_at = ?${cursorArgumentOffset} AND q.community_id = ?${cursorArgumentOffset + 1}
+            AND q.shard_sequence > ?${cursorArgumentOffset + 2})
         )`
       : ""
     const rows = await input.controlPlaneClient.execute({
@@ -1056,6 +1117,8 @@ export async function reconcileRewardCampaigns(input: {
           q.qualification_policy_version, q.evidence_summary_json
         FROM reward_qualification_events q
         WHERE q.qualified_at > ?1
+          ${communityClause}
+          ${eventClause}
           ${cursorClause}
           AND EXISTS (
             SELECT 1 FROM reward_campaigns c
@@ -1080,10 +1143,15 @@ export async function reconcileRewardCampaigns(input: {
         LIMIT ?2
       `,
       args: cursor
-        ? [since, pageSize, cursor.qualifiedAt, cursor.communityId, cursor.shardSequence]
-        : [since, pageSize],
+        ? [since, pageSize, ...creditFilterArgs, cursor.qualifiedAt, cursor.communityId, cursor.shardSequence]
+        : [since, pageSize, ...creditFilterArgs],
     })
     for (const row of rows.rows) {
+      if (
+        !shouldContinue()
+        || summary.scanned_qualifications >= maxScannedQualifications
+        || Date.now() >= deadlineAt
+      ) break
       summary.scanned_qualifications += 1
       try {
         const result = await creditRewardCampaignQualification({
@@ -1113,7 +1181,13 @@ export async function reconcileRewardCampaigns(input: {
       }
       if (summary.credited_events >= maxCredits) break
     }
-    if (rows.rows.length < pageSize || summary.credited_events >= maxCredits) break
+    if (
+      rows.rows.length < pageSize
+      || summary.credited_events >= maxCredits
+      || summary.scanned_qualifications >= maxScannedQualifications
+      || Date.now() >= deadlineAt
+      || !shouldContinue()
+    ) break
     const last = qualification(rows.rows[rows.rows.length - 1] as QueryResultRow)
     const shardSequence = Number(rowValue(rows.rows[rows.rows.length - 1] as QueryResultRow, "shard_sequence"))
     if (!Number.isSafeInteger(shardSequence) || shardSequence <= 0) {

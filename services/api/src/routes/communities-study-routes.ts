@@ -67,6 +67,7 @@ export function registerCommunityStudyRoutes(communities: Hono<AuthenticatedEnv>
       body,
       communityId,
       communityRepository,
+      defer: (task) => c.executionCtx.waitUntil(task),
       env: c.env,
       postId,
       studyTimezone: resolveStudyTimezone(c.req.raw.cf),

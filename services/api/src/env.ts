@@ -414,6 +414,14 @@ export type Env = {
   REWARDS_READS_ENABLED?: string
   REWARDS_PAYOUTS_ENABLED?: string
   REWARDS_CAMPAIGNS_ENABLED?: string
+  /** At-least-once hint transport; the community outbox and cron remain authoritative. */
+  REWARD_QUALIFICATION_WAKEUPS?: Queue<import("./lib/rewards/reward-qualification-wakeup").RewardQualificationWakeup>
+  /** Producer rollout gate. Missing or any value other than "true" disables sends. */
+  REWARD_QUALIFICATION_WAKEUP_ENQUEUE_ENABLED?: string
+  /** Consumer rollout gate. Missing or any value other than "true" acknowledges telemetry-only hints. */
+  REWARD_QUALIFICATION_WAKEUP_CONSUMER_ENABLED?: string
+  /** Comma-separated internal community IDs admitted to the wake-up canary. Empty admits none. */
+  REWARD_QUALIFICATION_WAKEUP_COMMUNITY_IDS?: string
   // Direct Base USDC campaign funding. These are required when campaigns are enabled;
   // missing or invalid values keep campaign mutation paths fail-closed.
   REWARDS_CAMPAIGN_CHAIN_ID?: string

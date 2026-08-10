@@ -117,6 +117,9 @@ import { runStorySettlementCoordinatorWatchdog } from "./lib/story/story-settlem
 import { reconcileSongPracticeRewards } from "./lib/rewards/song-practice-reconciler"
 import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-service"
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
+import { consumeRewardQualificationWakeups } from "./lib/rewards/reward-qualification-wakeup-consumer"
+import type { RewardQualificationWakeup } from "./lib/rewards/reward-qualification-wakeup"
+import { runWithRewardReconciliationLock } from "./lib/rewards/reward-reconciliation-lock"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
 import { reconcileConfirmingRewardCampaignFunding } from "./lib/rewards/reward-funding-confirmation-reconciler"
 import {
@@ -1490,14 +1493,28 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
 async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
-    const summary = await reconcileRewardCampaigns({
-      env,
-      communityRepository,
-      controlPlaneClient: getControlPlaneClient(env),
-      maxCommunities: 50,
-      maxCredits: 500,
-      outboxBatchSize: 500,
+    const namespace = env.SCHEDULED_CRON_LOCK as DurableObjectNamespace<ScheduledCronLockDO> | undefined
+    if (!namespace) throw new Error("SCHEDULED_CRON_LOCK binding is required for reward reconciliation")
+    const locked = await runWithRewardReconciliationLock({
+      namespace,
+      run: (lease) => reconcileRewardCampaigns({
+        env,
+        communityRepository,
+        controlPlaneClient: getControlPlaneClient(env),
+        maxCommunities: 50,
+        maxCredits: 500,
+        outboxBatchSize: 500,
+        shouldContinue: lease.isValid,
+      }),
     })
+    if (!locked.acquired) {
+      console.info("[reward-campaigns] reconciler lease held; cron will retry on the next tick")
+      return
+    }
+    const summary = locked.value
+    if (locked.leaseLost) {
+      console.error("[reward-campaigns] reconciler lease was lost before cron reconciliation completed")
+    }
     if (summary.retirement_policy_anomalies > 0) {
       console.error("[reward-campaigns] funding effects created after retirement cutoff", JSON.stringify(summary))
     }
@@ -1746,8 +1763,11 @@ export function scheduledMinimumPriorityStarts(
     + (canRunHnsRootObserver ? 1 : 0)
 }
 
-const handler: ExportedHandler<Env> = {
+const handler: ExportedHandler<Env, RewardQualificationWakeup> = {
   fetch: fetchApi,
+
+  queue: (batch, env) => withRequestControlPlaneClients(() =>
+    consumeRewardQualificationWakeups({ batch, env })),
 
   scheduled: (controller, env, ctx) => {
     if (shouldRunPublicReadCacheCanary(env, controller.scheduledTime || Date.now())) {
