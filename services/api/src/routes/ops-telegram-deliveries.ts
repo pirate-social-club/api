@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono"
 import { authenticateAdminToken, authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { mergeTelegramAccountIntoCanonical } from "../lib/telegram/account-merge-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { enqueueCommunityJob } from "../lib/communities/jobs/store"
 import { processAvailableCommunityJobs } from "../lib/communities/jobs/runner"
@@ -24,6 +25,7 @@ import {
   getTelegramSyntheticDelivery,
 } from "../lib/telegram/telegram-synthetic-ops-service"
 import { assertTelegramSyntheticCleanupPost } from "../lib/telegram/telegram-synthetic-contract"
+import { rowValue, stringOrNull } from "../lib/sql-row"
 
 // Operator surface for Telegram channel deliveries stranded in 'uncertain'.
 // Nothing scans that state automatically — by design, because retrying an
@@ -65,6 +67,51 @@ function requireStaging(c: Context<AuthenticatedEnv>): Response | null {
     ? null
     : c.json({ error: "not_found" }, 404)
 }
+
+// Residual account-merge repair is deliberately operator-only. It replays the
+// receipt-independent sweep for a completed/finalizing merge without exposing
+// merge identifiers or consumed link intents to normal users.
+opsTelegramDeliveries.post("/account-merges/:mergeId/residual-repair", async (c) => {
+  const actor = requireOpsActor(c)
+  if (!actor) return c.json({ error: "unauthorized" }, 401)
+  const mergeId = c.req.param("mergeId")?.trim()
+  if (!mergeId) return c.json({ error: "merge_id_required" }, 400)
+
+  const merge = await getControlPlaneClient(c.env).execute({
+    sql: `
+      SELECT m.source_user_id, m.canonical_user_id, m.status,
+             i.link_intent_id, i.telegram_provider_subject, i.telegram_user_id
+      FROM user_account_merges m
+      JOIN telegram_account_link_intents i ON i.link_intent_id = m.link_intent_id
+      WHERE m.user_account_merge_id = ?1
+      LIMIT 1
+    `,
+    args: [mergeId],
+  })
+  const row = merge.rows[0]
+  const status = stringOrNull(rowValue(row, "status"))
+  if (status !== "finalizing" && status !== "completed") {
+    return c.json({ error: "merge_not_ready", status }, 409)
+  }
+  const sourceUserId = stringOrNull(rowValue(row, "source_user_id"))
+  const canonicalUserId = stringOrNull(rowValue(row, "canonical_user_id"))
+  const linkIntentId = stringOrNull(rowValue(row, "link_intent_id"))
+  const providerSubject = stringOrNull(rowValue(row, "telegram_provider_subject"))
+  const telegramUserId = stringOrNull(rowValue(row, "telegram_user_id"))
+  if (!sourceUserId || !canonicalUserId || !linkIntentId || !providerSubject || !telegramUserId) {
+    return c.json({ error: "merge_metadata_incomplete" }, 500)
+  }
+
+  await mergeTelegramAccountIntoCanonical({
+    env: c.env,
+    linkIntentId,
+    sourceUserId,
+    canonicalUserId,
+    providerSubject,
+    telegramUserId,
+  })
+  return c.json({ merge_id: mergeId, status: "completed", operator_user_id: actor.userId }, 200)
+})
 
 opsTelegramDeliveries.get("/synthetic-fixture", async (c) => {
   const unavailable = requireStaging(c)

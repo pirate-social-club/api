@@ -396,13 +396,7 @@ async function applyStreakRebuildPlan(
   }
 }
 
-export async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
-  const existing = await client.execute({
-    sql: `SELECT 1 FROM user_account_merge_receipts WHERE user_account_merge_id = ?1 LIMIT 1`,
-    args: [merge.id],
-  })
-  if (existing.rows.length > 0) return
-
+async function migrateShardData(client: Client, merge: MergeRecord, recordReceipt: boolean): Promise<void> {
   const membershipPlan = await loadMembershipMergePlan(client, merge.sourceUserId, merge.canonicalUserId)
   const attemptMoves = await loadAttemptMoves(client, merge.id, merge.sourceUserId, merge.canonicalUserId)
   const streakPlan = await loadStreakRebuildPlan(client, merge.sourceUserId, merge.canonicalUserId)
@@ -492,18 +486,59 @@ export async function migrateShard(client: Client, merge: MergeRecord): Promise<
       sql: `UPDATE reward_qualification_outbox SET user_id = ?2 WHERE user_id = ?1`,
       args: [merge.sourceUserId, merge.canonicalUserId],
     })
-    await tx.execute({
-      sql: `
-        INSERT INTO user_account_merge_receipts (
-          user_account_merge_id, source_user_id, canonical_user_id, completed_at, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?4)
-      `,
-      args: [merge.id, merge.sourceUserId, merge.canonicalUserId, now],
-    })
+    if (recordReceipt) {
+      await tx.execute({
+        sql: `
+          INSERT INTO user_account_merge_receipts (
+            user_account_merge_id, source_user_id, canonical_user_id, completed_at, created_at
+          ) VALUES (?1, ?2, ?3, ?4, ?4)
+        `,
+        args: [merge.id, merge.sourceUserId, merge.canonicalUserId, now],
+      })
+    }
     await tx.commit()
   } catch (error) {
     await tx.rollback().catch(() => undefined)
     throw error
+  }
+}
+
+export async function migrateShard(client: Client, merge: MergeRecord): Promise<void> {
+  const existing = await client.execute({
+    sql: `SELECT 1 FROM user_account_merge_receipts WHERE user_account_merge_id = ?1 LIMIT 1`,
+    args: [merge.id],
+  })
+  if (existing.rows.length > 0) return
+  await migrateShardData(client, merge, true)
+}
+
+export async function shardHasMigratableSourceRows(client: Client, sourceUserId: string): Promise<boolean> {
+  // These are seven concrete tables, not partitioned views. Keeping this as a
+  // small compound query bounds fleet round trips without approaching D1's
+  // compound-select limit that the merge preflight previously encountered.
+  const result = await client.execute({
+    sql: `
+      SELECT 1 FROM (
+        SELECT 1 FROM community_memberships WHERE user_id = ?1 AND status <> 'left'
+        UNION ALL SELECT 1 FROM song_study_review_state WHERE user_id = ?1
+        UNION ALL SELECT 1 FROM song_study_session WHERE user_id = ?1
+        UNION ALL SELECT 1 FROM song_study_attempt WHERE user_id = ?1
+        UNION ALL SELECT 1 FROM song_engagement_days WHERE user_id = ?1
+        UNION ALL SELECT 1 FROM song_streaks WHERE user_id = ?1
+        UNION ALL SELECT 1 FROM reward_qualification_outbox WHERE user_id = ?1
+      ) residuals
+      LIMIT 1
+    `,
+    args: [sourceUserId],
+  })
+  return result.rows.length > 0
+}
+
+export async function migrateShardResiduals(client: Client, merge: MergeRecord): Promise<void> {
+  if (!await shardHasMigratableSourceRows(client, merge.sourceUserId)) return
+  await migrateShardData(client, merge, false)
+  if (await shardHasMigratableSourceRows(client, merge.sourceUserId)) {
+    throw new Error(`Account merge ${merge.id} left migratable source rows in a shard`)
   }
 }
 
@@ -736,37 +771,49 @@ export async function mergeTelegramAccountIntoCanonical(input: {
   telegramUserId: string
 }): Promise<void> {
   const client = getControlPlaneClient(input.env)
-  const merge = await ensureMergeRecord({
+  let merge = await ensureMergeRecord({
     client,
     linkIntentId: input.linkIntentId,
     sourceUserId: input.sourceUserId,
     canonicalUserId: input.canonicalUserId,
   })
-  if (merge.status === "completed") return
-
-  const tx = await client.transaction("write")
-  try {
-    const blocked = await controlPlaneBlockReason(tx, merge.sourceUserId, merge.canonicalUserId)
-    await tx.rollback()
-    if (blocked) await markBlocked(client, merge, blocked)
-  } catch (error) {
-    await tx.rollback().catch(() => undefined)
-    throw error
-  }
-
   const repository = getCommunityRepository(input.env)
   const communityIds = (await repository.listActiveCommunities({ requireReadyRouting: true }))
     .map((community) => community.community_id)
 
-  // Complete a read-only fleet preflight before mutating any shard.
-  for (const communityId of communityIds) {
-    const db = await openCommunityWriteClient(input.env, repository, communityId)
+  if (merge.status === "migrating") {
+    const tx = await client.transaction("write")
     try {
-      const blocked = await shardBlockReason(db.client, merge.sourceUserId)
+      const blocked = await controlPlaneBlockReason(tx, merge.sourceUserId, merge.canonicalUserId)
+      await tx.rollback()
       if (blocked) await markBlocked(client, merge, blocked)
-    } finally {
-      await db.close()
+    } catch (error) {
+      await tx.rollback().catch(() => undefined)
+      throw error
     }
+
+    // Complete a read-only fleet preflight before making the source identity
+    // irreversible. Once `finalizing` is committed, authentication resolves
+    // the source to the canonical account and failures must resume, not block.
+    for (const communityId of communityIds) {
+      const db = await openCommunityWriteClient(input.env, repository, communityId)
+      try {
+        const blocked = await shardBlockReason(db.client, merge.sourceUserId)
+        if (blocked) await markBlocked(client, merge, blocked)
+      } finally {
+        await db.close()
+      }
+    }
+    const fencedAt = nowIso()
+    await client.execute({
+      sql: `
+        UPDATE user_account_merges
+        SET status = 'finalizing', updated_at = ?2
+        WHERE user_account_merge_id = ?1 AND status = 'migrating'
+      `,
+      args: [merge.id, fencedAt],
+    })
+    merge = { ...merge, status: "finalizing" }
   }
 
   const now = nowIso()
@@ -814,6 +861,32 @@ export async function mergeTelegramAccountIntoCanonical(input: {
         args: [merge.id, communityId, error instanceof Error ? error.message.slice(0, 200) : "unknown", nowIso()],
       })
       throw error
+    } finally {
+      await db.close()
+    }
+  }
+
+  // Receipts deliberately suppress the original migration on replay. A
+  // distinct residual pass captures requests that authenticated immediately
+  // before the fence and wrote after their shard's first pass.
+  for (const communityId of communityIds) {
+    const db = await openCommunityWriteClient(input.env, repository, communityId)
+    try {
+      await migrateShardResiduals(db.client, merge)
+    } finally {
+      await db.close()
+    }
+  }
+
+  // Keep completion structurally impossible while any mutable source-owned
+  // row remains. This is separate from the migration pass so a faulty no-op
+  // residual implementation cannot certify itself.
+  for (const communityId of communityIds) {
+    const db = await openCommunityWriteClient(input.env, repository, communityId)
+    try {
+      if (await shardHasMigratableSourceRows(db.client, merge.sourceUserId)) {
+        throw new Error(`Account merge ${merge.id} cannot complete with migratable source rows`)
+      }
     } finally {
       await db.close()
     }

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { app } from "../../src/index"
 import { mintPirateAccessToken } from "../../src/lib/auth/pirate-session-token"
+import { authenticateUserToken } from "../../src/lib/auth-middleware"
 import { getSessionRepository } from "../../src/lib/auth/repositories"
 import { openCommunityWriteClient } from "../../src/lib/communities/community-read-access"
 import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
 import { mergeTelegramAccountIntoCanonical } from "../../src/lib/telegram/account-merge-service"
+import { resolveTelegramAccount } from "../../src/lib/telegram/join-request-service"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
 import { exchangeJwt } from "./communities/community-routes-test-helpers"
 
@@ -131,7 +133,7 @@ async function createMergeFixture(input: {
     })
   }
 
-  async function consumeLink(): Promise<{ linkIntentId: string }> {
+  async function createLinkIntent(): Promise<{ linkIntentId: string; linkToken: string }> {
     const created = await post(
       "http://pirate.test/users/me/telegram-account-link-intents",
       { community_id: communityId },
@@ -146,6 +148,14 @@ async function createMergeFixture(input: {
       sql: `SELECT link_intent_id FROM telegram_account_link_intents WHERE token_hash IS NOT NULL AND source_user_id = ?1`,
       args: [sourceUserId],
     })
+    return {
+      linkIntentId: String(intent.rows[0]?.link_intent_id),
+      linkToken: String(linkToken),
+    }
+  }
+
+  async function consumeLink(): Promise<{ linkIntentId: string }> {
+    const { linkIntentId, linkToken } = await createLinkIntent()
     const consumed = await post(
       "http://pirate.test/users/me/telegram-account-link-intents/consume",
       { token: linkToken },
@@ -154,7 +164,7 @@ async function createMergeFixture(input: {
     )
     expect(consumed.status).toBe(200)
     expect(await json(consumed)).toEqual({ linked: true })
-    return { linkIntentId: String(intent.rows[0]?.link_intent_id) }
+    return { linkIntentId }
   }
 
   return {
@@ -166,6 +176,7 @@ async function createMergeFixture(input: {
     providerSubject: input.telegramUserId,
     telegramUserId: input.telegramUserId,
     shard: shardHandle.client,
+    createLinkIntent,
     consumeLink,
   }
 }
@@ -823,6 +834,10 @@ describe("Telegram account linking", () => {
       wallets: [],
     })
     expect(telegramResolution.user.id.replace(/^usr_/, "")).toBe(canonicalUserId)
+    expect((await authenticateUserToken({
+      env: fixture.ctx.env,
+      token: fixture.sourceToken,
+    })).userId).toBe(canonicalUserId)
 
     const shardStateBeforeReplay = await fixture.shard.execute({
       sql: `
@@ -881,5 +896,114 @@ describe("Telegram account linking", () => {
       args: [mergeId],
     })
     expect(Number(receiptsAfterReplay.rows[0]?.count)).toBe(1)
+  })
+
+  test("moves post-receipt source writes through the residual completion gate", async () => {
+    const postId = "pst_residual_history"
+    const fixture = await createMergeFixture({
+      tag: "residual_history",
+      telegramUserId: "727272",
+      postIds: [postId],
+    })
+    const canonicalUserId = fixture.target.userId
+    const sourceUserId = fixture.sourceUserId
+    const { linkIntentId } = await fixture.consumeLink()
+    const merge = await fixture.ctx.client.execute({
+      sql: `SELECT user_account_merge_id FROM user_account_merges WHERE source_user_id = ?1`,
+      args: [sourceUserId],
+    })
+    const mergeId = String(merge.rows[0]?.user_account_merge_id)
+
+    await fixture.shard.execute({
+      sql: `
+        INSERT INTO song_study_attempt (
+          id, user_id, post_id, exercise_id, line_id, exercise_type,
+          target_language, study_pack_version, attempt_number, idempotency_key,
+          outcome, created_at
+        ) VALUES (
+          'ssa_residual_merge', ?1, ?2, 'exercise_residual', 'line_residual',
+          'translation_choice', 'es', 1, 1, 'late-source-attempt', 'correct',
+          '2026-08-09T14:49:49.000Z'
+        )
+      `,
+      args: [sourceUserId, postId],
+    })
+
+    await mergeTelegramAccountIntoCanonical({
+      env: fixture.ctx.env,
+      linkIntentId,
+      sourceUserId,
+      canonicalUserId,
+      providerSubject: fixture.providerSubject,
+      telegramUserId: fixture.telegramUserId,
+    })
+
+    const attempts = await fixture.shard.execute({
+      sql: `SELECT user_id, idempotency_key FROM song_study_attempt WHERE id = 'ssa_residual_merge'`,
+    })
+    expect(attempts.rows).toEqual([expect.objectContaining({
+      user_id: canonicalUserId,
+      idempotency_key: `merge:${mergeId}:ssa_residual_merge`,
+    })])
+    const receipts = await fixture.shard.execute({
+      sql: `SELECT COUNT(*) AS count FROM user_account_merge_receipts WHERE user_account_merge_id = ?1`,
+      args: [mergeId],
+    })
+    expect(Number(receipts.rows[0]?.count)).toBe(1)
+  })
+
+  test("redirects old source tokens only after the irreversible fence", async () => {
+    const fixture = await createMergeFixture({
+      tag: "write_fence",
+      telegramUserId: "737373",
+      postIds: [],
+    })
+    const { linkIntentId } = await fixture.createLinkIntent()
+    const mergeId = "uam_write_fence"
+    const now = "2026-08-09T11:29:00.000Z"
+    await fixture.ctx.client.execute({
+      sql: `
+        INSERT INTO user_account_merges (
+          user_account_merge_id, source_user_id, canonical_user_id, link_intent_id,
+          status, attempt_count, started_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, 'migrating', 1, ?5, ?5, ?5)
+      `,
+      args: [mergeId, fixture.sourceUserId, fixture.target.userId, linkIntentId, now],
+    })
+
+    expect((await authenticateUserToken({
+      env: fixture.ctx.env,
+      token: fixture.sourceToken,
+    })).userId).toBe(fixture.sourceUserId)
+
+    await fixture.ctx.client.execute({
+      sql: `
+        UPDATE user_account_merges
+        SET status = 'blocked', block_reason = 'authored_content', updated_at = ?2
+        WHERE user_account_merge_id = ?1
+      `,
+      args: [mergeId, now],
+    })
+    expect((await authenticateUserToken({
+      env: fixture.ctx.env,
+      token: fixture.sourceToken,
+    })).userId).toBe(fixture.sourceUserId)
+
+    await fixture.ctx.client.execute({
+      sql: `
+        UPDATE user_account_merges
+        SET status = 'finalizing', block_reason = NULL, updated_at = ?2
+        WHERE user_account_merge_id = ?1
+      `,
+      args: [mergeId, now],
+    })
+    expect((await authenticateUserToken({
+      env: fixture.ctx.env,
+      token: fixture.sourceToken,
+    })).userId).toBe(fixture.target.userId)
+    expect((await resolveTelegramAccount({
+      env: fixture.ctx.env,
+      telegramUserId: fixture.telegramUserId,
+    }))?.userId).toBe(fixture.target.userId)
   })
 })
