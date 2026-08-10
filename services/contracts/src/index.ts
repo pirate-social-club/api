@@ -777,6 +777,8 @@ export type Community = {
   description?: string | null;
   avatar_ref?: string | null;
   banner_ref?: string | null;
+  branding: CommunityBranding;
+  default_surface: "threads" | "videos";
   namespace_verification?: string | null;
   route_slug?: string | null;
   pending_namespace_verification_session?: string | null;

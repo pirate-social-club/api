@@ -826,6 +826,8 @@ export type Community = {
   description?: string | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  branding_json?: string
+  default_surface?: "threads" | "videos"
   store_url?: string | null
   store_label?: string | null
   country_code?: string | null

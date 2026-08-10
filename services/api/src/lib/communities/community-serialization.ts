@@ -363,6 +363,8 @@ export function serializeCommunity(env: Env, row: CommunityRow, local: LocalComm
       displayName,
       bannerRef: local?.banner_ref,
     }),
+    branding_json: row.branding_json,
+    default_surface: row.default_surface,
     store_url: store.store_url,
     store_label: store.store_label,
     country_code: countryCode,
