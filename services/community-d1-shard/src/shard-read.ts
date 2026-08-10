@@ -357,7 +357,10 @@ export async function runShardBulkRead(
   env: ShardEnv,
   input: ShardBulkReadRequest,
 ): Promise<ShardBulkReadResponse> {
-  const operations = await Promise.all(input.operations.map(async (operation) => {
+  const operations: ShardBulkReadResponse["operations"] = []
+  for (let offset = 0; offset < input.operations.length; offset += 8) {
+    const batch = input.operations.slice(offset, offset + 8)
+    operations.push(...await Promise.all(batch.map(async (operation) => {
     try {
       return { communityId: operation.communityId, result: await runShardBatch(env, operation) }
     } catch (error) {
@@ -394,7 +397,8 @@ export async function runShardBulkRead(
       }
       return { communityId: operation.communityId, result: { ok: true as const, value: values } }
     }
-  }))
+    })))
+  }
   return { operations }
 }
 
@@ -432,10 +436,14 @@ export async function runShardBulkWrite(
   env: ShardEnv,
   input: ShardBulkWriteRequest,
 ): Promise<ShardBulkWriteResponse> {
-  const operations = await Promise.all(input.operations.map(async (operation) => ({
-    communityId: operation.communityId,
-    result: await runShardWrite(env, operation),
-  })))
+  const operations: ShardBulkWriteResponse["operations"] = []
+  for (let offset = 0; offset < input.operations.length; offset += 8) {
+    const batch = input.operations.slice(offset, offset + 8)
+    operations.push(...await Promise.all(batch.map(async (operation) => ({
+      communityId: operation.communityId,
+      result: await runShardWrite(env, operation),
+    }))))
+  }
   return { operations }
 }
 
