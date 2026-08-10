@@ -11,6 +11,7 @@ import {
 } from "../auth/auth-db-community-queries"
 import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
 import type { Post } from "../../types"
+import { syncPublicSongArtifactGrantsForProjection } from "../song-artifacts/public-song-artifact-grant-repository"
 
 export async function recordCommunityPostProjection(
   client: Client,
@@ -30,7 +31,7 @@ export async function recordCommunityPostProjection(
 ): Promise<CommunityPostProjectionRow> {
   const projectionId = makeId("cpp")
 
-  return await withTransaction(client, "write", async (tx) => {
+  const projection = await withTransaction(client, "write", async (tx) => {
     await tx.batch([
       {
         sql: `
@@ -72,13 +73,15 @@ export async function recordCommunityPostProjection(
       }),
     ])
 
-    const projection = await getCommunityPostProjectionRowByPostId(tx, input.sourcePostId)
-    if (!projection) {
+    const inserted = await getCommunityPostProjectionRowByPostId(tx, input.sourcePostId)
+    if (!inserted) {
       throw internalError("Community post projection is missing after insert")
     }
 
-    return projection
+    return inserted
   })
+  await syncPublicSongArtifactGrantsForProjection(client, projection)
+  return projection
 }
 
 export async function updateCommunityPostProjectionStatus(
@@ -95,6 +98,8 @@ export async function updateCommunityPostProjectionStatus(
     status: input.status,
     updatedAt: input.updatedAt,
   })
+  const projection = await getCommunityPostProjectionRowByPostId(client, input.postId)
+  if (projection) await syncPublicSongArtifactGrantsForProjection(client, projection)
 }
 
 export async function updateCommunityPostProjectionPayload(
@@ -111,6 +116,8 @@ export async function updateCommunityPostProjectionPayload(
     projectedPayloadJson: input.projectedPayloadJson,
     updatedAt: input.updatedAt,
   })
+  const projection = await getCommunityPostProjectionRowByPostId(client, input.postId)
+  if (projection) await syncPublicSongArtifactGrantsForProjection(client, projection)
 }
 
 export async function updateCommunityPostProjectionMetrics(

@@ -33,6 +33,10 @@ import {
 import type { CommunityRow } from "../lib/auth/auth-db-rows"
 import { buildCommunityActionMatrix } from "../lib/communities/community-capabilities"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
+import {
+  HOME_FEED_SERVER_TIMING,
+  listPublicCommunityVideoFeed,
+} from "../lib/feed/home-feed-service"
 import { fetchPublishedPublicSongArtifactContent } from "../lib/song-artifacts/song-artifact-upload-service"
 import {
   decodePublicAssetId,
@@ -66,6 +70,8 @@ import { serializeLocalizedPostResponse } from "../serializers/post"
 import type { Env } from "../env"
 import type { CommunityPreview, CommunityPurchaseQuoteRequest } from "../types"
 import { setPublicReadCacheHeaders } from "./cache-headers"
+import { getWaitUntil } from "./execution-context"
+import { communityPresentationFromRow } from "../lib/communities/community-presentation"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
 const PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS = 3000
@@ -111,6 +117,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
 }
 
 function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
+  const presentation = communityPresentationFromRow(community)
   return {
     community_id: community.community_id,
     namespace_verification_id: community.namespace_verification_id,
@@ -120,6 +127,9 @@ function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
     localized_text: null,
     avatar_ref: community.avatar_ref,
     banner_ref: community.banner_ref,
+    branding: presentation.branding,
+    default_surface: presentation.default_surface,
+    video_feed_enabled: presentation.video_feed_enabled,
     membership_mode: "gated",
     // NOTE: karaoke_enabled is not carried on the control-plane CommunityRow — it
     // lives only in the per-community DB. This fallback is used ONLY when the full
@@ -785,6 +795,49 @@ publicCommunities.get("/:communityId/posts", async (c) => {
   })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
+})
+
+publicCommunities.get("/:communityId/feed/videos", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const community = await resolveCommunityRow(communityRepository, c.req.param("communityId"))
+  if (!community.video_feed_enabled) {
+    throw structuredSurfaceDisabled("The video feed is not available for structured access", {
+      community: publicCommunityId(community.community_id),
+      surface: "video_feed",
+      reason: "community_opt_out",
+    })
+  }
+
+  const result = await listPublicCommunityVideoFeed({
+    communityId: community.community_id,
+    communityRepository,
+    cursor: c.req.query("cursor"),
+    env: c.env,
+    locale: c.req.query("locale"),
+    profileRepository: getProfileRepository(c.env),
+    sort: c.req.query("sort"),
+    timeRange: c.req.query("time_range"),
+    waitUntil: getWaitUntil(c),
+  })
+  const serverTiming = result[HOME_FEED_SERVER_TIMING]
+  if (serverTiming) {
+    c.header("Server-Timing", serverTiming)
+  }
+  if (result.items.length === 0) {
+    c.header("Cache-Control", "no-store")
+    c.header("CDN-Cache-Control", "no-store")
+  } else {
+    setPublicReadCacheHeaders(c, {
+      cacheTags: [
+        `community:${publicCommunityId(community.community_id)}`,
+        ...result.items.flatMap((item) => [
+          `community:${item.post.post.community}`,
+          `post:${item.post.post.id}`,
+        ]),
+      ],
+    })
+  }
+  return c.json(result, 200)
 })
 
 publicCommunities.get("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {

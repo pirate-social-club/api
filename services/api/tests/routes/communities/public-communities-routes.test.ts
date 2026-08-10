@@ -18,6 +18,59 @@ afterEach(async () => {
 })
 
 describe("public community routes", () => {
+  test("serves a viewer-neutral community video feed and honors its surface policy", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "public-community-video-feed-owner")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Video Feed Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const communityId = ((await json(create)) as { community: { id: string } }).community.id
+
+    const response = await app.request(
+      `http://pirate.test/public-communities/${communityId}/feed/videos?sort=best`,
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("cdn-cache-control")).toBe("no-store")
+    expect(response.headers.get("cache-tag")).toBeNull()
+    expect(response.headers.get("server-timing")).toContain("home-feed;dur=")
+    expect(response.headers.get("vary")).toBeNull()
+    expect(await json(response)).toEqual({
+      items: [],
+      top_communities: [],
+      next_cursor: null,
+    })
+
+    const disable = await requestJson(
+      `http://pirate.test/communities/${communityId}/presentation`,
+      { video_feed_enabled: false },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(disable.status).toBe(200)
+
+    const disabled = await app.request(
+      `http://pirate.test/public-communities/${communityId}/feed/videos`,
+      {},
+      ctx.env,
+    )
+    expect(disabled.status).toBe(403)
+    expect(await json(disabled)).toMatchObject({
+      code: "structured_surface_disabled",
+      details: {
+        community: communityId,
+        reason: "community_opt_out",
+        surface: "video_feed",
+      },
+    })
+  })
+
   test("returns not found for a punycode handle missing the @ prefix", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup

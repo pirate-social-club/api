@@ -685,10 +685,12 @@ jobs:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
           BOOKINGS_PG_CI_REQUIRED: "true"
+          PUBLIC_ARTIFACT_GRANT_PG_CI_REQUIRED: "true"
           BOOKINGS_PG_SENTINEL_PATH: "/tmp/host-config-repository-production-path-pg-suite-complete"
         run: |
           rm -f "$BOOKINGS_PG_SENTINEL_PATH"
           bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
+          bun test src/lib/song-artifacts/public-song-artifact-grant-repository.pg.test.ts
           test "$(cat "$BOOKINGS_PG_SENTINEL_PATH")" = "host-config-repository-production-path-postgres-suite-complete"
 
       - name: Run API coverage report

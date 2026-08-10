@@ -601,6 +601,8 @@ export async function getCommunityControlPlaneState(
   env: Env,
   communityId: string,
 ): Promise<{
+  brandingJson: string | null
+  defaultSurface: string | null
   namespaceVerificationId: string | null
   routeSlug: string | null
   status: string | null
@@ -612,7 +614,7 @@ export async function getCommunityControlPlaneState(
   try {
     const communityResult = await client.execute({
       sql: `
-        SELECT namespace_verification_id, route_slug, status
+        SELECT branding_json, default_surface, namespace_verification_id, route_slug, status
         FROM communities
         WHERE community_id = ?1
         LIMIT 1
@@ -621,6 +623,12 @@ export async function getCommunityControlPlaneState(
     })
 
     return {
+      brandingJson: communityResult.rows[0]?.branding_json == null
+        ? null
+        : String(communityResult.rows[0]?.branding_json),
+      defaultSurface: communityResult.rows[0]?.default_surface == null
+        ? null
+        : String(communityResult.rows[0]?.default_surface),
       namespaceVerificationId: communityResult.rows[0]?.namespace_verification_id == null
         ? null
         : String(communityResult.rows[0]?.namespace_verification_id),

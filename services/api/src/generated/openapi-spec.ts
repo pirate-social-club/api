@@ -2884,6 +2884,56 @@ const spec = {
         "operationId": "post_communities_by_community_id_pricing_policy"
       }
     },
+    "/communities/{community_id}/presentation": {
+      "post": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "Update community presentation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityPresentationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPresentation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "post_communities_by_community_id_presentation"
+      }
+    },
     "/communities/{community_id}/listings": {
       "get": {
         "tags": [
@@ -8737,6 +8787,90 @@ const spec = {
         "operationId": "get_public_communities_by_community_id_posts"
       }
     },
+    "/public-communities/{community_id}/feed/videos": {
+      "get": {
+        "tags": [
+          "Communities",
+          "Feed"
+        ],
+        "x-implemented": true,
+        "security": [],
+        "summary": "List a public community video feed",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "best",
+                "top",
+                "new"
+              ],
+              "default": "best"
+            }
+          },
+          {
+            "name": "time_range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hour",
+                "day",
+                "week",
+                "month",
+                "year",
+                "all"
+              ],
+              "default": "all"
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeFeedResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_public_communities_by_community_id_feed_videos"
+      }
+    },
     "/public-posts/{post_id}": {
       "get": {
         "tags": [
@@ -12025,6 +12159,19 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
+          },
           "namespace_verification": {
             "type": "string",
             "nullable": true
@@ -12654,6 +12801,67 @@ const spec = {
           "source_template_version": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "CommunityPresentationPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBrandingPatch"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityPresentation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "object",
+          "community",
+          "branding",
+          "default_surface",
+          "video_feed_enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_presentation"
+            ]
+          },
+          "community": {
+            "type": "string",
+            "readOnly": true
+          },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -13768,6 +13976,19 @@ const spec = {
           "banner_ref": {
             "type": "string",
             "nullable": true
+          },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           },
           "store_url": {
             "type": "string",
@@ -20092,6 +20313,44 @@ const spec = {
           }
         ]
       },
+      "CommunityBranding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accent_color",
+          "theme",
+          "header_style",
+          "tagline"
+        ],
+        "properties": {
+          "accent_color": {
+            "type": "string",
+            "pattern": "^#[0-9A-F]{6}$",
+            "nullable": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "header_style": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "compact",
+              "immersive"
+            ]
+          },
+          "tagline": {
+            "type": "string",
+            "maxLength": 120,
+            "nullable": true
+          }
+        }
+      },
       "HumanVerificationLane": {
         "type": "string",
         "enum": [
@@ -21153,6 +21412,38 @@ const spec = {
           }
         }
       },
+      "CommunityBrandingPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accent_color": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "nullable": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "header_style": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "compact",
+              "immersive"
+            ]
+          },
+          "tagline": {
+            "type": "string",
+            "maxLength": 120,
+            "nullable": true
+          }
+        }
+      },
       "CommunityPurchaseSettlementMode": {
         "type": "string",
         "enum": [
@@ -22121,6 +22412,19 @@ const spec = {
           "avatar_ref": {
             "type": "string",
             "nullable": true
+          },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           },
           "member_count": {
             "type": "integer",

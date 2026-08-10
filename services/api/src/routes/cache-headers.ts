@@ -87,6 +87,7 @@ function publicReadVaryHeaders(request: Request): string[] {
     url.pathname === "/feed/home"
     || url.pathname === "/feed/home/public"
     || url.pathname === "/feed/home/videos/public"
+    || /^\/public-communities\/[^/]+\/feed\/videos$/u.test(url.pathname)
   ) {
     return []
   }

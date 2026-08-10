@@ -83,6 +83,7 @@ describe("community routes", () => {
       included_surfaces: {
         community_identity: boolean
         community_stats: boolean
+        video_feed: boolean
         thread_cards: boolean
         thread_bodies: boolean
         top_comments: boolean
@@ -166,6 +167,89 @@ describe("community routes", () => {
     expect(persistedPolicy.policy_origin).toBe("explicit")
     expect(persistedPolicy.included_surfaces.community_stats).toBe(false)
     expect(persistedPolicy.included_surfaces.top_comments).toBe(false)
+  })
+
+  test("community owners configure presentation and disabling video resets the default surface", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-presentation-owner")
+    const created = await requestJson("http://pirate.test/communities", {
+      display_name: "Sovereign Video Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(created.status).toBe(202)
+    const createdBody = await json(created) as { community: { id: string } }
+    const communityId = createdBody.community.id.replace(/^com_/, "")
+
+    const updated = await requestJson(
+      `http://pirate.test/communities/${communityId}/presentation`,
+      {
+        branding: {
+          accent_color: "#767676",
+          header_style: "immersive",
+          tagline: "Video from this community.",
+          theme: "system",
+        },
+        default_surface: "videos",
+      },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(updated.status).toBe(200)
+    expect(await json(updated)).toMatchObject({
+      community: `com_${communityId}`,
+      object: "community_presentation",
+      default_surface: "videos",
+      branding: {
+        accent_color: "#767676",
+        header_style: "immersive",
+        tagline: "Video from this community.",
+        theme: "system",
+      },
+    })
+
+    const publicCommunity = await app.request(
+      `http://pirate.test/public-communities/${communityId}`,
+      {},
+      ctx.env,
+    )
+    expect(publicCommunity.status).toBe(200)
+    expect(await json(publicCommunity)).toMatchObject({
+      default_surface: "videos",
+      branding: { accent_color: "#767676", header_style: "immersive" },
+    })
+
+    const disabled = await requestJson(
+      `http://pirate.test/communities/${communityId}/presentation`,
+      { video_feed_enabled: false },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(disabled.status).toBe(200)
+    expect(await json(disabled)).toMatchObject({
+      default_surface: "threads",
+      video_feed_enabled: false,
+    })
+
+    const stored = await getCommunityControlPlaneState(ctx.env, communityId)
+    expect(stored.defaultSurface).toBe("threads")
+    expect(JSON.parse(stored.brandingJson ?? "{}")).toMatchObject({
+      accent_color: "#767676",
+      header_style: "immersive",
+    })
+
+    const rejected = await requestJson(
+      `http://pirate.test/communities/${communityId}/presentation`,
+      { default_surface: "videos" },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(rejected.status).toBe(400)
+    expect(await json(rejected)).toMatchObject({
+      message: "default_surface cannot be videos while the video feed is disabled",
+    })
   })
 
   test("18_plus community create requires age verification but not unique_human", async () => {

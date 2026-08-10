@@ -58,6 +58,8 @@ export type Env = {
   OPS_ALERT_MEDIUM_BUCKET_MS?: string
   OPS_ALERT_LOW_BUCKET_MS?: string
   CLOUDFLARE_CACHE_PURGE_ZONE_ID?: string
+  /** Web delivery zone; presentation changes purge tagged SSR redirects here too. */
+  CLOUDFLARE_WEB_CACHE_PURGE_ZONE_ID?: string
   CLOUDFLARE_CACHE_PURGE_API_TOKEN?: string
   CLOUDFLARE_ZONE_ID?: string
   CLOUDFLARE_API_TOKEN?: string

@@ -3,6 +3,7 @@ import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, Co
 import {
   filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
+  homeFeedCorpusMemberCommunityIds,
   listHomeFeedCommunityViewCounts,
   mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
@@ -20,6 +21,7 @@ import {
   withHomeFeedCommunityIdentity,
 } from "./home-feed-service"
 import type { Env, HomeFeedItem } from "../../types"
+import { SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY } from "./video-feed-selection"
 
 describe("refreshMaterializedHomeFeedBookings", () => {
   test("replaces cached booking decoration and clears hosts no longer discoverable", async () => {
@@ -215,6 +217,33 @@ describe("best video candidate selection", () => {
     expect(second.hasMore).toBe(false)
   })
 
+  test("keeps cursor continuity for a sovereign feed with one creator", () => {
+    const candidates = Array.from({ length: 12 }, (_, index) => videoCandidateRow({
+      authorUserId: "usr_only_creator",
+      communityId: "cmt_sovereign",
+      postId: `pst_sovereign_${String(index).padStart(2, "0")}`,
+      upvotes: 12 - index,
+    }))
+    const first = selectBestVideoFeedProjectionPage({
+      cursor: { offset: 0, rankedAt },
+      pageSize: 6,
+      rows: candidates,
+      selectionPolicy: SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY,
+    })
+    const second = selectBestVideoFeedProjectionPage({
+      cursor: { offset: first.nextOffset, rankedAt },
+      pageSize: 6,
+      priorRows: first.rows,
+      rows: candidates,
+      selectionPolicy: SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY,
+    })
+    const firstIds = new Set(first.rows.map((row) => row.source_post_id))
+    expect(first.rows).toHaveLength(6)
+    expect(second.rows).toHaveLength(6)
+    expect(second.rows.every((row) => !firstIds.has(row.source_post_id))).toBe(true)
+    expect(second.hasMore).toBe(false)
+  })
+
   test("does not discard candidates deferred into a later diversity-policy page", () => {
     const candidates = [
       ...Array.from({ length: 6 }, (_, index) => videoCandidateRow({
@@ -328,6 +357,9 @@ function createCommunityRow(input: {
     description: null,
     avatar_ref: null,
     banner_ref: null,
+    branding_json: "{}",
+    default_surface: "threads",
+    video_feed_enabled: true,
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",
@@ -375,6 +407,22 @@ function createFollowRow(input: {
 }
 
 describe("resolveHomeFeedCommunityIds", () => {
+  test("uses a service-owned scope in production and filters inactive ids", () => {
+    const activeCommunities = [
+      createCommunityRow({ communityId: "cmt_scoped", creatorUserId: "usr_owner" }),
+      createCommunityRow({ communityId: "cmt_other", creatorUserId: "usr_owner" }),
+    ]
+    expect(resolveHomeFeedCandidateCommunityIds({
+      activeCommunities,
+      allowOverride: false,
+      followRows: [],
+      membershipRows: [],
+      override: ["cmt_other"],
+      scope: ["cmt_scoped", "cmt_missing", "cmt_scoped"],
+      userId: null,
+    })).toEqual(["cmt_scoped"])
+  })
+
   test("uses the explicit operator scope without leaking duplicate community reads", () => {
     expect(resolveHomeFeedCandidateCommunityIds({
       activeCommunities: [],
@@ -556,6 +604,14 @@ describe("filterVisibleHomeFeedProjections", () => {
   })
 })
 
+describe("homeFeedCorpusMemberCommunityIds", () => {
+  test("removes membership from corpus selection for viewer-aware public feeds", () => {
+    const memberships = new Set(["cmt_member"])
+    expect(homeFeedCorpusMemberCommunityIds(memberships, true)).toEqual(new Set())
+    expect(homeFeedCorpusMemberCommunityIds(memberships, false)).toBe(memberships)
+  })
+})
+
 describe("sortHomeFeedProjectionRows", () => {
   const now = Date.parse("2026-04-18T12:00:00.000Z")
 
@@ -638,6 +694,14 @@ function createCommunitySummary(input: {
     display_name: input.displayName ?? input.communityId,
     route_slug: input.communityId,
     avatar_ref: null,
+    branding: {
+      accent_color: null,
+      header_style: "standard",
+      tagline: null,
+      theme: "system",
+    },
+    default_surface: "threads",
+    video_feed_enabled: true,
     member_count: null,
     follower_count: null,
     view_count: input.viewCount ?? null,
