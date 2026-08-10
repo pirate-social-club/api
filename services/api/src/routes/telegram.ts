@@ -45,6 +45,7 @@ import { joinCommunity } from "../lib/communities/membership/request-service"
 import { sendCommunityAssistantTelegramDirectMessage } from "../lib/communities/assistant-policy/chat-service"
 import { answerTelegramGroupAssistantPrompt, telegramText } from "../lib/telegram/assistant-service"
 import { getProfileRepository, getSessionRepository, getUserRepository } from "../lib/auth/repositories"
+import { resolveCanonicalUserId } from "../lib/auth/account-alias-service"
 import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import {
   configuredTelegramInitDataMaxAgeSeconds,
@@ -1504,7 +1505,10 @@ telegram.post("/session/auto-exchange", async (c) => {
     selectedWallet: null,
     wallets: [],
   })
-  const userId = session.user.id.replace(/^usr_/, "")
+  const userId = await resolveCanonicalUserId({
+    env: c.env,
+    userId: session.user.id.replace(/^usr_/, ""),
+  })
 
   await syncTelegramAccountForUser({
     env: c.env,
@@ -1545,8 +1549,9 @@ telegram.post("/session/auto-exchange", async (c) => {
   })
 
   return c.json({
-    access_token: accessToken,
     ...session,
+    access_token: accessToken,
+    user: { ...session.user, id: `usr_${userId}` },
     profile: syncedProfile ?? session.profile,
     community: publicCommunityId(communityId),
     eligibility,

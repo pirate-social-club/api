@@ -4,6 +4,7 @@ import { authError, eligibilityFailed } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
 import { getUserRepository } from "./auth/repositories"
 import { DEFAULT_PIRATE_APP_SCOPE, verifyPirateAccessToken } from "./auth/pirate-session-token"
+import { resolveCanonicalUserId } from "./auth/account-alias-service"
 import type { Env } from "../env"
 
 export type ActorContext = {
@@ -43,9 +44,10 @@ export async function authenticateUserToken(input: {
   if (!user) {
     throw authError("Authentication failed")
   }
+  const userId = await resolveCanonicalUserId({ env: input.env, userId: session.userId })
 
   return {
-    userId: session.userId,
+    userId,
     authType: session.scope === DEFAULT_PIRATE_APP_SCOPE ? "user" : "device",
     scope: session.scope,
   }
@@ -58,8 +60,9 @@ async function authenticateAgentDelegatedToken(input: {
   const session = await getControlPlaneAgentOwnershipRepository(input.env).verifyAgentDelegatedAccessToken({
     accessToken: input.token,
   })
+  const userId = await resolveCanonicalUserId({ env: input.env, userId: session.userId })
   return {
-    userId: session.userId,
+    userId,
     authType: "agent_delegated",
     delegatedAgentId: session.agentId,
     delegatedCredentialOwnershipRecordId: session.currentOwnershipRecordId,

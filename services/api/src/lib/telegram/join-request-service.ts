@@ -7,6 +7,7 @@ import { badRequestError, conflictError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { publicCommunityId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
+import { resolveCanonicalUserId } from "../auth/account-alias-service"
 import type { Client } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { getTelegramLinkedChatBotContext } from "./community-chat-service"
@@ -139,7 +140,7 @@ export async function resolveTelegramAccount(input: {
   })
   const accountUserId = stringOrNull(rowValue(account.rows[0], "user_id"))
   if (accountUserId) {
-    return { userId: accountUserId }
+    return { userId: await resolveCanonicalUserId({ env: input.env, userId: accountUserId }) }
   }
 
   const link = await client.execute({
@@ -162,7 +163,7 @@ export async function resolveTelegramAccount(input: {
       telegramUserId: input.telegramUserId,
       userId: linkedUserId,
     })
-    return { userId: linkedUserId }
+    return { userId: await resolveCanonicalUserId({ env: input.env, userId: linkedUserId }) }
   }
 
   const setupOwner = await client.execute({
@@ -183,13 +184,17 @@ export async function resolveTelegramAccount(input: {
   if (!setupOwnerUserId) {
     return null
   }
+  const canonicalSetupOwnerUserId = await resolveCanonicalUserId({
+    env: input.env,
+    userId: setupOwnerUserId,
+  })
 
   await upsertResolvedTelegramAccount({
     client,
     telegramUserId: input.telegramUserId,
-    userId: setupOwnerUserId,
+    userId: canonicalSetupOwnerUserId,
   })
-  return { userId: setupOwnerUserId }
+  return { userId: canonicalSetupOwnerUserId }
 }
 
 export async function syncTelegramAccountForUser(input: {
