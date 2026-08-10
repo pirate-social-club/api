@@ -546,7 +546,7 @@ export async function migrateShardResiduals(client: Client, merge: MergeRecord):
 // fleet. Keep the writes on each individual shard atomic, but overlap a small
 // bounded number of independent shard calls so an operator repair cannot hit
 // the Worker request wall while walking a large fleet sequentially.
-const RESIDUAL_SCAN_CONCURRENCY = 8
+const RESIDUAL_SCAN_CONCURRENCY = 32
 
 async function forEachCommunityBatch(
   communityIds: string[],
