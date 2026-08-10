@@ -1,7 +1,7 @@
 import type { CommunityPostProjectionRow } from "../auth/auth-db-rows"
 import type { Client } from "../sql-client"
 import { decodePublicCommunityId, decodePublicSongArtifactUploadId } from "../public-ids"
-import { rowValue } from "../sql-row"
+import { requiredString, rowValue } from "../sql-row"
 import { withTransaction } from "../transactions"
 
 const TRUSTED_ARTIFACT_HOST = /(?:^|\.)pirate(?:\.sc)?$/u
@@ -113,7 +113,7 @@ export async function hasPublicSongArtifactGrant(input: {
       args: [input.communityId, input.songArtifactUploadId],
     })
     return result.rows.some((row) => projectionCanGrantPublicArtifactAccess({
-      projected_payload_json: String(rowValue(row, "projected_payload_json") ?? ""),
+      projected_payload_json: requiredString(row, "projected_payload_json"),
       status: rowValue(row, "status") as CommunityPostProjectionRow["status"],
       visibility: rowValue(row, "visibility") as CommunityPostProjectionRow["visibility"],
     }))
