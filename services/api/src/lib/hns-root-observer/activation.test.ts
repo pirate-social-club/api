@@ -67,6 +67,11 @@ describe("activateHnsRootRouting", () => {
     expect(audit?.args).toContain("hns_root.routing_activate")
     expect(audit?.args).toContain("operator_hns")
     expect(client.committed).toBe(true)
+    const activationWrite = client.statements.find((statement) => (
+      statement.sql.includes("UPDATE hns_root_delegation_state")
+    ))
+    expect(activationWrite?.sql).toContain("COALESCE(canonical_routing_eligible, 0) = 0")
+    expect(activationWrite?.sql).toContain("COALESCE(routing_hard_denied, 0) = 0")
   })
 
   test("fails when any of the latest three attempts is unhealthy", async () => {
