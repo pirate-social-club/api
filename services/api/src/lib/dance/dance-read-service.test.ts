@@ -80,6 +80,32 @@ describe("dance read service", () => {
     expect(record).toBeNull()
   })
 
+  test("returns a cancelled attempt without requiring shard evidence", async () => {
+    let shardOpened = false
+    const record = await getDanceAttemptForUser({
+      env: {} as Env,
+      attemptId: "dat_1",
+      subjectUserId: "usr_1",
+      controlClient: controlClient(sessionRow({
+        status: "cancelled",
+        terminal_reason: "cancelled",
+        finalized_at: "2026-08-10T00:02:00.000Z",
+      })),
+      openCommunityRead: async () => {
+        shardOpened = true
+        throw new Error("must not open shard")
+      },
+    })
+
+    expect(shardOpened).toBe(false)
+    expect(record).toMatchObject({
+      status: "cancelled",
+      scoreBps: null,
+      rankEligible: null,
+      reason: "cancelled",
+    })
+  })
+
   test("reads bounded terminal evidence from the owning community shard", async () => {
     let closed = false
     const record = await getDanceAttemptForUser({

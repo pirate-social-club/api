@@ -26,7 +26,7 @@ async function claimCleanup(input: {
         SELECT dance_attempt_session_id, upload_object_key, cleanup_attempt_count
         FROM dance_attempt_sessions
         WHERE cleanup_status IN ('pending', 'retrying')
-          AND status IN ('finalized', 'rejected', 'failed', 'expired')
+          AND status IN ('finalized', 'rejected', 'failed', 'expired', 'cancelled')
           AND cleanup_next_attempt_at <= ?1
           AND cleanup_attempt_count < 20
         ORDER BY cleanup_next_attempt_at, created_at
@@ -61,8 +61,20 @@ export async function expireDanceAttemptSessions(input: {
     sql: `
       UPDATE dance_attempt_sessions
       SET status = 'expired', terminal_reason = 'session_expired',
-        finalized_at = ?1, cleanup_status = 'pending',
-        cleanup_next_attempt_at = ?1, updated_at = ?1
+        finalized_at = ?1,
+        cleanup_status = CASE
+          WHEN upload_object_key =
+            'dance/attempt-media/' || dance_attempt_session_id || '/pending.mp4'
+          THEN 'not_required'
+          ELSE 'pending'
+        END,
+        cleanup_next_attempt_at = CASE
+          WHEN upload_object_key =
+            'dance/attempt-media/' || dance_attempt_session_id || '/pending.mp4'
+          THEN NULL
+          ELSE ?1
+        END,
+        updated_at = ?1
       WHERE status IN ('initialized', 'uploading')
         AND expires_at <= ?1
     `,

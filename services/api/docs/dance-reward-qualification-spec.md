@@ -397,10 +397,12 @@ but must not see an earned-reward claim.
 
 ### Telegram media contract
 
-The hosted Bot API `getFile` limit is 20 MB. V1 rejects reported files at or above a conservative
-19 MB application limit before download and limits choreographies and attempts to 30 seconds. The
-limits are configurable downward, but raising either requires evidence that the hosted Bot API and
-grader budgets still hold. V1 does not operate a local Bot API server.
+The hosted Bot API `getFile` limit is 20 MB. Gate 0B will reject reported files at or above a
+conservative 19 MB application limit before download and limit choreographies and attempts to 30
+seconds. These limits are specified but not yet implemented: the current direct-upload path still
+allows 64 MiB and the grader contract still accepts longer input. Once implemented, the limits are
+configurable downward, but raising either requires evidence that the hosted Bot API and grader
+budgets still hold. V1 does not operate a local Bot API server.
 
 Both Telegram `video` and video `document` messages are accepted. `file_id` is used to download;
 `file_unique_id` and the observed media metadata are retained as bounded exact-replay signals.
@@ -1229,6 +1231,11 @@ input distribution.
 - scorer output is deterministic and versioned.
 
 ### Gate 0B: staff-only Telegram ingestion
+
+While the pilot surface is dark, disabling `DANCE_CAPTURE_ENABLED` also disables participant
+session/attempt reads and cancellation with a fail-closed 503. Internal grader callbacks remain
+available for already-dispatched work. Before broader launch, define and implement the client
+recovery policy for attempts that outlive a flag transition.
 
 - Python tests and lint run in CI for every grader change;
 - staging deployment is codified, version-tagged, configuration-checked, and rollback-documented;
