@@ -1490,7 +1490,7 @@ async function monitorScheduledRewardCampaigns(env: Env): Promise<void> {
   }
 }
 
-async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
+export async function reconcileScheduledRewardCampaigns(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   try {
     const namespace = env.SCHEDULED_CRON_LOCK as DurableObjectNamespace<ScheduledCronLockDO> | undefined
