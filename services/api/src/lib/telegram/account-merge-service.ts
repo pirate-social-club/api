@@ -542,6 +542,22 @@ export async function migrateShardResiduals(client: Client, merge: MergeRecord):
   }
 }
 
+// Residual repair and its completion gate are read-heavy scans over the whole
+// fleet. Keep the writes on each individual shard atomic, but overlap a small
+// bounded number of independent shard calls so an operator repair cannot hit
+// the Worker request wall while walking a large fleet sequentially.
+const RESIDUAL_SCAN_CONCURRENCY = 8
+
+async function forEachCommunityBatch(
+  communityIds: string[],
+  callback: (communityId: string) => Promise<void>,
+): Promise<void> {
+  for (let offset = 0; offset < communityIds.length; offset += RESIDUAL_SCAN_CONCURRENCY) {
+    const batch = communityIds.slice(offset, offset + RESIDUAL_SCAN_CONCURRENCY)
+    await Promise.all(batch.map(callback))
+  }
+}
+
 async function finalizeControlPlane(input: {
   client: Client
   merge: MergeRecord
@@ -869,19 +885,19 @@ export async function mergeTelegramAccountIntoCanonical(input: {
   // Receipts deliberately suppress the original migration on replay. A
   // distinct residual pass captures requests that authenticated immediately
   // before the fence and wrote after their shard's first pass.
-  for (const communityId of communityIds) {
+  await forEachCommunityBatch(communityIds, async (communityId) => {
     const db = await openCommunityWriteClient(input.env, repository, communityId)
     try {
       await migrateShardResiduals(db.client, merge)
     } finally {
       await db.close()
     }
-  }
+  })
 
   // Keep completion structurally impossible while any mutable source-owned
   // row remains. This is separate from the migration pass so a faulty no-op
   // residual implementation cannot certify itself.
-  for (const communityId of communityIds) {
+  await forEachCommunityBatch(communityIds, async (communityId) => {
     const db = await openCommunityWriteClient(input.env, repository, communityId)
     try {
       if (await shardHasMigratableSourceRows(db.client, merge.sourceUserId)) {
@@ -890,7 +906,7 @@ export async function mergeTelegramAccountIntoCanonical(input: {
     } finally {
       await db.close()
     }
-  }
+  })
 
   await finalizeControlPlane({
     client,
