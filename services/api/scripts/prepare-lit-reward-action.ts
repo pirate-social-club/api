@@ -128,11 +128,13 @@ async function verifyGateways(cid: string, expected: ReturnType<typeof metadata>
   const observations = []
   for (const gateway of GATEWAYS) {
     const startedAt = performance.now()
-    const response = await fetch(`${gateway}/${cid}`, { redirect: "error" })
+    const response = await fetch(`${gateway}/${cid}`, { redirect: "follow" })
+    if (!response.url.startsWith("https://")) throw new Error("gateway redirected outside HTTPS")
     const bytes = new Uint8Array(await response.arrayBuffer())
     const sha256 = createHash("sha256").update(bytes).digest("hex")
     const observation = {
       gateway,
+      final_url: response.url,
       status: response.status,
       byte_length: bytes.byteLength,
       sha256,
