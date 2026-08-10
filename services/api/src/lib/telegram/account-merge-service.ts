@@ -1,7 +1,7 @@
 import type { Env } from "../../env"
 import { codedConflictError } from "../errors"
 import { getCommunityRepository } from "../communities/db-community-repository"
-import { openCommunityWriteClient } from "../communities/community-read-access"
+import { bulkCommunityRead, bulkCommunityWrite, openCommunityWriteClient } from "../communities/community-read-access"
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Client, Transaction } from "../sql-client"
@@ -117,6 +117,43 @@ export async function shardBlockReason(client: Client, sourceUserId: string): Pr
     if (!/no such table:\s*(?:main\.)?bookings\b/iu.test(message)) throw error
   }
   return null
+}
+
+const BULK_BLOCK_CHECK_STATEMENTS = [
+  `SELECT 1 FROM community_roles WHERE user_id = ?1 AND status = 'active' AND role IN ('owner', 'admin', 'moderator') LIMIT 1`,
+  `SELECT 1 FROM communities WHERE created_by_user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM posts WHERE author_user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM comments WHERE author_user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM purchases WHERE buyer_user_id = ?1 LIMIT 1`,
+  `SELECT 1 FROM bookings WHERE host_user_id = ?1 OR booker_user_id = ?1 LIMIT 1`,
+]
+
+/** Fleet equivalent of shardBlockReason; one bulk RPC covers a shard Worker. */
+async function bulkShardBlockReasons(input: {
+  env: Env
+  repository: ReturnType<typeof getCommunityRepository>
+  communityIds: string[]
+  sourceUserId: string
+}): Promise<Map<string, AccountMergeBlockReason>> {
+  const rowsByCommunity = await bulkCommunityRead(
+    input.env,
+    input.repository,
+    input.communityIds.map((communityId) => ({
+      communityId,
+      statements: BULK_BLOCK_CHECK_STATEMENTS.map((sql) => ({ sql, args: [input.sourceUserId] })),
+      allowMissingTables: ["bookings"],
+    })),
+  )
+  const reasons = new Map<string, AccountMergeBlockReason>()
+  for (const communityId of input.communityIds) {
+    const results = rowsByCommunity.get(communityId) ?? []
+    const index = results.findIndex((result) => result.rows.length > 0)
+    if (index === 0 || index === 1) reasons.set(communityId, "community_authority")
+    else if (index === 2 || index === 3) reasons.set(communityId, "authored_content")
+    else if (index === 4) reasons.set(communityId, "purchase_activity")
+    else if (index === 5) reasons.set(communityId, "booking_activity")
+  }
+  return reasons
 }
 
 async function markBlocked(client: Client, merge: MergeRecord, reason: AccountMergeBlockReason): Promise<never> {
@@ -512,23 +549,25 @@ export async function migrateShard(client: Client, merge: MergeRecord): Promise<
   await migrateShardData(client, merge, true)
 }
 
+const MIGRATABLE_SOURCE_ROWS_SQL = `
+  SELECT 1 FROM (
+    SELECT 1 FROM community_memberships WHERE user_id = ?1 AND status <> 'left'
+    UNION ALL SELECT 1 FROM song_study_review_state WHERE user_id = ?1
+    UNION ALL SELECT 1 FROM song_study_session WHERE user_id = ?1
+    UNION ALL SELECT 1 FROM song_study_attempt WHERE user_id = ?1
+    UNION ALL SELECT 1 FROM song_engagement_days WHERE user_id = ?1
+    UNION ALL SELECT 1 FROM song_streaks WHERE user_id = ?1
+    UNION ALL SELECT 1 FROM reward_qualification_outbox WHERE user_id = ?1
+  ) residuals
+  LIMIT 1
+`
+
 export async function shardHasMigratableSourceRows(client: Client, sourceUserId: string): Promise<boolean> {
   // These are seven concrete tables, not partitioned views. Keeping this as a
   // small compound query bounds fleet round trips without approaching D1's
   // compound-select limit that the merge preflight previously encountered.
   const result = await client.execute({
-    sql: `
-      SELECT 1 FROM (
-        SELECT 1 FROM community_memberships WHERE user_id = ?1 AND status <> 'left'
-        UNION ALL SELECT 1 FROM song_study_review_state WHERE user_id = ?1
-        UNION ALL SELECT 1 FROM song_study_session WHERE user_id = ?1
-        UNION ALL SELECT 1 FROM song_study_attempt WHERE user_id = ?1
-        UNION ALL SELECT 1 FROM song_engagement_days WHERE user_id = ?1
-        UNION ALL SELECT 1 FROM song_streaks WHERE user_id = ?1
-        UNION ALL SELECT 1 FROM reward_qualification_outbox WHERE user_id = ?1
-      ) residuals
-      LIMIT 1
-    `,
+    sql: MIGRATABLE_SOURCE_ROWS_SQL,
     args: [sourceUserId],
   })
   return result.rows.length > 0
@@ -540,6 +579,23 @@ export async function migrateShardResiduals(client: Client, merge: MergeRecord):
   if (await shardHasMigratableSourceRows(client, merge.sourceUserId)) {
     throw new Error(`Account merge ${merge.id} left migratable source rows in a shard`)
   }
+}
+
+async function bulkCommunitiesWithMigratableSourceRows(input: {
+  env: Env
+  repository: ReturnType<typeof getCommunityRepository>
+  communityIds: string[]
+  sourceUserId: string
+}): Promise<Set<string>> {
+  const rowsByCommunity = await bulkCommunityRead(
+    input.env,
+    input.repository,
+    input.communityIds.map((communityId) => ({
+      communityId,
+      statements: [{ sql: MIGRATABLE_SOURCE_ROWS_SQL, args: [input.sourceUserId] }],
+    })),
+  )
+  return new Set(input.communityIds.filter((communityId) => rowsByCommunity.get(communityId)?.[0]?.rows.length))
 }
 
 // Residual repair and its completion gate are read-heavy scans over the whole
@@ -811,14 +867,15 @@ export async function mergeTelegramAccountIntoCanonical(input: {
     // Complete a read-only fleet preflight before making the source identity
     // irreversible. Once `finalizing` is committed, authentication resolves
     // the source to the canonical account and failures must resume, not block.
+    const blockedByCommunity = await bulkShardBlockReasons({
+      env: input.env,
+      repository,
+      communityIds,
+      sourceUserId: merge.sourceUserId,
+    })
     for (const communityId of communityIds) {
-      const db = await openCommunityWriteClient(input.env, repository, communityId)
-      try {
-        const blocked = await shardBlockReason(db.client, merge.sourceUserId)
-        if (blocked) await markBlocked(client, merge, blocked)
-      } finally {
-        await db.close()
-      }
+      const blocked = blockedByCommunity.get(communityId)
+      if (blocked) await markBlocked(client, merge, blocked)
     }
     const fencedAt = nowIso()
     await client.execute({
@@ -832,7 +889,18 @@ export async function mergeTelegramAccountIntoCanonical(input: {
     merge = { ...merge, status: "finalizing" }
   }
 
+  // Identify shards that contain source-owned state before opening any
+  // per-community write client. Empty communities still receive a
+  // control-plane receipt, but spend no Service Binding invocation.
+  const sourceCommunities = await bulkCommunitiesWithMigratableSourceRows({
+    env: input.env,
+    repository,
+    communityIds,
+    sourceUserId: merge.sourceUserId,
+  })
+
   const now = nowIso()
+  const emptyCommunities: string[] = []
   for (const communityId of communityIds) {
     await client.execute({
       sql: `
@@ -853,6 +921,10 @@ export async function mergeTelegramAccountIntoCanonical(input: {
       args: [merge.id, communityId],
     })
     if (stringOrNull(rowValue(receipt.rows[0], "status")) === "completed") continue
+    if (!sourceCommunities.has(communityId)) {
+      emptyCommunities.push(communityId)
+      continue
+    }
     const db = await openCommunityWriteClient(input.env, repository, communityId)
     try {
       await migrateShard(db.client, merge)
@@ -882,10 +954,47 @@ export async function mergeTelegramAccountIntoCanonical(input: {
     }
   }
 
+  if (emptyCommunities.length > 0) {
+    await bulkCommunityWrite(
+      input.env,
+      repository,
+      emptyCommunities.map((communityId) => ({
+        communityId,
+        statements: [{
+          sql: `
+            INSERT INTO user_account_merge_receipts (
+              user_account_merge_id, source_user_id, canonical_user_id, completed_at, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?4)
+            ON CONFLICT(user_account_merge_id) DO NOTHING
+          `,
+          args: [merge.id, merge.sourceUserId, merge.canonicalUserId, now],
+        }],
+      })),
+    )
+    for (const communityId of emptyCommunities) {
+      const completedAt = nowIso()
+      await client.execute({
+        sql: `
+          UPDATE user_account_merge_shards
+          SET status = 'completed', attempt_count = attempt_count + 1,
+              last_error_code = NULL, completed_at = ?3, updated_at = ?3
+          WHERE user_account_merge_id = ?1 AND community_id = ?2
+        `,
+        args: [merge.id, communityId, completedAt],
+      })
+    }
+  }
+
   // Receipts deliberately suppress the original migration on replay. A
   // distinct residual pass captures requests that authenticated immediately
   // before the fence and wrote after their shard's first pass.
-  await forEachCommunityBatch(communityIds, async (communityId) => {
+  const residualCommunities = await bulkCommunitiesWithMigratableSourceRows({
+    env: input.env,
+    repository,
+    communityIds,
+    sourceUserId: merge.sourceUserId,
+  })
+  await forEachCommunityBatch([...residualCommunities], async (communityId) => {
     const db = await openCommunityWriteClient(input.env, repository, communityId)
     try {
       await migrateShardResiduals(db.client, merge)
@@ -897,16 +1006,15 @@ export async function mergeTelegramAccountIntoCanonical(input: {
   // Keep completion structurally impossible while any mutable source-owned
   // row remains. This is separate from the migration pass so a faulty no-op
   // residual implementation cannot certify itself.
-  await forEachCommunityBatch(communityIds, async (communityId) => {
-    const db = await openCommunityWriteClient(input.env, repository, communityId)
-    try {
-      if (await shardHasMigratableSourceRows(db.client, merge.sourceUserId)) {
-        throw new Error(`Account merge ${merge.id} cannot complete with migratable source rows`)
-      }
-    } finally {
-      await db.close()
-    }
+  const remainingCommunities = await bulkCommunitiesWithMigratableSourceRows({
+    env: input.env,
+    repository,
+    communityIds,
+    sourceUserId: merge.sourceUserId,
   })
+  if (remainingCommunities.size > 0) {
+    throw new Error(`Account merge ${merge.id} cannot complete with migratable source rows`)
+  }
 
   await finalizeControlPlane({
     client,

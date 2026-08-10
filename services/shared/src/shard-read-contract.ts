@@ -50,9 +50,51 @@ export type ShardBatchReadRequest = {
   statements: ShardSqlStatement[]
 }
 
+/**
+ * A bounded set of independent community reads executed by one shard Worker
+ * invocation.  The API uses this for fleet scans: a Service Binding invocation
+ * is the scarce resource, while each operation still gets the same per-
+ * community authorization and D1 batch semantics as `batch`.
+ */
+export type ShardBulkReadOperation = {
+  communityId: string
+  bindingName: string
+  statements: ShardSqlStatement[]
+  /** Read-only legacy-table names that may be absent and should be empty. */
+  allowMissingTables?: string[]
+}
+
+export type ShardBulkReadRequest = {
+  operations: ShardBulkReadOperation[]
+}
+
+export type ShardBulkOperationResult<T> = {
+  communityId: string
+  result: ShardResult<T>
+}
+
+export type ShardBulkReadResponse = {
+  operations: Array<ShardBulkOperationResult<ShardQueryResult[]>>
+}
+
+export type ShardBulkWriteOperation = ShardBulkReadOperation
+
+export type ShardBulkWriteRequest = {
+  operations: ShardBulkWriteOperation[]
+}
+
+export type ShardBulkWriteResponse = {
+  operations: Array<ShardBulkOperationResult<ShardQueryResult[]>>
+}
+
 export interface ShardReadRpc {
   execute(input: ShardReadRequest): Promise<ShardResult<ShardQueryResult>>
   batch(input: ShardBatchReadRequest): Promise<ShardResult<ShardQueryResult[]>>
+}
+
+export interface ShardBulkRpc {
+  bulkRead?(input: ShardBulkReadRequest): Promise<ShardBulkReadResponse>
+  bulkWrite?(input: ShardBulkWriteRequest): Promise<ShardBulkWriteResponse>
 }
 
 /**
@@ -79,7 +121,7 @@ export interface ShardWriteRpc {
  * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
  * other's package, only this shared contract.
  */
-export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc, ShardVersionRpc {}
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardBulkRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc, ShardVersionRpc {}
 
 export type ShardVersionInfo = {
   build: {

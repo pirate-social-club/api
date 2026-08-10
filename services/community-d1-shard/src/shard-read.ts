@@ -8,6 +8,10 @@ import {
   SHARD_READ_ERROR,
   shardSnapshotDigest,
   type ShardBatchReadRequest,
+  type ShardBulkReadRequest,
+  type ShardBulkReadResponse,
+  type ShardBulkWriteRequest,
+  type ShardBulkWriteResponse,
   type ShardBindRequest,
   type ShardLoadSnapshotRequest,
   type ShardLoadSnapshotResponse,
@@ -344,6 +348,57 @@ export async function runShardBatch(
 }
 
 /**
+ * Fleet read surface.  This is intentionally one WorkerEntrypoint call with
+ * one independently authorized D1 batch per operation.  Keeping the
+ * authorization and binding resolution inside `runShardBatch` means the bulk
+ * method cannot turn a routing row into a cross-community capability.
+ */
+export async function runShardBulkRead(
+  env: ShardEnv,
+  input: ShardBulkReadRequest,
+): Promise<ShardBulkReadResponse> {
+  const operations = await Promise.all(input.operations.map(async (operation) => {
+    try {
+      return { communityId: operation.communityId, result: await runShardBatch(env, operation) }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const missing = operation.allowMissingTables?.filter((table) =>
+        new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(message),
+      ) ?? []
+      if (missing.length === 0) throw error
+
+      // Legacy shards may lack one explicitly named table (currently only
+      // `bookings`). Re-run the operation statement-by-statement so that the
+      // absent table contributes an empty result while every other failure is
+      // still fail-closed.
+      const values: ShardQueryResult[] = []
+      for (const statement of operation.statements) {
+        try {
+          const value = await runShardRead(env, {
+            communityId: operation.communityId,
+            bindingName: operation.bindingName,
+            statement,
+          })
+          if (!value.ok) return { communityId: operation.communityId, result: value }
+          values.push(value.value)
+        } catch (statementError) {
+          const statementMessage = statementError instanceof Error ? statementError.message : String(statementError)
+          if (operation.allowMissingTables?.some((table) =>
+            new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(statementMessage),
+          )) {
+            values.push({ rows: [] })
+            continue
+          }
+          throw statementError
+        }
+      }
+      return { communityId: operation.communityId, result: { ok: true as const, value: values } }
+    }
+  }))
+  return { operations }
+}
+
+/**
  * PR3 write path. Runs the buffered statements of one community write transaction
  * as a single ATOMIC D1 batch (all-or-nothing). Same (communityId, bindingName)
  * authorization as reads; DML/SELECT only (DDL/PRAGMA rejected). Empty batch is a
@@ -366,6 +421,22 @@ export async function runShardWrite(
   }
   const results = await dbOrError.batch(prepared)
   return { ok: true, value: results.map(toResult) }
+}
+
+/**
+ * Fleet write surface.  Each operation remains an atomic batch for one
+ * community; the bulk call only amortizes the Service Binding invocation.
+ * There is deliberately no cross-community transaction claim here.
+ */
+export async function runShardBulkWrite(
+  env: ShardEnv,
+  input: ShardBulkWriteRequest,
+): Promise<ShardBulkWriteResponse> {
+  const operations = await Promise.all(input.operations.map(async (operation) => ({
+    communityId: operation.communityId,
+    result: await runShardWrite(env, operation),
+  })))
+  return { operations }
 }
 
 /**
