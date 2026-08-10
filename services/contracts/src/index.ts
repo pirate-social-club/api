@@ -2326,6 +2326,7 @@ export type DanceSession = {
   max_bytes: number;
   expires_at: number;
   created: number;
+  idempotent: boolean;
 };
 
 export type DanceAttempt = {

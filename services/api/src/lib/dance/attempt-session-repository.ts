@@ -3,6 +3,7 @@ import { conflictError, internalError, notFoundError } from "../errors"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { Client, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
+import { danceAttemptPlaceholderObjectKey } from "./attempt-object-key"
 
 export const DANCE_ATTEMPT_MAX_BYTES = 64 * 1024 * 1024
 export const DANCE_ATTEMPT_CALIBRATION_VERSION =
@@ -13,10 +14,6 @@ export const DANCE_ATTEMPT_FINGERPRINT_POLICY_VERSION =
   "dance_motion_fingerprint_gate0_v1"
 export const DANCE_ATTEMPT_INTEGRITY_POLICY_VERSION =
   "dance_integrity_gate0_v1"
-
-function placeholderUploadObjectKey(sessionId: string): string {
-  return `dance/attempt-media/${sessionId}/pending.mp4`
-}
 
 export type DanceAttemptSessionRecord = {
   sessionId: string
@@ -178,7 +175,8 @@ export async function cancelDanceAttemptSession(input: {
     if (existing.status !== "initialized" && existing.status !== "uploading") {
       throw conflictError("Submitted dance session cannot be cancelled")
     }
-    const cleanupRequired = existing.uploadObjectKey !== placeholderUploadObjectKey(existing.sessionId)
+    const cleanupRequired = existing.uploadObjectKey
+      !== danceAttemptPlaceholderObjectKey(existing.sessionId)
     await tx.execute({
       sql: `
         UPDATE dance_attempt_sessions
@@ -228,7 +226,7 @@ export async function createDanceAttemptSession(input: {
     })
     if (!revision) throw notFoundError("Active dance choreography revision not found")
 
-    const placeholderKey = placeholderUploadObjectKey(value.sessionId)
+    const placeholderKey = danceAttemptPlaceholderObjectKey(value.sessionId)
     const inserted = await tx.execute({
       sql: `
         INSERT INTO dance_attempt_sessions (
