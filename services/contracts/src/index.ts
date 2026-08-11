@@ -1307,7 +1307,7 @@ export type BookingCancellationPreview = {
 };
 
 export type CancelBookingRequest = {
-  expected_refund_cents?: number;
+  expected_refund_cents: number;
 };
 
 export type Booking = {
@@ -1894,6 +1894,8 @@ export type CrosspostSource = {
   author_user?: string | null;
   author_label?: string | null;
   thumbnail_ref?: string | null;
+  content_safety_state?: "pending" | "safe" | "sensitive" | "adult" | null;
+  age_gate_policy?: "none" | "18_plus" | null;
 };
 
 export type PostPublishFailureCode = "song_analysis_blocked" | "song_analysis_review_required" | "song_rights_reference_required" | "song_preview_generation_failed" | "text_moderation_blocked" | "story_royalty_registration_failed" | "story_locked_delivery_failed" | "listing_creation_failed" | "catalog_sync_failed" | "provider_unavailable" | "internal_error";
