@@ -508,6 +508,15 @@ export async function hydrateCommunityListing(
   return serializeListing(listing)
 }
 
+export async function hydrateCommunityListingForLiveRoom(
+  client: ListingExecutor,
+  communityId: string,
+  liveRoomId: string,
+): Promise<CommunityListing | null> {
+  const listing = await getListingRowByLiveRoomId(client, communityId, liveRoomId)
+  return listing ? serializeListing(listing) : null
+}
+
 /**
  * Shared listing-creation transaction body. Runs inside an already-open shard write tx and
  * does NOT validate community lifecycle status — callers MUST guard with requireLiveCommunity

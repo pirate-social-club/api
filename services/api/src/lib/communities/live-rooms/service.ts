@@ -1,4 +1,4 @@
-import type { QueryResultRow } from "../../sql-client"
+import type { Client, QueryResultRow } from "../../sql-client"
 import type { Env } from "../../../env"
 import type { CommunityDatabaseBindingRepository, CommunityPostProjectionRepository, CommunityReadRepository } from "../db-community-repository"
 import type { UserRepository } from "../../auth/repositories"
@@ -72,9 +72,12 @@ import {
 } from "./store"
 import {
   hydrateCommunityListing,
+  hydrateCommunityListingForLiveRoom,
   insertCommunityListingRow,
   prepareCommunityListingWrite,
 } from "../commerce/listing-service"
+import { findPostByIdempotencyKey } from "../../posts/community-post-create-store"
+import { hashIdempotentRequestBody } from "../../posts/post-create-idempotency"
 import {
   assertLiveRoomViewerSessionUid,
   assertPublicLiveRoomViewerSessionUid,
@@ -87,6 +90,7 @@ import type {
   CreateLiveRoomRequest,
   LiveRoom,
   LiveRoomStatus,
+  LiveRoomVisibility,
   LiveRoomViewerRenewRequest,
   PublishLiveRoomRequest,
 } from "./types"
@@ -261,9 +265,12 @@ export async function createLiveRoomInTransaction(input: {
   userId: string
   communityId: string
   prepared: PreparedLiveRoomCreate
+  idempotencyKey?: string | null
+  idempotencyBodyHash?: string | null
 }): Promise<{
   anchorPost: LiveRoomAnchorPost
   liveRoomId: string
+  visibility: LiveRoomVisibility
   createdAt: string
 }> {
   const liveRoomId = makeId("lr")
@@ -285,6 +292,9 @@ export async function createLiveRoomInTransaction(input: {
     ? buildDisclosedQualifierSnapshots(input.prepared.disclosedQualifierIds)
     : null
   const disclosedQualifiersJson = disclosedQualifierSnapshots ? JSON.stringify(disclosedQualifierSnapshots) : null
+  // The shared posts schema has public/members_only visibility, while live rooms
+  // have public/unlisted visibility. Feed reads and global projection writes use
+  // the linked room visibility as the discoverability authority for this anchor.
   await input.tx.execute({
     sql: `
       INSERT INTO posts (
@@ -293,14 +303,15 @@ export async function createLiveRoomInTransaction(input: {
         song_mode, title, body, caption, lyrics, link_url, media_refs_json,
         song_artifact_bundle_id, source_language, translation_policy, rights_basis,
         asset_id, parent_post_id, analysis_state, analysis_result_ref,
-        content_safety_state, age_gate_policy, created_at, updated_at
+        content_safety_state, age_gate_policy, idempotency_key, idempotency_body_hash,
+        created_at, updated_at
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, NULL, 'video', 'published',
         NULL, ?8, ?9, NULL, NULL, NULL, NULL,
         NULL, NULL, 'machine_allowed', 'none',
         NULL, NULL, 'allow', NULL,
-        'safe', 'none', ?10, ?10
+        'safe', 'none', ?10, ?11, ?12, ?12
       )
     `,
     args: [
@@ -313,6 +324,8 @@ export async function createLiveRoomInTransaction(input: {
       disclosedQualifiersJson,
       input.prepared.title,
       input.prepared.description,
+      input.idempotencyKey?.trim() ?? "",
+      input.idempotencyBodyHash ?? null,
       now,
     ],
   })
@@ -438,8 +451,36 @@ export async function createLiveRoomInTransaction(input: {
       updated_at: now,
     },
     liveRoomId,
+    visibility: input.prepared.visibility,
     createdAt: now,
   }
+}
+
+async function findIdempotentLiveRoom(input: {
+  client: Client
+  communityId: string
+  userId: string
+  idempotencyKey: string
+  bodyHash: string
+}): Promise<LiveRoom | null> {
+  const existingPost = await findPostByIdempotencyKey({
+    client: input.client,
+    communityId: input.communityId,
+    authorUserId: input.userId,
+    idempotencyKey: input.idempotencyKey,
+  })
+  if (!existingPost) return null
+  if (existingPost.idempotency_body_hash && existingPost.idempotency_body_hash !== input.bodyHash) {
+    throw conflictError("idempotency_key was already used with a different live room payload")
+  }
+  if (!existingPost.anchor_live_room_id) {
+    throw conflictError("idempotency_key is already attached to a non-live post")
+  }
+  return getHydratedLiveRoom(input.client, input.communityId, existingPost.anchor_live_room_id)
+}
+
+export function shouldProjectLiveRoomAnchorPost(visibility: LiveRoomVisibility): boolean {
+  return visibility === "public"
 }
 
 async function recordLiveRoomAnchorPostProjection(input: {
@@ -448,9 +489,14 @@ async function recordLiveRoomAnchorPostProjection(input: {
   communityId: string
   userId: string
   liveRoomId: string
+  roomVisibility: LiveRoomVisibility
   anchorPost: LiveRoomAnchorPost
   createdAt: string
 }): Promise<void> {
+  if (!shouldProjectLiveRoomAnchorPost(input.roomVisibility)) {
+    return
+  }
+
   try {
     await input.communityRepository.recordCommunityPostProjection({
       communityId: input.communityId,
@@ -459,7 +505,7 @@ async function recordLiveRoomAnchorPostProjection(input: {
       identityMode: input.anchorPost.identity_mode,
       postType: input.anchorPost.post_type,
       status: input.anchorPost.status,
-      visibility: input.anchorPost.visibility,
+      visibility: "public",
       sourceCreatedAt: input.anchorPost.created_at,
       projectedPayloadJson: JSON.stringify(input.anchorPost),
       actorUserId: input.userId,
@@ -493,6 +539,20 @@ export async function createLiveRoom(input: {
   await requireLiveCommunity(input.communityRepository, input.communityId)
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
+    const idempotencyKey = input.body.idempotency_key?.trim() ?? ""
+    const idempotencyBodyHash = idempotencyKey
+      ? await hashIdempotentRequestBody(input.body)
+      : null
+    if (idempotencyKey && idempotencyBodyHash) {
+      const existingRoom = await findIdempotentLiveRoom({
+        client: db.client,
+        communityId: input.communityId,
+        userId: input.userId,
+        idempotencyKey,
+        bodyHash: idempotencyBodyHash,
+      })
+      if (existingRoom) return serializeLiveRoom(existingRoom)
+    }
     const prepared = await createLiveRoomPreflight({
       client: db.client,
       userId: input.userId,
@@ -506,6 +566,8 @@ export async function createLiveRoom(input: {
         userId: input.userId,
         communityId: input.communityId,
         prepared,
+        idempotencyKey,
+        idempotencyBodyHash,
       })
     })
     if (!created) {
@@ -517,6 +579,7 @@ export async function createLiveRoom(input: {
       communityId: input.communityId,
       userId: input.userId,
       liveRoomId: created.liveRoomId,
+      roomVisibility: created.visibility,
       anchorPost: created.anchorPost,
       createdAt: created.createdAt,
     })
@@ -544,6 +607,30 @@ export async function publishLiveRoom(input: {
   }
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
+    const idempotencyKey = input.body.room?.idempotency_key?.trim() ?? ""
+    const idempotencyBodyHash = idempotencyKey
+      ? await hashIdempotentRequestBody(input.body)
+      : null
+    if (idempotencyKey && idempotencyBodyHash) {
+      const existingRoom = await findIdempotentLiveRoom({
+        client: db.client,
+        communityId: input.communityId,
+        userId: input.userId,
+        idempotencyKey,
+        bodyHash: idempotencyBodyHash,
+      })
+      if (existingRoom) {
+        const listing = await hydrateCommunityListingForLiveRoom(
+          db.client,
+          input.communityId,
+          existingRoom.id,
+        )
+        if (!listing) {
+          throw conflictError("The paid live room exists without its ticket listing")
+        }
+        return { room: serializeLiveRoom(existingRoom), listing }
+      }
+    }
     const prepared = await createLiveRoomPreflight({
       client: db.client,
       userId: input.userId,
@@ -579,6 +666,8 @@ export async function publishLiveRoom(input: {
         userId: input.userId,
         communityId: input.communityId,
         prepared,
+        idempotencyKey,
+        idempotencyBodyHash,
       })
       // Write-only: insert the live room (above) and the listing as one atomic batch.
       await insertCommunityListingRow(tx, input.communityId, preparedListing, createdRoom.liveRoomId)
@@ -593,6 +682,7 @@ export async function publishLiveRoom(input: {
       communityId: input.communityId,
       userId: input.userId,
       liveRoomId: created.liveRoomId,
+      roomVisibility: created.visibility,
       anchorPost: created.anchorPost,
       createdAt: created.createdAt,
     })
