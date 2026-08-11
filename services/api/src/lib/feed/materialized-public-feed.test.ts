@@ -43,21 +43,13 @@ describe("readMaterializedPublicHomeFeed", () => {
     expect(target?.cacheKey).not.toContain("scorer=")
   })
 
-  test("partitions the video snapshot cache when the legacy kill switch is active", () => {
+  test("pins video snapshot cache keys to the scorer", () => {
     const scorerTarget = buildMaterializedPublicHomeFeedTarget({
       contentKind: "video",
       locale: "en",
-      videoRankingMode: "scorer",
-    })
-    const legacyTarget = buildMaterializedPublicHomeFeedTarget({
-      contentKind: "video",
-      locale: "en",
-      videoRankingMode: "legacy",
     })
     expect(scorerTarget?.cacheKey).toContain("ranking=scorer")
-    expect(legacyTarget?.cacheKey).toContain("ranking=legacy")
-    expect(legacyTarget?.cacheKey).not.toContain("scorer=")
-    expect(legacyTarget?.cacheKey).not.toBe(scorerTarget?.cacheKey)
+    expect(scorerTarget?.cacheKey).toContain(`scorer=${VIDEO_SCORER_VERSION}`)
   })
 
   test("serves an expired snapshot during the bounded outage grace", async () => {

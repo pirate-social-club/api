@@ -6,7 +6,6 @@ import type { Client } from "../sql-client"
 import {
   HOME_FEED_SERVER_TIMING,
   listHomeFeed,
-  resolveVideoFeedBestRankingMode,
   type HomeFeedResponseWithTiming,
 } from "./home-feed-service"
 import type { Env, HomeFeedResponse } from "../../types"
@@ -72,7 +71,6 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
   searchParams?: URLSearchParams
   sort?: string | null
   timeRange?: string | null
-  videoRankingMode?: Env["VIDEO_FEED_BEST_RANKING_MODE"]
 }): MaterializedPublicHomeFeedTarget | null {
   if (input.searchParams) {
     for (const key of input.searchParams.keys()) {
@@ -96,11 +94,10 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
   const localeKey = locale ?? "default"
   const contentKind = input.contentKind ?? null
   const contentKindCacheKey = contentKind ? [`content_kind=${contentKind}`] : []
-  const videoRankingMode = resolveVideoFeedBestRankingMode(input.videoRankingMode)
   const scorerCacheKey = contentKind === "video"
     ? [
-        `ranking=${videoRankingMode}`,
-        ...(videoRankingMode === "scorer" ? [`scorer=${VIDEO_SCORER_VERSION}`] : []),
+        "ranking=scorer",
+        `scorer=${VIDEO_SCORER_VERSION}`,
       ]
     : []
   return {
