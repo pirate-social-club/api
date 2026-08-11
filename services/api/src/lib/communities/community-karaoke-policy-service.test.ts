@@ -255,6 +255,17 @@ describe("community karaoke policy", () => {
     await communityDb.execute("ALTER TABLE communities DROP COLUMN karaoke_enabled")
     communityDb.close()
 
+    await expect(getCommunityKaraokePolicy({
+      actor: {
+        authType: "admin",
+        userId: "usr_owner",
+        adminOverride: { adminActorId: "adm_test", scope: "test" },
+      },
+      communityId: ctx.communityId,
+      communityRepository: ctx.repo,
+      env: ctx.env,
+    })).rejects.toThrow(/missing karaoke policy columns \(migrations 1096_community_karaoke_enabled\.sql and 1098_community_karaoke_scoring_policy\.sql\); an operator must converge/u)
+
     await expect(updateCommunityKaraokePolicy({
       actor: {
         authType: "admin",

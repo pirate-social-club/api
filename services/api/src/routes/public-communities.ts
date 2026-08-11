@@ -677,7 +677,7 @@ publicCommunities.get("/", async (c) => {
         communityId: community.community_id,
         locale: null,
         communityRepository: repository,
-      }).catch(() => null)
+      })
       return {
         community: publicCommunityId(community.community_id),
         display_name: community.display_name,

@@ -1,5 +1,22 @@
-import { asNumber, isTruthyFlag, parseJsonArray } from "../lib/communities/bookings/booking-shared-helpers"
 import { nullableUnixSeconds, unixSeconds } from "./time"
+
+function asNumber(value: unknown): number {
+  return typeof value === "number" ? value : Number(value)
+}
+
+function isTruthyFlag(value: unknown): boolean {
+  return value === true || value === 1 || value === "1" || value === "true"
+}
+
+function parseJsonArray<T = unknown>(value: unknown): T[] | null {
+  if (value === null || value === undefined || value === "") return null
+  try {
+    const parsed = typeof value === "string" ? JSON.parse(value) : value
+    return Array.isArray(parsed) ? parsed as T[] : null
+  } catch {
+    return null
+  }
+}
 
 export interface BookingProfileResponse {
   object: "booking_profile"

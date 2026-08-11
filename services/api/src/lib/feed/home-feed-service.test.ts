@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import {
-  filterCommunitiesWithPosts,
   filterVisibleHomeFeedProjections,
   homeFeedCorpusMemberCommunityIds,
   listHomeFeedCommunityViewCounts,
+  listHomeFeedProjectionPage,
   mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
   resolveHomeFeedCandidateCommunityIds,
@@ -14,8 +14,6 @@ import {
   refreshMaterializedHomeFeedBookings,
   selectBestVideoFeedProjectionPage,
   sortCommunitySummariesByViews,
-  sortCommunitySummaries,
-  sortHomeFeedProjectionRows,
   parseVideoFeedCursor,
   videoFeedOrderSql,
   withHomeFeedCommunityIdentity,
@@ -122,7 +120,7 @@ describe("resolveVideoFeedBestRankingMode", () => {
     expect(resolveVideoFeedBestRankingMode(" LEGACY ")).toBe("legacy")
   })
 })
-import type { CommunityAggregate, HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
+import type { HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "../../../tests/helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -612,73 +610,193 @@ describe("homeFeedCorpusMemberCommunityIds", () => {
   })
 })
 
-describe("sortHomeFeedProjectionRows", () => {
-  const now = Date.parse("2026-04-18T12:00:00.000Z")
+describe("listHomeFeedProjectionPage", () => {
+  async function setupProjectionRows(rows: Array<{
+    id: string
+    createdAt: string
+    visibility?: "public" | "members_only"
+    upvotes?: number
+    comments?: number
+    likes?: number
+  }>) {
+    const setup = await createControlPlaneTestClient({ includeAllMigrations: true })
+    cleanup = setup.cleanup
+    const now = "2026-04-18T12:00:00.000Z"
+    await setup.client.execute({
+      sql: `
+        INSERT INTO users (
+          user_id, verification_state, verification_capabilities_json, created_at, updated_at
+        ) VALUES ('usr_feed_operator', 'verified', '{}', ?1, ?1)
+      `,
+      args: [now],
+    })
+    await setup.client.execute({
+      sql: `
+        INSERT INTO communities (
+          community_id, creator_user_id, display_name, membership_mode, status,
+          provisioning_state, transfer_state, route_slug, created_at, updated_at
+        ) VALUES (
+          'cmt_feed', 'usr_feed_operator', 'Feed', 'open', 'active',
+          'active', 'none', 'feed', ?1, ?1
+        )
+      `,
+      args: [now],
+    })
+    await setup.client.batch(rows.map((row) => ({
+      sql: `
+        INSERT INTO community_post_projections (
+          projection_id, community_id, source_post_id, author_user_id, identity_mode,
+          post_type, status, visibility, upvote_count, downvote_count, comment_count,
+          like_count, source_created_at, projected_payload_json, projection_version,
+          created_at, updated_at
+        ) VALUES (
+          ?1, 'cmt_feed', ?2, 'usr_feed_operator', 'public',
+          'text', 'published', ?3, ?4, 0, ?5,
+          ?6, ?7, '{}', 1, ?8, ?8
+        )
+      `,
+      args: [
+        `cpp_${row.id}`,
+        row.id,
+        row.visibility ?? "public",
+        row.upvotes ?? 0,
+        row.comments ?? 0,
+        row.likes ?? 0,
+        row.createdAt,
+        now,
+      ],
+    })), "write")
 
-  function row(input: Partial<HomeFeedProjectionRow> & { source_post_id: string }): HomeFeedProjectionRow {
     return {
-      community_id: "cmt_alpha",
-      source_post_id: input.source_post_id,
-      source_created_at: input.source_created_at ?? "2026-04-18T10:00:00.000Z",
-      visibility: input.visibility ?? "public",
-      upvote_count: input.upvote_count ?? 0,
-      downvote_count: input.downvote_count ?? 0,
-      comment_count: input.comment_count ?? 0,
-      like_count: input.like_count ?? 0,
+      client: setup.client,
+      env: buildTestEnv({
+        CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
+        DEV_MEMORY_STORE_ENABLED: "false",
+      }),
     }
   }
 
-  test("sorts top by engagement score and pushes zero-engagement posts below engaged posts", () => {
-    const result = sortHomeFeedProjectionRows([
-      row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
-      row({ source_post_id: "pst_commented", comment_count: 2, source_created_at: "2026-04-18T09:00:00.000Z" }),
-      row({ source_post_id: "pst_upvoted", upvote_count: 1, source_created_at: "2026-04-18T08:00:00.000Z" }),
-    ], "top", now)
+  test("returns a bounded page and excludes inaccessible member projections before pagination", async () => {
+    const rows = Array.from({ length: 29 }, (_, index) => ({
+      id: `pst_${String(index).padStart(2, "0")}`,
+      createdAt: new Date(Date.parse("2026-04-18T10:00:00.000Z") + index * 60_000).toISOString(),
+      visibility: index === 28 ? "members_only" as const : "public" as const,
+    }))
+    const { env } = await setupProjectionRows(rows)
+    const now = Date.parse("2026-04-18T12:00:00.000Z")
 
-    expect(result.map((item) => item.source_post_id)).toEqual([
-      "pst_commented",
-      "pst_upvoted",
-      "pst_recent_zero",
+    const first = await listHomeFeedProjectionPage({
+      env,
+      communityIds: ["cmt_feed"],
+      memberCommunityIds: [],
+      sort: "new",
+      now,
+      cutoffIso: null,
+      anchor: null,
+    })
+    const anchorRow = first.rows[first.rows.length - 1]
+    const second = await listHomeFeedProjectionPage({
+      env,
+      communityIds: ["cmt_feed"],
+      memberCommunityIds: [],
+      sort: "new",
+      now,
+      cutoffIso: null,
+      anchor: {
+        now,
+        sortKey: null,
+        createdIso: anchorRow?.source_created_at ?? "",
+        postId: anchorRow?.source_post_id ?? "",
+      },
+    })
+
+    expect(first.rows).toHaveLength(25)
+    expect(first.hasMore).toBe(true)
+    expect(first.rows[0]?.source_post_id).toBe("pst_27")
+    expect(second.rows.map((row) => row.source_post_id)).toEqual(["pst_02", "pst_01", "pst_00"])
+    expect(second.hasMore).toBe(false)
+    const firstIds = new Set(first.rows.map((row) => row.source_post_id))
+    expect(second.rows.some((row) => firstIds.has(row.source_post_id))).toBe(false)
+  }, 20000)
+
+  test("preserves distinct time-decayed best and engagement-only top ordering in SQL", async () => {
+    const { env } = await setupProjectionRows([
+      { id: "pst_recent_zero", createdAt: "2026-04-18T11:59:00.000Z" },
+      { id: "pst_recent_liked", createdAt: "2026-04-18T11:00:00.000Z", likes: 1 },
+      { id: "pst_cutoff_liked", createdAt: "2026-04-18T10:00:00.000Z", likes: 1 },
+      { id: "pst_old_upvoted", createdAt: "2026-04-18T00:00:00.000Z", upvotes: 2 },
+      { id: "pst_member", createdAt: "2026-04-18T11:58:00.000Z", visibility: "members_only", comments: 3 },
     ])
-  })
+    const common = {
+      env,
+      communityIds: ["cmt_feed"],
+      memberCommunityIds: ["cmt_feed"],
+      now: Date.parse("2026-04-18T12:00:00.000Z"),
+      cutoffIso: "2026-04-18T10:00:00.000Z",
+      anchor: null,
+    }
 
-  test("sorts best by time-decayed engagement with a freshness floor", () => {
-    const result = sortHomeFeedProjectionRows([
-      row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
-      row({ source_post_id: "pst_old_upvoted", upvote_count: 2, source_created_at: "2026-04-18T00:00:00.000Z" }),
-      row({ source_post_id: "pst_recent_liked", like_count: 1, source_created_at: "2026-04-18T11:00:00.000Z" }),
-    ], "best", now)
+    const best = await listHomeFeedProjectionPage({ ...common, sort: "best" })
+    const top = await listHomeFeedProjectionPage({ ...common, sort: "top" })
 
-    expect(result.map((item) => item.source_post_id)).toEqual([
+    expect(best.rows.map((row) => row.source_post_id)).toEqual([
+      "pst_member",
       "pst_recent_liked",
       "pst_recent_zero",
-      "pst_old_upvoted",
+      "pst_cutoff_liked",
     ])
-  })
-
-  test("lets fresh posts beat week-old posts with modest engagement in best", () => {
-    const result = sortHomeFeedProjectionRows([
-      row({ source_post_id: "pst_week_old_upvoted", upvote_count: 4, source_created_at: "2026-04-11T12:00:00.000Z" }),
-      row({ source_post_id: "pst_fresh_zero", source_created_at: "2026-04-18T11:55:00.000Z" }),
-    ], "best", now)
-
-    expect(result.map((item) => item.source_post_id)).toEqual([
-      "pst_fresh_zero",
-      "pst_week_old_upvoted",
-    ])
-  })
-
-  test("leaves new sorted by recency without engagement gating", () => {
-    const result = sortHomeFeedProjectionRows([
-      row({ source_post_id: "pst_old_engaged", upvote_count: 5, source_created_at: "2026-04-18T00:00:00.000Z" }),
-      row({ source_post_id: "pst_recent_zero", source_created_at: "2026-04-18T11:59:00.000Z" }),
-    ], "new", now)
-
-    expect(result.map((item) => item.source_post_id)).toEqual([
+    expect(top.rows.map((row) => row.source_post_id)).toEqual([
+      "pst_member",
+      "pst_recent_liked",
+      "pst_cutoff_liked",
       "pst_recent_zero",
-      "pst_old_engaged",
     ])
-  })
+  }, 20000)
+
+  test("keyset pagination does not duplicate a row whose engagement rises between pages", async () => {
+    const rows = Array.from({ length: 27 }, (_, index) => ({
+      id: `pst_${String(index).padStart(2, "0")}`,
+      createdAt: new Date(Date.parse("2026-04-18T00:00:00.000Z") + index * 60_000).toISOString(),
+      upvotes: index,
+    }))
+    const { client, env } = await setupProjectionRows(rows)
+    const now = Date.parse("2026-04-18T12:00:00.000Z")
+    const first = await listHomeFeedProjectionPage({
+      env,
+      communityIds: ["cmt_feed"],
+      memberCommunityIds: [],
+      sort: "top",
+      now,
+      cutoffIso: null,
+      anchor: null,
+    })
+    const anchorRow = first.rows[first.rows.length - 1]
+    await client.execute({
+      sql: "UPDATE community_post_projections SET upvote_count = ?1 WHERE source_post_id = ?2",
+      args: [500, "pst_10"],
+    })
+
+    const second = await listHomeFeedProjectionPage({
+      env,
+      communityIds: ["cmt_feed"],
+      memberCommunityIds: [],
+      sort: "top",
+      now,
+      cutoffIso: null,
+      anchor: {
+        now,
+        sortKey: (anchorRow?.upvote_count ?? 0) * 3
+          + (anchorRow?.comment_count ?? 0) * 2
+          + (anchorRow?.like_count ?? 0),
+        createdIso: anchorRow?.source_created_at ?? "",
+        postId: anchorRow?.source_post_id ?? "",
+      },
+    })
+
+    expect(second.rows.map((row) => row.source_post_id)).toEqual(["pst_01", "pst_00"])
+    const firstIds = new Set(first.rows.map((row) => row.source_post_id))
+    expect(second.rows.some((row) => firstIds.has(row.source_post_id))).toBe(false)
+  }, 20000)
 })
 
 function createCommunitySummary(input: {
@@ -708,34 +826,6 @@ function createCommunitySummary(input: {
     updated_at: input.updatedAt ?? "2026-04-18T00:00:00.000Z",
   }
 }
-
-describe("filterCommunitiesWithPosts", () => {
-  test("excludes communities with no eligible posts when a time range is active", () => {
-    const alpha = createCommunitySummary({ communityId: "cmt_alpha" })
-    const beta = createCommunitySummary({ communityId: "cmt_beta" })
-    const gamma = createCommunitySummary({ communityId: "cmt_gamma" })
-    const aggregates = new Map<string, CommunityAggregate>([
-      ["cmt_alpha", { totalScore: 5, bestRank: 2, latestPostMs: 1000 }],
-      ["cmt_gamma", { totalScore: 3, bestRank: 1, latestPostMs: 500 }],
-    ])
-
-    const result = filterCommunitiesWithPosts([alpha, beta, gamma], aggregates, true)
-
-    expect(result.map((summary) => summary.community_id)).toEqual(["cmt_alpha", "cmt_gamma"])
-  })
-
-  test("keeps communities without projection rows when no time range is active", () => {
-    const alpha = createCommunitySummary({ communityId: "cmt_alpha" })
-    const beta = createCommunitySummary({ communityId: "cmt_beta" })
-    const aggregates = new Map<string, CommunityAggregate>([
-      ["cmt_alpha", { totalScore: 5, bestRank: 2, latestPostMs: 1000 }],
-    ])
-
-    const result = filterCommunitiesWithPosts([alpha, beta], aggregates, false)
-
-    expect(result.map((summary) => summary.community_id)).toEqual(["cmt_alpha", "cmt_beta"])
-  })
-})
 
 describe("sortCommunitySummariesByViews", () => {
   test("selects viewed communities before zero-view feed-ranked communities", () => {
@@ -814,26 +904,13 @@ describe("listHomeFeedCommunityViewCounts", () => {
     expect(counts.has("cmt_gamma")).toBe(false)
   }, 20000)
 
-  test("returns empty counts when the health counts table has not migrated yet", async () => {
+  test("fails without bootstrapping analytics or widening schema when the health counts migration is missing", async () => {
     const setup = await createControlPlaneTestClient()
     cleanup = setup.cleanup
-
-    const counts = await listHomeFeedCommunityViewCounts({
-      env: buildTestEnv({
-        CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
-        DEV_MEMORY_STORE_ENABLED: "false",
-      }),
-      communityIds: ["cmt_alpha"],
-    })
-
-    expect(counts.size).toBe(0)
-  })
-
-  test("bootstraps synced counts when the health counts table is missing", async () => {
-    const setup = await createControlPlaneTestClient()
-    cleanup = setup.cleanup
+    let fetchCalled = false
 
     await withMockedFetch(() => (async () => {
+      fetchCalled = true
       return new Response(JSON.stringify({
         data: [
           { day: "2026-05-01", community_id: "cmt_alpha", views: 2 },
@@ -842,84 +919,21 @@ describe("listHomeFeedCommunityViewCounts", () => {
         ],
       }), { status: 200 })
     }), async () => {
-      const counts = await listHomeFeedCommunityViewCounts({
+      await expect(listHomeFeedCommunityViewCounts({
         env: buildTestEnv({
           CONTROL_PLANE_DATABASE_URL: `file:${setup.databasePath}`,
           DEV_MEMORY_STORE_ENABLED: "false",
           TINYBIRD_READ_TOKEN: "tb_read_test",
         }),
         communityIds: ["cmt_alpha"],
-      })
-
-      expect(counts.get("cmt_alpha")).toBe(5)
-      expect(counts.has("cmt_beta")).toBe(false)
+      })).rejects.toThrow(/community_health_counts/i)
     })
-  })
-})
 
-describe("sortCommunitySummaries", () => {
-  const alpha = createCommunitySummary({ communityId: "cmt_alpha" })
-  const beta = createCommunitySummary({ communityId: "cmt_beta" })
-  const gamma = createCommunitySummary({ communityId: "cmt_gamma" })
-
-  test("sorts by total score descending for top sort", () => {
-    const aggregates = new Map<string, CommunityAggregate>([
-      ["cmt_alpha", { totalScore: 50, bestRank: 1, latestPostMs: 1000 }],
-      ["cmt_beta", { totalScore: 200, bestRank: 1, latestPostMs: 1000 }],
-      ["cmt_gamma", { totalScore: 100, bestRank: 1, latestPostMs: 1000 }],
-    ])
-
-    const result = sortCommunitySummaries([alpha, beta, gamma], aggregates, "top")
-
-    expect(result.map((s) => s.community_id)).toEqual(["cmt_beta", "cmt_gamma", "cmt_alpha"])
-  })
-
-  test("sorts by best rank descending for best sort", () => {
-    const aggregates = new Map<string, CommunityAggregate>([
-      ["cmt_alpha", { totalScore: 50, bestRank: 3, latestPostMs: 1000 }],
-      ["cmt_beta", { totalScore: 200, bestRank: 10, latestPostMs: 1000 }],
-      ["cmt_gamma", { totalScore: 100, bestRank: 7, latestPostMs: 1000 }],
-    ])
-
-    const result = sortCommunitySummaries([alpha, beta, gamma], aggregates, "best")
-
-    expect(result.map((s) => s.community_id)).toEqual(["cmt_beta", "cmt_gamma", "cmt_alpha"])
-  })
-
-  test("sorts by latest post time descending for new sort", () => {
-    const aggregates = new Map<string, CommunityAggregate>([
-      ["cmt_alpha", { totalScore: 0, bestRank: 0, latestPostMs: 3000 }],
-      ["cmt_beta", { totalScore: 0, bestRank: 0, latestPostMs: 1000 }],
-      ["cmt_gamma", { totalScore: 0, bestRank: 0, latestPostMs: 2000 }],
-    ])
-
-    const result = sortCommunitySummaries([alpha, beta, gamma], aggregates, "new")
-
-    expect(result.map((s) => s.community_id)).toEqual(["cmt_alpha", "cmt_gamma", "cmt_beta"])
-  })
-
-  test("falls back to updated_at when community has no projection data", () => {
-    const aggregates = new Map<string, CommunityAggregate>()
-    const recentAlpha = createCommunitySummary({ communityId: "cmt_alpha", updatedAt: "2026-04-20T00:00:00.000Z" })
-    const olderBeta = createCommunitySummary({ communityId: "cmt_beta", updatedAt: "2026-04-18T00:00:00.000Z" })
-
-    const result = sortCommunitySummaries([olderBeta, recentAlpha], aggregates, "new")
-
-    expect(result.map((s) => s.community_id)).toEqual(["cmt_alpha", "cmt_beta"])
-  })
-
-  test("limits to 6 communities in caller", () => {
-    const summaries = Array.from({ length: 10 }, (_, i) =>
-      createCommunitySummary({ communityId: `cmt_${i}` })
-    )
-    const aggregates = new Map<string, CommunityAggregate>(
-      summaries.map((s, i) => [s.community_id, { totalScore: i, bestRank: i, latestPostMs: i }])
-    )
-
-    const sorted = sortCommunitySummaries(summaries, aggregates, "top")
-
-    expect(sorted.length).toBe(10)
-    expect(sorted.slice(0, 6).length).toBe(6)
-    expect(sorted[0].community_id).toBe("cmt_9")
+    expect(fetchCalled).toBe(false)
+    const tables = await setup.client.execute({
+      sql: "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
+      args: ["community_health_counts"],
+    })
+    expect(tables.rows).toEqual([])
   })
 })

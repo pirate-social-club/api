@@ -3,7 +3,7 @@ import {
   type AttendanceConfig,
   type AttendanceOutcome,
   evaluateAttendance,
-} from "../communities/bookings/booking-attendance-evaluator";
+} from "./booking-attendance-evaluator";
 import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
 import { completeGlobalBooking, markGlobalBookingSettlementAmbiguous, noShowGlobalBooking, startGlobalBookingSession } from "./booking-lifecycle-service";
 import type { SettlementEffectSqlExecutor } from "./settlement-effect-repository";

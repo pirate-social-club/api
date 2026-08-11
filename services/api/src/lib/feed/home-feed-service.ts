@@ -1,7 +1,5 @@
-import { isMissingRelationError } from "../db-helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredNumber, requiredString } from "../sql-row"
-import { ensureCommunityHealthCountsTable, fetchTinybirdCommunityViewCounts, upsertCommunityHealthCounts } from "../analytics/community-analytics-sync"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import { resolveAgeGateViewerState } from "../posts/age-gate-viewer-state"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
@@ -130,12 +128,51 @@ function getTimeRangeCutoffMs(timeRange: HomeFeedTimeRange, now: number): number
   return now - hours[timeRange] * 3_600_000
 }
 
-function parseOffsetCursor(cursor: string | null | undefined): number {
-  if (!cursor || !cursor.startsWith("o:")) {
-    return 0
+type HomeFeedKeysetAnchor = {
+  now: number
+  sortKey: number | null
+  createdIso: string
+  postId: string
+}
+
+function base64UrlEncode(value: string): string {
+  return btoa(value).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+}
+
+function base64UrlDecode(value: string): string {
+  const padding = value.length % 4 === 0 ? "" : "=".repeat(4 - (value.length % 4))
+  return atob(value.replace(/-/g, "+").replace(/_/g, "/") + padding)
+}
+
+function parseHomeFeedCursor(cursor: string | null | undefined): HomeFeedKeysetAnchor | null {
+  if (!cursor?.startsWith("k:")) return null
+  try {
+    const parsed = JSON.parse(base64UrlDecode(cursor.slice(2))) as unknown
+    if (!parsed || typeof parsed !== "object") return null
+    const record = parsed as Record<string, unknown>
+    const now = typeof record.n === "number" && Number.isSafeInteger(record.n) && record.n > 0 ? record.n : null
+    const createdIso = typeof record.c === "string" ? record.c : null
+    const postId = typeof record.p === "string" ? record.p : null
+    if (now === null || createdIso === null || Number.isNaN(Date.parse(createdIso)) || !postId) return null
+    const sortKey = typeof record.k === "number" && Number.isFinite(record.k) ? record.k : null
+    return { now, sortKey, createdIso, postId }
+  } catch {
+    return null
   }
-  const parsed = Number(cursor.slice(2))
-  return Number.isFinite(parsed) && parsed > 0 ? Math.trunc(parsed) : 0
+}
+
+function encodeHomeFeedCursor(row: HomeFeedProjectionRow, sort: HomeFeedSort, now: number): string {
+  const sortKey = sort === "top"
+    ? row.feed_sort_key ?? getProjectionEngagementScore(row)
+    : sort === "best"
+    ? row.feed_sort_key ?? getBestProjectionSortKey(row, now)
+    : null
+  return `k:${base64UrlEncode(JSON.stringify({
+    n: now,
+    k: sortKey,
+    c: row.source_created_at,
+    p: row.source_post_id,
+  }))}`
 }
 
 function getProjectionVoteScore(row: HomeFeedProjectionRow): number {
@@ -156,6 +193,16 @@ function getBestProjectionRank(row: HomeFeedProjectionRow, now: number): number 
   return (getProjectionEngagementScore(row) + 1) / Math.pow(ageHours + 2, 1.5)
 }
 
+/**
+ * Monotonic transform of getBestProjectionRank that avoids POWER/SQRT, which
+ * are not portable across every D1/libSQL runtime. Squaring the magnitude and
+ * preserving the sign produces the same ordering as the original rank.
+ */
+function getBestProjectionSortKey(row: HomeFeedProjectionRow, now: number): number {
+  const rank = getBestProjectionRank(row, now)
+  return Math.sign(rank) * rank * rank
+}
+
 function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
   const record = row as Record<string, unknown>
   return {
@@ -172,6 +219,7 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
     downvote_count: requiredNumber(row, "downvote_count"),
     comment_count: requiredNumber(row, "comment_count"),
     like_count: requiredNumber(row, "like_count"),
+    feed_sort_key: typeof record.feed_sort_key === "number" ? record.feed_sort_key : null,
     post_type: typeof record.post_type === "string"
       ? record.post_type as HomeFeedProjectionRow["post_type"]
       : undefined,
@@ -351,10 +399,9 @@ export function videoFeedOrderSql(sort: HomeFeedSort): string {
   const score = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
   if (sort === "new") return "source_created_at DESC, source_post_id DESC"
   if (sort === "top" || sort === "best") {
-    // The control-plane D1 runtime rejects the date-arithmetic ranking
-    // expression used here previously. The engagement ordering is already
-    // proven on that runtime and remains deterministic until best ranking is
-    // moved to a tested projection/runtime implementation.
+    // Video projection still uses its portable engagement order for both best and top.
+    // Mixed-feed best ranking is separate and applies tested recency decay in
+    // listHomeFeedProjectionPage.
     return `CASE WHEN ${score} > 0 THEN 1 ELSE 0 END DESC, ${score} DESC, source_created_at DESC, source_post_id DESC`
   }
   return "source_created_at DESC, source_post_id DESC"
@@ -643,48 +690,6 @@ export function homeFeedCorpusMemberCommunityIds(
   return publicCorpusOnly ? new Set() : memberCommunityIds
 }
 
-export type CommunityAggregate = {
-  totalScore: number
-  bestRank: number
-  latestPostMs: number
-}
-
-export function filterCommunitiesWithPosts(
-  summaries: InternalHomeFeedCommunitySummary[],
-  aggregates: Map<string, CommunityAggregate>,
-  hasTimeRange: boolean,
-): InternalHomeFeedCommunitySummary[] {
-  if (!hasTimeRange) return summaries
-  return summaries.filter((summary) => aggregates.has(summary.community_id))
-}
-
-export function sortCommunitySummaries(
-  summaries: InternalHomeFeedCommunitySummary[],
-  aggregates: Map<string, CommunityAggregate>,
-  sort: HomeFeedSort,
-): InternalHomeFeedCommunitySummary[] {
-  return [...summaries].sort((left, right) => {
-    const leftAgg = aggregates.get(left.community_id)
-    const rightAgg = aggregates.get(right.community_id)
-
-    if (sort === "top") {
-      const leftScore = leftAgg?.totalScore ?? 0
-      const rightScore = rightAgg?.totalScore ?? 0
-      if (rightScore !== leftScore) return rightScore - leftScore
-    } else if (sort === "best") {
-      const leftRank = leftAgg?.bestRank ?? 0
-      const rightRank = rightAgg?.bestRank ?? 0
-      if (rightRank !== leftRank) return rightRank - leftRank
-    }
-
-    const leftLatest = leftAgg?.latestPostMs ?? Date.parse(left.updated_at)
-    const rightLatest = rightAgg?.latestPostMs ?? Date.parse(right.updated_at)
-    if (rightLatest !== leftLatest) return rightLatest - leftLatest
-
-    return left.community_id.localeCompare(right.community_id)
-  })
-}
-
 export function sortCommunitySummariesByViews(
   summaries: InternalHomeFeedCommunitySummary[],
 ): InternalHomeFeedCommunitySummary[] {
@@ -701,61 +706,145 @@ export function sortCommunitySummariesByViews(
   })
 }
 
-export function sortHomeFeedProjectionRows(
-  rows: readonly HomeFeedProjectionRow[],
-  sort: HomeFeedSort,
-  now: number,
-): HomeFeedProjectionRow[] {
-  return [...rows].sort((left, right) => {
-    if (sort === "new") {
-      return getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
-    }
-
-    if (sort === "top") {
-      const leftHasEngagement = getProjectionEngagementScore(left) > 0
-      const rightHasEngagement = getProjectionEngagementScore(right) > 0
-      if (leftHasEngagement !== rightHasEngagement) {
-        return rightHasEngagement ? 1 : -1
-      }
-
-      const scoreDiff = getProjectionEngagementScore(right) - getProjectionEngagementScore(left)
-      if (scoreDiff !== 0) {
-        return scoreDiff
-      }
-    } else {
-      const rankDiff = getBestProjectionRank(right, now) - getBestProjectionRank(left, now)
-      if (rankDiff !== 0) {
-        return rankDiff
-      }
-    }
-
-    const createdAtDiff = getProjectionCreatedAtMs(right) - getProjectionCreatedAtMs(left)
-    if (createdAtDiff !== 0) {
-      return createdAtDiff
-    }
-    return right.source_post_id.localeCompare(left.source_post_id)
-  })
+export type HomeFeedProjectionPage = {
+  rows: HomeFeedProjectionRow[]
+  hasMore: boolean
 }
 
-async function listHomeFeedProjectionRows(input: {
+function projectionVisibilitySql(input: {
+  memberCommunityIds: string[]
+  nextArgIndex: number
+}): { sql: string; args: string[]; nextArgIndex: number } {
+  if (input.memberCommunityIds.length === 0) {
+    return {
+      sql: "visibility = 'public'",
+      args: [],
+      nextArgIndex: input.nextArgIndex,
+    }
+  }
+  const placeholders = input.memberCommunityIds
+    .map((_, index) => `?${input.nextArgIndex + index}`)
+    .join(", ")
+  return {
+    sql: `(visibility = 'public' OR (visibility = 'members_only' AND community_id IN (${placeholders})))`,
+    args: input.memberCommunityIds,
+    nextArgIndex: input.nextArgIndex + input.memberCommunityIds.length,
+  }
+}
+
+export async function listHomeFeedProjectionPage(input: {
   env: Env
   communityIds: string[]
-}): Promise<HomeFeedProjectionRow[]> {
+  memberCommunityIds: string[]
+  sort: HomeFeedSort
+  now: number
+  cutoffIso: string | null
+  anchor: HomeFeedKeysetAnchor | null
+}): Promise<HomeFeedProjectionPage> {
+  if (input.communityIds.length === 0) return { rows: [], hasMore: false }
+
   const controlPlaneClient = getControlPlaneClient(input.env)
-  const placeholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+  const engagementScore = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
+  const args: Array<string | number> = [...input.communityIds]
+  const pushArg = (value: string | number): number => {
+    args.push(value)
+    return args.length
+  }
+  const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+  const visibility = projectionVisibilitySql({
+    memberCommunityIds: input.memberCommunityIds,
+    nextArgIndex: args.length + 1,
+  })
+  args.push(...visibility.args)
+  const cutoffSql = input.cutoffIso ? `AND source_created_at >= ?${pushArg(input.cutoffIso)}` : ""
+
+  const bestRankSql = (() => {
+    if (input.sort !== "best") return null
+    const rankedAtIndex = pushArg(new Date(input.now).toISOString())
+    const numerator = `((${engagementScore}) + 1.0)`
+    const age = `(MAX(0.0, (julianday(?${rankedAtIndex}) - julianday(source_created_at)) * 24.0) + 2.0)`
+    const magnitudeSquared = `((${numerator}) * (${numerator}) / ((${age}) * (${age}) * (${age})))`
+    return `(CASE WHEN ${numerator} < 0 THEN -${magnitudeSquared} ELSE ${magnitudeSquared} END)`
+  })()
+  const keyExpr = input.sort === "top" ? engagementScore : bestRankSql
+  const orderSql = input.sort === "new"
+    ? "source_created_at DESC, source_post_id DESC"
+    : "feed_sort_key DESC, source_created_at DESC, source_post_id DESC"
+
+  let keysetSql = ""
+  if (input.anchor) {
+    if (input.sort === "new") {
+      const createdIndex = pushArg(input.anchor.createdIso)
+      const postIndex = pushArg(input.anchor.postId)
+      keysetSql = `AND (source_created_at < ?${createdIndex}`
+        + ` OR (source_created_at = ?${createdIndex} AND source_post_id < ?${postIndex}))`
+    } else if (keyExpr) {
+      const keyIndex = pushArg(input.anchor.sortKey ?? 0)
+      const createdIndex = pushArg(input.anchor.createdIso)
+      const postIndex = pushArg(input.anchor.postId)
+      keysetSql = `AND (feed_sort_key < ?${keyIndex}`
+        + ` OR (feed_sort_key = ?${keyIndex} AND source_created_at < ?${createdIndex})`
+        + ` OR (feed_sort_key = ?${keyIndex} AND source_created_at = ?${createdIndex} AND source_post_id < ?${postIndex}))`
+    }
+  }
+  const limitArgIndex = pushArg(VIDEO_FEED_PAGE_SIZE + 1)
 
   const result = await controlPlaneClient.execute({
     sql: `
+      WITH eligible AS (
+        SELECT community_id, source_post_id, source_created_at, visibility,
+               upvote_count, downvote_count, comment_count, like_count,
+               ${keyExpr ?? "NULL"} AS feed_sort_key
+        FROM community_post_projections
+        WHERE projection_version = 1
+          AND status = 'published'
+          AND community_id IN (${communityPlaceholders})
+          AND ${visibility.sql}
+          ${cutoffSql}
+      )
       SELECT community_id, source_post_id, source_created_at, visibility,
-             upvote_count, downvote_count, comment_count, like_count
+             upvote_count, downvote_count, comment_count, like_count, feed_sort_key
+      FROM eligible
+      WHERE 1 = 1
+        ${keysetSql}
+      ORDER BY ${orderSql}
+      LIMIT ?${limitArgIndex}
+    `,
+    args,
+  })
+  const rows = result.rows.map((row) => toHomeFeedProjectionRow(row))
+  return {
+    rows: rows.slice(0, VIDEO_FEED_PAGE_SIZE),
+    hasMore: rows.length > VIDEO_FEED_PAGE_SIZE,
+  }
+}
+
+async function listHomeFeedCommunityIdsWithPosts(input: {
+  env: Env
+  communityIds: string[]
+  memberCommunityIds: string[]
+  cutoffIso: string
+}): Promise<Set<string>> {
+  if (input.communityIds.length === 0) return new Set()
+
+  const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
+  const visibility = projectionVisibilitySql({
+    memberCommunityIds: input.memberCommunityIds,
+    nextArgIndex: input.communityIds.length + 1,
+  })
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT DISTINCT community_id
       FROM community_post_projections
       WHERE projection_version = 1
         AND status = 'published'
-        AND community_id IN (${placeholders})
+        AND community_id IN (${communityPlaceholders})
+        AND ${visibility.sql}
+        AND source_created_at >= ?${visibility.nextArgIndex}
     `,
-    args: input.communityIds,
+    args: [...input.communityIds, ...visibility.args, input.cutoffIso],
   })
-  return result.rows.map((row) => toHomeFeedProjectionRow(row))
+  return new Set(result.rows.map((row) => requiredString(row, "community_id")))
 }
 
 export async function listHomeFeedCommunityViewCounts(input: {
@@ -776,34 +865,7 @@ export async function listHomeFeedCommunityViewCounts(input: {
     `,
     args: input.communityIds,
   }
-  const result = await controlPlaneClient.execute({
-    ...statement,
-  }).catch(async (error: unknown) => {
-    if (isMissingRelationError(error, "community_health_counts")) {
-      try {
-        await ensureCommunityHealthCountsTable(controlPlaneClient)
-      } catch (bootstrapError) {
-        console.error("[home-feed] failed to create community health counts table", bootstrapError)
-        return { rows: [] }
-      }
-
-      if (String(input.env.TINYBIRD_READ_TOKEN || "").trim()) {
-        try {
-          await upsertCommunityHealthCounts(controlPlaneClient, await fetchTinybirdCommunityViewCounts(input.env))
-        } catch (syncError) {
-          console.error("[home-feed] failed to bootstrap community health counts", syncError)
-        }
-      }
-
-      return controlPlaneClient.execute(statement).catch((retryError: unknown) => {
-        if (isMissingRelationError(retryError, "community_health_counts")) {
-          return { rows: [] }
-        }
-        throw retryError
-      })
-    }
-    throw error
-  })
+  const result = await controlPlaneClient.execute(statement)
 
   const counts = new Map<string, number>()
   for (const row of result.rows) {
@@ -979,8 +1041,18 @@ export async function listHomeFeed(input: {
 
   phaseStartedAt = performance.now()
   const sort = parseHomeFeedSort(input.sort)
-  const now = Date.now()
+  const parsedMixedFeedAnchor = input.contentKind === "video" ? null : parseHomeFeedCursor(input.cursor)
+  const mixedFeedAnchor = parsedMixedFeedAnchor
+    && (sort === "new" || parsedMixedFeedAnchor.sortKey !== null)
+    ? parsedMixedFeedAnchor
+    : null
+  // Freeze the time-range cutoff across mixed-feed pages so a long scroll does
+  // not move the eligibility boundary underneath its cursor.
+  const now = mixedFeedAnchor?.now ?? Date.now()
   const timeRange = parseHomeFeedTimeRange(input.timeRange)
+  const cutoffMs = getTimeRangeCutoffMs(timeRange, now)
+  const cutoffIso = cutoffMs == null ? null : new Date(cutoffMs).toISOString()
+  const corpusMemberCommunityIds = [...corpusMemberCommunityIdSet]
   const shadowControlPlane = shouldShadowAuthenticatedVideoFeed({
     contentKind: input.contentKind,
     mode: input.env.AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE,
@@ -1011,55 +1083,54 @@ export async function listHomeFeed(input: {
           now,
           sort,
           timeRange,
-        })
+      })
     : null
+  const [mixedFeedPage, communitiesWithRecentPosts] = input.contentKind === "video"
+    ? [null, null] as const
+    : await Promise.all([
+        listHomeFeedProjectionPage({
+          env: input.env,
+          communityIds,
+          memberCommunityIds: corpusMemberCommunityIds,
+          sort,
+          now,
+          cutoffIso,
+          anchor: mixedFeedAnchor,
+        }),
+        cutoffIso
+          ? listHomeFeedCommunityIdsWithPosts({
+              env: input.env,
+              communityIds,
+              memberCommunityIds: corpusMemberCommunityIds,
+              cutoffIso,
+            })
+          : Promise.resolve(null),
+      ])
   let allRows = filterVisibleHomeFeedProjections(
-    videoPage?.rows ?? await listHomeFeedProjectionRows({
-      env: input.env,
-      communityIds,
-    }),
+    videoPage?.rows ?? mixedFeedPage?.rows ?? [],
     corpusMemberCommunityIdSet,
   )
 
-  const cutoffMs = getTimeRangeCutoffMs(timeRange, now)
   const timeFilteredRows = videoPage
     ? allRows
     : cutoffMs != null
     ? allRows.filter((row) => getProjectionCreatedAtMs(row) >= cutoffMs)
     : allRows
 
-  const communityAggregateById = new Map<string, CommunityAggregate>()
-  for (const row of timeFilteredRows) {
-    const existing = communityAggregateById.get(row.community_id)
-    const rowScore = getProjectionEngagementScore(row)
-    const rowBestRank = getBestProjectionRank(row, now)
-    const rowCreatedAtMs = getProjectionCreatedAtMs(row)
-    if (!existing) {
-      communityAggregateById.set(row.community_id, {
-        totalScore: rowScore,
-        bestRank: rowBestRank,
-        latestPostMs: rowCreatedAtMs,
-      })
-    } else {
-      existing.totalScore += rowScore
-      existing.bestRank += rowBestRank
-      if (rowCreatedAtMs > existing.latestPostMs) {
-        existing.latestPostMs = rowCreatedAtMs
-      }
-    }
-  }
-
   const communitySummaryById = Object.fromEntries(
     communitySummaries.map((summary) => [summary.community_id, summary] as const),
   )
 
-  const communitiesWithPosts = filterCommunitiesWithPosts(communitySummaries, communityAggregateById, cutoffMs != null)
+  const communitiesWithPosts = communitiesWithRecentPosts
+    ? communitySummaries.filter((summary) => communitiesWithRecentPosts.has(summary.community_id))
+    : communitySummaries
 
-  const sortedRows = sortHomeFeedProjectionRows(timeFilteredRows, sort, now)
-
-  const offset = videoPage ? 0 : parseOffsetCursor(input.cursor)
-  let pageRows = videoPage ? allRows : sortedRows.slice(offset, offset + VIDEO_FEED_PAGE_SIZE)
-  let nextCursor = videoPage?.nextCursor ?? (offset + VIDEO_FEED_PAGE_SIZE < sortedRows.length ? `o:${offset + VIDEO_FEED_PAGE_SIZE}` : null)
+  let pageRows = allRows
+  const mixedFeedLastRow = pageRows[pageRows.length - 1] ?? null
+  let nextCursor = videoPage?.nextCursor
+    ?? (mixedFeedPage?.hasMore && mixedFeedLastRow
+      ? encodeHomeFeedCursor(mixedFeedLastRow, sort, now)
+      : null)
   phaseTimings.projections_and_rank_ms = elapsedMs(phaseStartedAt)
 
   const communityIdentityById = new Map<string, HomeFeedCommunityIdentity | null>()

@@ -23,27 +23,6 @@ import {
 import { requireUserBuyerId } from "./buyer-identity"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
 
-export function usdToCents(value: number | null | undefined): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return null
-  }
-  return Math.round(value * 100)
-}
-
-export function pctToBps(value: number | null | undefined): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return null
-  }
-  return Math.round(value * 100)
-}
-
-export function centsToUsd(value: number | null | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return 0
-  }
-  return value / 100
-}
-
 export function serializeAsset(row: AssetRow, input?: { redactPrimaryForLocked?: boolean }): Asset {
   const primaryContentRef = input?.redactPrimaryForLocked && row.access_mode === "locked"
     ? `locked:${row.asset_id}`
@@ -98,7 +77,7 @@ export function serializeAsset(row: AssetRow, input?: { redactPrimaryForLocked?:
 export function parseListingPolicy(row: Pick<ListingRow, "regional_pricing_policy_json">): {
   regionalPricingEnabled: boolean
   donationPartnerId: string | null
-  donationSharePct: number | null
+  donationShareBps: number | null
 } {
   const parsed = parseJsonValue<ListingPolicySnapshot>(row.regional_pricing_policy_json, {})
   return {
@@ -106,8 +85,8 @@ export function parseListingPolicy(row: Pick<ListingRow, "regional_pricing_polic
     donationPartnerId: typeof parsed.donation_partner_id === "string" && parsed.donation_partner_id.trim()
       ? parsed.donation_partner_id
       : null,
-    donationSharePct: typeof parsed.donation_share_pct === "number" && Number.isFinite(parsed.donation_share_pct)
-      ? parsed.donation_share_pct
+    donationShareBps: typeof parsed.donation_share_bps === "number" && Number.isInteger(parsed.donation_share_bps)
+      ? parsed.donation_share_bps
       : null,
   }
 }
@@ -123,10 +102,10 @@ export function serializeListing(row: ListingRow): CommunityListing {
     replay_asset: row.replay_asset_id,
     listing_mode: row.listing_mode,
     status: row.status,
-    price_cents: usdToCents(row.price_usd) ?? 0,
+    price_cents: row.price_cents,
     regional_pricing_enabled: policy.regionalPricingEnabled,
     donation_partner: policy.donationPartnerId,
-    donation_share_bps: pctToBps(policy.donationSharePct),
+    donation_share_bps: policy.donationShareBps,
     vinyl_release_provider: row.vinyl_release_provider,
     vinyl_release_url: row.vinyl_release_url,
     created_by_user: `usr_${row.created_by_user_id}`,
@@ -148,17 +127,11 @@ export function serializeQuote(row: PurchaseQuoteRow): CommunityPurchaseQuote {
     asset: row.asset_id ? `asset_${row.asset_id}` : row.asset_id,
     live_room: row.live_room_id,
     replay_asset: row.replay_asset_id,
-    base_price_cents: usdToCents(row.base_price_usd) ?? 0,
+    base_price_cents: row.base_price_cents,
     pricing_tier: row.pricing_tier,
-    final_price_cents: usdToCents(row.final_price_usd) ?? 0,
+    final_price_cents: row.final_price_cents,
     settlement_mode: row.settlement_mode,
-    allocation_snapshot: parseQuoteAllocationSnapshot(row.allocation_snapshot_json).map((allocation) => {
-      const { amount_usd: amountUsd, ...rest } = allocation
-      return {
-        ...rest,
-        amount_cents: usdToCents(amountUsd) ?? 0,
-      }
-    }),
+    allocation_snapshot: parseQuoteAllocationSnapshot(row.allocation_snapshot_json),
     funding_mode: row.funding_mode,
     funding_asset: parseJsonValue(row.funding_asset_json, null),
     source_chain: parseJsonValue(row.source_chain_json, null),
@@ -202,7 +175,7 @@ export function serializePurchase(
     replay_asset: row.replay_asset_id,
     buyer_user: `usr_${requireUserBuyerId(row)}`,
     settlement_wallet_attachment: row.settlement_wallet_attachment_id,
-    purchase_price_cents: usdToCents(row.purchase_price_usd) ?? 0,
+    purchase_price_cents: row.purchase_price_cents,
     pricing_tier: row.pricing_tier,
     settlement_mode: row.settlement_mode,
     settlement_chain: settlementChain,
@@ -210,8 +183,8 @@ export function serializePurchase(
     settlement_tx_ref: row.settlement_tx_ref,
     allocations: allocations.map(serializePurchaseAllocationLeg),
     donation_partner: row.donation_partner_id,
-    donation_share_bps: pctToBps(row.donation_share_pct),
-    donation_amount_cents: usdToCents(row.donation_amount_usd),
+    donation_share_bps: row.donation_share_bps,
+    donation_amount_cents: row.donation_amount_cents,
     vinyl_release_provider: row.vinyl_release_provider,
     vinyl_release_url: row.vinyl_release_url,
     purchase_entitlement: entitlement.purchase_entitlement_id,

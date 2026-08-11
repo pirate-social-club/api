@@ -362,7 +362,7 @@ describe("community study routes", () => {
         sql: `
           INSERT INTO purchases (
             purchase_id, community_id, listing_id, asset_id, buyer_user_id,
-            settlement_wallet_attachment_id, purchase_price_usd, settlement_chain,
+            settlement_wallet_attachment_id, purchase_price_cents, settlement_chain,
             settlement_token, settlement_tx_ref, created_at
           ) VALUES ('pur_parity', ?1, 'lst_parity', 'ast_purchased', ?2,
                     'wla_parity', 1, 'base', 'usdc', '0xparity', ?3)

@@ -43,7 +43,6 @@ import {
 import { getControlPlaneClient as getRealControlPlaneClient } from "../lib/runtime-deps"
 import { decodePublicUserId } from "../lib/public-ids"
 import { requireJsonBody } from "./communities-route-helpers"
-import { logBodylessBookingCancellation, parseOptionalExpectedRefundCents } from "./booking-cancellation-compat"
 
 const DEFAULT_WINDOW_DAYS = 14
 const SETTLEMENT_REVIEW_RESOLUTIONS = new Set(["completed", "no_show_host", "no_show_booker"])
@@ -58,7 +57,7 @@ function isBookingOperatorPath(pathname: string): boolean {
 
 function isPublicSlotsRead(method: string, pathname: string): boolean {
   return method.toUpperCase() === "GET"
-    && /\/bookings\/(?:booking-)?hosts\/[^/]+\/slots$/u.test(pathname)
+    && /\/bookings\/hosts\/[^/]+\/slots$/u.test(pathname)
 }
 
 bookings.use("*", async (c, next) => {
@@ -310,15 +309,10 @@ bookings.get("/", async (c) => {
 })
 
 bookings.get("/hosts/:hostUserId/slots", slotsHandler)
-bookings.get("/booking-hosts/:hostUserId/slots", slotsHandler)
 bookings.post("/hosts/:hostUserId/holds", createHoldHandler)
-bookings.post("/booking-hosts/:hostUserId/holds", createHoldHandler)
 bookings.post("/holds/:holdId/quote", quoteHoldHandler)
-bookings.post("/booking-holds/:holdId/quote", quoteHoldHandler)
 bookings.post("/holds/:holdId/confirm", confirmHoldHandler)
-bookings.post("/booking-holds/:holdId/confirm", confirmHoldHandler)
 bookings.post("/holds/:holdId/payment-submitted", paymentSubmittedHandler)
-bookings.post("/booking-holds/:holdId/payment-submitted", paymentSubmittedHandler)
 bookings.get("/payment-intents/pending", async (c) => {
   const data = await routeServices().listPendingBookingPaymentIntents({
     executor: executor(c),
@@ -468,8 +462,11 @@ bookings.post("/:bookingId/settlement-review/resolve", async (c) => {
 })
 
 bookings.post("/:bookingId/cancel", async (c) => {
-  const terms = await parseOptionalExpectedRefundCents(() => c.req.text())
-  if (!terms.ok) {
+  const body = await requireJsonBody<{ expected_refund_cents?: unknown }>(
+    c,
+    "expected_refund_cents is required",
+  )
+  if (!Number.isSafeInteger(body.expected_refund_cents) || Number(body.expected_refund_cents) < 0) {
     return c.json({ error: "invalid_expected_refund_cents" }, 400)
   }
   const bookingId = routeParam(c, "bookingId")
@@ -479,7 +476,7 @@ bookings.post("/:bookingId/cancel", async (c) => {
     bookingId,
     actorUserId: c.get("actor").userId,
     nowUtc: new Date().toISOString(),
-    expectedRefundCents: terms.provided ? terms.expectedRefundCents : undefined,
+    expectedRefundCents: Number(body.expected_refund_cents),
   })
   if (!result.ok) {
     if (result.reason === "cancellation_terms_changed") {
@@ -487,7 +484,6 @@ bookings.post("/:bookingId/cancel", async (c) => {
     }
     return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
   }
-  if (!terms.provided) logBodylessBookingCancellation({ bookingId, actorRole: result.cancelledBy })
   return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
 })
 

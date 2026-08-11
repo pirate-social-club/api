@@ -240,6 +240,9 @@ const spec = {
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
           }
@@ -5437,40 +5440,6 @@ const spec = {
         ]
       }
     },
-    "/bookings/booking-hosts/{host_user_id}/slots": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "security": [],
-        "summary": "Resolve public bookable slots for a host",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingSlotsResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "get_bookings_booking_hosts_by_host_user_id_slots",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
     "/bookings/hosts/{host_user_id}/holds": {
       "post": {
         "tags": [
@@ -5522,57 +5491,6 @@ const spec = {
         ]
       }
     },
-    "/bookings/booking-hosts/{host_user_id}/holds": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a booking hold for a host slot",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "hold"
-                  ],
-                  "properties": {
-                    "hold": {
-                      "$ref": "#/components/schemas/BookingHold"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_hosts_by_host_user_id_holds",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
     "/bookings/holds/{hold_id}/quote": {
       "post": {
         "tags": [
@@ -5605,50 +5523,6 @@ const spec = {
           }
         },
         "operationId": "post_bookings_holds_by_hold_id_quote",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-holds/{hold_id}/quote": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Quote a booking hold",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "quote"
-                  ],
-                  "properties": {
-                    "quote": {
-                      "$ref": "#/components/schemas/BookingQuote"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_holds_by_hold_id_quote",
         "parameters": [
           {
             "name": "hold_id",
@@ -5734,79 +5608,6 @@ const spec = {
         ]
       }
     },
-    "/bookings/booking-holds/{hold_id}/confirm": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Confirm a paid booking hold",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "operationId": "post_bookings_booking_holds_by_hold_id_confirm",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
     "/bookings/holds/{hold_id}/payment-submitted": {
       "post": {
         "tags": [
@@ -5860,71 +5661,6 @@ const spec = {
           }
         },
         "operationId": "post_bookings_holds_by_hold_id_payment_submitted",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-holds/{hold_id}/payment-submitted": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Durably record a submitted booking payment for later confirmation",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubmitBookingPaymentRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "payment_intent_id",
-                    "status",
-                    "claimed_tx_ref"
-                  ],
-                  "properties": {
-                    "payment_intent_id": {
-                      "type": "string"
-                    },
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "recorded"
-                      ]
-                    },
-                    "claimed_tx_ref": {
-                      "type": "string"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_holds_by_hold_id_payment_submitted",
         "parameters": [
           {
             "name": "hold_id",
@@ -6253,7 +5989,7 @@ const spec = {
         "tags": [
           "Bookings"
         ],
-        "summary": "Cancel a booking, checking previously confirmed financial terms when supplied",
+        "summary": "Cancel a booking only if the previously previewed financial terms still match",
         "requestBody": {
           "required": true,
           "content": {
@@ -9266,6 +9002,15 @@ const spec = {
           }
         }
       },
+      "RateLimited": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
       "ServiceUnavailable": {
         "content": {
           "application/json": {
@@ -9285,15 +9030,6 @@ const spec = {
         }
       },
       "BadRequest": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      },
-      "RateLimited": {
         "content": {
           "application/json": {
             "schema": {
@@ -17601,6 +17337,9 @@ const spec = {
       "CancelBookingRequest": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "expected_refund_cents"
+        ],
         "properties": {
           "expected_refund_cents": {
             "type": "integer",

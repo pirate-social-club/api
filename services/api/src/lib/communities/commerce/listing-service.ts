@@ -30,9 +30,8 @@ import {
   requireVerifiedHuman,
   serializeListing,
 } from "./shared"
-import { centsToUsd } from "./serialization"
 import { getCommunityPricingPolicy } from "./policy-service"
-import { assertValidDonationSharePct } from "./quote-helpers"
+import { assertValidDonationShareBps } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
 import {
   assertAssetNotRightsHeld,
@@ -60,7 +59,7 @@ import type {
 
 type ListingDonationConfig = {
   donation_partner_id: string | null
-  donation_share_pct: number | null
+  donation_share_bps: number | null
 }
 
 type ListingVinylReleaseConfig = {
@@ -175,35 +174,34 @@ async function resolveListingDonationConfig(input: {
   requestedPartnerId: string | null | undefined
   requestedShareBps: number | null | undefined
 }): Promise<ListingDonationConfig> {
-  const requestedSharePct = input.requestedShareBps == null ? input.requestedShareBps : input.requestedShareBps / 100
-  const nextSharePct = requestedSharePct === undefined
-    ? input.current.donation_share_pct
-    : requestedSharePct
+  const nextShareBps = input.requestedShareBps === undefined
+    ? input.current.donation_share_bps
+    : input.requestedShareBps
   const nextPartnerId = input.requestedPartnerId === undefined
     ? input.current.donation_partner_id
     : input.requestedPartnerId
 
-  if (nextSharePct === 0) {
+  if (nextShareBps === 0) {
     return {
       donation_partner_id: null,
-      donation_share_pct: null,
+      donation_share_bps: null,
     }
   }
 
-  if (nextSharePct == null) {
+  if (nextShareBps == null) {
     if (typeof nextPartnerId === "string" && nextPartnerId.trim()) {
-      throw badRequestError("donation_share_pct is required when donation_partner_id is set")
+      throw badRequestError("donation_share_bps is required when donation_partner_id is set")
     }
     return {
       donation_partner_id: null,
-      donation_share_pct: null,
+      donation_share_bps: null,
     }
   }
 
-  assertValidDonationSharePct(nextSharePct)
+  assertValidDonationShareBps(nextShareBps)
 
   if (!nextPartnerId?.trim()) {
-    throw badRequestError("donation_partner_id is required when donation_share_pct is greater than 0")
+    throw badRequestError("donation_partner_id is required when donation_share_bps is greater than 0")
   }
 
   const communityRow = await input.communityRepository.getCommunityById(input.communityId)
@@ -229,7 +227,7 @@ async function resolveListingDonationConfig(input: {
 
   return {
     donation_partner_id: nextPartnerId.trim(),
-    donation_share_pct: nextSharePct,
+    donation_share_bps: nextShareBps,
   }
 }
 
@@ -309,7 +307,7 @@ type PreparedCommunityListingWrite = {
   liveRoomId: string | null
   replayAssetId: string | null
   status: CreateCommunityListingRequest["status"]
-  priceUsd: number
+  priceCents: number
   regionalPricingPolicyJson: string
   vinylReleaseProvider: ListingVinylReleaseConfig["vinyl_release_provider"]
   vinylReleaseUrl: string | null
@@ -420,7 +418,7 @@ export async function prepareCommunityListingWrite(input: {
     communityRepository: input.communityRepository,
     current: {
       donation_partner_id: null,
-      donation_share_pct: null,
+      donation_share_bps: null,
     },
     requestedPartnerId: input.body.donation_partner,
     requestedShareBps: input.body.donation_share_bps,
@@ -443,11 +441,11 @@ export async function prepareCommunityListingWrite(input: {
     liveRoomId,
     replayAssetId,
     status: input.body.status,
-    priceUsd: centsToUsd(input.body.price_cents),
+    priceCents: input.body.price_cents,
     regionalPricingPolicyJson: JSON.stringify({
       regional_pricing_enabled: input.body.regional_pricing_enabled,
       donation_partner_id: donationConfig.donation_partner_id,
-      donation_share_pct: donationConfig.donation_share_pct,
+      donation_share_bps: donationConfig.donation_share_bps,
     }),
     vinylReleaseProvider: vinylReleaseConfig.vinyl_release_provider,
     vinylReleaseUrl: vinylReleaseConfig.vinyl_release_url,
@@ -469,7 +467,7 @@ export async function insertCommunityListingRow(
   await client.execute({
     sql: `
       INSERT INTO listings (
-        listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_usd,
+        listing_id, community_id, asset_id, live_room_id, replay_asset_id, listing_mode, status, price_cents,
         regional_pricing_policy_json, vinyl_release_provider, vinyl_release_url,
         created_by_user_id, created_at, updated_at
       ) VALUES (
@@ -484,7 +482,7 @@ export async function insertCommunityListingRow(
       liveRoomIdOverride ?? prepared.liveRoomId,
       prepared.replayAssetId,
       prepared.status,
-      prepared.priceUsd,
+      prepared.priceCents,
       prepared.regionalPricingPolicyJson,
       prepared.vinylReleaseProvider,
       prepared.vinylReleaseUrl,
@@ -611,7 +609,7 @@ export async function updateCommunityListing(input: {
       communityRepository: input.communityRepository,
       current: {
         donation_partner_id: currentPolicy.donationPartnerId,
-        donation_share_pct: currentPolicy.donationSharePct,
+        donation_share_bps: currentPolicy.donationShareBps,
       },
       requestedPartnerId: input.body.donation_partner,
       requestedShareBps: input.body.donation_share_bps,
@@ -631,7 +629,7 @@ export async function updateCommunityListing(input: {
       sql: `
         UPDATE listings
         SET status = ?3,
-            price_usd = ?4,
+            price_cents = ?4,
             regional_pricing_policy_json = ?5,
             updated_at = ?6
         WHERE community_id = ?1
@@ -641,11 +639,11 @@ export async function updateCommunityListing(input: {
         input.communityId,
         input.listingId,
         input.body.status ?? listing.status,
-        input.body.price_cents == null ? listing.price_usd : centsToUsd(input.body.price_cents),
+        input.body.price_cents ?? listing.price_cents,
         JSON.stringify({
           regional_pricing_enabled: nextRegional,
           donation_partner_id: donationConfig.donation_partner_id,
-          donation_share_pct: donationConfig.donation_share_pct,
+          donation_share_bps: donationConfig.donation_share_bps,
         }),
         nowIso(),
       ],

@@ -58,32 +58,20 @@ function alignmentStatusValue(value: unknown): SongPresentationAlignmentStatus {
   }
 }
 
-function isMissingKaraokeEnabledColumnError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error)
-  return /(?:no such column|unknown column|column .*karaoke_enabled.* does not exist|no column named karaoke_enabled)/iu.test(message)
-}
-
 async function readCommunityKaraokeEnabled(input: {
   executor: DbExecutor
   communityId: string
 }): Promise<boolean> {
-  try {
-    const row = await executeFirst(input.executor, {
-      sql: `
-        SELECT karaoke_enabled
-        FROM communities
-        WHERE community_id = ?1
-        LIMIT 1
-      `,
-      args: [input.communityId],
-    }) as Record<string, unknown> | null
-    return Number(row?.karaoke_enabled ?? 0) === 1
-  } catch (error) {
-    if (isMissingKaraokeEnabledColumnError(error)) {
-      return false
-    }
-    throw error
-  }
+  const row = await executeFirst(input.executor, {
+    sql: `
+      SELECT karaoke_enabled
+      FROM communities
+      WHERE community_id = ?1
+      LIMIT 1
+    `,
+    args: [input.communityId],
+  }) as Record<string, unknown> | null
+  return Number(row?.karaoke_enabled ?? 0) === 1
 }
 
 function getCommunityKaraokeEnabled(input: {

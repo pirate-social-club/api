@@ -507,7 +507,7 @@ export async function cancelGlobalBooking(input: {
   bookingId: string;
   actorUserId: string;
   nowUtc: string;
-  expectedRefundCents?: number;
+  expectedRefundCents: number;
   confirmPollMs?: number[];
 }): Promise<CancelGlobalBookingResult> {
   const repo = createBookingLifecycleWriteRepository(input.executor);
@@ -533,7 +533,7 @@ export async function cancelGlobalBooking(input: {
     if (!await transitionAllowed(booking.status, event)) return { ok: false, reason: "illegal_transition" };
     intentState = await transition(booking.status, event) as SettlementIntentState;
     const preview = await cancellationPreviewFor(booking, cancelledBy, input.nowUtc);
-    if (input.expectedRefundCents !== undefined && input.expectedRefundCents !== preview.refund_cents) {
+    if (input.expectedRefundCents !== preview.refund_cents) {
       return { ok: false, reason: "cancellation_terms_changed", preview };
     }
     refundCents = preview.refund_cents;

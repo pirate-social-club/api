@@ -83,15 +83,11 @@ export function assertEndaomentPayoutConfigured(env: Env): void {
   resolveEndaomentPayoutConfig(env)
 }
 
-function resolveUsdcAmountAtomic(amountUsd: number): bigint {
-  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+function resolveUsdcAmountAtomic(amountCents: number): bigint {
+  if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
     throw badRequestError("Donation amount must be positive")
   }
-  const amountAtomic = BigInt(Math.round(amountUsd * 1_000_000))
-  if (amountAtomic <= 0n) {
-    throw badRequestError("Donation amount is below USDC precision")
-  }
-  return amountAtomic
+  return BigInt(amountCents) * 10_000n
 }
 
 async function waitForConfirmedTx(input: {
@@ -123,7 +119,7 @@ export async function executeEndaomentUsdcDonation(
   const entity = new Contract(getAddress(entityAddress), ENDAOMENT_ENTITY_ABI, signer)
   const registry = new Contract(config.registryAddress, ENDAOMENT_REGISTRY_ABI, provider)
   const usdc = new Contract(config.usdcTokenAddress, ERC20_ABI, signer)
-  const amount = resolveUsdcAmountAtomic(input.amountUsd)
+  const amount = resolveUsdcAmountAtomic(input.amountCents)
 
   const isActiveEntity = await registry.isActiveEntity(getAddress(entityAddress)) as boolean
   if (!isActiveEntity) {
