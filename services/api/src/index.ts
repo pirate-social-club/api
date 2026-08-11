@@ -58,7 +58,6 @@ import {
 } from "./lib/analytics"
 import { getCommunityRepository } from "./lib/communities/db-community-repository"
 import { reconcileStaleCommunityPurchaseSettlements } from "./lib/communities/commerce/settlement-service"
-import { emptyBookingSettlementSummary, sweepDueBookingSettlements } from "./lib/communities/bookings/booking-settlement-cron"
 import { emptyGlobalBookingSettlementSummary, isGlobalBookingSettlementCronEnabled, sweepGlobalBookingSettlements } from "./lib/bookings/booking-settlement-cron"
 import {
   emptyBookingPaymentReverificationSummary,
@@ -1174,28 +1173,19 @@ async function reconcileScheduledBookingSettlements(env: Env): Promise<void> {
   // Gated: inert (no enumeration, no settlement) unless BOOKINGS_SETTLEMENT_CRON_ENABLED === "true".
   if (!isGlobalBookingSettlementCronEnabled(env)) return
   let globalSummary = emptyGlobalBookingSettlementSummary(true)
-  const communityRepository = getCommunityRepository(env)
-  const legacyCommunitySweepEnabled = String(env.LEGACY_COMMUNITY_BOOKINGS_SETTLEMENT_CRON_ENABLED ?? "").trim().toLowerCase() === "true"
-  let summary = emptyBookingSettlementSummary(legacyCommunitySweepEnabled)
   try {
     globalSummary = await sweepGlobalBookingSettlements({ env, client: getControlPlaneClient(env), maxBookings: 100, deadlineMs: 20_000 })
-    if (legacyCommunitySweepEnabled) {
-      summary = await sweepDueBookingSettlements({ env, communityRepository, maxCommunities: 50, maxBookingsPerCommunity: 25, deadlineMs: 20_000 })
-    }
     // Sweep classifies enumeration failures fatal without surfacing the raw error; alert on it with a
     // generic marker (no raw message/object reaches alert sinks from coordinator/RPC paths).
     if (globalSummary.fatal) await captureScheduledError(env, new Error("global_booking_settlement_sweep_fatal"), "global_booking_settlement_reconciliation")
-    if (summary.fatal) await captureScheduledError(env, new Error("booking_settlement_sweep_fatal"), "booking_settlement_reconciliation")
   } catch (error) {
     // Defense: an unexpected throw past the sweep still yields a fatal summary (no raw error logged).
-    summary.errors += 1
-    summary.fatal = true
+    globalSummary.errors += 1
+    globalSummary.fatal = true
     await captureScheduledError(env, error, "booking_settlement_reconciliation")
   } finally {
     // One structured summary for EVERY enabled run — including zero-work AND fatal runs.
     console.info("[global-booking-settlements] swept", JSON.stringify(globalSummary))
-    console.info("[booking-settlements] swept", JSON.stringify(summary))
-    await communityRepository.close?.()
   }
 }
 
