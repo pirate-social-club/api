@@ -37,7 +37,6 @@ export type Env = {
    * `scorer` serves the versioned TypeScript scorer; `legacy` restores the
    * portable SQL engagement ordering without affecting `new` or `top`.
    */
-  VIDEO_FEED_BEST_RANKING_MODE?: "legacy" | "scorer"
   /** Sample percentage (0-100) for non-blocking owned-vs-hosted EFP read comparisons. */
   EFP_FOLLOW_SHADOW_SAMPLE_PERCENT?: string
   EFP_HOSTED_API_URL?: string

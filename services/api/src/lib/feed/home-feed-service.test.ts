@@ -10,7 +10,6 @@ import {
   resolveHomeFeedCandidateCommunityIds,
   resolveHomeFeedCommunityIds,
   resolveJoinedHomeFeedCommunityIds,
-  resolveVideoFeedBestRankingMode,
   refreshMaterializedHomeFeedBookings,
   selectBestVideoFeedProjectionPage,
   sortCommunitySummariesByViews,
@@ -112,14 +111,6 @@ describe("videoFeedOrderSql", () => {
   })
 })
 
-describe("resolveVideoFeedBestRankingMode", () => {
-  test("defaults to the scorer and honors the emergency legacy fallback", () => {
-    expect(resolveVideoFeedBestRankingMode(undefined)).toBe("scorer")
-    expect(resolveVideoFeedBestRankingMode("scorer")).toBe("scorer")
-    expect(resolveVideoFeedBestRankingMode("legacy")).toBe("legacy")
-    expect(resolveVideoFeedBestRankingMode(" LEGACY ")).toBe("legacy")
-  })
-})
 import type { HomeFeedProjectionRow, InternalHomeFeedCommunitySummary } from "./home-feed-service"
 import { buildTestEnv, createControlPlaneTestClient, withMockedFetch } from "../../../tests/helpers"
 
