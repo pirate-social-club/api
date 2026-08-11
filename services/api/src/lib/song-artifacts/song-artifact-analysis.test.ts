@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { HttpError } from "../errors"
 import { mockFetch } from "../../test-helpers/fetch"
-import { analyzeSongBundle, evaluateLyricsModeration } from "./song-artifact-analysis"
+import {
+  analyzeSongBundle,
+  canonicalizeTimedLyricSegments,
+  evaluateLyricsModeration,
+} from "./song-artifact-analysis"
 
 const originalFetch = globalThis.fetch
 
@@ -79,6 +83,24 @@ async function expectProviderUnavailable(
 }
 
 describe("song artifact analysis", () => {
+  test("uses canonical lyric characters while retaining provider timings", () => {
+    const segments = [
+      { start_ms: 0, end_ms: 100, text: "Wе" },
+      { start_ms: 100, end_ms: 200, text: " sing" },
+    ]
+
+    expect(canonicalizeTimedLyricSegments(segments, "We sing")).toEqual([
+      { start_ms: 0, end_ms: 100, text: "We" },
+      { start_ms: 100, end_ms: 200, text: " sing" },
+    ])
+  })
+
+  test("leaves provider segments intact when they do not match the canonical lyrics", () => {
+    const segments = [{ start_ms: 0, end_ms: 100, text: "Different" }]
+
+    expect(canonicalizeTimedLyricSegments(segments, "Canonical")).toBe(segments)
+  })
+
   test("marks ACR identification as skipped when staging bypass is requested", async () => {
     const result = await analyzeSongBundle({
       communityId: "com_test",
