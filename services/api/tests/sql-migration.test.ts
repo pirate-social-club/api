@@ -5,6 +5,37 @@ import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("maps the community health watermark upsert to SQLite insert-or-ignore", () => {
+    const [statement] = toSqliteCompatibleStatements(`
+      INSERT INTO community_health_sync_state (
+        projection_key, next_date, reset_required, updated_at
+      ) VALUES (
+        'tinybird_community_health_daily', CURRENT_DATE, 1, CURRENT_TIMESTAMP
+      )
+      ON CONFLICT (projection_key) DO NOTHING;
+    `)
+
+    expect(statement).toContain("INSERT OR IGNORE INTO community_health_sync_state")
+    expect(statement).not.toContain("ON CONFLICT")
+
+    const database = new Database(":memory:")
+    try {
+      database.exec(`
+        CREATE TABLE community_health_sync_state (
+          projection_key TEXT PRIMARY KEY,
+          next_date TEXT NOT NULL,
+          reset_required INTEGER NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+      `)
+      database.exec(statement!)
+      database.exec(statement!)
+      expect(database.query("SELECT COUNT(*) AS count FROM community_health_sync_state").get()).toEqual({ count: 1 })
+    } finally {
+      database.close()
+    }
+  })
+
   test("keeps rehearsal fixture funding distinct while reconciling campaign counters", async () => {
     const database = new Database(":memory:")
     database.exec(`

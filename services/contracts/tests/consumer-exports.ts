@@ -60,4 +60,6 @@ export const consumerCancellationPreview = {
   policy_cutoff_at: "2026-07-09T10:00:00.000Z",
 } satisfies BookingCancellationPreview
 
-export const consumerLegacyCancellation = {} satisfies CancelBookingRequest
+export const consumerLegacyCancellation = {
+  expected_refund_cents: 0,
+} satisfies CancelBookingRequest
