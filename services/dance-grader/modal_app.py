@@ -51,7 +51,7 @@ app = modal.App(APP_NAME)
 service_secret = modal.Secret.from_name("dance-grader-service")
 
 
-@app.function(secrets=[service_secret], timeout=30)
+@app.function(image=image, secrets=[service_secret], timeout=30)
 def validate_service_configuration() -> dict[str, str]:
     """Fail without exposing values when the staging service secret is incomplete."""
 
