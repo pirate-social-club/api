@@ -42,6 +42,26 @@ function stringField(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null
 }
 
+function projectedContentSafetyState(payload: Record<string, unknown> | null): Post["content_safety_state"] | null {
+  const value = payload?.content_safety_state
+  return value === "pending" || value === "safe" || value === "sensitive" || value === "adult" ? value : null
+}
+
+function projectedAgeGatePolicy(payload: Record<string, unknown> | null): Post["age_gate_policy"] | null {
+  const value = payload?.age_gate_policy
+  return value === "none" || value === "18_plus" ? value : null
+}
+
+function moreRestrictiveContentSafety(
+  stored: Post["content_safety_state"] | null | undefined,
+  current: Post["content_safety_state"] | null,
+): Post["content_safety_state"] {
+  const severity: Record<Post["content_safety_state"], number> = { pending: 3, safe: 0, sensitive: 1, adult: 2 }
+  const left = stored ?? "sensitive"
+  const right = current ?? "sensitive"
+  return severity[left] >= severity[right] ? left : right
+}
+
 function resolveThumbnailRef(
   postType: SourcePostType,
   projectedPayload: Record<string, unknown> | null,
@@ -153,6 +173,15 @@ export async function hydrateCrosspostSources(input: {
     }
 
     const projectedPayload = parseProjectedPayload(projection.projected_payload_json)
+    const contentSafetyState = moreRestrictiveContentSafety(
+      source.content_safety_state,
+      projectedContentSafetyState(projectedPayload),
+    )
+    const ageGatePolicy = source.age_gate_policy === "18_plus"
+      || projectedAgeGatePolicy(projectedPayload) === "18_plus"
+      || contentSafetyState === "adult"
+      ? "18_plus"
+      : "none"
     post.crosspost_source = {
       status: "available",
       post_id: source.post_id,
@@ -165,6 +194,10 @@ export async function hydrateCrosspostSources(input: {
       author_user_id: projection.author_user_id,
       author_label: projection.author_user_id ? authorLabelByUserId.get(projection.author_user_id) ?? null : null,
       thumbnail_ref: resolveThumbnailRef(projection.post_type, projectedPayload),
+      source_content_safety_state: source.source_content_safety_state,
+      source_age_gate_policy: source.source_age_gate_policy,
+      content_safety_state: contentSafetyState,
+      age_gate_policy: ageGatePolicy,
     }
   }
 }

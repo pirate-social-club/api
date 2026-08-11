@@ -103,6 +103,8 @@ export function serializePost(post: Post): CurrentPostResponse {
           author_user: post.crosspost_source.author_user_id ? `usr_${post.crosspost_source.author_user_id}` : null,
           author_label: post.crosspost_source.author_label ?? null,
           thumbnail_ref: post.crosspost_source.thumbnail_ref ?? null,
+          content_safety_state: post.crosspost_source.content_safety_state ?? null,
+          age_gate_policy: post.crosspost_source.age_gate_policy ?? null,
         }
       : null,
     song_mode: post.song_mode,

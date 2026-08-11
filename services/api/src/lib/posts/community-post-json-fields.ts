@@ -84,7 +84,19 @@ export function parseCrosspostSource(value: string | null): Post["crosspost_sour
     post_id: sourcePostId,
     community_id: sourceCommunityId,
     captured_at: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
+    source_content_safety_state: readContentSafetyState(parsed.source_content_safety_state),
+    source_age_gate_policy: readAgeGatePolicy(parsed.source_age_gate_policy),
+    content_safety_state: readContentSafetyState(parsed.content_safety_state),
+    age_gate_policy: readAgeGatePolicy(parsed.age_gate_policy),
   }
+}
+
+function readContentSafetyState(value: unknown): Post["content_safety_state"] | null {
+  return value === "pending" || value === "safe" || value === "sensitive" || value === "adult" ? value : null
+}
+
+function readAgeGatePolicy(value: unknown): Post["age_gate_policy"] | null {
+  return value === "none" || value === "18_plus" ? value : null
 }
 
 export function parseStringArray(value: string | null): string[] | undefined {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { preparePostCreate } from "./post-create-preparation"
+import { preparePostCreate, resolveCrosspostSafety } from "./post-create-preparation"
 import type { Client } from "../sql-client"
 import type { Community, CreatePostRequest, Post } from "../../types"
 import type { Env } from "../../env"
@@ -79,5 +79,38 @@ describe("preparePostCreate age_gate_policy", () => {
     })
 
     expect(prepared.analysisOverride.age_gate_policy).toBe("18_plus")
+  })
+})
+
+describe("resolveCrosspostSafety", () => {
+  test("does not assert safe when an adult source enters a permissive target", () => {
+    const target = community()
+    target.adult_content_policy = {
+      community: target.community_id,
+      policy_origin: "explicit",
+      suggestive: "allow",
+      artistic_nudity: "allow",
+      explicit_nudity: "allow",
+      explicit_sexual_content: "allow",
+      fetish_content: "allow",
+    }
+
+    expect(resolveCrosspostSafety({
+      community: target,
+      sourceContentSafetyState: "adult",
+      sourceAgeGatePolicy: "18_plus",
+    })).toEqual({
+      analysis_state: "allow",
+      content_safety_state: "adult",
+      age_gate_policy: "18_plus",
+    })
+  })
+
+  test("blocks an adult source when the target policy disallows it", () => {
+    expect(resolveCrosspostSafety({
+      community: community(),
+      sourceContentSafetyState: "adult",
+      sourceAgeGatePolicy: "18_plus",
+    }).analysis_state).toBe("blocked")
   })
 })

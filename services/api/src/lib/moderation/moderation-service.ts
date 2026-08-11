@@ -51,7 +51,7 @@ import {
 
 type ModerationCommunityRepository =
   & CommunityDatabaseBindingRepository
-  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionStatus">
+  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionPayload" | "updateCommunityPostProjectionStatus">
 
 async function updateDerivativeSourceProjectionStatus(input: {
   env: Env
@@ -575,6 +575,20 @@ export async function resolveModerationCaseWithAction(input: {
         communityId: input.communityId,
         postId: caseRow.post_id,
         status: nextStatus,
+        updatedAt: now,
+      })
+    }
+    if (
+      caseRow.post_id
+      && (mutation.nextAgeGatePolicy || mutation.nextContentSafetyState)
+    ) {
+      const updatedPost = await getPostById(db.client, caseRow.post_id)
+      if (!updatedPost) {
+        throw internalError("Post is missing after moderation action")
+      }
+      await input.communityRepository.updateCommunityPostProjectionPayload({
+        postId: caseRow.post_id,
+        projectedPayloadJson: JSON.stringify(updatedPost),
         updatedAt: now,
       })
     }
