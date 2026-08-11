@@ -391,8 +391,10 @@ at least 500 ms inside the opening 2,500 ms. The assignment is database-immutabl
 records `passed` plus the exact scored-window boundary, or rejects with `start_cue_mismatch`; the
 cue evidence is included in the callback digest and immutable aggregate attempt evidence. Scoring
 after cue-window exclusion is `dance_scorer_gate0_v2`. Session creation selects only v2 reference
-revisions, so v1 references fail closed until reprocessed instead of being silently graded under a
-different input contract.
+revisions; there is no in-place v1-to-v2 reprocessing job, so v1 references remain unavailable until
+operators seed a fresh v2 revision. Migration 0216 is the cutover boundary for existing sessions:
+it expires every nonterminal session, so it must run before any consented staff recording or pilot
+capture begins.
 
 Only one nonterminal dance session may exist per Telegram account. `/cancel` expires it and releases
 the slot. Sessions also expire automatically. Telegram webhook redelivery, repeated button presses,
