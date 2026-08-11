@@ -299,6 +299,21 @@ describe("sql migration helpers", () => {
     expect(statement).not.toContain("md5")
   })
 
+  test("splits dance cue columns from PostgreSQL table constraints for sqlite", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN start_cue_policy_version TEXT,
+        ADD COLUMN start_cue_kind TEXT,
+        ADD COLUMN start_cue_minimum_hold_ms INTEGER,
+        ADD COLUMN start_cue_observation_window_ms INTEGER,
+        ADD COLUMN start_cue_outcome TEXT,
+        ADD COLUMN scored_window_start_ms INTEGER,
+        ADD CONSTRAINT dance_attempt_session_start_cue_assignment_check CHECK (
+          start_cue_policy_version IS NULL OR start_cue_kind IS NOT NULL
+        );
+    `)).toHaveLength(6)
+  })
+
   test("splits PostgreSQL multi-column projection state changes for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       ALTER TABLE efp_follow_projection_state
