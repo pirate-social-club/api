@@ -40,6 +40,7 @@ describe("admin auth middleware", () => {
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
       source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
       hotfix_reason_slug: null,
       patch_sha256: null,
     })).toEqual({
@@ -52,6 +53,7 @@ describe("admin auth middleware", () => {
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
       source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
       hotfix_reason_slug: null,
       patch_sha256: null,
     })
@@ -66,6 +68,7 @@ describe("admin auth middleware", () => {
       BUILD_API_SHA: "runtime-api123",
       BUILD_CORE_SHA: "runtime-core123",
       BUILD_SOURCE_STATE: "dirty",
+      BUILD_DEPLOY_REASON_SLUG: "runtime-repair",
       BUILD_HOTFIX_REASON_SLUG: "runtime-repair",
       BUILD_PATCH_SHA256: "f".repeat(64),
     }, {
@@ -78,6 +81,7 @@ describe("admin auth middleware", () => {
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
       source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
       hotfix_reason_slug: null,
       patch_sha256: null,
     })).toEqual({
@@ -90,6 +94,7 @@ describe("admin auth middleware", () => {
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
       source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
       hotfix_reason_slug: null,
       patch_sha256: null,
     })
@@ -107,6 +112,7 @@ describe("admin auth middleware", () => {
       BUILD_API_SHA: "a".repeat(40),
       BUILD_CORE_SHA: "c".repeat(40),
       BUILD_SOURCE_STATE: "clean",
+      BUILD_DEPLOY_REASON_SLUG: "approved-clean-deploy",
     })
     expect(response.status).toBe(200)
     expect(await json(response)).toMatchObject({
@@ -119,6 +125,7 @@ describe("admin auth middleware", () => {
       api_sha: "a".repeat(40),
       core_sha: "c".repeat(40),
       source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
       hotfix: null,
     })
   })

@@ -38,6 +38,7 @@ describe("deploy version stamping", () => {
       apiSha: githubSha,
       coreSha: null,
       sourceState: "clean",
+      deployReasonSlug: null,
       hotfixReasonSlug: null,
       patchSha256: null,
     })
@@ -69,6 +70,7 @@ describe("deploy version stamping", () => {
       apiSha: explicitSha,
       coreSha: null,
       sourceState: "clean",
+      deployReasonSlug: null,
       hotfixReasonSlug: null,
       patchSha256: null,
     })
@@ -128,6 +130,7 @@ describe("deploy version stamping", () => {
       apiSha,
       coreSha,
       sourceState: "dirty",
+      deployReasonSlug: "urgent-repair",
       hotfixReasonSlug: "urgent-repair",
       patchSha256: "f".repeat(64),
     })).toEqual([
@@ -154,6 +157,8 @@ describe("deploy version stamping", () => {
       `__PIRATE_BUILD_API_SHA__:\"${apiSha}\"`,
       "--define",
       `__PIRATE_BUILD_CORE_SHA__:\"${coreSha}\"`,
+      "--define",
+      "__PIRATE_BUILD_DEPLOY_REASON_SLUG__:\"urgent-repair\"",
       "--define",
       "__PIRATE_BUILD_HOTFIX_REASON_SLUG__:\"urgent-repair\"",
       "--define",

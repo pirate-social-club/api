@@ -31,6 +31,7 @@ console.info("[deploy] stamping Worker build", {
   api_sha: metadata.apiSha,
   core_sha: metadata.coreSha,
   source_state: metadata.sourceState,
+  deploy_reason_slug: metadata.deployReasonSlug,
   hotfix: metadata.sourceState === "dirty"
     ? { reason_slug: metadata.hotfixReasonSlug, patch_sha256: metadata.patchSha256 }
     : null,

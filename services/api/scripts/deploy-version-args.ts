@@ -9,6 +9,7 @@ export type BuildVersionMetadata = {
   apiSha: string
   coreSha: string | null
   sourceState: "clean" | "dirty"
+  deployReasonSlug: string | null
   hotfixReasonSlug: string | null
   patchSha256: string | null
 }
@@ -67,6 +68,10 @@ export function resolveBuildVersionMetadata(
   const coreSha = firstNonEmpty([env.BUILD_CORE_SHA, env.PIRATE_BUILD_CORE_SHA])
   const requestedSourceState = firstNonEmpty([env.BUILD_SOURCE_STATE, env.PIRATE_BUILD_SOURCE_STATE])
   const sourceState = requestedSourceState ?? (dirtySources ? "dirty" : "clean")
+  const deployReasonSlug = firstNonEmpty([
+    env.BUILD_DEPLOY_REASON_SLUG,
+    env.PIRATE_BUILD_DEPLOY_REASON_SLUG,
+  ])
   const hotfixReasonSlug = firstNonEmpty([
     env.BUILD_HOTFIX_REASON_SLUG,
     env.PIRATE_BUILD_HOTFIX_REASON_SLUG,
@@ -87,6 +92,9 @@ export function resolveBuildVersionMetadata(
   }
   if (sourceState !== "clean" && sourceState !== "dirty") {
     throw new Error("BUILD_SOURCE_STATE must be clean or dirty")
+  }
+  if (deployReasonSlug && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(deployReasonSlug)) {
+    throw new Error("BUILD_DEPLOY_REASON_SLUG must be normalized")
   }
   if (sourceState === "dirty" && (
     !hotfixReasonSlug
@@ -111,6 +119,7 @@ export function resolveBuildVersionMetadata(
     apiSha: gitSha,
     coreSha,
     sourceState,
+    deployReasonSlug,
     hotfixReasonSlug,
     patchSha256,
   }
@@ -126,6 +135,7 @@ export function buildStampedWranglerDeployArgs(
     ["__PIRATE_BUILD_WEB_SHA__", metadata.webSha],
     ["__PIRATE_BUILD_API_SHA__", metadata.apiSha],
     ["__PIRATE_BUILD_CORE_SHA__", metadata.coreSha],
+    ["__PIRATE_BUILD_DEPLOY_REASON_SLUG__", metadata.deployReasonSlug],
     ["__PIRATE_BUILD_HOTFIX_REASON_SLUG__", metadata.hotfixReasonSlug],
     ["__PIRATE_BUILD_PATCH_SHA256__", metadata.patchSha256],
   ] as const).flatMap(([name, value]) => value ? ["--define", defineString(name, value)] : [])

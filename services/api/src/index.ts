@@ -197,6 +197,7 @@ declare const __PIRATE_BUILD_WEB_SHA__: string | undefined
 declare const __PIRATE_BUILD_API_SHA__: string | undefined
 declare const __PIRATE_BUILD_CORE_SHA__: string | undefined
 declare const __PIRATE_BUILD_SOURCE_STATE__: string | undefined
+declare const __PIRATE_BUILD_DEPLOY_REASON_SLUG__: string | undefined
 declare const __PIRATE_BUILD_HOTFIX_REASON_SLUG__: string | undefined
 declare const __PIRATE_BUILD_PATCH_SHA256__: string | undefined
 declare const __PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__: string | undefined
@@ -223,6 +224,7 @@ type BuildVersionMetadata = {
   api_sha: string | null
   core_sha: string | null
   source_state: "clean" | "dirty" | null
+  deploy_reason_slug: string | null
   hotfix_reason_slug: string | null
   patch_sha256: string | null
 }
@@ -240,6 +242,9 @@ const COMPILED_BUILD_VERSION_METADATA: BuildVersionMetadata = {
     && (__PIRATE_BUILD_SOURCE_STATE__ === "clean" || __PIRATE_BUILD_SOURCE_STATE__ === "dirty")
       ? __PIRATE_BUILD_SOURCE_STATE__
       : null,
+  deploy_reason_slug: typeof __PIRATE_BUILD_DEPLOY_REASON_SLUG__ === "string"
+    ? __PIRATE_BUILD_DEPLOY_REASON_SLUG__ || null
+    : null,
   hotfix_reason_slug: typeof __PIRATE_BUILD_HOTFIX_REASON_SLUG__ === "string"
     ? __PIRATE_BUILD_HOTFIX_REASON_SLUG__ || null
     : null,
@@ -310,6 +315,7 @@ export function buildVersionMetadata(
     | "BUILD_API_SHA"
     | "BUILD_CORE_SHA"
     | "BUILD_SOURCE_STATE"
+    | "BUILD_DEPLOY_REASON_SLUG"
     | "BUILD_HOTFIX_REASON_SLUG"
     | "BUILD_PATCH_SHA256"
   >,
@@ -329,6 +335,9 @@ export function buildVersionMetadata(
     source_state: useCompiledSourceProvenance
       ? compiled.source_state
       : env.BUILD_SOURCE_STATE ?? null,
+    deploy_reason_slug: useCompiledSourceProvenance
+      ? compiled.deploy_reason_slug
+      : env.BUILD_DEPLOY_REASON_SLUG ?? null,
     hotfix_reason_slug: useCompiledSourceProvenance
       ? compiled.hotfix_reason_slug
       : env.BUILD_HOTFIX_REASON_SLUG ?? null,
@@ -352,6 +361,7 @@ async function buildVersionPayload(env: Env) {
     api_sha: buildVersion.api_sha ?? buildVersion.git_sha,
     core_sha: buildVersion.core_sha,
     source_state: buildVersion.source_state,
+    deploy_reason_slug: buildVersion.deploy_reason_slug,
     hotfix: buildVersion.source_state === "dirty"
       ? {
           reason_slug: buildVersion.hotfix_reason_slug,
