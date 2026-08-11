@@ -836,12 +836,34 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
-  // The PostgreSQL migration temporarily drops the cue immutability trigger
-  // while backfilling legacy rows. The trigger itself is intentionally omitted
-  // from the SQLite mirror (its body calls a PostgreSQL trigger function), so
-  // the matching DROP is a no-op here as well.
-  if (normalized.startsWith("DROP TRIGGER ")) {
+  // PostgreSQL spells trigger removal as `DROP TRIGGER ... ON table`; SQLite
+  // has no table qualifier and does not carry the function-backed trigger in
+  // its local mirror in the first place.
+  if (normalized.startsWith("DROP TRIGGER ") && normalized.includes(" ON ")) {
     return []
+  }
+
+  // The canonical dance cue backfill hashes ids with PostgreSQL-only crypto
+  // functions. Local SQLite mirrors need the same completeness invariant, not
+  // byte-identical bucket assignment, so use a stable portable bucket there.
+  if (
+    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("GET_BYTE(DECODE(MD5(DANCE_ATTEMPT_SESSION_ID)")
+  ) {
+    return [`
+      UPDATE dance_attempt_sessions
+      SET start_cue_policy_version = 'dance_start_cue_gross_body_v1',
+          start_cue_kind = CASE (length(dance_attempt_session_id) % 3)
+            WHEN 0 THEN 'hands_on_head'
+            WHEN 1 THEN 'arms_t'
+            ELSE 'hands_on_hips'
+          END,
+          start_cue_minimum_hold_ms = 500,
+          start_cue_observation_window_ms = 2500,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')
+        AND start_cue_policy_version IS NULL;
+    `]
   }
 
   if (normalized.startsWith("GRANT ")) {

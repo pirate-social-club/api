@@ -364,7 +364,7 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       preview: { refund_cents: 5000 },
     });
     const rows = await repoDb.unsafe(
-      "SELECT status FROM bookings.records WHERE booking_id = $1",
+      "SELECT status FROM bookings.bookings WHERE booking_id = $1",
       ["bkg_lifecycle_service_cancel_terms"],
     ) as Record<string, unknown>[];
     expect(rows).toEqual([{ status: "confirmed" }]);

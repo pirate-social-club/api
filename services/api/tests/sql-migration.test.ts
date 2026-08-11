@@ -275,6 +275,28 @@ describe("sql migration helpers", () => {
       DEFERRABLE INITIALLY DEFERRED
       FOR EACH ROW EXECUTE FUNCTION enforce_projection_coverage();
     `)).toEqual([])
+    expect(toSqliteCompatibleStatements(`
+      DROP TRIGGER dance_attempt_session_start_cue_immutable ON dance_attempt_sessions;
+    `)).toEqual([])
+  })
+
+  test("rewrites the PostgreSQL dance cue hash backfill for sqlite", () => {
+    const [statement] = toSqliteCompatibleStatements(`
+      UPDATE dance_attempt_sessions
+      SET start_cue_policy_version = 'dance_start_cue_gross_body_v1',
+          start_cue_kind = CASE (get_byte(decode(md5(dance_attempt_session_id), 'hex'), 0) % 3)
+            WHEN 0 THEN 'hands_on_head'
+            WHEN 1 THEN 'arms_t'
+            ELSE 'hands_on_hips'
+          END,
+          updated_at = NOW()
+      WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')
+        AND start_cue_policy_version IS NULL;
+    `)
+
+    expect(statement).toContain("length(dance_attempt_session_id) % 3")
+    expect(statement).toContain("updated_at = CURRENT_TIMESTAMP")
+    expect(statement).not.toContain("md5")
   })
 
   test("splits PostgreSQL multi-column projection state changes for sqlite", () => {
