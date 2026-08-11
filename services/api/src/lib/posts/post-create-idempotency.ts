@@ -26,8 +26,12 @@ function stableJsonValue(value: unknown): unknown {
   return output
 }
 
-export async function hashPostCreateRequestBody(body: CreatePostRequest): Promise<string> {
+export async function hashIdempotentRequestBody(body: unknown): Promise<string> {
   return `0x${await sha256Hex(JSON.stringify(stableJsonValue(body)))}`
+}
+
+export async function hashPostCreateRequestBody(body: CreatePostRequest): Promise<string> {
+  return hashIdempotentRequestBody(body)
 }
 
 export function isPostCreateIdempotencyConflict(input: {
