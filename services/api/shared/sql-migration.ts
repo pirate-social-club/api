@@ -915,6 +915,29 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  // The production backfill uses PostgreSQL's md5/decode/get_byte functions
+  // to spread legacy sessions across cue kinds. SQLite has no equivalents;
+  // retain deterministic assignment in the mirror using the session-id length.
+  if (
+    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("GET_BYTE(DECODE(MD5(")
+  ) {
+    return [`
+      UPDATE dance_attempt_sessions
+      SET start_cue_policy_version = 'dance_start_cue_gross_body_v1',
+          start_cue_kind = CASE (length(dance_attempt_session_id) % 3)
+            WHEN 0 THEN 'hands_on_head'
+            WHEN 1 THEN 'arms_t'
+            ELSE 'hands_on_hips'
+          END,
+          start_cue_minimum_hold_ms = 500,
+          start_cue_observation_window_ms = 2500,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')
+        AND start_cue_policy_version IS NULL;
+    `]
+  }
+
   // Migration 0159 adds two nullable admission-policy columns plus a paired
   // PostgreSQL CHECK in one ALTER TABLE. SQLite only supports one ADD COLUMN
   // per ALTER and cannot add the table-level constraint after creation.

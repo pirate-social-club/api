@@ -321,6 +321,11 @@ describe("sql migration helpers", () => {
       "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
     ])
     expect(toSqliteCompatibleStatements("DROP TRIGGER dance_attempt_session_start_cue_immutable ON dance_attempt_sessions;")).toEqual([])
+    expect(toSqliteCompatibleStatement(`
+      UPDATE dance_attempt_sessions
+      SET start_cue_kind = CASE (get_byte(decode(md5(dance_attempt_session_id), 'hex'), 0) % 3)
+      WHERE start_cue_policy_version IS NULL;
+    `)).toContain("length(dance_attempt_session_id) % 3")
   })
 
   test("translates EFP recovery state and review deadlines for sqlite", () => {
