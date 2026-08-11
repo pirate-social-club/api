@@ -7,7 +7,7 @@ import {
   submitDanceAttemptSession,
 } from "./attempt-session-repository"
 
-function fakeClient() {
+function fakeClient(budget = { recent_count: 0, active_count: 0, idempotency_count: 0 }) {
   let session: Record<string, unknown> | null = null
   const revision = {
     community_id: "cmty_1",
@@ -32,6 +32,12 @@ function fakeClient() {
     const args = typeof query === "string" ? [] : (query.args ?? [])
     if (sql.includes("FROM dance_choreography_revisions")) {
       return { rows: [revision] }
+    }
+    if (sql.includes("AS recent_count")) {
+      return { rows: [{
+        ...budget,
+        idempotency_count: session ? 1 : budget.idempotency_count,
+      }] }
     }
     if (sql.includes("INSERT INTO dance_attempt_sessions")) {
       if (session) return { rows: [] }
@@ -128,6 +134,31 @@ function fakeClient() {
 }
 
 describe("dance attempt durable session repository", () => {
+  test("blocks cue rerolls through active-session and hourly creation budgets", async () => {
+    const value = {
+      sessionId: "dse_budget",
+      attemptId: "dat_budget",
+      subjectUserId: "usr_1",
+      hostPostId: "post_1",
+      creationIdempotencyKey: "idem_budget",
+      activityDate: "2026-07-30",
+      activityTimezone: "UTC",
+      consentPolicyVersion: "dance_recording_v1" as const,
+      consentedAt: "2026-07-30T00:00:00.000Z",
+      consentSource: "api" as const,
+      now: "2026-07-30T00:00:00.000Z",
+      expiresAt: "2026-07-30T00:30:00.000Z",
+    }
+    await expect(createDanceAttemptSession({
+      client: fakeClient({ recent_count: 1, active_count: 1, idempotency_count: 0 }).client,
+      value,
+    })).rejects.toMatchObject({ status: 409 })
+    await expect(createDanceAttemptSession({
+      client: fakeClient({ recent_count: 6, active_count: 0, idempotency_count: 0 }).client,
+      value,
+    })).rejects.toMatchObject({ status: 429, code: "rate_limited" })
+  })
+
   test("pins a ready revision and moves through hash-bound upload submission", async () => {
     const { client } = fakeClient()
     const created = await createDanceAttemptSession({

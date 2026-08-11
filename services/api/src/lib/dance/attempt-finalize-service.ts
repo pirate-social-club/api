@@ -91,13 +91,15 @@ function factsVersions(facts: DanceAttemptTerminalFacts) {
   return "versions" in facts ? facts.versions : null
 }
 
-function hasVersionMismatch(session: Session, facts: DanceAttemptTerminalFacts): boolean {
+export function hasVersionMismatch(session: Session, facts: DanceAttemptTerminalFacts): boolean {
   const versions = factsVersions(facts)
   const cue = facts.startCue
-  return Boolean((cue && (
-    cue.policyVersion !== session.startCuePolicyVersion
-    || cue.kind !== session.startCueKind
-  )) || (versions && (
+  const cueMismatch = session.startCuePolicyVersion !== null
+    ? !cue
+      || cue.policyVersion !== session.startCuePolicyVersion
+      || cue.kind !== session.startCueKind
+    : Boolean(cue)
+  return Boolean(cueMismatch || (versions && (
     versions.scorer !== session.scorerVersion
     || versions.featureSchema !== session.featureSchemaVersion
     || versions.calibration !== session.calibrationVersion
