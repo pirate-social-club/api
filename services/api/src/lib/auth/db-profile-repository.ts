@@ -480,7 +480,7 @@ export class DatabaseProfileRepository {
         input.desired.labelDisplay,
         input.tier,
         input.issuanceSource,
-        input.pricePaidCents == null ? null : input.pricePaidCents / 100,
+        input.pricePaidCents ?? null,
         input.paidQuoteId ?? null,
         updatedAt,
       ],
