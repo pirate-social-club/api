@@ -228,8 +228,8 @@ async function mintJwt(input: {
   const isStaging = new URL(input.origin).hostname.includes("staging")
   const issuer = env("AUTH_UPSTREAM_JWT_ISSUER") || (isStaging ? "pirate-staging-upstream" : "pirate-production-upstream")
   const audience = env("AUTH_UPSTREAM_JWT_AUDIENCE") || (isStaging ? "pirate-api-staging" : "api-core")
-  const secret = env("AUTH_UPSTREAM_JWT_SHARED_SECRET") || env("JWT_BASED_AUTH_SHARED_SECRET")
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET / JWT_BASED_AUTH_SHARED_SECRET is not configured")
+  const secret = env("AUTH_UPSTREAM_JWT_SHARED_SECRET")
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is not configured")
   const payload: Record<string, unknown> = {}
   if (input.wallet) payload.wallet_address = input.wallet
   return await new SignJWT(payload)

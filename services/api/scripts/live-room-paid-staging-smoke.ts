@@ -83,7 +83,7 @@ Flags:
   --buyer-subject <sub>  Stable upstream auth subject for the buyer. Can also be set with PIRATE_SMOKE_BUYER_SUBJECT.
 
 Required env for staging:
-  AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET
+  AUTH_UPSTREAM_JWT_SHARED_SECRET
   AGORA_APP_ID and AGORA_APP_CERTIFICATE configured in the API environment
 
 Required env for --settle-purchase:
@@ -149,21 +149,18 @@ function resolveJwtConfig(env: Record<string, string | undefined>, apiBaseUrl: s
 } {
   const staging = isStagingApiUrl(apiBaseUrl)
   const explicitIssuer = process.env.AUTH_UPSTREAM_JWT_ISSUER?.trim()
-    || process.env.JWT_BASED_AUTH_ISSUERS?.split(",")[0]?.trim()
   const explicitAudience = process.env.AUTH_UPSTREAM_JWT_AUDIENCE?.trim()
-    || process.env.JWT_BASED_AUTH_AUDIENCE?.trim()
   const explicitSecret = process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET?.trim()
-    || process.env.JWT_BASED_AUTH_SHARED_SECRET?.trim()
 
   const issuer = explicitIssuer
-    || (staging ? "pirate-staging-upstream" : (env.AUTH_UPSTREAM_JWT_ISSUER || env.JWT_BASED_AUTH_ISSUERS || "pirate-dev").split(",")[0]!.trim())
+    || (staging ? "pirate-staging-upstream" : (env.AUTH_UPSTREAM_JWT_ISSUER || "pirate-dev").split(",")[0]!.trim())
   const audience = explicitAudience
-    || (staging ? "pirate-api-staging" : env.AUTH_UPSTREAM_JWT_AUDIENCE || env.JWT_BASED_AUTH_AUDIENCE || "pirate-api")
+    || (staging ? "pirate-api-staging" : env.AUTH_UPSTREAM_JWT_AUDIENCE || "pirate-api")
   const secret = explicitSecret
-    || (staging ? "" : env.AUTH_UPSTREAM_JWT_SHARED_SECRET || env.JWT_BASED_AUTH_SHARED_SECRET || "")
+    || (staging ? "" : env.AUTH_UPSTREAM_JWT_SHARED_SECRET || "")
 
   if (!secret) {
-    throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+    throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
   }
 
   return { audience, issuer, secret }

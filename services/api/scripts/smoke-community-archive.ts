@@ -25,15 +25,12 @@ const RUN_ID = `${Math.floor(Date.now() / 1000)}-${Wallet.createRandom().address
 
 function jwtConfig() {
   const issuer = process.env.AUTH_UPSTREAM_JWT_ISSUER?.trim()
-    || process.env.JWT_BASED_AUTH_ISSUERS?.split(",")[0]?.trim()
     || "pirate-staging-upstream"
   const audience = process.env.AUTH_UPSTREAM_JWT_AUDIENCE?.trim()
-    || process.env.JWT_BASED_AUTH_AUDIENCE?.trim()
     || "pirate-api-staging"
   const secret = process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET?.trim()
-    || process.env.JWT_BASED_AUTH_SHARED_SECRET?.trim()
     || ""
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET / JWT_BASED_AUTH_SHARED_SECRET required (inject via Infisical staging)")
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET required (inject via the staging secret manager)")
   return { issuer, audience, secret }
 }
 

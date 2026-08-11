@@ -334,12 +334,12 @@ async function mintUpstreamJwt(input: {
   subject: string
   walletAddress: string
 }): Promise<string> {
-  const issuer = (input.env.AUTH_UPSTREAM_JWT_ISSUER || input.env.JWT_BASED_AUTH_ISSUERS || "pirate-dev")
+  const issuer = (input.env.AUTH_UPSTREAM_JWT_ISSUER || "pirate-dev")
     .split(",")[0]!
     .trim()
-  const audience = input.env.AUTH_UPSTREAM_JWT_AUDIENCE || input.env.JWT_BASED_AUTH_AUDIENCE || "pirate-api"
-  const secret = input.env.AUTH_UPSTREAM_JWT_SHARED_SECRET || input.env.JWT_BASED_AUTH_SHARED_SECRET
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+  const audience = input.env.AUTH_UPSTREAM_JWT_AUDIENCE || "pirate-api"
+  const secret = input.env.AUTH_UPSTREAM_JWT_SHARED_SECRET
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
 
   return await new SignJWT({ wallet_address: input.walletAddress })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
