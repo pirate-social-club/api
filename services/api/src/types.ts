@@ -187,6 +187,12 @@ type RewardPendingVerificationSummary = {
   count: number
   conditional_cents: number
   earliest_expires_at: number | null
+  provider_requirements: Array<{
+    provider: "self" | "zkpassport" | "very"
+    count: number
+    conditional_cents: number
+    earliest_expires_at: number | null
+  }>
 }
 
 export type RewardQualificationStatus =

@@ -438,13 +438,13 @@ describe("reward campaign reconciler", () => {
           status, eligible_activity, min_score_bps, daily_reward_cents,
           default_amount_cents, max_claim_cents, payout_tiers_json,
           milestone_7_cents, milestone_30_cents, reward_period_cap_cents,
-          budget_cents, funded_cents, terms_hash, starts_at, ends_at,
+          budget_cents, funded_cents, reward_identity_provider, terms_hash, starts_at, ends_at,
           activated_at, created_at, updated_at
         ) VALUES (
           'rcp_pending_verification', ?1, 'pending-verification-create', ?2, ?3, ?4,
-          ?1, 'active', 'karaoke', 7000, 40, 40, 80,
-          '[{"nationalities":["VNM"],"amount_cents":60}]',
-          0, 0, 80, 1000, 1000,
+          ?1, 'active', 'karaoke', 7000, 80, 80, 80,
+          '[]',
+          0, 0, 80, 1000, 1000, 'very',
           'pending-verification-terms', '2026-07-01T00:00:00.000Z',
           '2026-07-31T00:00:00.000Z', ?5, ?5, ?5
         )
@@ -499,7 +499,15 @@ describe("reward campaign reconciler", () => {
     })
     expect(beforeVerification).toMatchObject({
       balance_cents: 0,
-      pending_verification: { count: 1, conditional_cents: 80 },
+      pending_verification: {
+        count: 1,
+        conditional_cents: 80,
+        provider_requirements: [{
+          provider: "very",
+          count: 1,
+          conditional_cents: 80,
+        }],
+      },
       recent_qualifications: [{
         reward_qualification_event_id: candidate.eventId,
         reward_campaign_id: "rcp_pending_verification",
@@ -516,7 +524,7 @@ describe("reward campaign reconciler", () => {
       sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
       args: [session.userId, JSON.stringify({
         unique_human: {
-          state: "verified", provider: "self", proof_type: "unique_human",
+          state: "verified", provider: "very", proof_type: "unique_human",
           mechanism: "session_complete", verified_at: Math.floor(Date.parse(now) / 1000),
         },
       })],
@@ -526,7 +534,7 @@ describe("reward campaign reconciler", () => {
         INSERT INTO identity_nullifiers (
           identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
           status, first_seen_at, created_at, updated_at
-        ) VALUES ('idn_pending_verification', ?1, 'self', 'zk-nullifier',
+        ) VALUES ('idn_pending_verification', ?1, 'very', 'zk-nullifier',
           'pending-verification-human', 'active', ?2, ?2, ?2)
       `,
       args: [session.userId, now],
@@ -544,7 +552,7 @@ describe("reward campaign reconciler", () => {
         verification_session_id, user_id, provider, session_kind,
         requested_capabilities_json, status, started_at, completed_at,
         created_at, updated_at
-      ) VALUES ('vss_pending_verification', ?1, 'self', 'identity',
+      ) VALUES ('vss_pending_verification', ?1, 'very', 'identity',
         '["nationality"]', 'verified', ?2, ?2, ?2, ?2)`,
       args: [session.userId, now],
     })
@@ -555,20 +563,19 @@ describe("reward campaign reconciler", () => {
         created_at, updated_at,
         source_identity_nullifier_id
       ) VALUES ('att_pending_verification', ?1, 'vss_pending_verification',
-        'self', 'nationality', 'nationality', ?2, 'accepted', ?3, ?3, ?3,
+        'very', 'nationality', 'nationality', ?2, 'accepted', ?3, ?3, ?3,
         'idn_pending_verification')`,
       args: [session.userId, JSON.stringify({ nationality: "VNM" }), now],
     })
     expect(await creditRewardCampaignQualification({
-      // Deliberately disagrees with the persisted `self` pool. The campaign
-      // term must win and allow the Self identity to credit.
-      env: { ...ctx.env, REWARDS_IDENTITY_PROVIDER: "very" },
+      // The campaign term must win over the legacy environment default.
+      env: { ...ctx.env, REWARDS_IDENTITY_PROVIDER: "self" },
       client: ctx.client,
       candidate,
       now,
     })).toEqual({
       result: "credited",
-      amountCents: 60,
+      amountCents: 80,
     })
     const afterVerification = await getRewardsSummaryForUser({
       env: { ...ctx.env, REWARDS_READS_ENABLED: "true" },
@@ -577,16 +584,16 @@ describe("reward campaign reconciler", () => {
       now,
     })
     expect(afterVerification).toMatchObject({
-      balance_cents: 60,
+      balance_cents: 80,
       pending_verification: { count: 0, conditional_cents: 0 },
       recent_qualifications: [{
         reward_qualification_event_id: candidate.eventId,
-        amount_cents: 60,
+        amount_cents: 80,
         status: "credited",
         outcome_reason: null,
         credited_reward_event_id: expect.stringMatching(/^rew_/),
       }],
-      cashout: { eligible: false, verification_state: "verified", verification_provider: "self" },
+      cashout: { eligible: false, verification_state: "verified", verification_provider: "very" },
     })
     const projection = await ctx.client.execute({
       sql: `
@@ -598,7 +605,7 @@ describe("reward campaign reconciler", () => {
     })
     expect(projection.rows).toEqual([expect.objectContaining({
       status: "credited",
-      conditional_amount_cents: 60,
+      conditional_amount_cents: 80,
       credited_reward_event_id: expect.stringMatching(/^rew_/),
     })])
     const accounting = await ctx.client.execute({
@@ -614,10 +621,10 @@ describe("reward campaign reconciler", () => {
       args: [candidate.eventId],
     })
     expect(accounting.rows[0]).toMatchObject({
-      resolved_amount_cents: 60,
-      result_key: "tier:0",
+      resolved_amount_cents: null,
+      result_key: null,
       pending_exposure_cents: 0,
-      allocated_cents: 60,
+      allocated_cents: 80,
     })
 
     const lowScoreCandidate = {

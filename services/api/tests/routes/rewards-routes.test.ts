@@ -1950,6 +1950,7 @@ describe("rewards routes", () => {
         count: 0,
         conditional_cents: 0,
         earliest_expires_at: null,
+        provider_requirements: [],
       },
       cashout: {
         eligible: false,
