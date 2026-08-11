@@ -836,6 +836,14 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
+  // The PostgreSQL migration temporarily drops the cue immutability trigger
+  // while backfilling legacy rows. The trigger itself is intentionally omitted
+  // from the SQLite mirror (its body calls a PostgreSQL trigger function), so
+  // the matching DROP is a no-op here as well.
+  if (normalized.startsWith("DROP TRIGGER ")) {
+    return []
+  }
+
   if (normalized.startsWith("GRANT ")) {
     return []
   }
