@@ -109,4 +109,51 @@ describe("D1 pool schema attestation migration", () => {
       db.close()
     }
   })
+
+  test("0005 preserves rows and accepts the verifier's unreachable status", async () => {
+    const db = await migratedPool()
+    try {
+      db.exec("INSERT INTO d1_pool (binding_name, community_id, version) VALUES ('DB_CMTY_0001', 'community-1', 7)")
+      db.query(
+        `
+        INSERT INTO d1_pool_schema_attestations (
+          shard_worker_id, binding_name, community_id, pool_version,
+          attestation_epoch, state, verdict_status, effective_policy_digest,
+          schema_fingerprint, migration_ledger_digest, canonical_inventory_digest,
+          verified_at, writer_kind, writer_run_id
+        ) VALUES ('worker-a', 'DB_CMTY_0001', 'community-1', 7,
+          'scan-1', 'verified', 'satisfied', ?1, ?1, ?1, ?1,
+          '2026-08-03T00:00:00.000Z', 'full_scan', 'scan-1')
+      `,
+      ).run(digest)
+
+      db.exec(await readFile(resolve(migrations, "0004_d1_pool_schema_attestation_writers.sql"), "utf8"))
+      db.exec(await readFile(resolve(migrations, "0005_d1_pool_schema_attestation_unreachable.sql"), "utf8"))
+
+      expect(db.query("SELECT state, verdict_status FROM d1_pool_schema_attestations").get()).toEqual({
+        state: "verified",
+        verdict_status: "satisfied",
+      })
+
+      db.query(
+        `
+        INSERT INTO d1_pool_schema_attestations (
+          shard_worker_id, binding_name, community_id, pool_version,
+          attestation_epoch, state, verdict_status, effective_policy_digest,
+          schema_fingerprint, migration_ledger_digest, canonical_inventory_digest,
+          verified_at, writer_kind, writer_run_id, last_error_code
+        ) VALUES ('worker-b', 'DB_CMTY_0001', 'community-1', 7,
+          'scan-2', 'invalid', 'unreachable', ?1, ?1, ?1, ?1,
+          NULL, 'full_scan', 'scan-2', 'unreachable')
+      `,
+      ).run(digest)
+
+      expect(db.query("SELECT state, verdict_status FROM d1_pool_schema_attestations WHERE shard_worker_id = 'worker-b'").get()).toEqual({
+        state: "invalid",
+        verdict_status: "unreachable",
+      })
+    } finally {
+      db.close()
+    }
+  })
 })
