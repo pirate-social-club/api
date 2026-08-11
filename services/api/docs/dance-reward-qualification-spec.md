@@ -934,6 +934,9 @@ V1 uses layered friction rather than claiming cryptographic camera liveness.
 - Credit-time unique-human proof and the existing song/day claim fence prevent multi-account
   duplicate payment for one verified identity.
 - Per-user and per-IP session/submission limits constrain storage and grading spend.
+- The backend permits at most one active dance session per user and at most six newly-created
+  sessions per rolling hour. Cancellation does not refund the hourly budget, so users cannot
+  cheaply re-roll the three cue kinds until a prepared clip matches.
 - Repeated integrity failures can disable rewarded dance for the account pending review.
 
 Near-duplicate thresholds must be calibrated against honest people performing the same choreography.
@@ -952,6 +955,11 @@ observability.
 
 These remain escalation options if campaign value, duplicate rate, or observed organized farming
 exceeds v1 risk limits.
+
+The prelude-only cue does not prevent an attacker from splicing a freshly recorded valid cue onto
+pre-recorded choreography footage. The cue is therefore replay friction, not continuous liveness.
+Higher-value campaigns require a larger cue sequence or a challenge interleaved with choreography,
+plus a separately calibrated scorer contract.
 
 ## Privacy and retention
 
