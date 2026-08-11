@@ -23,6 +23,7 @@ export type LiveRoomAudienceGate = {
 }
 
 export type CreateLiveRoomRequest = {
+  idempotency_key?: string | null
   title?: string | null
   description?: string | null
   identity_mode?: Post["identity_mode"] | null

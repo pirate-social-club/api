@@ -193,6 +193,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
     SELECT live_room_id
     FROM live_rooms
     WHERE live_rooms.anchor_post_id = posts.post_id
+      AND live_rooms.visibility = 'public'
     LIMIT 1
   ) AS anchor_live_room_id, (
     SELECT status

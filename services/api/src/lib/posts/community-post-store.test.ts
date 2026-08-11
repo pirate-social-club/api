@@ -327,6 +327,55 @@ describe("isAsyncSongBundleStatusPublishable", () => {
 })
 
 describe("listPublishedLocalizedPosts", () => {
+  test("omits anchor posts for unlisted live rooms", async () => {
+    const client = createClient({ url: "file::memory:" })
+    clients.push(client)
+    await createPostStoreTables(client)
+    await client.batch([
+      "CREATE TABLE post_votes (post_id TEXT NOT NULL, user_id TEXT NOT NULL, vote_value INTEGER NOT NULL)",
+      "CREATE TABLE comments (thread_root_post_id TEXT NOT NULL, status TEXT NOT NULL)",
+      "CREATE TABLE post_reactions (post_id TEXT NOT NULL, reaction_key TEXT NOT NULL)",
+      {
+        sql: `
+          INSERT INTO posts (
+            post_id, community_id, author_user_id, authorship_mode, identity_mode,
+            label_assignment_status, post_type, status, visibility, title, body,
+            source_language, translation_policy, rights_basis, analysis_state,
+            content_safety_state, age_gate_policy, idempotency_key, created_at, updated_at
+          ) VALUES
+            ('pst_public_live', 'cmt_test', 'usr_test', 'human_direct', 'public',
+             'pending', 'video', 'published', 'public', 'Public live', '',
+             'en', 'none', 'none', 'allow', 'safe', 'none', 'public-live',
+             '2026-05-06T00:00:02.000Z', '2026-05-06T00:00:02.000Z'),
+            ('pst_unlisted_live', 'cmt_test', 'usr_test', 'human_direct', 'public',
+             'pending', 'video', 'published', 'public', 'Unlisted live', '',
+             'en', 'none', 'none', 'allow', 'safe', 'none', 'unlisted-live',
+             '2026-05-06T00:00:01.000Z', '2026-05-06T00:00:01.000Z')
+        `,
+      },
+      {
+        sql: `
+          INSERT INTO live_rooms (live_room_id, anchor_post_id, status, visibility)
+          VALUES
+            ('lr_public', 'pst_public_live', 'scheduled', 'public'),
+            ('lr_unlisted', 'pst_unlisted_live', 'scheduled', 'unlisted')
+        `,
+      },
+    ])
+
+    const feed = await listPublishedLocalizedPosts({
+      client,
+      communityId: "cmt_test",
+      viewerUserId: "",
+      limit: 10,
+      sort: "new",
+      visibility: "public",
+    })
+
+    expect(feed.items.map((item) => item.post.post_id)).toEqual(["pst_public_live"])
+    expect(feed.items[0]?.post.anchor_live_room_id).toBe("lr_public")
+  })
+
   test("omits asset-backed posts when the asset row is missing", async () => {
     const client = createClient({ url: "file::memory:" })
     clients.push(client)
