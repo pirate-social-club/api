@@ -114,6 +114,39 @@ function resolveVerificationState(hasNullifier: boolean): RewardVerificationStat
   return hasNullifier ? "verified" : "unverified"
 }
 
+export function summarizePendingProviderRows(rows: QueryResultRow[]) {
+  const providerRequirements = rows.map((row) => {
+    const rawProvider = requiredString(row, "provider")
+    if (rawProvider !== "self" && rawProvider !== "very" && rawProvider !== "zkpassport") {
+      throw new Error(`unexpected_reward_identity_provider:${rawProvider}`)
+    }
+    const provider: "self" | "very" | "zkpassport" = rawProvider
+    const earliestExpiresAt = rowValue(row, "earliest_expires_at")
+    return {
+      provider,
+      count: requiredNumber(row, "pending_count"),
+      conditional_cents: requiredNumber(row, "conditional_cents"),
+      earliest_expires_at: earliestExpiresAt == null ? null : unixSeconds(earliestExpiresAt),
+    }
+  })
+  return {
+    count: providerRequirements.reduce((total, requirement) => total + requirement.count, 0),
+    conditional_cents: providerRequirements.reduce(
+      (total, requirement) => total + requirement.conditional_cents,
+      0,
+    ),
+    earliest_expires_at: providerRequirements.reduce<number | null>(
+      (earliest, requirement) => earliest == null
+        ? requirement.earliest_expires_at
+        : requirement.earliest_expires_at == null
+          ? earliest
+          : Math.min(earliest, requirement.earliest_expires_at),
+      null,
+    ),
+    provider_requirements: providerRequirements,
+  }
+}
+
 export async function getRewardsSummaryForUser(input: {
   env: Env
   userId: string
@@ -139,6 +172,7 @@ export async function getRewardsSummaryForUser(input: {
         count: 0,
         conditional_cents: 0,
         earliest_expires_at: null,
+        provider_requirements: [],
       },
       cashout: {
         eligible: false,
@@ -150,7 +184,7 @@ export async function getRewardsSummaryForUser(input: {
     }
   }
 
-  const [creditRow, payoutRow, todayRow, eventRows, qualificationRows, pendingRow, latestInFlightRow, hasNullifier] = await Promise.all([
+  const [creditRow, payoutRow, todayRow, eventRows, qualificationRows, pendingProviderRows, latestInFlightRow, hasNullifier] = await Promise.all([
     executeFirst(client, {
       sql: `
         SELECT COALESCE(SUM(amount_cents), 0) AS credit_cents
@@ -213,15 +247,20 @@ export async function getRewardsSummaryForUser(input: {
       `,
       args: [input.userId, recentLimit],
     }),
-    executeFirst(client, {
+    client.execute({
       sql: `
-        SELECT COUNT(*) AS pending_count,
+        SELECT campaign.reward_identity_provider AS provider,
+          COUNT(*) AS pending_count,
           COALESCE(SUM(conditional_amount_cents), 0) AS conditional_cents,
           MIN(expires_at) AS earliest_expires_at
-        FROM reward_pending_qualifications
-        WHERE user_id = ?1
-          AND status IN ('pending_verification', 'reconciling')
-          AND expires_at > ?2
+        FROM reward_pending_qualifications qualification
+        JOIN reward_campaigns campaign
+          ON campaign.reward_campaign_id = qualification.reward_campaign_id
+        WHERE qualification.user_id = ?1
+          AND qualification.status IN ('pending_verification', 'reconciling')
+          AND qualification.expires_at > ?2
+        GROUP BY campaign.reward_identity_provider
+        ORDER BY campaign.reward_identity_provider ASC
       `,
       args: [input.userId, input.now ?? new Date().toISOString()],
     }),
@@ -243,9 +282,7 @@ export async function getRewardsSummaryForUser(input: {
   const payoutCents = numberOrNull(rowValue(payoutRow, "payout_cents")) ?? 0
   const balanceCents = Math.max(0, creditCents - payoutCents)
   const todayEarnedCents = numberOrNull(rowValue(todayRow, "credited_cents")) ?? 0
-  const pendingCount = numberOrNull(rowValue(pendingRow, "pending_count")) ?? 0
-  const pendingConditionalCents = numberOrNull(rowValue(pendingRow, "conditional_cents")) ?? 0
-  const pendingExpiresAt = rowValue(pendingRow, "earliest_expires_at")
+  const pendingVerification = summarizePendingProviderRows(pendingProviderRows.rows)
   const verificationState = resolveVerificationState(Boolean(hasNullifier))
 
   return {
@@ -254,11 +291,7 @@ export async function getRewardsSummaryForUser(input: {
     today_earned_cents: todayEarnedCents,
     recent_events: eventRows.rows.map(serializeRewardEvent),
     recent_qualifications: qualificationRows.rows.map(serializeRewardQualification),
-    pending_verification: {
-      count: pendingCount,
-      conditional_cents: pendingConditionalCents,
-      earliest_expires_at: pendingExpiresAt == null ? null : unixSeconds(pendingExpiresAt),
-    },
+    pending_verification: pendingVerification,
     cashout: {
       eligible: balanceCents >= minCashoutCents && verificationState === "verified",
       min_cents: minCashoutCents,

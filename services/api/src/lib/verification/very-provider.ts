@@ -349,6 +349,9 @@ function getStringValue(record: Record<string, unknown>, keys: string[]): string
     if (typeof value === "string" && value.trim()) {
       return value.trim()
     }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return String(value)
+    }
   }
   return null
 }
