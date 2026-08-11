@@ -42,7 +42,7 @@ function verify() {
   return verifyPirateCheckoutUsdcFunding({
     env,
     quoteId: "quote_1",
-    amountUsd: 5,
+    amountCents: 500,
     buyerAddress: BUYER,
     fundingTxRef: TX,
   })

@@ -5,7 +5,6 @@ import {
   getActiveEntitlementForBuyer,
   getListingRowByAssetId,
   getListingRowByLiveRoomId,
-  usdToCents,
   type ListingRow,
   type PurchaseEntitlementRow,
 } from "../commerce/shared"
@@ -352,8 +351,7 @@ async function buildPurchaseEntitlementFailedSegment(
   const purchasableListings = (await Promise.all(segment.target_refs.map(async (targetRef) => {
     const listing = await getListingRowByAssetId(client, communityId, targetRef)
     if (!listing || listing.status !== "active" || !listing.asset_id) return null
-    const priceCents = usdToCents(listing.price_usd)
-    if (priceCents == null) return null
+    const priceCents = listing.price_cents
     return {
       listing: publicId(listing.listing_id, "lst"),
       asset: publicId(listing.asset_id, "asset"),

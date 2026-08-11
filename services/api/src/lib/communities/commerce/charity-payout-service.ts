@@ -20,7 +20,7 @@ export type CharityPayoutExecutionInput = {
   provider: "endaoment"
   providerPartnerRef: string | null
   payoutDestinationRef: string
-  amountUsd: number
+  amountCents: number
   amountAtomic: string
   settlementDecimals: number
   shareBps: number
@@ -75,7 +75,7 @@ export async function executeCharityPayoutsForSettlement(input: {
   const charityAllocations = input.allocations.filter((allocation) =>
     allocation.recipient_type === "charity"
     && allocation.settlement_strategy === "provider_payout"
-    && allocation.amount_usd > 0
+    && allocation.amount_cents > 0
     && allocation.recipient_ref?.trim())
 
   for (const allocation of charityAllocations) {
@@ -131,7 +131,7 @@ export async function executeCharityPayoutsForSettlement(input: {
       continue
     }
 
-    const settlementAmount = resolveSettlementAmountSnapshot(allocation.amount_usd)
+    const settlementAmount = resolveSettlementAmountSnapshot(allocation.amount_cents)
     let payout: CharityPayoutExecutionResult
     try {
       payout = await executeCharityPayout({
@@ -143,7 +143,7 @@ export async function executeCharityPayoutsForSettlement(input: {
         provider: "endaoment",
         providerPartnerRef: stringOrNull(partner, "provider_partner_ref"),
         payoutDestinationRef,
-        amountUsd: allocation.amount_usd,
+        amountCents: allocation.amount_cents,
         amountAtomic: settlementAmount.amountAtomic,
         settlementDecimals: settlementAmount.decimals,
         shareBps: allocation.share_bps,

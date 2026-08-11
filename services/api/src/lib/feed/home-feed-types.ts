@@ -18,6 +18,8 @@ export type HomeFeedProjectionRow = {
   downvote_count: number
   comment_count: number
   like_count: number
+  /** SQL-computed ordering key carried only far enough to build an exact keyset cursor. */
+  feed_sort_key?: number | null
   post_type?: "text" | "image" | "video" | "link" | "song" | "crosspost"
 }
 

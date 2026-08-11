@@ -28,21 +28,13 @@ export type CommunityStudyPolicyPatch = {
   study_enabled?: boolean
 }
 
-type CommunityColumnClient = Pick<Client, "execute">
-
-async function hasCommunityColumn(client: CommunityColumnClient | DbExecutor, columnName: string): Promise<boolean> {
-  const result = await client.execute("PRAGMA table_info(communities)")
-  return result.rows.some((row) => String(row.name) === columnName)
-}
-
 function defaultCommunityStudyPolicy(input: {
   communityId: string
-  updatedAt?: string | null
 }): CommunityStudyPolicy {
   return {
     community_id: input.communityId,
     study_enabled: false,
-    updated_at: input.updatedAt ?? null,
+    updated_at: null,
   }
 }
 
@@ -64,7 +56,13 @@ function toCommunityStudyPolicy(input: {
 
 function isMissingStudyEnabledColumnError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /(?:no such column|unknown column|column .*study_enabled.* does not exist|no column named study_enabled)/iu.test(message)
+  return /(?:no such column(?::|\s)+.*study_enabled|unknown column(?::|\s)+.*study_enabled|column .*study_enabled.* does not exist|no column named study_enabled)/iu.test(message)
+}
+
+function missingStudyEnabledColumnError(communityId: string) {
+  return internalError(
+    `Community ${communityId} is missing the study_enabled column (migration 1115_community_study_enabled.sql); an operator must converge the community database schema via the reviewed migration path before study policy access can proceed`,
+  )
 }
 
 export async function updateStudyPolicyRow(input: {
@@ -96,9 +94,7 @@ export async function updateStudyPolicyRow(input: {
     if (!isMissingStudyEnabledColumnError(error)) {
       throw error
     }
-    throw internalError(
-      `Community ${input.communityId} is missing the study_enabled column (migration 1115_community_study_enabled.sql); an operator must converge the community database schema via the reviewed migration path before study policy writes can proceed`,
-    )
+    throw missingStudyEnabledColumnError(input.communityId)
   }
 }
 
@@ -136,9 +132,6 @@ export async function isCommunityStudyEnabled(input: {
   executor: DbExecutor
   communityId: string
 }): Promise<boolean> {
-  if (!await hasCommunityColumn(input.executor, "study_enabled")) {
-    return false
-  }
   const result = await input.executor.execute({
     sql: `
       SELECT study_enabled
@@ -147,6 +140,11 @@ export async function isCommunityStudyEnabled(input: {
       LIMIT 1
     `,
     args: [input.communityId],
+  }).catch((error: unknown) => {
+    if (isMissingStudyEnabledColumnError(error)) {
+      throw missingStudyEnabledColumnError(input.communityId)
+    }
+    throw error
   })
   return Number(result.rows[0]?.study_enabled ?? 0) === 1
 }
@@ -171,22 +169,6 @@ async function readCommunityStudyPolicy(input: {
 }): Promise<CommunityStudyPolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    if (!await hasCommunityColumn(db.client, "study_enabled")) {
-      const legacy = await db.client.execute({
-        sql: `
-          SELECT updated_at
-          FROM communities
-          WHERE community_id = ?1
-          LIMIT 1
-        `,
-        args: [input.communityId],
-      })
-      return defaultCommunityStudyPolicy({
-        communityId: input.communityId,
-        updatedAt: typeof legacy.rows[0]?.updated_at === "string" ? legacy.rows[0].updated_at : null,
-      })
-    }
-
     const result = await db.client.execute({
       sql: `
         SELECT study_enabled, updated_at
@@ -195,6 +177,11 @@ async function readCommunityStudyPolicy(input: {
         LIMIT 1
       `,
       args: [input.communityId],
+    }).catch((error: unknown) => {
+      if (isMissingStudyEnabledColumnError(error)) {
+        throw missingStudyEnabledColumnError(input.communityId)
+      }
+      throw error
     })
     return toCommunityStudyPolicy({
       communityId: input.communityId,

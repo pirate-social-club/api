@@ -50,7 +50,8 @@
     "1150_moderation_content_rating_audit.sql",
     "1151_song_study_orchestration_v2.sql",
     "1152_user_account_merge_receipts.sql",
-    "1153_dance_attempt_start_cue_evidence.sql"
+    "1153_dance_attempt_start_cue_evidence.sql",
+    "1154_commerce_integer_money.sql"
   ],
   "features": {},
   "transitional": {
@@ -118,6 +119,7 @@
     "1149_song_streak_owner_timezone.sql": "The migration backfills timezone and active_until_at with UPDATE statements that the fleet artifact deriver cannot model. Require the exact pinned Core ledger checksum; the generated community schema snapshot and streak migration/service tests separately verify the final columns, index, UTC backfill, and owner-timezone runtime behavior.",
     "1150_moderation_content_rating_audit.sql": "SQLite widens the moderation action contract through a full table rebuild, copies existing rows, and recreates indexes. Require the exact pinned Core ledger checksum because the fleet artifact deriver cannot model rebuild equivalence; Core migration tests verify populated-row preservation and the new audited content-rating fields, while the API snapshot verifies the final schema.",
     "1151_song_study_orchestration_v2.sql": "The migration adds server-owned lesson-orchestration columns and receipt/response tables, then backfills completed sessions and resolved exercises with UPDATE statements the fleet artifact deriver cannot model. Require the exact pinned Core ledger checksum; Core migration tests verify the backfill and persistence contract while the API snapshot verifies the resulting columns, constraints, indexes, and tables.",
-    "1153_dance_attempt_start_cue_evidence.sql": "SQLite widens the immutable dance reason contract and appends cue evidence through a full table rebuild. Require the exact pinned Core ledger checksum; Core migration tests verify populated-row preservation and API finalization tests verify the cue fields written by scorer v2."
+    "1153_dance_attempt_start_cue_evidence.sql": "SQLite widens the immutable dance reason contract and appends cue evidence through a full table rebuild. Require the exact pinned Core ledger checksum; Core migration tests verify populated-row preservation and API finalization tests verify the cue fields written by scorer v2.",
+    "1154_commerce_integer_money.sql": "The migration rebuilds four populated commerce tables, converts floating-point USD and percentage values into integer cents and basis points, rewrites allocation snapshot JSON, and recreates indexes. Require the exact pinned Core ledger checksum; migration regressions verify populated-row conversion and integer guards while the API snapshot verifies the final schema."
   }
 }

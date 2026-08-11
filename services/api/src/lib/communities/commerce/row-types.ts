@@ -68,7 +68,7 @@ export type ListingRow = {
   replay_asset_id: string | null
   listing_mode: CommunityListing["listing_mode"]
   status: CommunityListing["status"]
-  price_usd: number
+  price_cents: number
   regional_pricing_policy_json: string | null
   vinyl_release_provider: CommunityListing["vinyl_release_provider"] | null
   vinyl_release_url: string | null
@@ -80,12 +80,10 @@ export type ListingRow = {
 export type ListingPolicySnapshot = {
   regional_pricing_enabled?: boolean
   donation_partner_id?: string | null
-  donation_share_pct?: number | null
+  donation_share_bps?: number | null
 }
 
-export type QuoteAllocationSnapshot = Omit<NonNullable<CommunityPurchaseQuote["allocation_snapshot"]>[number], "amount_cents"> & {
-  amount_usd: number
-}
+export type QuoteAllocationSnapshot = NonNullable<CommunityPurchaseQuote["allocation_snapshot"]>[number]
 
 export type PurchaseAllocationLeg = NonNullable<CommunityPurchase["allocations"]>[number]
 
@@ -103,9 +101,9 @@ export type PurchaseQuoteRow = {
   asset_id: string | null
   live_room_id: string | null
   replay_asset_id: string | null
-  base_price_usd: number
+  base_price_cents: number
   pricing_tier: string | null
-  final_price_usd: number
+  final_price_cents: number
   allocation_snapshot_json: string | null
   funding_mode: "direct" | "routed"
   funding_asset_json: string | null
@@ -146,7 +144,7 @@ export type PurchaseAllocationLegRow = {
   recipient_ref: string | null
   waterfall_position: number
   share_bps: number
-  amount_usd: number
+  amount_cents: number
   settlement_strategy: PurchaseAllocationLeg["settlement_strategy"]
   status: PurchaseAllocationLeg["status"]
   settlement_ref: string | null
@@ -174,15 +172,15 @@ export type PurchaseRow = {
   buyer_wallet_address_normalized: string | null
   buyer_chain_ref: string | null
   settlement_wallet_attachment_id: string
-  purchase_price_usd: number
+  purchase_price_cents: number
   pricing_tier: string | null
   settlement_mode: PurchaseSettlementMode
   settlement_chain: string
   settlement_token: string
   settlement_tx_ref: string
   donation_partner_id: string | null
-  donation_share_pct: number | null
-  donation_amount_usd: number | null
+  donation_share_bps: number | null
+  donation_amount_cents: number | null
   vinyl_release_provider: CommunityPurchase["vinyl_release_provider"] | null
   vinyl_release_url: string | null
   created_at: string

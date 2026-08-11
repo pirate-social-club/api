@@ -33,9 +33,6 @@ function studyEnabledExecutor(input: {
   return {
     async execute(query) {
       const sql = typeof query === "string" ? query : query.sql
-      if (String(sql).includes("PRAGMA table_info(communities)")) {
-        return { rows: [{ name: "study_enabled" }] }
-      }
       if (String(sql).includes("FROM communities")) {
         return { rows: [{ study_enabled: 1 }] }
       }
@@ -72,9 +69,6 @@ function studyDisabledExecutor(input: {
   return {
     async execute(query) {
       const sql = typeof query === "string" ? query : query.sql
-      if (String(sql).includes("PRAGMA table_info(communities)")) {
-        return { rows: [{ name: "study_enabled" }] }
-      }
       if (String(sql).includes("FROM communities")) {
         return { rows: [{ study_enabled: 0 }] }
       }
@@ -94,10 +88,6 @@ function studyPolicyCountingExecutor(input: {
     executor: {
       async execute(query) {
         const sql = typeof query === "string" ? query : query.sql
-        if (String(sql).includes("PRAGMA table_info(communities)")) {
-          studyPolicyQueries += 1
-          return { rows: [{ name: "study_enabled" }] }
-        }
         if (String(sql).includes("SELECT study_enabled") && String(sql).includes("FROM communities")) {
           studyPolicyQueries += 1
           return { rows: [{ study_enabled: input.studyEnabled === false ? 0 : 1 }] }
@@ -486,7 +476,35 @@ describe("buildLocalizedPostResponse", () => {
     })
 
     expect(responses.map((response) => response.study_capability?.status)).toEqual(["ready", "ready"])
-    expect(counted.studyPolicyQueryCount()).toBe(2)
+    expect(counted.studyPolicyQueryCount()).toBe(1)
+  })
+
+  test("feed response rejects when either migration-owned policy column is missing", async () => {
+    for (const missingColumn of ["karaoke_enabled", "study_enabled"] as const) {
+      const executor = {
+        async execute(query: string | { sql: string }) {
+          const sql = typeof query === "string" ? query : query.sql
+          if (sql.includes(`SELECT ${missingColumn}`) && sql.includes("FROM communities")) {
+            throw new Error(`no such column: ${missingColumn}`)
+          }
+          if (sql.includes("SELECT karaoke_enabled") && sql.includes("FROM communities")) {
+            return { rows: [{ karaoke_enabled: 0 }] }
+          }
+          if (sql.includes("SELECT study_enabled") && sql.includes("FROM communities")) {
+            return { rows: [{ study_enabled: 1 }] }
+          }
+          return { rows: [] }
+        },
+      } as DbExecutor
+
+      await expect(buildLocalizedPostFeedResponses({
+        client: executor as Client,
+        feedItems: [makeFeedItem(makeSongPost())],
+        viewerUserId: "usr_fan",
+        ageGateState: null,
+        studyElevenLabsCredentialResolver: activeElevenLabsCredential,
+      })).rejects.toThrow(missingColumn)
+    }
   })
 
   test("adds a locked study capability for locked songs without entitlement", async () => {
@@ -541,7 +559,7 @@ describe("buildLocalizedPostResponse", () => {
     expect(entitlementQueries).toBe(0)
   })
 
-  test("omits study capability when the study_enabled column is absent", async () => {
+  test("omits study capability when the local community row is absent", async () => {
     const response = await buildLocalizedPostResponse({
       executor: emptyExecutor(),
       post: {

@@ -1051,7 +1051,7 @@ describe("community handle routes", () => {
       fromAddress: input.buyerAddress,
       toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
       tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+      amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
       chainRef: "eip155:84532",
       observation: {
         chainId: 84532,
@@ -1635,7 +1635,7 @@ describe("community handle routes", () => {
         fromAddress: input.buyerAddress,
         toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
         tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
         chainRef: "eip155:84532",
       }
     })

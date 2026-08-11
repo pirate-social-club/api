@@ -156,7 +156,7 @@ beforeEach(() => {
     fromAddress: input.buyerAddress,
     toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
     tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-    amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+    amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
     chainRef: "eip155:84532",
   }))
 })
@@ -1378,7 +1378,7 @@ describe("song artifact locked routes", () => {
       idempotencyKey: string
       donationPartnerId: string
       payoutDestinationRef: string
-      amountUsd: number
+      amountCents: number
       amountAtomic: string
       settlementToken: string
     }> = []
@@ -1418,7 +1418,7 @@ describe("song artifact locked routes", () => {
         idempotencyKey: input.idempotencyKey,
         donationPartnerId: input.donationPartnerId,
         payoutDestinationRef: input.payoutDestinationRef,
-        amountUsd: input.amountUsd,
+        amountCents: input.amountCents,
         amountAtomic: input.amountAtomic,
         settlementToken: input.settlementToken,
       })
@@ -1961,7 +1961,7 @@ describe("song artifact locked routes", () => {
     expect(charityPayoutCalls).toHaveLength(1)
     expect(charityPayoutCalls[0]?.donationPartnerId).toBe("don_charity_water")
     expect(charityPayoutCalls[0]?.payoutDestinationRef).toBe("charity-water")
-    expect(charityPayoutCalls[0]?.amountUsd).toBe(0.5)
+    expect(charityPayoutCalls[0]?.amountCents).toBe(50)
     expect(charityPayoutCalls[0]?.amountAtomic).toBe("500000000000000000")
     expect(charityPayoutCalls[0]?.settlementToken).toBe("WIP")
     expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.id.replace(/^pq_/, "")}:charity:don_charity_water:60`)
@@ -2436,7 +2436,7 @@ describe("song artifact locked routes", () => {
     const charityPayoutCalls: Array<{
       idempotencyKey: string
       donationPartnerId: string
-      amountUsd: number
+      amountCents: number
       amountAtomic: string
     }> = []
     setStoryRuntimeFundingAssertionForTests(async () => {})
@@ -2497,7 +2497,7 @@ describe("song artifact locked routes", () => {
       charityPayoutCalls.push({
         idempotencyKey: input.idempotencyKey,
         donationPartnerId: input.donationPartnerId,
-        amountUsd: input.amountUsd,
+        amountCents: input.amountCents,
         amountAtomic: input.amountAtomic,
       })
       return {
@@ -2783,7 +2783,7 @@ describe("song artifact locked routes", () => {
     ])
     expect(charityPayoutCalls).toHaveLength(1)
     expect(charityPayoutCalls[0]?.donationPartnerId).toBe("don_derivative_charity")
-    expect(charityPayoutCalls[0]?.amountUsd).toBe(0.4)
+    expect(charityPayoutCalls[0]?.amountCents).toBe(40)
     expect(charityPayoutCalls[0]?.amountAtomic).toBe("400000000000000000")
     expect(charityPayoutCalls[0]?.idempotencyKey).toContain(`${quoteBody.id.replace(/^pq_/, "")}:charity:don_derivative_charity:60`)
     expect(royaltySettlementCalls).toHaveLength(1)

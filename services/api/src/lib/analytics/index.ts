@@ -14,6 +14,6 @@ export {
 } from "./outbox"
 
 export {
-  fetchTinybirdCommunityViewCounts,
+  isCommunityHealthSyncSaturationError,
   syncCommunityHealthCounts,
 } from "./community-analytics-sync"

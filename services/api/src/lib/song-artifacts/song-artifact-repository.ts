@@ -17,10 +17,6 @@ import {
   toSongArtifactBundleRow,
   toSongArtifactUploadRow,
 } from "./song-artifact-serialization"
-import { ensureSongArtifactBundleAlignmentReasonColumn } from "./ensure-song-artifact-bundle-alignment-reason-column"
-import { ensureSongArtifactBundleGeniusAnnotationsUrlColumn } from "./ensure-song-artifact-bundle-genius-annotations-url-column"
-import { ensureSongArtifactBundleKaraokeRevisionColumn } from "./ensure-song-artifact-bundle-karaoke-revision-column"
-import { ensureSongArtifactBundleTitleColumn } from "./ensure-song-artifact-bundle-title-column"
 import { deriveKaraokeRevisionId, resolveKaraokeRevisionId } from "./karaoke-revision"
 import type { SongArtifactStorageProvider } from "./song-artifact-storage-provider"
 
@@ -50,10 +46,6 @@ async function getSongArtifactBundleRow(
   communityId: string,
   songArtifactBundleId: string,
 ): Promise<SongArtifactBundleRow | null> {
-  await ensureSongArtifactBundleTitleColumn(client)
-  await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(client)
-  await ensureSongArtifactBundleAlignmentReasonColumn(client)
-  await ensureSongArtifactBundleKaraokeRevisionColumn(client)
   const row = await executeFirst(client, {
     sql: `
       SELECT song_artifact_bundle_id, community_id, creator_user_id, status, primary_audio_json,
@@ -317,10 +309,6 @@ export async function createSongArtifactBundleDraft(input: {
   previewStatus: SongArtifactBundle["preview_status"]
   createdAt: string
 }): Promise<SongArtifactBundle> {
-  await ensureSongArtifactBundleTitleColumn(input.client)
-  await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(input.client)
-  await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
-  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
   await input.client.execute({
     sql: `
       INSERT INTO song_artifact_bundles (
@@ -391,8 +379,6 @@ export async function finalizeSongArtifactBundle(input: {
   previewError: string | null
   updatedAt: string
 }): Promise<SongArtifactBundle> {
-  await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
-  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
   const karaokeRevisionId = await deriveKaraokeRevisionId({
     instrumentalAudio: input.instrumentalAudio,
     timedLyrics: input.timedLyrics,
@@ -499,8 +485,6 @@ export async function updateSongArtifactBundleAlignment(input: {
   timedLyrics: Record<string, unknown> | null
   updatedAt: string
 }): Promise<SongArtifactBundle> {
-  await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
-  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
   const existing = await getSongArtifactBundleRow(input.client, input.communityId, input.songArtifactBundleId)
   if (!existing) {
     throw internalError("Song artifact bundle is missing before alignment update")
@@ -572,10 +556,6 @@ export async function listSongArtifactBundles(input: {
   query?: string | null
   limit: number
 }): Promise<SongArtifactBundleListResponse> {
-  await ensureSongArtifactBundleTitleColumn(input.client)
-  await ensureSongArtifactBundleGeniusAnnotationsUrlColumn(input.client)
-  await ensureSongArtifactBundleAlignmentReasonColumn(input.client)
-  await ensureSongArtifactBundleKaraokeRevisionColumn(input.client)
   const query = input.query?.trim()
   const hasQuery = Boolean(query)
   const rows = await input.client.execute({

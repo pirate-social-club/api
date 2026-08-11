@@ -36,7 +36,7 @@ export async function verifyPaymentForPaidHandleClaim(input: {
   const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
     env: input.env,
     quoteId: input.quoteId,
-    amountUsd: input.priceCents / 100,
+    amountCents: input.priceCents,
     buyerAddress: wallet.wallet_address,
     fundingTxRef: input.body.funding_tx_ref,
   })

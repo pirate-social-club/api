@@ -827,7 +827,7 @@ export class DatabaseProfileRepository {
     const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
       env: this.env,
       quoteId,
-      amountUsd: priceCents / 100,
+      amountCents: priceCents,
       buyerAddress: buyerWalletAddress,
       fundingTxRef: body.funding_tx_ref,
     })

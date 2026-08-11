@@ -1,6 +1,29 @@
-import { describe, expect, test } from "bun:test"
-import { postgresifySql, resolveControlPlanePostgresConnectionString } from "../src/lib/runtime-deps"
+import { afterEach, describe, expect, test } from "bun:test"
+import {
+  getControlPlaneClient,
+  postgresifySql,
+  resolveControlPlanePostgresConnectionString,
+  setControlPlanePostgresPoolFactoryForTests,
+  withRequestControlPlaneClients,
+} from "../src/lib/runtime-deps"
 import type { Env } from "../src/env"
+
+const POSTGRES_TEST_ENV = {
+  CONTROL_PLANE_DATABASE_URL: "postgres://runtime-deadline.test/control",
+  ENVIRONMENT: "test",
+} as unknown as Env
+
+type TestPostgresPool = ReturnType<
+  NonNullable<Parameters<typeof setControlPlanePostgresPoolFactoryForTests>[0]>
+>
+
+function pendingQuery(): Promise<{ rows: unknown[]; rowCount: number }> {
+  return new Promise(() => {})
+}
+
+afterEach(() => {
+  setControlPlanePostgresPoolFactoryForTests(null)
+})
 
 describe("postgresifySql", () => {
   test("translates namespace verification upserts to PostgreSQL syntax", () => {
@@ -79,5 +102,112 @@ describe("resolveControlPlanePostgresConnectionString", () => {
       { ENVIRONMENT: "staging" } as Env,
       "postgres://direct/control",
     )).toBe("postgres://direct/control")
+  })
+})
+
+describe("PostgreSQL control-plane deadlines", () => {
+  test("terminates the request-scoped connection when a statement exceeds the transport deadline", async () => {
+    const queries: string[] = []
+    let abortCalls = 0
+    let endCalls = 0
+    setControlPlanePostgresPoolFactoryForTests(() => ({
+      statementTimeoutMs: 5,
+      query: async (sql: string) => {
+        queries.push(sql)
+        return await pendingQuery()
+      },
+      abortPendingQuery: () => {
+        abortCalls += 1
+      },
+      connect: async () => {
+        throw new Error("transaction connection not expected")
+      },
+      end: async () => {
+        endCalls += 1
+      },
+    }) as TestPostgresPool)
+
+    await expect(withRequestControlPlaneClients(async () => {
+      await getControlPlaneClient(POSTGRES_TEST_ENV).execute("SELECT 1")
+    })).rejects.toThrow("statement SELECT did not settle within 5ms")
+
+    expect(queries).toEqual(["SELECT 1"])
+    expect(abortCalls).toBe(1)
+    expect(endCalls).toBe(1)
+  })
+
+  for (const finalizer of ["commit", "rollback"] as const) {
+    test(`bounds and terminates a stalled transaction ${finalizer}`, async () => {
+      const queries: string[] = []
+      let abortCalls = 0
+      const finalizerSql = finalizer.toUpperCase()
+      const transactionConnection = {
+        statementTimeoutMs: 5,
+        query: async (sql: string) => {
+          queries.push(sql)
+          return sql === finalizerSql ? await pendingQuery() : { rows: [], rowCount: 0 }
+        },
+        abortPendingQuery: () => {
+          abortCalls += 1
+        },
+        release: () => {},
+      }
+      setControlPlanePostgresPoolFactoryForTests(() => ({
+        query: async () => ({ rows: [], rowCount: 0 }),
+        connect: async () => transactionConnection,
+        end: async () => {},
+      }) as TestPostgresPool)
+
+      await expect(withRequestControlPlaneClients(async () => {
+        const transaction = await getControlPlaneClient(POSTGRES_TEST_ENV).transaction()
+        try {
+          if (finalizer === "commit") {
+            await transaction.commit()
+          } else {
+            await transaction.rollback()
+          }
+        } finally {
+          transaction.close()
+        }
+      })).rejects.toThrow(`statement ${finalizerSql} did not settle within 5ms`)
+
+      expect(queries).toEqual([
+        "BEGIN",
+        "SET LOCAL statement_timeout = 5",
+        "SET LOCAL idle_in_transaction_session_timeout = 10",
+        finalizerSql,
+      ])
+      expect(abortCalls).toBe(1)
+    })
+  }
+
+  test("terminates a transaction connection when the server rejects commit", async () => {
+    let abortCalls = 0
+    const transactionConnection = {
+      query: async (sql: string) => {
+        if (sql === "COMMIT") throw new Error("server canceled commit")
+        return { rows: [], rowCount: 0 }
+      },
+      abortPendingQuery: () => {
+        abortCalls += 1
+      },
+      release: () => {},
+    }
+    setControlPlanePostgresPoolFactoryForTests(() => ({
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => transactionConnection,
+      end: async () => {},
+    }) as TestPostgresPool)
+
+    await expect(withRequestControlPlaneClients(async () => {
+      const transaction = await getControlPlaneClient(POSTGRES_TEST_ENV).transaction()
+      try {
+        await transaction.commit()
+      } finally {
+        transaction.close()
+      }
+    })).rejects.toThrow("server canceled commit")
+
+    expect(abortCalls).toBe(1)
   })
 })

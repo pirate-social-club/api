@@ -108,22 +108,16 @@ export async function loadCommunityLocalSnapshot(
   repo: CommunityDatabaseBindingRepository,
   communityId: string,
 ): Promise<LocalCommunitySnapshot | null> {
-  // Routed read via the D1 shard read RPC. Read-only (SELECTs only). Closes #48 for
-  // donation/rules/gate snapshot reads. Falls back to null on any open failure, as before.
-  const db = await openCommunityReadClient(env, repo, communityId).catch(() => null)
-  if (!db) {
-    return null
-  }
+  // Routed read via the D1 shard read RPC. The shard schema is migration-owned;
+  // connection and schema failures must surface instead of becoming an empty snapshot.
+  const db = await openCommunityReadClient(env, repo, communityId)
 
   try {
-    const columnsResult = await db.client.execute("PRAGMA table_info(communities)")
-    const communityColumns = new Set(columnsResult.rows.map((row) => String(row.name)))
-    const hasKaraokeEnabledColumn = communityColumns.has("karaoke_enabled")
     const result = await db.client.execute({
       sql: `
         SELECT community_id, display_name, description, avatar_ref, banner_ref, status, membership_mode, default_age_gate_policy,
                allow_anonymous_identity, anonymous_identity_scope, donation_policy_mode, donation_partner_id, donation_partner_status,
-               settings_json${hasKaraokeEnabledColumn ? ", karaoke_enabled" : ""},
+               settings_json, karaoke_enabled,
                governance_mode, created_by_user_id, created_at, updated_at
         FROM communities
         WHERE community_id = ?1
@@ -215,8 +209,6 @@ export async function loadCommunityLocalSnapshot(
       created_at: String(row.created_at),
       updated_at: String(row.updated_at),
     }
-  } catch {
-    return null
   } finally {
     db.close()
   }

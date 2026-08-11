@@ -57,7 +57,7 @@ import {
 } from "./list-cursors"
 import {
   assertExecutableQuoteAllocationSnapshot,
-  extractDonationCompatibilityFields,
+  extractDonationFields,
   parseQuoteAllocationSnapshot,
 } from "./allocation"
 import {
@@ -198,8 +198,8 @@ async function finalizeLocalPurchaseSettlement(input: {
   allocationSnapshot: QuoteAllocationSnapshot[]
   charityPayouts: Map<string, ResolvedCharityPayout>
   donationPartnerId: string | null
-  donationSharePct: number | null
-  donationAmountUsd: number | null
+  donationShareBps: number | null
+  donationAmountCents: number | null
   settlementWalletAttachmentId: string
   createdAt: string
 }): Promise<CommunityPurchaseSettlement | PublicCommunityPurchaseSettlement> {
@@ -262,9 +262,9 @@ async function finalizeLocalPurchaseSettlement(input: {
         INSERT INTO purchases (
           purchase_id, community_id, listing_id, asset_id, live_room_id, replay_asset_id, buyer_kind, buyer_user_id,
           buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
-          settlement_wallet_attachment_id, purchase_price_usd, pricing_tier, settlement_chain,
-          settlement_mode, settlement_token, settlement_tx_ref, donation_partner_id, donation_share_pct,
-          donation_amount_usd, donation_settlement_ref, vinyl_release_provider, vinyl_release_url, created_at
+          settlement_wallet_attachment_id, purchase_price_cents, pricing_tier, settlement_chain,
+          settlement_mode, settlement_token, settlement_tx_ref, donation_partner_id, donation_share_bps,
+          donation_amount_cents, donation_settlement_ref, vinyl_release_provider, vinyl_release_url, created_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
           ?9, ?10, ?11,
@@ -287,15 +287,15 @@ async function finalizeLocalPurchaseSettlement(input: {
         buyerFields.buyer_wallet_address_normalized,
         buyerFields.buyer_chain_ref,
         input.settlementWalletAttachmentId,
-        input.quote.final_price_usd,
+        input.quote.final_price_cents,
         input.quote.pricing_tier,
         JSON.stringify(input.settlementChain),
         input.quote.settlement_mode,
         input.quote.destination_settlement_token,
         settlementTxRef,
         input.donationPartnerId,
-        input.donationPartnerId ? input.donationSharePct : null,
-        input.donationPartnerId ? input.donationAmountUsd : null,
+        input.donationPartnerId ? input.donationShareBps : null,
+        input.donationPartnerId ? input.donationAmountCents : null,
         Array.from(input.charityPayouts.values())[0]?.settlementRef ?? null,
         listing.vinyl_release_provider ?? null,
         listing.vinyl_release_url,
@@ -316,7 +316,7 @@ async function finalizeLocalPurchaseSettlement(input: {
         sql: `
           INSERT INTO purchase_allocation_legs (
             purchase_allocation_leg_id, purchase_id, quote_id, community_id, recipient_type, recipient_ref,
-            waterfall_position, share_bps, amount_usd, settlement_strategy, status, settlement_ref,
+            waterfall_position, share_bps, amount_cents, settlement_strategy, status, settlement_ref,
             provider_receipt_ref, tax_receipt_ref, submitted_at, confirmed_at, failed_at, attempt_count,
             failure_reason, created_at, updated_at
           ) VALUES (
@@ -344,7 +344,7 @@ async function finalizeLocalPurchaseSettlement(input: {
           allocation.recipient_ref ?? null,
           allocation.waterfall_position,
           allocation.share_bps,
-          allocation.amount_usd,
+          allocation.amount_cents,
           allocation.settlement_strategy,
           allocationStatus,
           allocationSettlementRef,
@@ -595,7 +595,7 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
     if (
       allocation.recipient_type === "charity"
       && allocation.settlement_strategy === "provider_payout"
-      && allocation.amount_usd > 0
+      && allocation.amount_cents > 0
       && allocation.recipient_ref?.trim()
       && !charityPayouts.has(getAllocationExecutionKey(allocation))
     ) {
@@ -675,10 +675,10 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
   }
 
   const {
-    donationAmountUsd,
+    donationAmountCents,
     donationPartnerId,
-    donationSharePct,
-  } = extractDonationCompatibilityFields({ allocationSnapshot })
+    donationShareBps,
+  } = extractDonationFields({ allocationSnapshot })
   const settlementChain = parseJsonValue<CommunityPurchaseSettlement["settlement_chain"]>(
     quote.destination_settlement_chain_json,
     { chain_namespace: "eip155", chain_id: 1315, display_name: "Story Aeneid" },
@@ -699,8 +699,8 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
       allocationSnapshot,
       charityPayouts,
       donationPartnerId,
-      donationSharePct,
-      donationAmountUsd,
+      donationShareBps,
+      donationAmountCents,
       settlementWalletAttachmentId: input.attempt.settlement_wallet_attachment_id,
       createdAt: input.now,
     })
@@ -888,10 +888,10 @@ async function settleCommunityPurchaseForBuyer(input: {
       throw badRequestError("Non-asset purchase donations are not supported until charity payout routing is enabled")
     }
     const {
-      donationAmountUsd,
+      donationAmountCents,
       donationPartnerId,
-      donationSharePct,
-    } = extractDonationCompatibilityFields({
+      donationShareBps,
+    } = extractDonationFields({
       allocationSnapshot,
     })
     const coordinatorOwnedAttempt = (await listPurchaseSettlementEffectsByQuote({
@@ -937,7 +937,7 @@ async function settleCommunityPurchaseForBuyer(input: {
     // (e.g. live-room tickets) finalize entitlement on a client-provided funding_tx_ref
     // without verifying that funds actually moved on-chain — a "free ticket" hole.
     let buyerWalletAddress: string | null = null
-    if (quote.final_price_usd > 0) {
+    if (quote.final_price_cents > 0) {
       buyerWalletAddress = await input.resolveBuyerWalletAddress()
       const fundingReceipt = await confirmBuyerFundingForSettlement({
         env: input.env,
@@ -978,7 +978,7 @@ async function settleCommunityPurchaseForBuyer(input: {
         }
       }
       // buyerWalletAddress was resolved above during funding-proof verification.
-      // For the impossible free-asset edge case (final_price_usd === 0), resolve it here.
+      // For the impossible free-asset edge case (final_price_cents === 0), resolve it here.
       const assetBuyerWalletAddress = buyerWalletAddress ?? await input.resolveBuyerWalletAddress()
       const purchaseRef = derivePurchaseRef({
         communityId: input.communityId,
@@ -1263,8 +1263,8 @@ async function settleCommunityPurchaseForBuyer(input: {
         allocationSnapshot,
         charityPayouts,
         donationPartnerId,
-        donationSharePct,
-        donationAmountUsd,
+        donationShareBps,
+        donationAmountCents,
         settlementWalletAttachmentId: input.settlementWalletAttachmentId,
         createdAt,
       })
