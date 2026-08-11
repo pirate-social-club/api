@@ -9,7 +9,8 @@ provision a Queue, trigger a qualification, or change scheduler behavior.
 ## Version and window
 
 - Environment: production (`api-core`)
-- API SHA: `14b11392b34c3e999421645854efc13de2711525`
+- API SHA prefix: `14b1139` (the full deployment SHA is retained in the
+  direct `__version` evidence and issue record)
 - Production deployments of this SHA completed at `2026-08-10T21:30:05Z`
   and `2026-08-10T22:00:06Z`; the natural release train redeployed the same
   API pin without changing the code under measurement.
