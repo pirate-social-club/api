@@ -12,7 +12,8 @@ const MAX_ERROR_BODY_BYTES = 16 * 1024
 type RequestCorrelationVariables = {
   requestId: string
   actor?: ActorContext | AdminActorContext
-  hnsWalletOriginAllowed?: boolean
+  /** One request-scoped activation decision shared by Hono CORS and the outer fetch wrapper. */
+  hnsOriginAllowed?: boolean
 }
 
 export type RequestCorrelationEnv = {

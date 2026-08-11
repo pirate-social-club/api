@@ -29,11 +29,20 @@ describe("allowed origins", () => {
     })).toBeNull()
   })
 
-  test("allows legacy and dynamically authorized HNS app origins for general CORS", () => {
+  test("allows only activation-authorized HNS apex and app origins", () => {
+    expect(configuredCorsOrigin("https://dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
     expect(configuredCorsOrigin("https://app.dankmeme", {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",
-    })).toBe("https://app.dankmeme")
-    expect(configuredCorsOrigin("https://app.xn--pokmon-dva", {
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    }, true)).toBe("https://dankmeme")
+    expect(configuredCorsOrigin("https://app.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    }, true)).toBe("https://app.dankmeme")
+    expect(configuredCorsOrigin("https://xn--pokmon-dva", {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",
     })).toBeNull()
     expect(configuredCorsOrigin("https://app.xn--pokmon-dva", {
