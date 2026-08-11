@@ -13,17 +13,9 @@ function isActiveDanceSessionUniqueConflict(error: unknown): boolean {
     const record = current as Record<string, unknown>
     const code = typeof record.code === "string" ? record.code : ""
     const constraint = typeof record.constraint === "string" ? record.constraint : ""
-    const message = typeof record.message === "string" ? record.message : ""
     const isUnique = code === "23505"
       || code === "SQLITE_CONSTRAINT_UNIQUE"
-      || /unique constraint|duplicate key/iu.test(message)
-    const isActiveSession = constraint === DANCE_ACTIVE_SESSION_INDEX
-      || message.includes(DANCE_ACTIVE_SESSION_INDEX)
-      || (
-        message.includes("dance_attempt_sessions")
-        && message.includes("subject_user_id")
-      )
-    if (isUnique && isActiveSession) return true
+    if (isUnique && constraint === DANCE_ACTIVE_SESSION_INDEX) return true
     current = record.cause
   }
   return false
@@ -273,10 +265,11 @@ export async function createDanceAttemptSession(input: {
     const value = input.value
     // Serialize a subject's session creations so the hourly budget and the
     // active-session preflight are evaluated against one ordered history.
-    await tx.execute({
+    const subject = await executeFirst(tx, {
       sql: `SELECT user_id FROM users WHERE user_id = ?1 FOR UPDATE`,
       args: [value.subjectUserId],
     })
+    if (!subject) throw conflictError("Dance session subject user not found")
     const budget = await executeFirst(tx, {
       sql: `
         SELECT
