@@ -5,6 +5,30 @@ import type { Client, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { danceAttemptPlaceholderObjectKey } from "./attempt-object-key"
 
+const DANCE_ACTIVE_SESSION_INDEX = "dance_attempt_session_one_active_per_subject_idx"
+
+function isActiveDanceSessionUniqueConflict(error: unknown): boolean {
+  let current: unknown = error
+  while (current && typeof current === "object") {
+    const record = current as Record<string, unknown>
+    const code = typeof record.code === "string" ? record.code : ""
+    const constraint = typeof record.constraint === "string" ? record.constraint : ""
+    const message = typeof record.message === "string" ? record.message : ""
+    const isUnique = code === "23505"
+      || code === "SQLITE_CONSTRAINT_UNIQUE"
+      || /unique constraint|duplicate key/iu.test(message)
+    const isActiveSession = constraint === DANCE_ACTIVE_SESSION_INDEX
+      || message.includes(DANCE_ACTIVE_SESSION_INDEX)
+      || (
+        message.includes("dance_attempt_sessions")
+        && message.includes("subject_user_id")
+      )
+    if (isUnique && isActiveSession) return true
+    current = record.cause
+  }
+  return false
+}
+
 export const DANCE_ATTEMPT_MAX_BYTES = 19_000_000
 export const DANCE_CONSENT_POLICY_VERSION = "dance_recording_v1"
 export const DANCE_ATTEMPT_CALIBRATION_VERSION =
@@ -247,6 +271,12 @@ export async function createDanceAttemptSession(input: {
 }): Promise<{ kind: "created" | "idempotent"; record: DanceAttemptSessionRecord }> {
   return withTransaction(input.client, "write", async (tx) => {
     const value = input.value
+    // Serialize a subject's session creations so the hourly budget and the
+    // active-session preflight are evaluated against one ordered history.
+    await tx.execute({
+      sql: `SELECT user_id FROM users WHERE user_id = ?1 FOR UPDATE`,
+      args: [value.subjectUserId],
+    })
     const budget = await executeFirst(tx, {
       sql: `
         SELECT
@@ -291,74 +321,82 @@ export async function createDanceAttemptSession(input: {
     if (!revision) throw notFoundError("Active dance choreography revision not found")
 
     const placeholderKey = danceAttemptPlaceholderObjectKey(value.sessionId)
-    const inserted = await tx.execute({
-      sql: `
-        INSERT INTO dance_attempt_sessions (
-          dance_attempt_session_id, dance_attempt_id, subject_user_id,
-          community_id, host_post_id, referenced_song_post_id,
-          song_artifact_bundle_id, dance_choreography_id,
-          dance_choreography_revision_id, reference_content_sha256,
-          reference_feature_ref, reference_feature_sha256,
-          reference_feature_size_bytes, pose_model_version, pose_model_sha256,
-          feature_schema_version, scorer_version, artifact_version,
-          required_calibration_version, required_calibration_checksum,
-          required_fingerprint_policy_version, required_integrity_policy_version,
-          mirror_policy, status, activity_date, activity_timezone,
-          creation_idempotency_key, consent_policy_version, consented_at,
-          consent_source, start_cue_policy_version, start_cue_kind,
-          start_cue_minimum_hold_ms, start_cue_observation_window_ms,
-          upload_object_key, expected_mime_type,
-          maximum_bytes, expires_at, created_at, updated_at
-        ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
-          ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
-          'initialized', ?24, ?25, ?26, ?27, ?28, ?29,
-          ?30, ?31, ?32, ?33, ?34,
-          'video/mp4', ?35, ?36, ?37, ?37
-        )
-        ON CONFLICT (subject_user_id, creation_idempotency_key) DO NOTHING
-        RETURNING dance_attempt_session_id
-      `,
-      args: [
-        value.sessionId,
-        value.attemptId,
-        value.subjectUserId,
-        requiredString(revision, "community_id"),
-        requiredString(revision, "host_post_id"),
-        requiredString(revision, "referenced_song_post_id"),
-        requiredString(revision, "song_artifact_bundle_id"),
-        requiredString(revision, "dance_choreography_id"),
-        requiredString(revision, "dance_choreography_revision_id"),
-        requiredString(revision, "reference_content_sha256"),
-        requiredString(revision, "reference_feature_ref"),
-        requiredString(revision, "reference_feature_sha256"),
-        Number(rowValue(revision, "reference_feature_size_bytes")),
-        requiredString(revision, "pose_model_version"),
-        requiredString(revision, "pose_model_sha256"),
-        requiredString(revision, "feature_schema_version"),
-        requiredString(revision, "scorer_version"),
-        requiredString(revision, "artifact_version"),
-        DANCE_ATTEMPT_CALIBRATION_VERSION,
-        DANCE_ATTEMPT_CALIBRATION_CHECKSUM,
-        DANCE_ATTEMPT_FINGERPRINT_POLICY_VERSION,
-        DANCE_ATTEMPT_INTEGRITY_POLICY_VERSION,
-        requiredString(revision, "mirror_policy"),
-        value.activityDate,
-        value.activityTimezone,
-        value.creationIdempotencyKey,
-        value.consentPolicyVersion,
-        value.consentedAt,
-        value.consentSource,
-        DANCE_START_CUE_POLICY_VERSION,
-        value.startCueKind ?? "hands_on_head",
-        DANCE_START_CUE_MINIMUM_HOLD_MS,
-        DANCE_START_CUE_OBSERVATION_WINDOW_MS,
-        placeholderKey,
-        DANCE_ATTEMPT_MAX_BYTES,
-        value.expiresAt,
-        value.now,
-      ],
-    })
+    let inserted: Awaited<ReturnType<Transaction["execute"]>>
+    try {
+      inserted = await tx.execute({
+        sql: `
+          INSERT INTO dance_attempt_sessions (
+            dance_attempt_session_id, dance_attempt_id, subject_user_id,
+            community_id, host_post_id, referenced_song_post_id,
+            song_artifact_bundle_id, dance_choreography_id,
+            dance_choreography_revision_id, reference_content_sha256,
+            reference_feature_ref, reference_feature_sha256,
+            reference_feature_size_bytes, pose_model_version, pose_model_sha256,
+            feature_schema_version, scorer_version, artifact_version,
+            required_calibration_version, required_calibration_checksum,
+            required_fingerprint_policy_version, required_integrity_policy_version,
+            mirror_policy, status, activity_date, activity_timezone,
+            creation_idempotency_key, consent_policy_version, consented_at,
+            consent_source, start_cue_policy_version, start_cue_kind,
+            start_cue_minimum_hold_ms, start_cue_observation_window_ms,
+            upload_object_key, expected_mime_type,
+            maximum_bytes, expires_at, created_at, updated_at
+          ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+            ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+            'initialized', ?24, ?25, ?26, ?27, ?28, ?29,
+            ?30, ?31, ?32, ?33, ?34,
+            'video/mp4', ?35, ?36, ?37, ?37
+          )
+          ON CONFLICT (subject_user_id, creation_idempotency_key) DO NOTHING
+          RETURNING dance_attempt_session_id
+        `,
+        args: [
+          value.sessionId,
+          value.attemptId,
+          value.subjectUserId,
+          requiredString(revision, "community_id"),
+          requiredString(revision, "host_post_id"),
+          requiredString(revision, "referenced_song_post_id"),
+          requiredString(revision, "song_artifact_bundle_id"),
+          requiredString(revision, "dance_choreography_id"),
+          requiredString(revision, "dance_choreography_revision_id"),
+          requiredString(revision, "reference_content_sha256"),
+          requiredString(revision, "reference_feature_ref"),
+          requiredString(revision, "reference_feature_sha256"),
+          Number(rowValue(revision, "reference_feature_size_bytes")),
+          requiredString(revision, "pose_model_version"),
+          requiredString(revision, "pose_model_sha256"),
+          requiredString(revision, "feature_schema_version"),
+          requiredString(revision, "scorer_version"),
+          requiredString(revision, "artifact_version"),
+          DANCE_ATTEMPT_CALIBRATION_VERSION,
+          DANCE_ATTEMPT_CALIBRATION_CHECKSUM,
+          DANCE_ATTEMPT_FINGERPRINT_POLICY_VERSION,
+          DANCE_ATTEMPT_INTEGRITY_POLICY_VERSION,
+          requiredString(revision, "mirror_policy"),
+          value.activityDate,
+          value.activityTimezone,
+          value.creationIdempotencyKey,
+          value.consentPolicyVersion,
+          value.consentedAt,
+          value.consentSource,
+          DANCE_START_CUE_POLICY_VERSION,
+          value.startCueKind ?? "hands_on_head",
+          DANCE_START_CUE_MINIMUM_HOLD_MS,
+          DANCE_START_CUE_OBSERVATION_WINDOW_MS,
+          placeholderKey,
+          DANCE_ATTEMPT_MAX_BYTES,
+          value.expiresAt,
+          value.now,
+        ],
+      })
+    } catch (error) {
+      if (isActiveDanceSessionUniqueConflict(error)) {
+        throw conflictError("An active dance session already exists")
+      }
+      throw error
+    }
 
     const row = inserted.rows.length > 0
       ? await selectSessionForUpdate(tx, value.sessionId)
