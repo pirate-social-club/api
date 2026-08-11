@@ -92,7 +92,7 @@ export type GlobalHandleRow = {
   tier: GlobalHandle["tier"]
   issuance_source: GlobalHandle["issuance_source"]
   redirect_target_global_handle_id: string | null
-  price_paid_usd: number | null
+  price_paid_cents: number | null
   free_rename_consumed: number
   issued_at: string
   replaced_at: string | null
@@ -228,7 +228,7 @@ export function toGlobalHandleRow(row: unknown): GlobalHandleRow {
     tier: requiredString(row, "tier") as GlobalHandle["tier"],
     issuance_source: requiredString(row, "issuance_source") as GlobalHandle["issuance_source"],
     redirect_target_global_handle_id: stringOrNull(rowValue(row, "redirect_target_global_handle_id")),
-    price_paid_usd: numberOrNull(rowValue(row, "price_paid_usd")),
+    price_paid_cents: numberOrNull(rowValue(row, "price_paid_cents")),
     free_rename_consumed: requiredNumber(row, "free_rename_consumed"),
     issued_at: requiredString(row, "issued_at"),
     replaced_at: stringOrNull(rowValue(row, "replaced_at")),

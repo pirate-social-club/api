@@ -102,11 +102,11 @@ describe("publishLiveRoom combined create+listing inside a D1 write transaction"
         liveRoomId: null,
         replayAssetId: null,
         status: "active",
-        priceUsd: 9.99,
+        priceCents: 999,
         regionalPricingPolicyJson: JSON.stringify({
           regional_pricing_enabled: false,
           donation_partner_id: null,
-          donation_share_pct: null,
+          donation_share_bps: null,
         }),
         vinylReleaseProvider: null,
         vinylReleaseUrl: null,

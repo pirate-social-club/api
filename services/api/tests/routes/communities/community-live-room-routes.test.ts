@@ -47,7 +47,7 @@ beforeEach(() => {
     fromAddress: input.buyerAddress,
     toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
     tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-    amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+    amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
     chainRef: "eip155:84532",
   }))
 })
@@ -934,7 +934,7 @@ describe("community live-room routes", () => {
           JSON.stringify({
             regional_pricing_enabled: false,
             donation_partner_id: "don_live_room_charity",
-            donation_share_pct: 10,
+            donation_share_bps: 1000,
           }),
         ],
       })
@@ -970,7 +970,7 @@ describe("community live-room routes", () => {
           JSON.stringify({
             regional_pricing_enabled: false,
             donation_partner_id: null,
-            donation_share_pct: null,
+            donation_share_bps: null,
           }),
         ],
       })
@@ -978,7 +978,7 @@ describe("community live-room routes", () => {
       communityDbAfterDonationCheck.close()
     }
 
-    const legacyDonationQuoteCreate = await requestJson(
+    const unsupportedDonationQuoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
       {
         listing: listingBody.id,
@@ -987,14 +987,14 @@ describe("community live-room routes", () => {
       ctx.env,
       owner.accessToken,
     )
-    expect(legacyDonationQuoteCreate.status).toBe(201)
-    const legacyDonationQuoteBody = await json(legacyDonationQuoteCreate) as { id: string }
-    const legacyDonationQuoteId = legacyDonationQuoteBody.id.replace(/^pq_/, "")
-    const communityDbForLegacyDonationQuote = createClient({
+    expect(unsupportedDonationQuoteCreate.status).toBe(201)
+    const unsupportedDonationQuoteBody = await json(unsupportedDonationQuoteCreate) as { id: string }
+    const unsupportedDonationQuoteId = unsupportedDonationQuoteBody.id.replace(/^pq_/, "")
+    const communityDbForUnsupportedDonationQuote = createClient({
       url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
     })
     try {
-      await communityDbForLegacyDonationQuote.execute({
+      await communityDbForUnsupportedDonationQuote.execute({
         sql: `
           UPDATE purchase_quotes
           SET allocation_snapshot_json = ?3
@@ -1003,14 +1003,14 @@ describe("community live-room routes", () => {
         `,
         args: [
           communityId,
-          legacyDonationQuoteId,
+          unsupportedDonationQuoteId,
           JSON.stringify([
             {
               recipient_type: "charity",
               recipient_ref: "don_live_room_charity",
               waterfall_position: 60,
               share_bps: 1000,
-              amount_usd: 1.2,
+              amount_cents: 120,
               settlement_strategy: "provider_payout",
             },
             {
@@ -1018,20 +1018,20 @@ describe("community live-room routes", () => {
               recipient_ref: owner.userId,
               waterfall_position: 70,
               share_bps: 9000,
-              amount_usd: 10.8,
+              amount_cents: 1080,
               settlement_strategy: "story_payout",
             },
           ]),
         ],
       })
     } finally {
-      communityDbForLegacyDonationQuote.close()
+      communityDbForUnsupportedDonationQuote.close()
     }
 
-    const legacyDonationSettlement = await requestJson(
+    const unsupportedDonationSettlement = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-settlements`,
       {
-        quote: legacyDonationQuoteBody.id,
+        quote: unsupportedDonationQuoteBody.id,
         settlement_wallet_attachment: "wal_legacy_live_room_donation",
         funding_tx_ref: "0xfunding-legacy-live-room-donation",
         settlement_tx_ref: "tx-legacy-live-room-donation",
@@ -1039,8 +1039,8 @@ describe("community live-room routes", () => {
       ctx.env,
       owner.accessToken,
     )
-    expect(legacyDonationSettlement.status).toBe(400)
-    expect(JSON.stringify(await json(legacyDonationSettlement))).toContain("Non-asset purchase donations are not supported")
+    expect(unsupportedDonationSettlement.status).toBe(400)
+    expect(JSON.stringify(await json(unsupportedDonationSettlement))).toContain("Non-asset purchase donations are not supported")
 
     const quoteCreate = await requestJson(
       `http://pirate.test/communities/${communityId}/purchase-quotes`,
@@ -1249,7 +1249,7 @@ describe("community live-room routes", () => {
       fromAddress: input.buyerAddress,
       toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
       tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+      amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
       chainRef: "eip155:84532",
     }))
 
@@ -3750,7 +3750,7 @@ describe("community live-room routes", () => {
             JSON.stringify({
               regional_pricing_enabled: false,
               donation_partner_id: "don_replay_charity",
-              donation_share_pct: 10,
+              donation_share_bps: 1000,
             }),
           ],
         })
@@ -3786,7 +3786,7 @@ describe("community live-room routes", () => {
             JSON.stringify({
               regional_pricing_enabled: false,
               donation_partner_id: null,
-              donation_share_pct: null,
+              donation_share_bps: null,
             }),
           ],
         })

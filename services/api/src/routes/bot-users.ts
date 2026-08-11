@@ -136,7 +136,7 @@ botUsers.post("/provision", async (c) => {
         sql: `
           INSERT INTO global_handles (
             global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-            redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at, replaced_at, created_at, updated_at
+            redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at, replaced_at, created_at, updated_at
           ) VALUES (?1, ?2, ?3, ?4, 'active', 'standard', 'admin_grant', NULL, NULL, 1, ?5, NULL, ?5, ?5)
         `,
         args: [globalHandleId, userId, requestedHandle.labelNormalized, requestedHandle.labelDisplay, createdAt],

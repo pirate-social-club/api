@@ -65,4 +65,36 @@ describe("COMMUNITY_SCHEMA_STATEMENTS vs the shard bootstrap guard", () => {
       db.close()
     }
   })
+
+  test("the generated commerce schema stores money only as integer cents and basis points", () => {
+    const db = new Database(":memory:")
+    try {
+      for (const sql of COMMUNITY_SCHEMA_STATEMENTS) db.exec(sql)
+
+      const expectedColumns = {
+        listings: ["price_cents"],
+        purchase_quotes: ["base_price_cents", "final_price_cents"],
+        purchases: ["purchase_price_cents", "donation_share_bps", "donation_amount_cents"],
+        purchase_allocation_legs: ["amount_cents"],
+      } as const
+      const retiredColumns = new Set([
+        "price_usd",
+        "base_price_usd",
+        "final_price_usd",
+        "purchase_price_usd",
+        "donation_share_pct",
+        "donation_amount_usd",
+        "amount_usd",
+      ])
+
+      for (const [table, required] of Object.entries(expectedColumns)) {
+        const columns = db.query<{ name: string; type: string }, []>(`PRAGMA table_info(${table})`).all()
+        const byName = new Map(columns.map((column) => [column.name, column.type.toUpperCase()]))
+        for (const column of required) expect(byName.get(column)).toBe("INTEGER")
+        for (const column of retiredColumns) expect(byName.has(column)).toBe(false)
+      }
+    } finally {
+      db.close()
+    }
+  })
 })

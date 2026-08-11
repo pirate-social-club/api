@@ -753,12 +753,12 @@ async function seedActiveAssetEntitlement(userId: string, assetId = "ast_song"):
   await exec(`
     INSERT INTO purchases (
       purchase_id, community_id, listing_id, asset_id, buyer_user_id,
-      settlement_wallet_attachment_id, purchase_price_usd, settlement_chain,
+      settlement_wallet_attachment_id, purchase_price_cents, settlement_chain,
       settlement_token, settlement_tx_ref, created_at
     )
     VALUES (
       'pur_study_entitlement', ?1, 'lst_study_entitlement', ?2, ?3,
-      'wla_study', 3.99, 'base', 'usdc', '0xstudy', ?4
+      'wla_study', 399, 'base', 'usdc', '0xstudy', ?4
     )
   `, [COMMUNITY_ID, assetId, userId, NOW])
   await exec(`
@@ -1285,21 +1285,18 @@ describe("post study service", () => {
     expect(Number(units.rows[0]?.count ?? 0)).toBe(0)
   })
 
-  test("treats a missing study_enabled column as disabled without throwing", async () => {
+  test("fails legibly when the study policy migration is missing", async () => {
     await seedSongPost()
     await client!.execute("ALTER TABLE communities DROP COLUMN study_enabled")
 
-    const payload = await getPostStudyPayload({
+    await expect(getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
       env: env(),
       postId: POST_ID,
       targetLanguage: "es",
-    })
-
-    expect(payload.access).toBe("unavailable")
-    expect(payload.exercise_count).toBe(0)
+    })).rejects.toThrow(/missing the study_enabled column \(migration 1115_community_study_enabled\.sql\); an operator must converge/u)
   })
 
   test("orders multiple-choice options deterministically per learner without storing per-user rows", async () => {

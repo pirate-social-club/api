@@ -11,7 +11,6 @@ import {
 } from "./row-types"
 import { requireUserBuyerId } from "./buyer-identity"
 import { serializePurchaseAllocationLeg } from "./allocation"
-import { centsToUsd, pctToBps, usdToCents } from "./serialization"
 import { unixSeconds } from "../../../serializers/time"
 import type {
   CommunityListing,
@@ -22,29 +21,23 @@ import type {
   CommunityPricingPolicy,
 } from "../../../types"
 
-export function roundUsd(value: number): number {
-  return Math.round(value * 100) / 100
-}
-
-export function assertValidDonationSharePct(value: unknown): number {
-  const pct = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN
-  if (!Number.isInteger(pct) || pct <= 0 || pct > 50) {
-    throw badRequestError("donation_share_pct must be an integer between 1 and 50")
+export function assertValidDonationShareBps(value: unknown): number {
+  const bps = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN
+  if (!Number.isInteger(bps) || bps <= 0 || bps > 5000) {
+    throw badRequestError("donation_share_bps must be an integer between 1 and 5000")
   }
-  return pct
+  return bps
 }
 
-export function resolveSettlementAmountSnapshot(finalPriceUsd: number): {
+export function resolveSettlementAmountSnapshot(finalPriceCents: number): {
   amountAtomic: string
   decimals: number
 } {
-  const roundedUsd = roundUsd(finalPriceUsd)
-  const cents = Math.round(roundedUsd * 100)
-  if (!Number.isFinite(roundedUsd) || cents <= 0) {
+  if (!Number.isSafeInteger(finalPriceCents) || finalPriceCents <= 0) {
     throw badRequestError("Settlement amount must be positive")
   }
   return {
-    amountAtomic: String(BigInt(cents) * 10n ** 16n),
+    amountAtomic: String(BigInt(finalPriceCents) * 10n ** 16n),
     decimals: 18,
   }
 }
@@ -60,15 +53,15 @@ export function resolvePurchaseSettlementMode(input: {
 
 export function resolveAllocationSettlementAmountAtomic(input: {
   allocations: PurchaseAllocationLegRow[] | Array<{
-    amount_usd: number
+    amount_cents: number
     settlement_strategy: string
   }>
   settlementStrategy: string
 }): bigint {
-  const amountUsd = input.allocations
+  const amountCents = input.allocations
     .filter((allocation) => allocation.settlement_strategy === input.settlementStrategy)
-    .reduce((sum, allocation) => sum + allocation.amount_usd, 0)
-  return BigInt(resolveSettlementAmountSnapshot(roundUsd(amountUsd)).amountAtomic)
+    .reduce((sum, allocation) => sum + allocation.amount_cents, 0)
+  return BigInt(resolveSettlementAmountSnapshot(amountCents).amountAtomic)
 }
 
 export function resolvePurchaseEntitlementTarget(
@@ -118,7 +111,7 @@ export function serializeSettlement(
     live_room: purchase.live_room_id,
     replay_asset: purchase.replay_asset_id,
     settlement_wallet_attachment: purchase.settlement_wallet_attachment_id,
-    purchase_price_cents: usdToCents(purchase.purchase_price_usd) ?? 0,
+    purchase_price_cents: purchase.purchase_price_cents,
     pricing_tier: purchase.pricing_tier,
     settlement_mode: purchase.settlement_mode,
     settlement_chain: settlementChain,
@@ -127,8 +120,8 @@ export function serializeSettlement(
     settlement_tx_ref: purchase.settlement_tx_ref,
     allocations: allocations.map(serializePurchaseAllocationLeg),
     donation_partner: purchase.donation_partner_id,
-    donation_share_bps: pctToBps(purchase.donation_share_pct),
-    donation_amount_cents: usdToCents(purchase.donation_amount_usd),
+    donation_share_bps: purchase.donation_share_bps,
+    donation_amount_cents: purchase.donation_amount_cents,
     vinyl_release_provider: purchase.vinyl_release_provider,
     vinyl_release_url: purchase.vinyl_release_url,
     entitlement_kind: toSettlementEntitlementKind(entitlement.entitlement_kind),
@@ -142,28 +135,28 @@ export function resolveRegionalPrice(input: {
   listing: CommunityListing
   pricingPolicy: CommunityPricingPolicy
   buyer: Awaited<ReturnType<UserRepository["getUserById"]>>
-}): { finalPriceUsd: number; pricingTier: string | null; verificationSnapshot: Record<string, unknown> | null } {
-  const basePriceUsd = centsToUsd(input.listing.price_cents)
+}): { finalPriceCents: number; pricingTier: string | null; verificationSnapshot: Record<string, unknown> | null } {
+  const basePriceCents = input.listing.price_cents
   if (!input.listing.regional_pricing_enabled || !input.pricingPolicy.regional_pricing_enabled || !input.buyer) {
-    return { finalPriceUsd: basePriceUsd, pricingTier: null, verificationSnapshot: null }
+    return { finalPriceCents: basePriceCents, pricingTier: null, verificationSnapshot: null }
   }
   const nationality = input.buyer.verification_capabilities.nationality
   if (nationality.state !== "verified" || nationality.provider !== "self") {
-    return { finalPriceUsd: basePriceUsd, pricingTier: null, verificationSnapshot: null }
+    return { finalPriceCents: basePriceCents, pricingTier: null, verificationSnapshot: null }
   }
   const countryCode = (nationality.value || "").toUpperCase()
   const assignment = input.pricingPolicy.country_assignments.find((entry) => entry.country_code === countryCode)
   const tierKey = assignment?.tier_key || input.pricingPolicy.default_tier_key || null
   if (!tierKey) {
-    return { finalPriceUsd: basePriceUsd, pricingTier: null, verificationSnapshot: null }
+    return { finalPriceCents: basePriceCents, pricingTier: null, verificationSnapshot: null }
   }
   const tier = input.pricingPolicy.tiers.find((entry) => entry.tier_key === tierKey)
   if (!tier) {
-    return { finalPriceUsd: basePriceUsd, pricingTier: null, verificationSnapshot: null }
+    return { finalPriceCents: basePriceCents, pricingTier: null, verificationSnapshot: null }
   }
-  const finalPriceUsd = roundUsd(basePriceUsd * tier.adjustment_value)
+  const finalPriceCents = Math.round(basePriceCents * tier.adjustment_value)
   return {
-    finalPriceUsd,
+    finalPriceCents,
     pricingTier: tier.tier_key,
     verificationSnapshot: {
       nationality_state: nationality.state,
@@ -179,21 +172,21 @@ export function resolveBestVerifiedRegionalPrice(input: {
   listing: CommunityListing
   pricingPolicy: CommunityPricingPolicy
 }): {
-  bestVerifiedPriceUsd: number | null
-  maxSelfDiscountPercent: number | null
+  bestVerifiedPriceCents: number | null
+  maxSelfDiscountBps: number | null
   verificationRequiredProvider: "self" | null
 } {
-  const basePriceUsd = centsToUsd(input.listing.price_cents)
+  const basePriceCents = input.listing.price_cents
   if (
     !input.listing.regional_pricing_enabled
     || !input.pricingPolicy.regional_pricing_enabled
     || input.pricingPolicy.tiers.length === 0
-    || !Number.isFinite(basePriceUsd)
-    || basePriceUsd <= 0
+    || !Number.isSafeInteger(basePriceCents)
+    || basePriceCents <= 0
   ) {
     return {
-      bestVerifiedPriceUsd: null,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: null,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: null,
     }
   }
@@ -207,8 +200,8 @@ export function resolveBestVerifiedRegionalPrice(input: {
   }
   if (reachableTierKeys.size === 0) {
     return {
-      bestVerifiedPriceUsd: null,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: null,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: null,
     }
   }
@@ -216,29 +209,31 @@ export function resolveBestVerifiedRegionalPrice(input: {
   const reachableTiers = input.pricingPolicy.tiers.filter((tier) => reachableTierKeys.has(tier.tier_key))
   if (reachableTiers.length === 0) {
     return {
-      bestVerifiedPriceUsd: null,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: null,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: null,
     }
   }
 
-  const bestVerifiedPriceUsd = reachableTiers.reduce((bestPrice, tier) => {
-    const tierPrice = roundUsd(basePriceUsd * tier.adjustment_value)
+  const bestVerifiedPriceCents = reachableTiers.reduce((bestPrice, tier) => {
+    const tierPrice = Math.round(basePriceCents * tier.adjustment_value)
     return Math.min(bestPrice, tierPrice)
-  }, basePriceUsd)
+  }, basePriceCents)
 
-  if (bestVerifiedPriceUsd >= basePriceUsd) {
+  if (bestVerifiedPriceCents >= basePriceCents) {
     return {
-      bestVerifiedPriceUsd: basePriceUsd,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: basePriceCents,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: input.pricingPolicy.verification_provider_requirement ?? "self",
     }
   }
 
-  const maxSelfDiscountPercent = Math.round(((basePriceUsd - bestVerifiedPriceUsd) / basePriceUsd) * 1000) / 10
+  const maxSelfDiscountBps = Math.round(
+    ((basePriceCents - bestVerifiedPriceCents) / basePriceCents) * 10_000,
+  )
   return {
-    bestVerifiedPriceUsd,
-    maxSelfDiscountPercent,
+    bestVerifiedPriceCents,
+    maxSelfDiscountBps,
     verificationRequiredProvider: input.pricingPolicy.verification_provider_requirement ?? "self",
   }
 }

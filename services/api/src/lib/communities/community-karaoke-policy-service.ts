@@ -40,7 +40,6 @@ export type CommunityKaraokePolicyPatch = {
 
 function defaultCommunityKaraokePolicy(input: {
   communityId: string
-  updatedAt?: string | null
 }): CommunityKaraokePolicy {
   return {
     community_id: input.communityId,
@@ -50,7 +49,7 @@ function defaultCommunityKaraokePolicy(input: {
     karaoke_stt_model: null,
     karaoke_stt_provider: "assistant",
     karaoke_voice_coach_enabled: false,
-    updated_at: input.updatedAt ?? null,
+    updated_at: null,
   }
 }
 
@@ -79,16 +78,15 @@ function toCommunityKaraokePolicy(input: {
   }
 }
 
-type CommunityColumnClient = Pick<Client, "execute">
-
-async function hasCommunityColumn(client: CommunityColumnClient, columnName: string): Promise<boolean> {
-  const result = await client.execute("PRAGMA table_info(communities)")
-  return result.rows.some((row) => String(row.name) === columnName)
-}
-
 function isMissingKaraokePolicyColumnError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error)
-  return /(?:no such column|unknown column|column .*karaoke_.* does not exist|no column named karaoke_)/iu.test(message)
+  return /(?:no such column(?::|\s)+.*karaoke_|unknown column(?::|\s)+.*karaoke_|column .*karaoke_.* does not exist|no column named karaoke_)/iu.test(message)
+}
+
+function missingKaraokePolicyColumnsError(communityId: string) {
+  return internalError(
+    `Community ${communityId} is missing karaoke policy columns (migrations 1096_community_karaoke_enabled.sql and 1098_community_karaoke_scoring_policy.sql); an operator must converge the community database schema via the reviewed migration path before karaoke policy access can proceed`,
+  )
 }
 
 async function ensureCommunityKaraokePolicyRow(input: {
@@ -128,10 +126,6 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
 }): Promise<KaraokeScoringPolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    if (!await hasCommunityColumn(db.client, "karaoke_scoring_enabled")) {
-      return { kind: "disabled" }
-    }
-
     const result = await db.client.execute({
       sql: `
         SELECT c.karaoke_scoring_enabled, c.karaoke_stt_provider, c.karaoke_stt_model,
@@ -143,6 +137,11 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
         LIMIT 1
       `,
       args: [input.communityId],
+    }).catch((error: unknown) => {
+      if (isMissingKaraokePolicyColumnError(error)) {
+        throw missingKaraokePolicyColumnsError(input.communityId)
+      }
+      throw error
     })
     const row = result.rows[0]
     if (!row) return { kind: "disabled" }
@@ -226,22 +225,6 @@ async function readCommunityKaraokePolicy(input: {
 }): Promise<CommunityKaraokePolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    if (!await hasCommunityColumn(db.client, "karaoke_enabled")) {
-      const legacy = await db.client.execute({
-        sql: `
-          SELECT updated_at
-          FROM communities
-          WHERE community_id = ?1
-          LIMIT 1
-        `,
-        args: [input.communityId],
-      })
-      return defaultCommunityKaraokePolicy({
-        communityId: input.communityId,
-        updatedAt: typeof legacy.rows[0]?.updated_at === "string" ? legacy.rows[0].updated_at : null,
-      })
-    }
-
     const result = await db.client.execute({
       sql: `
         SELECT karaoke_enabled, karaoke_scoring_enabled, karaoke_stt_provider,
@@ -252,6 +235,11 @@ async function readCommunityKaraokePolicy(input: {
         LIMIT 1
       `,
       args: [input.communityId],
+    }).catch((error: unknown) => {
+      if (isMissingKaraokePolicyColumnError(error)) {
+        throw missingKaraokePolicyColumnsError(input.communityId)
+      }
+      throw error
     })
     const row = result.rows[0]
     return toCommunityKaraokePolicy({ communityId: input.communityId, row })
@@ -352,9 +340,7 @@ export async function updateCommunityKaraokePolicy(input: {
       if (!isMissingKaraokePolicyColumnError(error)) {
         throw error
       }
-      throw internalError(
-        `Community ${input.communityId} is missing karaoke policy columns (migrations 1096_community_karaoke_enabled.sql and 1098_community_karaoke_scoring_policy.sql); an operator must converge the community database schema via the reviewed migration path before karaoke policy writes can proceed`,
-      )
+      throw missingKaraokePolicyColumnsError(input.communityId)
     }
   } finally {
     db.close()

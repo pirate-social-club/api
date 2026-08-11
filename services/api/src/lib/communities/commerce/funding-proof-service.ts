@@ -55,7 +55,7 @@ type CheckoutFundingQuote = Pick<
   | "quote_id"
   | "route_provider"
   | "funding_mode"
-  | "final_price_usd"
+  | "final_price_cents"
   | "source_chain_json"
   | "funding_destination_address"
 >
@@ -85,14 +85,10 @@ export function setBuyerFundingProviderFactoryForTests(
 }
 
 function requireCheckoutFundingAmountAtomic(quote: CheckoutFundingQuote): bigint {
-  if (!Number.isFinite(quote.final_price_usd) || quote.final_price_usd <= 0) {
+  if (!Number.isSafeInteger(quote.final_price_cents) || quote.final_price_cents <= 0) {
     throw badRequestError("Quote funding amount is invalid")
   }
-  const micros = Math.round(quote.final_price_usd * 1_000_000)
-  if (micros <= 0) {
-    throw badRequestError("Quote funding amount is below USDC precision")
-  }
-  return BigInt(micros)
+  return BigInt(quote.final_price_cents) * 10_000n
 }
 
 function topicAddress(topic: string): string | null {
@@ -434,7 +430,7 @@ export async function classifyBookingPaymentReceipt(input: {
 export async function verifyPirateCheckoutUsdcFunding(input: {
   env: Env
   quoteId: string
-  amountUsd: number
+  amountCents: number
   buyerAddress: string
   fundingTxRef: string
   fundingDestinationAddress?: string | null
@@ -452,7 +448,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
       quote_id: input.quoteId,
       route_provider: "pirate_checkout",
       funding_mode: "routed",
-      final_price_usd: input.amountUsd,
+      final_price_cents: input.amountCents,
       source_chain_json: input.sourceChainJson ?? null,
       funding_destination_address: input.fundingDestinationAddress ?? null,
     },

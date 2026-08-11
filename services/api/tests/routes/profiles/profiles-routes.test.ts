@@ -57,7 +57,7 @@ function setSuccessfulPaidHandleFundingVerifier(env: Env, withObservation = fals
     fromAddress: input.buyerAddress,
     toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(env),
     tokenAddress: resolvePirateCheckoutUsdcTokenAddress(env),
-    amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+    amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
     chainRef: "eip155:84532",
     ...(withObservation ? {
       observation: {
@@ -652,7 +652,7 @@ describe("profile routes", () => {
         fromAddress: input.buyerAddress,
         toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(ctx.env),
         tokenAddress: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
-        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
         chainRef: "eip155:84532",
       }
     })
@@ -918,7 +918,7 @@ describe("profile routes", () => {
         fromAddress: input.buyerAddress,
         toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(ctx.env),
         tokenAddress: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
-        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
         chainRef: "eip155:84532",
       }
     })

@@ -273,6 +273,13 @@ describe("community study policy", () => {
     await communityDb.execute("ALTER TABLE communities DROP COLUMN study_enabled")
     communityDb.close()
 
+    await expect(getCommunityStudyPolicy({
+      actor: adminActor,
+      communityId: ctx.communityId,
+      communityRepository: ctx.repo,
+      env: ctx.env,
+    })).rejects.toThrow(/missing the study_enabled column \(migration 1115_community_study_enabled\.sql\); an operator must converge/u)
+
     await expect(updateCommunityStudyPolicy({
       actor: adminActor,
       body: { study_enabled: true },

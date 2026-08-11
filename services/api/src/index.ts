@@ -51,6 +51,7 @@ import {
 } from "./routes/cache-headers"
 import {
   flushAnalyticsOutbox,
+  isCommunityHealthSyncSaturationError,
   isAnalyticsEnabled,
   pruneAnalyticsOutbox,
   syncCommunityHealthCounts,
@@ -852,12 +853,22 @@ async function syncScheduledCommunityHealthCounts(env: Env): Promise<void> {
   const db = getControlPlaneClient(env)
   try {
     const summary = await syncCommunityHealthCounts(env, db)
-    if (summary.synced_communities > 0) {
+    if (summary.projection_reset || summary.processed_days > 0) {
       console.info("[analytics] synced community health counts", JSON.stringify(summary))
     }
   } catch (error) {
     console.error("[analytics] scheduled community health sync failed", error)
-    await captureScheduledError(env, error, "community_health_sync")
+    if (isCommunityHealthSyncSaturationError(error)) {
+      await captureScheduledWarning(
+        env,
+        "Community health analytics sync reached its daily row limit and requires operator action",
+        "community_health_sync_saturated",
+        { date: error.date, row_limit: error.rowLimit },
+        { urgency: "high" },
+      )
+    } else {
+      await captureScheduledError(env, error, "community_health_sync")
+    }
   } finally {
     db.close?.()
   }

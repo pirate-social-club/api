@@ -46,7 +46,7 @@ function setSuccessfulPublicNameFundingVerifier(input: {
   calls?: Array<{
     quoteId: string
     buyerAddress: string
-    amountUsd: number
+    amountCents: number
     fundingTxRef: string
   }>
 }): void {
@@ -54,7 +54,7 @@ function setSuccessfulPublicNameFundingVerifier(input: {
     input.calls?.push({
       quoteId: fundingInput.quote.quote_id,
       buyerAddress: fundingInput.buyerAddress,
-      amountUsd: fundingInput.quote.final_price_usd,
+      amountCents: fundingInput.quote.final_price_cents,
       fundingTxRef: fundingInput.fundingTxRef,
     })
     return {
@@ -62,7 +62,7 @@ function setSuccessfulPublicNameFundingVerifier(input: {
       fromAddress: fundingInput.buyerAddress,
       toAddress: fundingInput.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(input.env),
       tokenAddress: resolvePirateCheckoutUsdcTokenAddress(input.env),
-      amountAtomic: String(BigInt(Math.round(fundingInput.quote.final_price_usd * 1_000_000))),
+      amountAtomic: String(BigInt(fundingInput.quote.final_price_cents * 10_000)),
       chainRef: "eip155:84532",
       ...(input.withObservation ? {
         observation: {
@@ -107,7 +107,7 @@ describe("public names routes", () => {
     const fundingCalls: Array<{
       quoteId: string
       buyerAddress: string
-      amountUsd: number
+      amountCents: number
       fundingTxRef: string
     }> = []
     setSuccessfulPublicNameFundingVerifier({ env: ctx.env, calls: fundingCalls, withObservation: true })
@@ -177,7 +177,7 @@ describe("public names routes", () => {
     expect(fundingCalls).toEqual([{
       quoteId: quoteBody.quote,
       buyerAddress: buyerWallet.toLowerCase(),
-      amountUsd: 5,
+      amountCents: 500,
       fundingTxRef,
     }])
 
@@ -213,7 +213,7 @@ describe("public names routes", () => {
     const fundingCalls: Array<{
       quoteId: string
       buyerAddress: string
-      amountUsd: number
+      amountCents: number
       fundingTxRef: string
     }> = []
     setSuccessfulPublicNameFundingVerifier({ env: ctx.env, calls: fundingCalls })
@@ -253,7 +253,7 @@ describe("public names routes", () => {
     const fundingCalls: Array<{
       quoteId: string
       buyerAddress: string
-      amountUsd: number
+      amountCents: number
       fundingTxRef: string
     }> = []
     setSuccessfulPublicNameFundingVerifier({ env: ctx.env, calls: fundingCalls })

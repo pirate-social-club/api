@@ -22,7 +22,6 @@ import {
   parseListingPolicy,
   serializeListing,
   serializeQuote,
-  usdToCents,
 } from "./serialization"
 import {
   getCommunityMoneyPolicy,
@@ -43,8 +42,7 @@ import {
 } from "./checkout-config"
 import { assertEndaomentPayoutConfigured } from "./endaoment-payout-service"
 import {
-  assertValidDonationSharePct,
-  roundUsd,
+  assertValidDonationShareBps,
   resolveBestVerifiedRegionalPrice,
   resolveAllocationSettlementAmountAtomic,
   resolvePurchaseSettlementMode,
@@ -78,22 +76,21 @@ import type {
 } from "../../../types"
 
 function resolveReplayQuoteAllocationSnapshot(input: {
-  finalPriceUsd: number
+  finalPriceCents: number
   replayAllocations: Awaited<ReturnType<typeof listLiveRoomReplayAllocations>>
   listingPolicy: {
     donationPartnerId: string | null
-    donationSharePct: number | null
+    donationShareBps: number | null
   }
 }): QuoteAllocationSnapshot[] {
-  const charitySharePct = Number.isInteger(input.listingPolicy.donationSharePct)
-    ? Math.max(0, Math.min(100, input.listingPolicy.donationSharePct ?? 0))
+  const charityShareBps = Number.isInteger(input.listingPolicy.donationShareBps)
+    ? Math.max(0, Math.min(10_000, input.listingPolicy.donationShareBps ?? 0))
     : 0
-  const charityShareBps = charitySharePct * 100
   const charityRecipientRef = input.listingPolicy.donationPartnerId?.trim() || null
-  const charityAmountUsd = charityShareBps > 0 && charityRecipientRef
-    ? roundUsd(input.finalPriceUsd * (charityShareBps / 10_000))
+  const charityAmountCents = charityShareBps > 0 && charityRecipientRef
+    ? Math.round(input.finalPriceCents * (charityShareBps / 10_000))
     : 0
-  const payableAmountUsd = roundUsd(input.finalPriceUsd - charityAmountUsd)
+  const payableAmountCents = input.finalPriceCents - charityAmountCents
   if (input.replayAllocations.some((allocation) => allocation.external_party_ref !== null)) {
     throw badRequestError("Paid replay cannot be sold while an allocation names an external rightsholder without a payable Pirate identity")
   }
@@ -104,34 +101,34 @@ function resolveReplayQuoteAllocationSnapshot(input: {
   }
 
   const allocations: QuoteAllocationSnapshot[] = []
-  if (charityAmountUsd > 0 && charityRecipientRef) {
+  if (charityAmountCents > 0 && charityRecipientRef) {
     allocations.push({
       recipient_type: "charity",
       recipient_ref: charityRecipientRef,
       waterfall_position: 60,
       share_bps: charityShareBps,
-      amount_usd: charityAmountUsd,
+      amount_cents: charityAmountCents,
       settlement_strategy: "provider_payout",
     })
   }
-  let allocatedUsd = 0
+  let allocatedCents = 0
   let allocatedBps = charityShareBps
   approvedReplayAllocations.forEach((allocation, index) => {
     const isLast = index === approvedReplayAllocations.length - 1
-    const amountUsd = isLast
-      ? roundUsd(payableAmountUsd - allocatedUsd)
-      : roundUsd(payableAmountUsd * (allocation.share_bps / 10_000))
+    const amountCents = isLast
+      ? payableAmountCents - allocatedCents
+      : Math.round(payableAmountCents * (allocation.share_bps / 10_000))
     const shareBps = isLast
       ? 10_000 - allocatedBps
       : Math.round((10_000 - charityShareBps) * (allocation.share_bps / 10_000))
-    allocatedUsd = roundUsd(allocatedUsd + amountUsd)
+    allocatedCents += amountCents
     allocatedBps += shareBps
     allocations.push({
       recipient_type: "performer",
       recipient_ref: allocation.participant_user_id ?? allocation.external_party_ref,
       waterfall_position: 70 + index,
       share_bps: shareBps,
-      amount_usd: amountUsd,
+      amount_cents: amountCents,
       settlement_strategy: "story_payout",
     })
   })
@@ -220,12 +217,10 @@ export async function preflightCommunityPurchaseQuote(input: {
       route_required: moneyPolicy.route_required,
       route_status_policy: moneyPolicy.route_status_policy,
       route_hop_tolerance: moneyPolicy.route_hop_tolerance,
-      base_price_cents: usdToCents(listing?.price_usd ?? null),
-      viewer_price_cents: usdToCents(resolvedPrice?.finalPriceUsd ?? null),
-      best_verified_price_cents: usdToCents(bestVerifiedPrice?.bestVerifiedPriceUsd ?? null),
-      max_self_discount_bps: typeof bestVerifiedPrice?.maxSelfDiscountPercent === "number"
-        ? Math.round(bestVerifiedPrice.maxSelfDiscountPercent * 100)
-        : null,
+      base_price_cents: listing?.price_cents ?? null,
+      viewer_price_cents: resolvedPrice?.finalPriceCents ?? null,
+      best_verified_price_cents: bestVerifiedPrice?.bestVerifiedPriceCents ?? null,
+      max_self_discount_bps: bestVerifiedPrice?.maxSelfDiscountBps ?? null,
       verification_required_provider: bestVerifiedPrice?.verificationRequiredProvider ?? null,
       quoted_at: unixSeconds(quotedAt),
       expires_at: unixSeconds(expiresAt),
@@ -412,12 +407,12 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         throw eligibilityFailed("Donation partner provider is not supported")
       }
 
-      assertValidDonationSharePct(listingPolicy.donationSharePct)
+      assertValidDonationShareBps(listingPolicy.donationShareBps)
     }
 
     if (listing.replay_asset_id?.trim()) {
       replayAllocationSnapshot = resolveReplayQuoteAllocationSnapshot({
-        finalPriceUsd: resolvedPrice.finalPriceUsd,
+        finalPriceCents: resolvedPrice.finalPriceCents,
         replayAllocations: await listLiveRoomReplayAllocations({
           client: db.client,
           communityId: input.communityId,
@@ -428,7 +423,7 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
     }
     const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
       replayAllocationSnapshot ?? resolveQuoteAllocationSnapshot({
-        finalPriceUsd: resolvedPrice.finalPriceUsd,
+        finalPriceCents: resolvedPrice.finalPriceCents,
         listingPolicy,
       }),
     )
@@ -462,8 +457,8 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         INSERT INTO purchase_quotes (
           quote_id, community_id, listing_id, buyer_kind, buyer_user_id,
           buyer_wallet_address, buyer_wallet_address_normalized, buyer_chain_ref,
-          asset_id, live_room_id, replay_asset_id, base_price_usd,
-          pricing_tier, final_price_usd, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
+          asset_id, live_room_id, replay_asset_id, base_price_cents,
+          pricing_tier, final_price_cents, allocation_snapshot_json, funding_mode, funding_asset_json, source_chain_json,
           route_provider, funding_destination_address, route_policy_compliant, route_live_available, policy_origin,
           destination_settlement_chain_json, destination_settlement_token, destination_settlement_amount_atomic,
           destination_settlement_decimals, treasury_denomination,
@@ -493,9 +488,9 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
         listing.asset_id,
         listing.live_room_id,
         listing.replay_asset_id,
-        listing.price_usd,
+        listing.price_cents,
         resolvedPrice.pricingTier,
-        resolvedPrice.finalPriceUsd,
+        resolvedPrice.finalPriceCents,
         JSON.stringify(allocationSnapshot),
         route.fundingMode,
         input.body.funding_asset ? JSON.stringify(input.body.funding_asset) : null,
