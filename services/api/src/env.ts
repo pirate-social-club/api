@@ -20,6 +20,9 @@ export type Env = {
   BUILD_WEB_SHA?: string
   BUILD_API_SHA?: string
   BUILD_CORE_SHA?: string
+  BUILD_SOURCE_STATE?: "clean" | "dirty"
+  BUILD_HOTFIX_REASON_SLUG?: string
+  BUILD_PATCH_SHA256?: string
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string

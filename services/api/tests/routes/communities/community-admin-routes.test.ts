@@ -39,6 +39,9 @@ describe("admin auth middleware", () => {
       web_sha: "compiled-web123",
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
+      source_state: "clean",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })).toEqual({
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
@@ -48,6 +51,9 @@ describe("admin auth middleware", () => {
       web_sha: "compiled-web123",
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
+      source_state: "clean",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })
 
     expect(buildVersionMetadata({
@@ -59,6 +65,9 @@ describe("admin auth middleware", () => {
       BUILD_WEB_SHA: "runtime-web123",
       BUILD_API_SHA: "runtime-api123",
       BUILD_CORE_SHA: "runtime-core123",
+      BUILD_SOURCE_STATE: "dirty",
+      BUILD_HOTFIX_REASON_SLUG: "runtime-repair",
+      BUILD_PATCH_SHA256: "f".repeat(64),
     }, {
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
@@ -68,6 +77,9 @@ describe("admin auth middleware", () => {
       web_sha: "compiled-web123",
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
+      source_state: "clean",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })).toEqual({
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
@@ -77,6 +89,9 @@ describe("admin auth middleware", () => {
       web_sha: "compiled-web123",
       api_sha: "compiled-api123",
       core_sha: "compiled-core123",
+      source_state: "clean",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })
   })
 
@@ -91,6 +106,7 @@ describe("admin auth middleware", () => {
       BUILD_WEB_SHA: "b".repeat(40),
       BUILD_API_SHA: "a".repeat(40),
       BUILD_CORE_SHA: "c".repeat(40),
+      BUILD_SOURCE_STATE: "clean",
     })
     expect(response.status).toBe(200)
     expect(await json(response)).toMatchObject({
@@ -102,6 +118,8 @@ describe("admin auth middleware", () => {
       web_sha: "b".repeat(40),
       api_sha: "a".repeat(40),
       core_sha: "c".repeat(40),
+      source_state: "clean",
+      hotfix: null,
     })
   })
 
