@@ -26,6 +26,24 @@ describe("sql migration helpers", () => {
     expect(statement).not.toContain("get_byte")
   })
 
+  test("splits dance start-cue columns from PostgreSQL table constraints", () => {
+    const statements = toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN start_cue_policy_version TEXT,
+        ADD COLUMN start_cue_kind TEXT,
+        ADD COLUMN start_cue_minimum_hold_ms INTEGER,
+        ADD COLUMN start_cue_observation_window_ms INTEGER,
+        ADD COLUMN start_cue_outcome TEXT,
+        ADD COLUMN scored_window_start_ms INTEGER,
+        ADD CONSTRAINT dance_attempt_session_start_cue_assignment_check CHECK (
+          start_cue_policy_version IS NULL
+        );
+    `)
+
+    expect(statements).toHaveLength(6)
+    expect(statements.every((statement) => statement.startsWith("ALTER TABLE dance_attempt_sessions ADD COLUMN"))).toBe(true)
+  })
+
   test("maps the community health watermark upsert to SQLite insert-or-ignore", () => {
     const [statement] = toSqliteCompatibleStatements(`
       INSERT INTO community_health_sync_state (

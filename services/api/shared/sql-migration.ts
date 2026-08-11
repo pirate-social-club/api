@@ -909,6 +909,21 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN START_CUE_POLICY_VERSION ")
+    && normalized.includes("ADD COLUMN SCORED_WINDOW_START_MS ")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
+    ]
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
     if (
       normalized.includes("NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_CHECK")
