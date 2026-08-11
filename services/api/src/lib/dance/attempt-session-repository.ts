@@ -1,5 +1,5 @@
 import { executeFirst } from "../db-helpers"
-import { conflictError, internalError, notFoundError } from "../errors"
+import { conflictError, internalError, notFoundError, rateLimited } from "../errors"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { Client, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
@@ -19,6 +19,7 @@ export const DANCE_SCORER_VERSION = "dance_scorer_gate0_v2"
 export const DANCE_START_CUE_POLICY_VERSION = "dance_start_cue_gross_body_v1"
 export const DANCE_START_CUE_MINIMUM_HOLD_MS = 500
 export const DANCE_START_CUE_OBSERVATION_WINDOW_MS = 2500
+export const DANCE_SESSION_CREATION_LIMIT_PER_HOUR = 6
 export const DANCE_START_CUE_KINDS = [
   "hands_on_head",
   "arms_t",
@@ -246,6 +247,26 @@ export async function createDanceAttemptSession(input: {
 }): Promise<{ kind: "created" | "idempotent"; record: DanceAttemptSessionRecord }> {
   return withTransaction(input.client, "write", async (tx) => {
     const value = input.value
+    const budget = await executeFirst(tx, {
+      sql: `
+        SELECT
+          COUNT(*) FILTER (WHERE created_at >= ?2::timestamptz - INTERVAL '1 hour') AS recent_count,
+          COUNT(*) FILTER (WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')) AS active_count,
+          COUNT(*) FILTER (WHERE creation_idempotency_key = ?3) AS idempotency_count
+        FROM dance_attempt_sessions
+        WHERE subject_user_id = ?1
+      `,
+      args: [value.subjectUserId, value.now, value.creationIdempotencyKey],
+    })
+    const idempotencyCount = Number(rowValue(budget, "idempotency_count") ?? 0)
+    if (idempotencyCount === 0) {
+      if (Number(rowValue(budget, "active_count") ?? 0) > 0) {
+        throw conflictError("An active dance session already exists")
+      }
+      if (Number(rowValue(budget, "recent_count") ?? 0) >= DANCE_SESSION_CREATION_LIMIT_PER_HOUR) {
+        throw rateLimited("Dance session creation limit reached")
+      }
+    }
     const revision = await executeFirst(tx, {
       sql: `
         SELECT c.community_id, c.host_post_id, c.referenced_song_post_id,

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 
 import type { DanceAttemptScoredFacts } from "./attempt-contract"
-import { finalizeDanceAttempt } from "./attempt-finalize-service"
+import { finalizeDanceAttempt, hasVersionMismatch } from "./attempt-finalize-service"
 
 const session = {
   dance_attempt_session_id: "dse_1",
@@ -26,6 +26,8 @@ const session = {
   required_calibration_checksum: "d".repeat(64),
   required_fingerprint_policy_version: "fingerprint_v1",
   required_integrity_policy_version: "integrity_v1",
+  start_cue_policy_version: "dance_start_cue_gross_body_v1",
+  start_cue_kind: "hands_on_head",
 }
 
 function scoredFacts(): DanceAttemptScoredFacts {
@@ -82,6 +84,12 @@ function scoredFacts(): DanceAttemptScoredFacts {
     },
     completedAt: 1_785_420_000,
     resultDigest: "e".repeat(64),
+    startCue: {
+      policyVersion: "dance_start_cue_gross_body_v1",
+      kind: "hands_on_head",
+      outcome: "passed",
+      scoredWindowStartMs: 500,
+    },
   }
 }
 
@@ -140,5 +148,23 @@ describe("dance attempt finalization", () => {
     expect(shardInsertArgs[9]).toBe("passed")
     expect(shardInsertArgs[11]).toBe(0)
     expect(shardInsertArgs[30]).toBe(0)
+  })
+
+  test("fails closed when an assigned cue is omitted from grader facts", () => {
+    const facts = scoredFacts()
+    delete facts.startCue
+    expect(hasVersionMismatch({
+      scorerVersion: "scorer_v1",
+      featureSchemaVersion: "features_v1",
+      calibrationVersion: "dance_calibration_gate0_provisional_v1",
+      calibrationChecksum: "d".repeat(64),
+      fingerprintPolicyVersion: "fingerprint_v1",
+      poseModelVersion: "pose_v1",
+      poseModelSha256: "c".repeat(64),
+      artifactVersion: "artifact_v1",
+      referenceFeatureSha256: "b".repeat(64),
+      startCuePolicyVersion: "dance_start_cue_gross_body_v1",
+      startCueKind: "hands_on_head",
+    } as never, facts)).toBe(true)
   })
 })

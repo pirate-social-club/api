@@ -85,6 +85,10 @@ export async function claimDueDanceAttemptDispatch(input: {
         SELECT *
         FROM dance_attempt_sessions
         WHERE status IN ('submitted', 'grading')
+          AND start_cue_policy_version IS NOT NULL
+          AND start_cue_kind IS NOT NULL
+          AND start_cue_minimum_hold_ms IS NOT NULL
+          AND start_cue_observation_window_ms IS NOT NULL
           AND grading_next_dispatch_at <= ?1
           AND grading_dispatch_attempt_count < 5
           AND (

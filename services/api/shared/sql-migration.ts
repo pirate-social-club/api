@@ -836,10 +836,11 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
-  if (
-    normalized.startsWith("DROP TRIGGER DANCE_ATTEMPT_SESSION_START_CUE_IMMUTABLE ")
-    && normalized.includes(" ON DANCE_ATTEMPT_SESSIONS")
-  ) {
+  // The PostgreSQL migration temporarily drops the cue immutability trigger
+  // while backfilling legacy rows. The trigger itself is intentionally omitted
+  // from the SQLite mirror (its body calls a PostgreSQL trigger function), so
+  // the matching DROP is a no-op here as well.
+  if (normalized.startsWith("DROP TRIGGER ")) {
     return []
   }
 
@@ -895,6 +896,48 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD
   }
 
+  // Migration 0211 adds the cue columns and PostgreSQL CHECK constraints in a
+  // single ALTER TABLE. SQLite cannot add table constraints after the fact;
+  // preserve the columns in the local mirror and let the PostgreSQL migration
+  // enforce the checks in production.
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN START_CUE_POLICY_VERSION ")
+    && normalized.includes("ADD CONSTRAINT DANCE_ATTEMPT_SESSION_START_CUE_ASSIGNMENT_CHECK")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
+    ]
+  }
+
+  // The production backfill uses PostgreSQL's md5/decode/get_byte functions
+  // to spread legacy sessions across cue kinds. SQLite has no equivalents;
+  // retain deterministic assignment in the mirror using the session-id length.
+  if (
+    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("GET_BYTE(DECODE(MD5(")
+  ) {
+    return [`
+      UPDATE dance_attempt_sessions
+      SET start_cue_policy_version = 'dance_start_cue_gross_body_v1',
+          start_cue_kind = CASE (length(dance_attempt_session_id) % 3)
+            WHEN 0 THEN 'hands_on_head'
+            WHEN 1 THEN 'arms_t'
+            ELSE 'hands_on_hips'
+          END,
+          start_cue_minimum_hold_ms = 500,
+          start_cue_observation_window_ms = 2500,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')
+        AND start_cue_policy_version IS NULL;
+    `]
+  }
+
   // Migration 0159 adds two nullable admission-policy columns plus a paired
   // PostgreSQL CHECK in one ALTER TABLE. SQLite only supports one ADD COLUMN
   // per ALTER and cannot add the table-level constraint after creation.
@@ -906,21 +949,6 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return [
       "ALTER TABLE reward_campaign_funding_effects ADD COLUMN admitted_refund_policy_version TEXT;",
       "ALTER TABLE reward_campaign_funding_effects ADD COLUMN admitted_max_refund_atomic TEXT;",
-    ]
-  }
-
-  if (
-    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
-    && normalized.includes("ADD COLUMN START_CUE_POLICY_VERSION ")
-    && normalized.includes("ADD COLUMN SCORED_WINDOW_START_MS ")
-  ) {
-    return [
-      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
-      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
-      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
-      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
-      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
-      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
     ]
   }
 
@@ -989,15 +1017,6 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   let sqliteCompat = statement
-  if (
-    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
-    && normalized.includes("GET_BYTE(DECODE(MD5(DANCE_ATTEMPT_SESSION_ID), 'HEX'), 0) % 3")
-  ) {
-    sqliteCompat = sqliteCompat.replace(
-      /get_byte\s*\(\s*decode\s*\(\s*md5\s*\(\s*dance_attempt_session_id\s*\)\s*,\s*'hex'\s*\)\s*,\s*0\s*\)/iu,
-      "unicode(substr(dance_attempt_session_id, 1, 1))",
-    )
-  }
   if (
     normalized.startsWith("INSERT INTO COMMUNITY_HEALTH_SYNC_STATE ")
     && normalized.includes("ON CONFLICT (PROJECTION_KEY) DO NOTHING")

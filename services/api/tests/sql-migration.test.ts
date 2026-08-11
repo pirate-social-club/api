@@ -5,45 +5,6 @@ import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
-  test("maps the dance start-cue backfill to SQLite-compatible statements", () => {
-    expect(toSqliteCompatibleStatements(`
-      DROP TRIGGER dance_attempt_session_start_cue_immutable ON dance_attempt_sessions;
-    `)).toEqual([])
-
-    const [statement] = toSqliteCompatibleStatements(`
-      UPDATE dance_attempt_sessions
-      SET start_cue_kind = CASE (
-        get_byte(decode(md5(dance_attempt_session_id), 'hex'), 0) % 3
-      )
-        WHEN 0 THEN 'hands_on_head'
-        WHEN 1 THEN 'arms_t'
-        ELSE 'hands_on_hips'
-      END
-      WHERE start_cue_policy_version IS NULL;
-    `)
-
-    expect(statement).toContain("unicode(substr(dance_attempt_session_id, 1, 1)) % 3")
-    expect(statement).not.toContain("get_byte")
-  })
-
-  test("splits dance start-cue columns from PostgreSQL table constraints", () => {
-    const statements = toSqliteCompatibleStatements(`
-      ALTER TABLE dance_attempt_sessions
-        ADD COLUMN start_cue_policy_version TEXT,
-        ADD COLUMN start_cue_kind TEXT,
-        ADD COLUMN start_cue_minimum_hold_ms INTEGER,
-        ADD COLUMN start_cue_observation_window_ms INTEGER,
-        ADD COLUMN start_cue_outcome TEXT,
-        ADD COLUMN scored_window_start_ms INTEGER,
-        ADD CONSTRAINT dance_attempt_session_start_cue_assignment_check CHECK (
-          start_cue_policy_version IS NULL
-        );
-    `)
-
-    expect(statements).toHaveLength(6)
-    expect(statements.every((statement) => statement.startsWith("ALTER TABLE dance_attempt_sessions ADD COLUMN"))).toBe(true)
-  })
-
   test("maps the community health watermark upsert to SQLite insert-or-ignore", () => {
     const [statement] = toSqliteCompatibleStatements(`
       INSERT INTO community_health_sync_state (
@@ -370,6 +331,32 @@ describe("sql migration helpers", () => {
       "ALTER TABLE dance_attempt_sessions ADD COLUMN consented_at TEXT;",
       "ALTER TABLE dance_attempt_sessions ADD COLUMN consent_source TEXT;",
     ])
+  })
+
+  test("preserves dance cue columns when SQLite skips PostgreSQL constraints", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN start_cue_policy_version TEXT,
+        ADD COLUMN start_cue_kind TEXT,
+        ADD COLUMN start_cue_minimum_hold_ms INTEGER,
+        ADD COLUMN start_cue_observation_window_ms INTEGER,
+        ADD COLUMN start_cue_outcome TEXT,
+        ADD COLUMN scored_window_start_ms INTEGER,
+        ADD CONSTRAINT dance_attempt_session_start_cue_assignment_check CHECK (start_cue_kind IS NULL);
+    `)).toEqual([
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
+    ])
+    expect(toSqliteCompatibleStatements("DROP TRIGGER dance_attempt_session_start_cue_immutable ON dance_attempt_sessions;")).toEqual([])
+    expect(toSqliteCompatibleStatement(`
+      UPDATE dance_attempt_sessions
+      SET start_cue_kind = CASE (get_byte(decode(md5(dance_attempt_session_id), 'hex'), 0) % 3)
+      WHERE start_cue_policy_version IS NULL;
+    `)).toContain("length(dance_attempt_session_id) % 3")
   })
 
   test("translates EFP recovery state and review deadlines for sqlite", () => {
