@@ -15,6 +15,11 @@ export type Env = {
   BUILD_GIT_REF?: string
   BUILD_GIT_SHA?: string
   BUILD_TIMESTAMP?: string
+  BUILD_RELEASE_ID?: string
+  BUILD_ID?: string
+  BUILD_WEB_SHA?: string
+  BUILD_API_SHA?: string
+  BUILD_CORE_SHA?: string
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string

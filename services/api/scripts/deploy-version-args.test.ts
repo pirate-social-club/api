@@ -31,6 +31,11 @@ describe("deploy version stamping", () => {
       gitRef: "main",
       timestamp: "2026-07-06T12:00:00.000Z",
       communityD1ShardSourceVersion: "shard-tree.shared-tree",
+      releaseId: null,
+      buildId: null,
+      webSha: null,
+      apiSha: "sha-from-github",
+      coreSha: null,
     })
   })
 
@@ -53,6 +58,11 @@ describe("deploy version stamping", () => {
       gitRef: "release/api",
       timestamp: "2026-07-06T12:01:00.000Z",
       communityD1ShardSourceVersion: "shard-tree.shared-tree",
+      releaseId: null,
+      buildId: null,
+      webSha: null,
+      apiSha: "explicit-sha",
+      coreSha: null,
     })
   })
 
@@ -73,6 +83,11 @@ describe("deploy version stamping", () => {
       gitRef: "main",
       timestamp: "2026-07-06T12:02:00.000Z",
       communityD1ShardSourceVersion: "shard-tree.shared-tree",
+      releaseId: "release-123",
+      buildId: "build-123",
+      webSha: "web-123",
+      apiSha: "api-123",
+      coreSha: "core-123",
     })).toEqual([
       "deploy",
       "--env",
@@ -85,6 +100,16 @@ describe("deploy version stamping", () => {
       "__PIRATE_BUILD_TIMESTAMP__:\"2026-07-06T12:02:00.000Z\"",
       "--define",
       "__PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__:\"shard-tree.shared-tree\"",
+      "--define",
+      "__PIRATE_BUILD_RELEASE_ID__:\"release-123\"",
+      "--define",
+      "__PIRATE_BUILD_ID__:\"build-123\"",
+      "--define",
+      "__PIRATE_BUILD_WEB_SHA__:\"web-123\"",
+      "--define",
+      "__PIRATE_BUILD_API_SHA__:\"api-123\"",
+      "--define",
+      "__PIRATE_BUILD_CORE_SHA__:\"core-123\"",
       "--tag",
       "abc123",
     ])

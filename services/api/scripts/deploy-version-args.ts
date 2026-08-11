@@ -3,6 +3,11 @@ export type BuildVersionMetadata = {
   gitSha: string
   timestamp: string
   communityD1ShardSourceVersion: string
+  releaseId: string | null
+  buildId: string | null
+  webSha: string | null
+  apiSha: string
+  coreSha: string | null
 }
 
 export type RunTextCommand = (command: string, args: string[]) => string
@@ -67,6 +72,10 @@ export function resolveBuildVersionMetadata(
   ).trim()
   const sharedTree = runText("git", ["rev-parse", "HEAD:services/shared"]).trim()
   const communityD1ShardSourceVersion = `${communityD1ShardTree}.${sharedTree}`
+  const releaseId = firstNonEmpty([env.BUILD_RELEASE_ID, env.PIRATE_BUILD_RELEASE_ID])
+  const buildId = firstNonEmpty([env.BUILD_ID, env.PIRATE_BUILD_ID])
+  const webSha = firstNonEmpty([env.BUILD_WEB_SHA, env.PIRATE_BUILD_WEB_SHA])
+  const coreSha = firstNonEmpty([env.BUILD_CORE_SHA, env.PIRATE_BUILD_CORE_SHA])
 
   if (!gitSha || !gitRef || !timestamp || !communityD1ShardTree || !sharedTree) {
     throw new Error("Missing build version metadata")
@@ -77,6 +86,11 @@ export function resolveBuildVersionMetadata(
     gitSha,
     timestamp,
     communityD1ShardSourceVersion,
+    releaseId,
+    buildId,
+    webSha,
+    apiSha: gitSha,
+    coreSha,
   }
 }
 
@@ -84,6 +98,14 @@ export function buildStampedWranglerDeployArgs(
   passthroughArgs: string[],
   metadata: BuildVersionMetadata,
 ): string[] {
+  const optionalDefines = ([
+    ["__PIRATE_BUILD_RELEASE_ID__", metadata.releaseId],
+    ["__PIRATE_BUILD_ID__", metadata.buildId],
+    ["__PIRATE_BUILD_WEB_SHA__", metadata.webSha],
+    ["__PIRATE_BUILD_API_SHA__", metadata.apiSha],
+    ["__PIRATE_BUILD_CORE_SHA__", metadata.coreSha],
+  ] as const).flatMap(([name, value]) => value ? ["--define", defineString(name, value)] : [])
+
   return [
     "deploy",
     ...passthroughArgs,
@@ -98,6 +120,7 @@ export function buildStampedWranglerDeployArgs(
       "__PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__",
       metadata.communityD1ShardSourceVersion,
     ),
+    ...optionalDefines,
     "--tag",
     metadata.gitSha,
   ]

@@ -34,24 +34,74 @@ describe("admin auth middleware", () => {
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
     })).toEqual({
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
     })
 
     expect(buildVersionMetadata({
       BUILD_GIT_SHA: "runtime-api123",
       BUILD_GIT_REF: "runtime-main",
       BUILD_TIMESTAMP: "2026-05-26T17:51:00Z",
+      BUILD_RELEASE_ID: "runtime-release",
+      BUILD_ID: "runtime-build",
+      BUILD_WEB_SHA: "runtime-web123",
+      BUILD_API_SHA: "runtime-api123",
+      BUILD_CORE_SHA: "runtime-core123",
     }, {
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
     })).toEqual({
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
+    })
+  })
+
+  test("version endpoint exposes the public release attestation tuple", async () => {
+    const response = await app.request("http://pirate.test/__version", undefined, {
+      ENVIRONMENT: "production",
+      BUILD_GIT_SHA: "a".repeat(40),
+      BUILD_GIT_REF: "main",
+      BUILD_TIMESTAMP: "2026-08-11T11:23:15Z",
+      BUILD_RELEASE_ID: "d".repeat(64),
+      BUILD_ID: "build-123",
+      BUILD_WEB_SHA: "b".repeat(40),
+      BUILD_API_SHA: "a".repeat(40),
+      BUILD_CORE_SHA: "c".repeat(40),
+    })
+    expect(response.status).toBe(200)
+    expect(await json(response)).toMatchObject({
+      service: "api",
+      environment: "production",
+      git_sha: "a".repeat(40),
+      release_id: "d".repeat(64),
+      build_id: "build-123",
+      web_sha: "b".repeat(40),
+      api_sha: "a".repeat(40),
+      core_sha: "c".repeat(40),
     })
   })
 
