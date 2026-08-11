@@ -70,6 +70,8 @@
     "admin:courtyard-asset-gate": "bun run scripts/admin-courtyard-asset-gate.ts",
     "admin:community-job-recycle": "bun run scripts/admin-community-job-recycle.ts",
     "admin:hns-root-activate": "bun run scripts/admin-hns-root-activate.ts",
+    "admin:hns-ownership-lease-renew": "bun run scripts/admin-hns-ownership-lease-renew.ts",
+    "admin:hns-ownership-lease-renew-fleet": "bun run scripts/admin-hns-ownership-lease-renew-fleet.ts",
     "admin:staging-d1-reclaim": "bun run scripts/admin-staging-d1-reclaim.ts",
     "admin:staging-d1-reclaim-inventory": "bun run scripts/staging-d1-reclamation-inventory.ts",
     "admin:seed-courtyard-clubs": "bun run scripts/admin-seed-courtyard-clubs.ts"

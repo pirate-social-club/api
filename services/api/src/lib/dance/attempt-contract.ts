@@ -12,6 +12,7 @@ export const DANCE_ATTEMPT_REJECTION_CODES = [
   "insufficient_alignment",
   "multiple_people",
   "reference_replay",
+  "start_cue_mismatch",
 ] as const
 
 export type DanceAttemptRejectionCode =
@@ -66,6 +67,13 @@ type ExtractionFacts = {
   motionEnergyBps: number
 }
 
+export type DanceStartCueFacts = {
+  policyVersion: "dance_start_cue_gross_body_v1"
+  kind: "hands_on_head" | "arms_t" | "hands_on_hips"
+  outcome: "passed" | "failed"
+  scoredWindowStartMs: number | null
+}
+
 export type DanceAttemptScoredFacts = {
   outcome: "scored"
   reason: null
@@ -80,6 +88,7 @@ export type DanceAttemptScoredFacts = {
   extraction: ExtractionFacts
   completedAt: number
   resultDigest: string
+  startCue?: DanceStartCueFacts
 }
 
 export type DanceAttemptRejectedFacts = {
@@ -96,6 +105,7 @@ export type DanceAttemptRejectedFacts = {
   extraction: ExtractionFacts
   completedAt: number
   resultDigest: string
+  startCue?: DanceStartCueFacts
 }
 
 export type DanceAttemptPregradeRejectedFacts = {
@@ -105,6 +115,7 @@ export type DanceAttemptPregradeRejectedFacts = {
   pregrade: true
   completedAt: number
   resultDigest: string
+  startCue?: DanceStartCueFacts | null
 }
 
 export type DanceAttemptFailedFacts = {
@@ -112,6 +123,7 @@ export type DanceAttemptFailedFacts = {
   reason: "scoring_unavailable"
   completedAt: number
   resultDigest: string
+  startCue?: DanceStartCueFacts | null
 }
 
 export type DanceAttemptTerminalFacts =
@@ -128,6 +140,7 @@ const PREGRADE_REJECTIONS = new Set<string>([
   "video_invalid",
   "duration_out_of_range",
   "insufficient_pose_presence",
+  "start_cue_mismatch",
   "insufficient_coverage",
   "insufficient_motion",
   "multiple_people",
@@ -303,6 +316,31 @@ function stableJson(value: unknown): string {
   ).join(",")}}`
 }
 
+function parseStartCue(value: unknown): DanceStartCueFacts {
+  const source = record(value, "start_cue")
+  if (source.policy_version !== "dance_start_cue_gross_body_v1") {
+    throw badRequestError("start_cue.policy_version is invalid")
+  }
+  if (!["hands_on_head", "arms_t", "hands_on_hips"].includes(String(source.kind))) {
+    throw badRequestError("start_cue.kind is invalid")
+  }
+  if (source.outcome !== "passed" && source.outcome !== "failed") {
+    throw badRequestError("start_cue.outcome is invalid")
+  }
+  const boundary = source.scored_window_start_ms === null
+    ? null
+    : integer(source.scored_window_start_ms, "start_cue.scored_window_start_ms", 0, 5000)
+  if ((source.outcome === "passed") !== (boundary !== null)) {
+    throw badRequestError("start_cue scored window does not match outcome")
+  }
+  return {
+    policyVersion: source.policy_version,
+    kind: source.kind as DanceStartCueFacts["kind"],
+    outcome: source.outcome,
+    scoredWindowStartMs: boundary,
+  }
+}
+
 function verifyResultDigest(value: Record<string, unknown>): string {
   const received = sha256(value.result_digest, "result_digest")
   const payload = { ...value }
@@ -317,11 +355,18 @@ export function parseDanceAttemptTerminalFacts(
 ): DanceAttemptTerminalFacts {
   const completedAt = integer(value.completed_at, "completed_at", 1, 4_102_444_800)
   const resultDigest = verifyResultDigest(value)
+  const startCue = value.start_cue === undefined ? null : parseStartCue(value.start_cue)
   if (value.outcome === "failed") {
     if (value.reason !== "scoring_unavailable") {
       throw badRequestError("reason is invalid")
     }
-    return { outcome: "failed", reason: "scoring_unavailable", completedAt, resultDigest }
+    return {
+      outcome: "failed",
+      reason: "scoring_unavailable",
+      completedAt,
+      resultDigest,
+      ...(startCue ? { startCue } : {}),
+    }
   }
   if (value.outcome !== "scored" && value.outcome !== "rejected") {
     throw badRequestError("outcome is invalid")
@@ -331,6 +376,12 @@ export function parseDanceAttemptTerminalFacts(
     if (!PREGRADE_REJECTIONS.has(reason)) {
       throw badRequestError("pregrade rejection reason is invalid")
     }
+    if (
+      reason === "start_cue_mismatch"
+      && (!startCue || startCue.outcome !== "failed")
+    ) {
+      throw badRequestError("failed start cue evidence is required")
+    }
     return {
       outcome: "rejected",
       reason: reason as DanceAttemptPregradeRejectedFacts["reason"],
@@ -338,6 +389,7 @@ export function parseDanceAttemptTerminalFacts(
       pregrade: true,
       completedAt,
       resultDigest,
+      ...(startCue ? { startCue } : {}),
     }
   }
 
@@ -348,6 +400,12 @@ export function parseDanceAttemptTerminalFacts(
   const quality = parseQuality(grade.quality)
   const versions = parseVersions(grade.versions)
   const extraction = parseExtraction(value.extraction_metrics)
+  if (
+    versions.scorer === "dance_scorer_gate0_v2"
+    && (!startCue || startCue.outcome !== "passed")
+  ) {
+    throw badRequestError("passed start cue evidence is required")
+  }
   if (typeof grade.calibration_admitted !== "boolean") {
     throw badRequestError("grade.calibration_admitted is invalid")
   }
@@ -379,6 +437,7 @@ export function parseDanceAttemptTerminalFacts(
       extraction,
       completedAt,
       resultDigest,
+      ...(startCue ? { startCue } : {}),
     }
   }
 
@@ -407,6 +466,7 @@ export function parseDanceAttemptTerminalFacts(
     extraction,
     completedAt,
     resultDigest,
+    ...(startCue ? { startCue } : {}),
   }
 }
 

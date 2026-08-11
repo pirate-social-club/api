@@ -128,6 +128,10 @@ export async function dispatchDueDanceAttempts(input: {
         fingerprint_policy_version: record.fingerprintPolicyVersion,
         integrity_policy_version: record.integrityPolicyVersion,
         mirror_policy: record.mirrorPolicy,
+        start_cue_policy_version: record.startCuePolicyVersion,
+        start_cue_kind: record.startCueKind,
+        start_cue_minimum_hold_ms: record.startCueMinimumHoldMs,
+        start_cue_observation_window_ms: record.startCueObservationWindowMs,
       }
       const body = JSON.stringify(payload)
       const signature = signDanceGraderRequest({

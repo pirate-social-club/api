@@ -39,6 +39,8 @@ type Session = {
   calibrationChecksum: string
   fingerprintPolicyVersion: string
   integrityPolicyVersion: string
+  startCuePolicyVersion: string | null
+  startCueKind: string | null
 }
 
 function required(row: unknown, field: string): string {
@@ -71,6 +73,8 @@ function toSession(row: unknown): Session {
     calibrationChecksum: required(row, "required_calibration_checksum"),
     fingerprintPolicyVersion: required(row, "required_fingerprint_policy_version"),
     integrityPolicyVersion: required(row, "required_integrity_policy_version"),
+    startCuePolicyVersion: stringOrNull(rowValue(row, "start_cue_policy_version")),
+    startCueKind: stringOrNull(rowValue(row, "start_cue_kind")),
   }
 }
 
@@ -89,7 +93,11 @@ function factsVersions(facts: DanceAttemptTerminalFacts) {
 
 function hasVersionMismatch(session: Session, facts: DanceAttemptTerminalFacts): boolean {
   const versions = factsVersions(facts)
-  return Boolean(versions && (
+  const cue = facts.startCue
+  return Boolean((cue && (
+    cue.policyVersion !== session.startCuePolicyVersion
+    || cue.kind !== session.startCueKind
+  )) || (versions && (
     versions.scorer !== session.scorerVersion
     || versions.featureSchema !== session.featureSchemaVersion
     || versions.calibration !== session.calibrationVersion
@@ -99,7 +107,7 @@ function hasVersionMismatch(session: Session, facts: DanceAttemptTerminalFacts):
     || versions.poseModelSha256 !== session.poseModelSha256
     || versions.referenceArtifact !== requiredArtifactVersion(session)
     || versions.referenceFeatureSha256 !== session.referenceFeatureSha256
-  ))
+  )))
 }
 
 function requiredArtifactVersion(session: Session): string {
@@ -311,11 +319,13 @@ export async function finalizeDanceAttempt(input: {
           calibration_admitted, fingerprint_policy_version,
           integrity_policy_version, whole_attempt_fingerprint_hmac,
           segment_fingerprint_hmac_json, grader_result_digest,
-          completed_at, created_at
+          completed_at, created_at, start_cue_policy_version,
+          start_cue_kind, start_cue_outcome, scored_window_start_ms
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
           ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26,
-          ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, NULL, ?35, ?36, ?37
+          ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, NULL, ?35, ?36, ?37,
+          ?38, ?39, ?40, ?41
         )
         ON CONFLICT (dance_attempt_id) DO NOTHING
       `,
@@ -357,6 +367,10 @@ export async function finalizeDanceAttempt(input: {
         input.facts.resultDigest,
         new Date(input.facts.completedAt * 1000).toISOString(),
         input.now,
+        input.facts.startCue?.policyVersion ?? null,
+        input.facts.startCue?.kind ?? null,
+        input.facts.startCue?.outcome ?? null,
+        input.facts.startCue?.scoredWindowStartMs ?? null,
       ],
     })
     const persisted = await executeFirst(shard.client, {
@@ -410,6 +424,7 @@ export async function finalizeDanceAttempt(input: {
         score_bps = ?5, calibration_version = ?6,
         calibration_checksum = ?7, calibration_admitted = ?8,
         grader_result_digest = ?9, finalized_at = ?10,
+        start_cue_outcome = ?11, scored_window_start_ms = ?12,
         grading_next_dispatch_at = NULL,
         grading_dispatch_claim_token = NULL,
         grading_dispatch_claim_expires_at = NULL,
@@ -428,6 +443,8 @@ export async function finalizeDanceAttempt(input: {
       projection.calibrationAdmitted,
       input.facts.resultDigest,
       input.now,
+      input.facts.startCue?.outcome ?? null,
+      input.facts.startCue?.scoredWindowStartMs ?? null,
     ],
   })
   if ((updated.rowsAffected ?? updated.rows.length) !== 1) {

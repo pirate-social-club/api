@@ -2331,6 +2331,7 @@ export type DanceSession = {
   created: number;
   consent_policy_version: string | null;
   consented_at: number | null;
+  start_cue: DanceStartCue | null;
 };
 
 export type DanceSessionMutationResponse = (DanceSession & {
@@ -2390,6 +2391,8 @@ export type DanceAttempt = {
   coverage_bps?: number | null;
   pose_detection_bps?: number | null;
   duration_ratio_bps?: number | null;
+  start_cue_outcome?: "passed" | "failed" | null;
+  scored_window_start_ms?: number | null;
   completed_at: number | null;
 };
 
@@ -4012,7 +4015,7 @@ type CreateMultisigCommunityRequest = (CreateCommunityRequestBase & {
   governance_backend: MultisigGovernanceAttachmentInput;
 });
 
-type DanceAttemptReason = "video_invalid" | "upload_invalid" | "duration_out_of_range" | "insufficient_coverage" | "insufficient_pose_presence" | "multiple_people" | "reference_replay" | "duplicate_attempt" | "scoring_unavailable" | "below_platform_floor" | "version_mismatch" | "insufficient_motion" | "insufficient_alignment" | "session_expired" | "cancelled" | null;
+type DanceAttemptReason = "video_invalid" | "upload_invalid" | "duration_out_of_range" | "insufficient_coverage" | "insufficient_pose_presence" | "multiple_people" | "reference_replay" | "duplicate_attempt" | "scoring_unavailable" | "below_platform_floor" | "version_mismatch" | "insufficient_motion" | "insufficient_alignment" | "start_cue_mismatch" | "session_expired" | "cancelled" | null;
 
 type DanceAttemptStatus = "initialized" | "uploading" | "submitted" | "grading" | "passed" | "rejected" | "failed" | "expired" | "cancelled";
 
@@ -4025,6 +4028,13 @@ type DanceChoreographyReference = {
 };
 
 type DanceSessionStatus = "initialized" | "uploading" | "submitted" | "grading" | "finalized" | "rejected" | "failed" | "expired" | "cancelled";
+
+type DanceStartCue = {
+  policy_version: "dance_start_cue_gross_body_v1";
+  kind: "hands_on_head" | "arms_t" | "hands_on_hips";
+  minimum_hold_ms: number;
+  observation_window_ms: number;
+};
 
 type DisclosedQualifierSnapshot = {
   qualifier_template: string;
