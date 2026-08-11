@@ -462,7 +462,7 @@ export class DatabaseProfileRepository {
           tier,
           issuance_source,
           redirect_target_global_handle_id,
-          price_paid_usd,
+          price_paid_cents,
           global_handle_paid_quote_id,
           free_rename_consumed,
           issued_at,
@@ -782,7 +782,7 @@ export class DatabaseProfileRepository {
     const existingForQuote = (await this.client.execute({
       sql: `
         SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-               redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+               redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
                replaced_at, created_at, updated_at
         FROM global_handles
         WHERE global_handle_paid_quote_id = ?1
@@ -858,7 +858,7 @@ export class DatabaseProfileRepository {
         const existing = (await tx.execute({
           sql: `
             SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-                   redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+                   redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
                    replaced_at, created_at, updated_at
             FROM global_handles
             WHERE global_handle_paid_quote_id = ?1

@@ -299,7 +299,7 @@ export class DatabaseIdentityRepository {
                     tier,
                     issuance_source,
                     redirect_target_global_handle_id,
-                    price_paid_usd,
+                    price_paid_cents,
                     free_rename_consumed,
                     issued_at,
                     replaced_at,

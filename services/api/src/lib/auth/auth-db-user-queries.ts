@@ -292,7 +292,7 @@ export async function getGlobalHandleRow(executor: DbExecutor, globalHandleId: s
   const row = await firstRow(executor, {
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-             redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+             redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
              replaced_at, created_at, updated_at
       FROM global_handles
       WHERE global_handle_id = ?1
@@ -312,7 +312,7 @@ export async function listGlobalHandleRowsByIds(executor: DbExecutor, globalHand
   const result = await executor.execute({
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-             redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+             redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
              replaced_at, created_at, updated_at
       FROM global_handles
       WHERE global_handle_id IN (${clause.placeholders})
@@ -330,7 +330,7 @@ export async function getGlobalHandleRowByLabelNormalized(
   const row = await firstRow(executor, {
     sql: `
       SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-             redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+             redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
              replaced_at, created_at, updated_at
       FROM global_handles
       WHERE label_normalized = ?1

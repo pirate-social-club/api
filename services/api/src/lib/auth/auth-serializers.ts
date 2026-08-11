@@ -86,8 +86,8 @@ export function serializeGlobalHandle(row: GlobalHandleRow): GlobalHandle {
     status: row.status,
     issuance_source: row.issuance_source,
     redirect_target_global_handle: row.redirect_target_global_handle_id,
-    price_paid_cents: typeof row.price_paid_usd === "number" && Number.isFinite(row.price_paid_usd)
-      ? Math.round(row.price_paid_usd * 100)
+    price_paid_cents: typeof row.price_paid_cents === "number" && Number.isSafeInteger(row.price_paid_cents)
+      ? row.price_paid_cents
       : null,
     free_rename_consumed: Boolean(row.free_rename_consumed),
     issued_at: unixSeconds(row.issued_at),
