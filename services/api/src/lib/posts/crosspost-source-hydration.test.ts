@@ -190,4 +190,73 @@ describe("hydrateCrosspostSources", () => {
       thumbnail_ref: "https://cdn.test/adult.jpg",
     })
   })
+
+  test("age-gates a pending source rating", async () => {
+    const post = makeCrosspost()
+    post.crosspost_source = {
+      ...post.crosspost_source!,
+      content_safety_state: "pending",
+      age_gate_policy: "none",
+    }
+
+    await hydrateCrosspostSources({
+      posts: [post],
+      communityRepository: {
+        async getCommunityPostProjectionByPostId() {
+          return makeProjection({
+            projected_payload_json: JSON.stringify({
+              content_safety_state: "safe",
+              age_gate_policy: "none",
+            }),
+          })
+        },
+        async getCommunityById() {
+          return {
+            community_id: "source_community",
+            display_name: "@Music",
+            route_slug: "music",
+            status: "active",
+            provisioning_state: "active",
+          }
+        },
+      } as never,
+    })
+
+    expect(post.crosspost_source).toMatchObject({
+      content_safety_state: "pending",
+      age_gate_policy: "18_plus",
+    })
+  })
+
+  test("age-gates a source whose current projection safety is missing", async () => {
+    const post = makeCrosspost()
+    post.crosspost_source = {
+      ...post.crosspost_source!,
+      content_safety_state: "safe",
+      age_gate_policy: "none",
+    }
+
+    await hydrateCrosspostSources({
+      posts: [post],
+      communityRepository: {
+        async getCommunityPostProjectionByPostId() {
+          return makeProjection({ projected_payload_json: JSON.stringify({ content_safety_state: "unknown" }) })
+        },
+        async getCommunityById() {
+          return {
+            community_id: "source_community",
+            display_name: "@Music",
+            route_slug: "music",
+            status: "active",
+            provisioning_state: "active",
+          }
+        },
+      } as never,
+    })
+
+    expect(post.crosspost_source).toMatchObject({
+      content_safety_state: "pending",
+      age_gate_policy: "18_plus",
+    })
+  })
 })

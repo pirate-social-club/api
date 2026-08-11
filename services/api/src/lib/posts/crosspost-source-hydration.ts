@@ -56,10 +56,18 @@ function moreRestrictiveContentSafety(
   stored: Post["content_safety_state"] | null | undefined,
   current: Post["content_safety_state"] | null,
 ): Post["content_safety_state"] {
+  if (!current) {
+    return "pending"
+  }
+  if (!stored) {
+    return current
+  }
+  return contentSafetySeverity(stored) >= contentSafetySeverity(current) ? stored : current
+}
+
+function contentSafetySeverity(state: Post["content_safety_state"]): number {
   const severity: Record<Post["content_safety_state"], number> = { pending: 3, safe: 0, sensitive: 1, adult: 2 }
-  const left = stored ?? "sensitive"
-  const right = current ?? "sensitive"
-  return severity[left] >= severity[right] ? left : right
+  return severity[state]
 }
 
 function resolveThumbnailRef(
@@ -179,7 +187,7 @@ export async function hydrateCrosspostSources(input: {
     )
     const ageGatePolicy = source.age_gate_policy === "18_plus"
       || projectedAgeGatePolicy(projectedPayload) === "18_plus"
-      || contentSafetyState === "adult"
+      || contentSafetySeverity(contentSafetyState) >= contentSafetySeverity("adult")
       ? "18_plus"
       : "none"
     post.crosspost_source = {
