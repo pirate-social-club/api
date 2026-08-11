@@ -758,33 +758,94 @@ async function alignLyricsWithElevenLabs(input: {
   }
 }
 
-function normalizeTimedLyrics(result: Record<string, unknown>): Record<string, unknown> {
+const LATIN_LOOKALIKE_FOLD: Record<string, string> = {
+  "\u0430": "a",
+  "\u0435": "e",
+  "\u043E": "o",
+  "\u0440": "p",
+  "\u0441": "c",
+  "\u0445": "x",
+  "\u0443": "y",
+  "\u0410": "A",
+  "\u0412": "B",
+  "\u0415": "E",
+  "\u041A": "K",
+  "\u041C": "M",
+  "\u041D": "H",
+  "\u041E": "O",
+  "\u0420": "P",
+  "\u0421": "C",
+  "\u0422": "T",
+  "\u0425": "X",
+}
+
+function foldLatinLookalikes(value: string): string {
+  return Array.from(value, (character) => LATIN_LOOKALIKE_FOLD[character] ?? character).join("")
+}
+
+export function canonicalizeTimedLyricSegments(
+  segments: unknown[],
+  canonicalLyrics: string,
+): unknown[] {
+  const texts = segments.map((segment) => {
+    if (!segment || typeof segment !== "object" || !("text" in segment) || typeof segment.text !== "string") {
+      return null
+    }
+    return segment.text
+  })
+  if (texts.some((text) => text === null)) {
+    return segments
+  }
+
+  const providerLyrics = texts.join("")
+  if (
+    providerLyrics.length !== canonicalLyrics.length
+    || foldLatinLookalikes(providerLyrics) !== foldLatinLookalikes(canonicalLyrics)
+  ) {
+    return segments
+  }
+
+  let cursor = 0
+  return segments.map((segment, index) => {
+    const text = texts[index] ?? ""
+    const canonicalText = canonicalLyrics.slice(cursor, cursor + text.length)
+    cursor += text.length
+    return { ...(segment as Record<string, unknown>), text: canonicalText }
+  })
+}
+
+function normalizeTimedLyrics(result: Record<string, unknown>, canonicalLyrics: string): Record<string, unknown> {
   if (Array.isArray(result.segments)) {
-    return result
+    return {
+      ...result,
+      segments: canonicalizeTimedLyricSegments(result.segments, canonicalLyrics),
+    }
   }
 
   const words = Array.isArray(result.words) ? result.words : []
+  const segments = words
+    .map((word) => {
+      if (!word || typeof word !== "object") {
+        return null
+      }
+      const text = "text" in word && typeof word.text === "string" ? word.text : null
+      const start = "start" in word && typeof word.start === "number" ? word.start : null
+      const end = "end" in word && typeof word.end === "number" ? word.end : null
+      if (!text || start === null || end === null) {
+        return null
+      }
+      return {
+        start_ms: Math.round(start * 1000),
+        end_ms: Math.round(end * 1000),
+        text,
+        loss: "loss" in word && typeof word.loss === "number" ? word.loss : null,
+      }
+    })
+    .filter((segment): segment is { start_ms: number; end_ms: number; text: string; loss: number | null } => Boolean(segment))
+
   return {
     provider: "elevenlabs",
-    segments: words
-      .map((word) => {
-        if (!word || typeof word !== "object") {
-          return null
-        }
-        const text = "text" in word && typeof word.text === "string" ? word.text : null
-        const start = "start" in word && typeof word.start === "number" ? word.start : null
-        const end = "end" in word && typeof word.end === "number" ? word.end : null
-        if (!text || start === null || end === null) {
-          return null
-        }
-        return {
-          start_ms: Math.round(start * 1000),
-          end_ms: Math.round(end * 1000),
-          text,
-          loss: "loss" in word && typeof word.loss === "number" ? word.loss : null,
-        }
-      })
-      .filter((segment): segment is { start_ms: number; end_ms: number; text: string; loss: number | null } => Boolean(segment)),
+    segments: canonicalizeTimedLyricSegments(segments, canonicalLyrics),
     provider_result: result,
   }
 }
@@ -818,7 +879,7 @@ async function evaluateAlignment(input: {
     alignmentStatus: "completed",
     alignmentError: null,
     alignmentReason: null,
-    timedLyrics: normalizeTimedLyrics(providerResult ?? {}),
+    timedLyrics: normalizeTimedLyrics(providerResult ?? {}, input.lyrics),
   }
 }
 
