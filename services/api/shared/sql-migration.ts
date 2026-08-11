@@ -836,6 +836,13 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return []
   }
 
+  if (
+    normalized.startsWith("DROP TRIGGER DANCE_ATTEMPT_SESSION_START_CUE_IMMUTABLE ")
+    && normalized.includes(" ON DANCE_ATTEMPT_SESSIONS")
+  ) {
+    return []
+  }
+
   if (normalized.startsWith("GRANT ")) {
     return []
   }
@@ -967,6 +974,15 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   let sqliteCompat = statement
+  if (
+    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("GET_BYTE(DECODE(MD5(DANCE_ATTEMPT_SESSION_ID), 'HEX'), 0) % 3")
+  ) {
+    sqliteCompat = sqliteCompat.replace(
+      /get_byte\s*\(\s*decode\s*\(\s*md5\s*\(\s*dance_attempt_session_id\s*\)\s*,\s*'hex'\s*\)\s*,\s*0\s*\)/iu,
+      "unicode(substr(dance_attempt_session_id, 1, 1))",
+    )
+  }
   if (
     normalized.startsWith("INSERT INTO COMMUNITY_HEALTH_SYNC_STATE ")
     && normalized.includes("ON CONFLICT (PROJECTION_KEY) DO NOTHING")

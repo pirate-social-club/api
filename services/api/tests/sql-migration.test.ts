@@ -5,6 +5,27 @@ import { resolve } from "node:path"
 import { splitSqlStatements, toSqliteCompatibleStatement, toSqliteCompatibleStatements } from "../shared/sql-migration"
 
 describe("sql migration helpers", () => {
+  test("maps the dance start-cue backfill to SQLite-compatible statements", () => {
+    expect(toSqliteCompatibleStatements(`
+      DROP TRIGGER dance_attempt_session_start_cue_immutable ON dance_attempt_sessions;
+    `)).toEqual([])
+
+    const [statement] = toSqliteCompatibleStatements(`
+      UPDATE dance_attempt_sessions
+      SET start_cue_kind = CASE (
+        get_byte(decode(md5(dance_attempt_session_id), 'hex'), 0) % 3
+      )
+        WHEN 0 THEN 'hands_on_head'
+        WHEN 1 THEN 'arms_t'
+        ELSE 'hands_on_hips'
+      END
+      WHERE start_cue_policy_version IS NULL;
+    `)
+
+    expect(statement).toContain("unicode(substr(dance_attempt_session_id, 1, 1)) % 3")
+    expect(statement).not.toContain("get_byte")
+  })
+
   test("maps the community health watermark upsert to SQLite insert-or-ignore", () => {
     const [statement] = toSqliteCompatibleStatements(`
       INSERT INTO community_health_sync_state (
