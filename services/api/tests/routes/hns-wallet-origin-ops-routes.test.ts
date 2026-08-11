@@ -117,6 +117,74 @@ describe("HNS wallet origin operator routes", () => {
     expect(projected.snapshots[0]?.effective).toBe(true)
   })
 
+  test("keeps durable authorization stable while verifier or Privy is unavailable", async () => {
+    const projected = projection()
+    const ctx = await createRouteTestContext({
+      HNS_WALLET_ORIGIN_AUTHORITY: projected.binding as never,
+      HNS_VERIFIER_BASE_URL: "https://verifier.outage.test/hns",
+      HNS_VERIFIER_AUTH_TOKEN: "outage-test-token",
+      PIRATE_ADMIN_TOKEN: "admin-test-token",
+      PRIVY_API_URL: "https://privy.outage.test",
+    })
+    cleanup = ctx.cleanup
+    await insertRootState(ctx, "stable-root", 1)
+
+    const registration = await app.request(adminRequest(
+      "/admin/ops/hns-wallet-origins/stable-root/registrations",
+      {
+        operator_actor_id: "workspace_operator",
+        reason: "Privy dashboard origin confirmed",
+        registration_reference: "privy-dashboard:app.stable-root",
+      },
+    ), undefined, ctx.env)
+    expect(registration.status).toBe(200)
+
+    const durableSnapshot = structuredClone(projected.snapshots.at(-1))
+    expect(durableSnapshot).toMatchObject({
+      authorityVersion: 1,
+      effective: true,
+      originHostname: "app.stable-root",
+    })
+
+    for (const unavailableProvider of ["verifier", "Privy"] as const) {
+      const previousFetch = globalThis.fetch
+      const blockedCalls: string[] = []
+      Object.defineProperty(globalThis, "fetch", {
+        configurable: true,
+        value: async (input: RequestInfo | URL) => {
+          blockedCalls.push(String(input))
+          throw new Error(`${unavailableProvider}_provider_unavailable`)
+        },
+        writable: true,
+      })
+
+      try {
+        const enabledResponse = await app.request(new Request("http://pirate.test/health", {
+          headers: { origin: "https://app.stable-root" },
+        }), undefined, ctx.env)
+        expect(enabledResponse.headers.get("access-control-allow-origin")).toBe(
+          "https://app.stable-root",
+        )
+
+        const unregisteredResponse = await app.request(new Request("http://pirate.test/health", {
+          headers: { origin: "https://app.unregistered-root" },
+        }), undefined, ctx.env)
+        expect(unregisteredResponse.headers.get("access-control-allow-origin")).toBe(null)
+      } finally {
+        Object.defineProperty(globalThis, "fetch", {
+          configurable: true,
+          value: previousFetch,
+          writable: true,
+        })
+      }
+
+      // Request-time authorization must not contact either external provider.
+      expect(blockedCalls).toEqual([])
+      expect(projected.snapshots).toHaveLength(1)
+      expect(projected.snapshots.at(-1)).toEqual(durableSnapshot)
+    }
+  })
+
   test("rejects an unactivated or hard-denied root", async () => {
     const projected = projection()
     const ctx = await createRouteTestContext({
