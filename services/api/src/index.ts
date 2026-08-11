@@ -191,6 +191,15 @@ registerStorySettlementChainPrimitives(storySettlementRealChain)
 declare const __PIRATE_BUILD_GIT_REF__: string | undefined
 declare const __PIRATE_BUILD_GIT_SHA__: string | undefined
 declare const __PIRATE_BUILD_TIMESTAMP__: string | undefined
+declare const __PIRATE_BUILD_RELEASE_ID__: string | undefined
+declare const __PIRATE_BUILD_ID__: string | undefined
+declare const __PIRATE_BUILD_WEB_SHA__: string | undefined
+declare const __PIRATE_BUILD_API_SHA__: string | undefined
+declare const __PIRATE_BUILD_CORE_SHA__: string | undefined
+declare const __PIRATE_BUILD_SOURCE_STATE__: string | undefined
+declare const __PIRATE_BUILD_DEPLOY_REASON_SLUG__: string | undefined
+declare const __PIRATE_BUILD_HOTFIX_REASON_SLUG__: string | undefined
+declare const __PIRATE_BUILD_PATCH_SHA256__: string | undefined
 declare const __PIRATE_COMMUNITY_D1_SHARD_SOURCE_VERSION__: string | undefined
 
 const app = new Hono<RequestCorrelationEnv>()
@@ -209,12 +218,39 @@ type BuildVersionMetadata = {
   git_ref: string | null
   git_sha: string | null
   build_timestamp: string | null
+  release_id: string | null
+  build_id: string | null
+  web_sha: string | null
+  api_sha: string | null
+  core_sha: string | null
+  source_state: "clean" | "dirty" | null
+  deploy_reason_slug: string | null
+  hotfix_reason_slug: string | null
+  patch_sha256: string | null
 }
 
 const COMPILED_BUILD_VERSION_METADATA: BuildVersionMetadata = {
   git_ref: typeof __PIRATE_BUILD_GIT_REF__ === "string" ? __PIRATE_BUILD_GIT_REF__ : null,
   git_sha: typeof __PIRATE_BUILD_GIT_SHA__ === "string" ? __PIRATE_BUILD_GIT_SHA__ : null,
   build_timestamp: typeof __PIRATE_BUILD_TIMESTAMP__ === "string" ? __PIRATE_BUILD_TIMESTAMP__ : null,
+  release_id: typeof __PIRATE_BUILD_RELEASE_ID__ === "string" ? __PIRATE_BUILD_RELEASE_ID__ : null,
+  build_id: typeof __PIRATE_BUILD_ID__ === "string" ? __PIRATE_BUILD_ID__ : null,
+  web_sha: typeof __PIRATE_BUILD_WEB_SHA__ === "string" ? __PIRATE_BUILD_WEB_SHA__ : null,
+  api_sha: typeof __PIRATE_BUILD_API_SHA__ === "string" ? __PIRATE_BUILD_API_SHA__ : null,
+  core_sha: typeof __PIRATE_BUILD_CORE_SHA__ === "string" ? __PIRATE_BUILD_CORE_SHA__ : null,
+  source_state: typeof __PIRATE_BUILD_SOURCE_STATE__ === "string"
+    && (__PIRATE_BUILD_SOURCE_STATE__ === "clean" || __PIRATE_BUILD_SOURCE_STATE__ === "dirty")
+      ? __PIRATE_BUILD_SOURCE_STATE__
+      : null,
+  deploy_reason_slug: typeof __PIRATE_BUILD_DEPLOY_REASON_SLUG__ === "string"
+    ? __PIRATE_BUILD_DEPLOY_REASON_SLUG__ || null
+    : null,
+  hotfix_reason_slug: typeof __PIRATE_BUILD_HOTFIX_REASON_SLUG__ === "string"
+    ? __PIRATE_BUILD_HOTFIX_REASON_SLUG__ || null
+    : null,
+  patch_sha256: typeof __PIRATE_BUILD_PATCH_SHA256__ === "string"
+    ? __PIRATE_BUILD_PATCH_SHA256__ || null
+    : null,
 }
 
 const COMPILED_COMMUNITY_D1_SHARD_SOURCE_VERSION =
@@ -268,13 +304,46 @@ app.use("*", async (c, next) => {
 })
 
 export function buildVersionMetadata(
-  env: Pick<Env, "BUILD_GIT_REF" | "BUILD_GIT_SHA" | "BUILD_TIMESTAMP">,
+  env: Pick<
+    Env,
+    | "BUILD_GIT_REF"
+    | "BUILD_GIT_SHA"
+    | "BUILD_TIMESTAMP"
+    | "BUILD_RELEASE_ID"
+    | "BUILD_ID"
+    | "BUILD_WEB_SHA"
+    | "BUILD_API_SHA"
+    | "BUILD_CORE_SHA"
+    | "BUILD_SOURCE_STATE"
+    | "BUILD_DEPLOY_REASON_SLUG"
+    | "BUILD_HOTFIX_REASON_SLUG"
+    | "BUILD_PATCH_SHA256"
+  >,
   compiled: BuildVersionMetadata = COMPILED_BUILD_VERSION_METADATA,
 ): BuildVersionMetadata {
+  const useCompiledSourceProvenance = compiled.source_state !== null
+
   return {
     git_ref: compiled.git_ref ?? env.BUILD_GIT_REF ?? null,
     git_sha: compiled.git_sha ?? env.BUILD_GIT_SHA ?? null,
     build_timestamp: compiled.build_timestamp ?? env.BUILD_TIMESTAMP ?? null,
+    release_id: compiled.release_id ?? env.BUILD_RELEASE_ID ?? null,
+    build_id: compiled.build_id ?? env.BUILD_ID ?? null,
+    web_sha: compiled.web_sha ?? env.BUILD_WEB_SHA ?? null,
+    api_sha: compiled.api_sha ?? env.BUILD_API_SHA ?? null,
+    core_sha: compiled.core_sha ?? env.BUILD_CORE_SHA ?? null,
+    source_state: useCompiledSourceProvenance
+      ? compiled.source_state
+      : env.BUILD_SOURCE_STATE ?? null,
+    deploy_reason_slug: useCompiledSourceProvenance
+      ? compiled.deploy_reason_slug
+      : env.BUILD_DEPLOY_REASON_SLUG ?? null,
+    hotfix_reason_slug: useCompiledSourceProvenance
+      ? compiled.hotfix_reason_slug
+      : env.BUILD_HOTFIX_REASON_SLUG ?? null,
+    patch_sha256: useCompiledSourceProvenance
+      ? compiled.patch_sha256
+      : env.BUILD_PATCH_SHA256 ?? null,
   }
 }
 
@@ -286,6 +355,19 @@ async function buildVersionPayload(env: Env) {
     git_sha: buildVersion.git_sha,
     git_ref: buildVersion.git_ref,
     build_timestamp: buildVersion.build_timestamp,
+    release_id: buildVersion.release_id,
+    build_id: buildVersion.build_id,
+    web_sha: buildVersion.web_sha,
+    api_sha: buildVersion.api_sha ?? buildVersion.git_sha,
+    core_sha: buildVersion.core_sha,
+    source_state: buildVersion.source_state,
+    deploy_reason_slug: buildVersion.deploy_reason_slug,
+    hotfix: buildVersion.source_state === "dirty"
+      ? {
+          reason_slug: buildVersion.hotfix_reason_slug,
+          patch_sha256: buildVersion.patch_sha256,
+        }
+      : null,
     karaoke_scoring_version: KARAOKE_SCORING_VERSION,
     karaoke_runtime: {
       version: KARAOKE_RUNTIME_BUILD.version,

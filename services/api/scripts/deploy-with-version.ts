@@ -25,6 +25,16 @@ console.info("[deploy] stamping Worker build", {
   git_sha: metadata.gitSha,
   build_timestamp: metadata.timestamp,
   community_d1_shard_source_version: metadata.communityD1ShardSourceVersion,
+  release_id: metadata.releaseId,
+  build_id: metadata.buildId,
+  web_sha: metadata.webSha,
+  api_sha: metadata.apiSha,
+  core_sha: metadata.coreSha,
+  source_state: metadata.sourceState,
+  deploy_reason_slug: metadata.deployReasonSlug,
+  hotfix: metadata.sourceState === "dirty"
+    ? { reason_slug: metadata.hotfixReasonSlug, patch_sha256: metadata.patchSha256 }
+    : null,
 })
 
 const child = spawn("wrangler", args, {
