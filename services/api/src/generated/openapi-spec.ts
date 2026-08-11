@@ -5370,6 +5370,40 @@ const spec = {
           "Bookings"
         ],
         "summary": "List authenticated user's bookings",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "role",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "booker",
+                "host"
+              ],
+              "default": "booker"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_community_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -5379,7 +5413,8 @@ const spec = {
                   "required": [
                     "object",
                     "data",
-                    "has_more"
+                    "has_more",
+                    "next_cursor"
                   ],
                   "properties": {
                     "object": {
@@ -5396,6 +5431,12 @@ const spec = {
                     },
                     "has_more": {
                       "type": "boolean"
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   }
                 }
