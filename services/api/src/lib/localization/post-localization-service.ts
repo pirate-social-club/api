@@ -1,10 +1,10 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
-import { getCommunityLabelById, serializeCommunityPostLabel } from "../communities/community-label-store"
+import { getCommunityLabelById, serializeCommunityPostLabel, type CommunityLabelRow } from "../communities/community-label-store"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import { resolvePostStudyCapability } from "../posts/post-study-service"
 import { computePostSourceHash, computeTextSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
-import { getContentTranslation } from "./content-translation-store"
+import { contentTranslationLookupKey, getContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
 import type { CommentThreadSnapshot, LocalizedPostResponse, Post, SongPresentationDownloadableAudio } from "../../types"
 import type { Env } from "../../env"
 import type { Client } from "../sql-client"
@@ -623,10 +623,32 @@ function hasTranslatablePostContent(post: Post): boolean {
   )
 }
 
+async function resolveContentTranslation(input: {
+  executor: DbExecutor
+  contentType: "post"
+  contentId: string
+  fieldKey?: string | null
+  locale: string
+  sourceHash: string
+  contentTranslationByKey?: ReadonlyMap<string, ContentTranslationRecord>
+}): Promise<ContentTranslationRecord | null> {
+  if (input.contentTranslationByKey) {
+    return input.contentTranslationByKey.get(contentTranslationLookupKey({
+      content_type: input.contentType,
+      content_id: input.contentId,
+      field_key: input.fieldKey ?? "",
+      locale: input.locale,
+      source_hash: input.sourceHash,
+    })) ?? null
+  }
+  return getContentTranslation(input)
+}
+
 async function getLocalizedMarketEmbedTranslations(input: {
   executor: DbExecutor
   post: Post
   locale: string
+  contentTranslationByKey?: ReadonlyMap<string, ContentTranslationRecord>
 }): Promise<{
   missingCount: number
   translations: LocalizedPostResponse["translated_embeds"]
@@ -637,13 +659,14 @@ async function getLocalizedMarketEmbedTranslations(input: {
 
   for (const embed of marketEmbeds) {
     const sourceHash = await computeTextSourceHash(embed.question)
-    const cached = await getContentTranslation({
+    const cached = await resolveContentTranslation({
       executor: input.executor,
       contentType: "post",
       contentId: input.post.post_id,
       fieldKey: `embed:${embed.embedKey}:question`,
       locale: input.locale,
       sourceHash,
+      contentTranslationByKey: input.contentTranslationByKey,
     })
     if (!cached) {
       missingCount += 1
@@ -653,13 +676,14 @@ async function getLocalizedMarketEmbedTranslations(input: {
       const translatedOutcomes: NonNullable<NonNullable<LocalizedPostResponse["translated_embeds"]>[number]["translated_outcomes"]> = []
       for (const outcome of embed.outcomes) {
         const outcomeSourceHash = await computeTextSourceHash(outcome.label)
-        const outcomeTranslation = await getContentTranslation({
+        const outcomeTranslation = await resolveContentTranslation({
           executor: input.executor,
           contentType: "post",
           contentId: input.post.post_id,
           fieldKey: `embed:${embed.embedKey}:outcome:${outcome.index}`,
           locale: input.locale,
           sourceHash: outcomeSourceHash,
+          contentTranslationByKey: input.contentTranslationByKey,
         })
         if (!outcomeTranslation) {
           missingCount += 1
@@ -702,6 +726,9 @@ export async function buildLocalizedPostResponse(input: {
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
   studyEnabledCache?: StudyEnabledCache
   karaokeEnabledCache?: KaraokeEnabledCache
+  communityLabelById?: ReadonlyMap<string, CommunityLabelRow>
+  authorCommunityRoleByUserId?: ReadonlyMap<string, LocalizedPostResponse["author_community_role"]>
+  contentTranslationByKey?: ReadonlyMap<string, ContentTranslationRecord>
   viewerUserId?: string | null
 }): Promise<LocalizedPostResponse> {
   const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
@@ -716,16 +743,17 @@ export async function buildLocalizedPostResponse(input: {
     songPresentation,
   })
   const label = input.post.label_id
-    ? await getCommunityLabelById({
-        executor: input.executor,
-        communityId: input.post.community_id,
-        labelId: input.post.label_id,
-      })
+    ? input.communityLabelById
+      ? input.communityLabelById.get(input.post.label_id) ?? null
+      : await getCommunityLabelById({
+          executor: input.executor,
+          communityId: input.post.community_id,
+          labelId: input.post.label_id,
+        })
     : null
-  const authorCommunityRole = await getAuthorCommunityRole({
-    executor: input.executor,
-    post: input.post,
-  })
+  const authorCommunityRole = input.post.author_user_id && input.authorCommunityRoleByUserId
+    ? input.authorCommunityRoleByUserId.get(input.post.author_user_id) ?? null
+    : await getAuthorCommunityRole({ executor: input.executor, post: input.post })
   const communityKaraokeEnabled = await getCommunityKaraokeEnabled({
     cache: input.karaokeEnabledCache,
     executor: input.executor,
@@ -782,6 +810,7 @@ export async function buildLocalizedPostResponse(input: {
     executor: input.executor,
     post: input.post,
     locale: resolvedLocale,
+    contentTranslationByKey: input.contentTranslationByKey,
   })
 
   if (!hasPostContent && !input.post.embeds?.some((embed) => getPredictionMarketEmbedQuestion(embed))) {
@@ -800,12 +829,13 @@ export async function buildLocalizedPostResponse(input: {
     }
   }
 
-  const cached = await getContentTranslation({
+  const cached = await resolveContentTranslation({
     executor: input.executor,
     contentType: "post",
     contentId: input.post.post_id,
     locale: resolvedLocale,
     sourceHash,
+    contentTranslationByKey: input.contentTranslationByKey,
   })
 
   if ((hasPostContent && !cached) || marketEmbedTranslations.missingCount > 0) {

@@ -11,7 +11,10 @@ import {
   getCommunityMembershipState,
 } from "../communities/membership/membership-state-store"
 import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
+import { listCommunityLabels } from "../communities/community-label-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale } from "../localization/content-locale"
+import { contentTranslationLookupKey, listContentTranslationsForContentIds } from "../localization/content-translation-store"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
 import {
   hydrateDerivativeSourcesForResponses,
@@ -367,6 +370,39 @@ export async function resolveTopCommunitiesIdentity(input: {
   }))
 }
 
+async function listHomeFeedAuthorCommunityRoles(input: {
+  executor: DbExecutor
+  communityId: string
+  userIds: string[]
+}): Promise<Map<string, LocalizedPostResponse["author_community_role"]>> {
+  const uniqueUserIds = [...new Set(input.userIds)]
+  const roles = new Map<string, LocalizedPostResponse["author_community_role"]>()
+  if (uniqueUserIds.length === 0) return roles
+  const placeholders = uniqueUserIds.map((_, index) => `?${index + 2}`).join(", ")
+  const result = await input.executor.execute({
+    sql: `
+      SELECT user_id, role
+      FROM community_roles
+      WHERE community_id = ?1
+        AND user_id IN (${placeholders})
+        AND status = 'active'
+        AND role IN ('owner', 'admin', 'moderator')
+      ORDER BY user_id, CASE role
+        WHEN 'owner' THEN 0
+        WHEN 'admin' THEN 1
+        ELSE 2
+      END
+    `,
+    args: [input.communityId, ...uniqueUserIds],
+  })
+  for (const row of result.rows) {
+    const userId = requiredString(row, "user_id")
+    if (roles.has(userId)) continue
+    roles.set(userId, requiredString(row, "role") === "owner" ? "owner" : "moderator")
+  }
+  return roles
+}
+
 export async function readHomeFeedCommunityItems(input: {
   env: Env
   communityId: string
@@ -455,8 +491,38 @@ export async function readHomeFeedCommunityItems(input: {
       userId: input.userId,
     })
     const votesMs = elapsedMs(votesStartedAt)
+    const publishedPosts = publishedPostIds
+      .map((postId) => postsById.get(postId))
+      .filter((post): post is Post => Boolean(post))
+    const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
+    const [communityLabels, authorCommunityRoleByUserId, contentTranslations] = await Promise.all([
+      listCommunityLabels({
+        executor: db.client,
+        communityId: input.communityId,
+        includeArchived: true,
+      }),
+      listHomeFeedAuthorCommunityRoles({
+        executor: db.client,
+        communityId: input.communityId,
+        userIds: publishedPosts
+          .filter((post) => post.identity_mode === "public")
+          .map((post) => post.author_user_id)
+          .filter((userId): userId is string => Boolean(userId)),
+      }),
+      listContentTranslationsForContentIds({
+        executor: db.client,
+        contentType: "post",
+        contentIds: publishedPostIds,
+        locale: resolvedLocale,
+      }),
+    ])
+    const communityLabelById = new Map(communityLabels.map((label) => [label.label_id, label] as const))
+    const contentTranslationByKey = new Map(
+      contentTranslations.map((translation) => [contentTranslationLookupKey(translation), translation] as const),
+    )
     const postReadJobs: HomeFeedPostReadJob[] = []
     const studyEnabledCache = new Map<string, Promise<boolean>>()
+    const karaokeEnabledCache = new Map<string, Promise<boolean>>()
     const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
     let localizeMs = 0
     for (const row of input.rows) {
@@ -488,6 +554,10 @@ export async function readHomeFeedCommunityItems(input: {
         studyElevenLabsCredentialResolver,
         studyArtifactWriteClient: db.client,
         studyEnabledCache,
+        karaokeEnabledCache,
+        communityLabelById,
+        authorCommunityRoleByUserId,
+        contentTranslationByKey,
         viewerUserId: input.userId,
       })
       localizeMs += elapsedMs(localizeStartedAt)

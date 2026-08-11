@@ -60,6 +60,36 @@ function toContentTranslationRecord(row: unknown): ContentTranslationRecord {
   }
 }
 
+export function contentTranslationLookupKey(input: Pick<
+  ContentTranslationRecord,
+  "content_type" | "content_id" | "field_key" | "locale" | "source_hash"
+>): string {
+  return [input.content_type, input.content_id, input.field_key, input.locale, input.source_hash].join("\u0000")
+}
+
+export async function listContentTranslationsForContentIds(input: {
+  executor: DbExecutor
+  contentType: LocalizedContentType
+  contentIds: string[]
+  locale: string
+}): Promise<ContentTranslationRecord[]> {
+  if (input.contentIds.length === 0) return []
+  const placeholders = input.contentIds.map((_, index) => `?${index + 3}`).join(", ")
+  const result = await input.executor.execute({
+    sql: `
+      SELECT content_translation_id, content_type, content_id, field_key, locale, source_hash,
+             source_language, outcome, translated_title, translated_body, translated_caption, provider,
+             provider_model, provider_result_json, created_at, updated_at
+      FROM content_translations
+      WHERE content_type = ?1
+        AND locale = ?2
+        AND content_id IN (${placeholders})
+    `,
+    args: [input.contentType, input.locale, ...input.contentIds],
+  })
+  return result.rows.map(toContentTranslationRecord)
+}
+
 export async function getContentTranslation(input: {
   executor: DbExecutor
   contentType: LocalizedContentType
