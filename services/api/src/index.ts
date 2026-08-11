@@ -90,8 +90,16 @@ import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/run
 import {
   configuredCorsOrigin as configuredCorsOriginForEnv,
   importedHnsAppRoot,
+  importedHnsRootLabel,
 } from "./lib/http/allowed-origins"
-import { hnsWalletOriginAuthorityStub } from "./lib/hns-wallet-origin-authority-do"
+import {
+  hnsWalletOriginAuthorityStub,
+  type HnsRootRoutingAuthoritySnapshot,
+} from "./lib/hns-wallet-origin-authority-do"
+import {
+  HNS_ROOT_ROUTING_AUTHORITY_TTL_MS,
+  readHnsRootRoutingAuthority,
+} from "./lib/hns-root-routing-authority"
 import { mirrorResponseToRequestHost } from "./lib/http/request-host-mirror"
 import { runScheduledBatch, type NamedTask } from "./lib/scheduled-job-runner"
 import { createDurableObjectCronLock, ScheduledCronLockDO } from "./lib/scheduled-cron-lock"
@@ -289,23 +297,96 @@ async function buildVersionPayload(env: Env) {
 
 function configuredCorsOrigin(
   origin: string,
-  c: { env: Env; get(name: "hnsWalletOriginAllowed"): boolean | undefined },
+  c: { env: Env; get(name: "hnsOriginAllowed"): boolean | undefined },
 ): string | null {
-  const importedHnsAppAllowed = Boolean(c.get("hnsWalletOriginAllowed"))
-  return configuredCorsOriginForEnv(origin, c.env, importedHnsAppAllowed)
+  return configuredCorsOriginForEnv(origin, c.env, Boolean(c.get("hnsOriginAllowed")))
 }
 
-async function resolveHnsWalletOriginAllowed(origin: string | null, env: Env): Promise<boolean> {
+function freshRoutingSnapshot(snapshot: HnsRootRoutingAuthoritySnapshot | null, nowMs: number): boolean {
+  if (!snapshot) return false
+  const updatedAt = Date.parse(snapshot.updatedAt)
+  const ageMs = nowMs - updatedAt
+  return Number.isFinite(updatedAt) && ageMs >= 0 && ageMs <= HNS_ROOT_ROUTING_AUTHORITY_TTL_MS
+}
+
+function routingSnapshotMatchesRoot(
+  snapshot: HnsRootRoutingAuthoritySnapshot | null,
+  rootLabel: string,
+): boolean {
+  return snapshot?.originHostname === `https://${rootLabel}`
+}
+
+function routingSnapshotFromRead(input: {
+  rootLabel: string
+  effective: boolean
+  reasonCode: HnsRootRoutingAuthoritySnapshot["reasonCode"]
+  now: Date
+  current: HnsRootRoutingAuthoritySnapshot | null
+}): HnsRootRoutingAuthoritySnapshot {
+  return {
+    authorityVersion: (input.current?.authorityVersion ?? 0) + 1,
+    effective: input.effective,
+    originHostname: `https://${input.rootLabel}`,
+    reasonCode: input.reasonCode,
+    updatedAt: input.now.toISOString(),
+  }
+}
+
+async function resolveHnsOriginAllowed(origin: string | null, env: Env): Promise<boolean> {
   if (!origin) return false
-  const rootLabel = importedHnsAppRoot(origin)
-  if (!rootLabel) return false
+  let hostname: string
   try {
-    const snapshot = await hnsWalletOriginAuthorityStub(env)?.readSnapshot(rootLabel)
-    return snapshot?.effective === true
-      && snapshot.originHostname === `app.${rootLabel}`
+    hostname = new URL(origin).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  // Canonical Pirate/Clawitzer hosts remain configured platform origins. They
+  // are not imported sovereign roots and therefore do not consult HNS state.
+  if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) return false
+  const rootLabel = importedHnsAppRoot(origin) ?? importedHnsRootLabel(origin)
+  if (!rootLabel) return false
+  const now = new Date()
+  const nowMs = now.getTime()
+  const stub = hnsWalletOriginAuthorityStub(env)
+  try {
+    const hasRoutingProjection = typeof stub?.readRoutingSnapshot === "function"
+    const current = hasRoutingProjection
+      ? await stub?.readRoutingSnapshot?.(rootLabel) ?? null
+      : null
+    if (routingSnapshotMatchesRoot(current, rootLabel) && freshRoutingSnapshot(current, nowMs)) {
+      return current?.effective === true
+    }
+
+    // Compatibility for test doubles and an old authority binding during a
+    // staged rollout. The current DO always exposes the routing methods, so
+    // production requests never use wallet registration as root activation.
+    if (!hasRoutingProjection && importedHnsAppRoot(origin)) {
+      const walletSnapshot = await stub?.readSnapshot(rootLabel)
+      if (
+        walletSnapshot?.effective === true
+        && walletSnapshot.originHostname === `app.${rootLabel}`
+      ) {
+        return true
+      }
+    }
+
+    const authority = await readHnsRootRoutingAuthority(
+      getControlPlaneClient(env),
+      rootLabel,
+      now,
+    )
+    const snapshot = routingSnapshotFromRead({
+      rootLabel,
+      effective: authority.effective,
+      reasonCode: authority.reasonCode,
+      now,
+      current,
+    })
+    await stub?.applyRoutingSnapshot?.(snapshot)
+    return authority.effective
   } catch (error) {
     console.error(JSON.stringify({
-      event: "hns_wallet_origin_authority_read_failed",
+      event: "hns_root_routing_authority_read_failed",
       root_label: rootLabel,
       error: error instanceof Error ? error.message : String(error),
     }))
@@ -313,10 +394,17 @@ async function resolveHnsWalletOriginAllowed(origin: string | null, env: Env): P
   }
 }
 
+// CORS authority refreshes can consult the request-scoped control-plane
+// client. Keep this scope outside the resolver and the downstream route so a
+// stale projection never causes an unbounded connection or a second scope.
+app.use("*", async (_c, next) => {
+  await withRequestControlPlaneClients(next)
+})
+
 app.use("/*", async (c, next) => {
   c.set(
-    "hnsWalletOriginAllowed",
-    await resolveHnsWalletOriginAllowed(c.req.header("origin") ?? null, c.env),
+    "hnsOriginAllowed",
+    await resolveHnsOriginAllowed(c.req.header("origin") ?? null, c.env),
   )
   await next()
 })
@@ -337,10 +425,6 @@ app.use(
     })(c, next)
   },
 )
-
-app.use("*", async (_c, next) => {
-  await withRequestControlPlaneClients(next)
-})
 
 app.get("/health", (c) => c.json({ ok: true }))
 app.get("/health/provisioning", async (c) => {
@@ -764,7 +848,12 @@ function appendCommaSeparatedHeader(headers: Headers, name: string, value: strin
   }
 }
 
-async function applyCorsHeaders(request: Request, response: Response, env: Env): Promise<Response> {
+async function applyCorsHeaders(
+  request: Request,
+  response: Response,
+  env: Env,
+  hnsOriginAllowed: boolean,
+): Promise<Response> {
   if (response.headers.has("Access-Control-Allow-Origin")) {
     if ((response.headers.get("Access-Control-Expose-Headers") ?? "")
       .split(",")
@@ -784,7 +873,7 @@ async function applyCorsHeaders(request: Request, response: Response, env: Env):
   const allowedOrigin = configuredCorsOriginForEnv(
     origin,
     env,
-    await resolveHnsWalletOriginAllowed(origin, env),
+    hnsOriginAllowed,
   )
   if (!allowedOrigin) {
     return response
@@ -798,14 +887,17 @@ async function applyCorsHeaders(request: Request, response: Response, env: Env):
 }
 
 async function fetchApi(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-  const response = isPublicReadCacheRequest(req)
-    ? await fetchPublicRead(req, env, ctx)
-    : await app.fetch(req, env, ctx)
-  // Rehost stored absolute media refs to the allowlisted HNS request host
-  // after the (potentially cache-fronted) inner fetch, so cached and stored
-  // payloads always keep the canonical origin.
-  const mirrored = await mirrorResponseToRequestHost({ request: req, response, env })
-  return await applyCorsHeaders(req, mirrored, env)
+  return await withRequestControlPlaneClients(async () => {
+    const hnsOriginAllowed = await resolveHnsOriginAllowed(req.headers.get("Origin"), env)
+    const response = isPublicReadCacheRequest(req)
+      ? await fetchPublicRead(req, env, ctx)
+      : await app.fetch(req, env, ctx)
+    // Rehost stored absolute media refs to the allowlisted HNS request host
+    // after the (potentially cache-fronted) inner fetch, so cached and stored
+    // payloads always keep the canonical origin.
+    const mirrored = await mirrorResponseToRequestHost({ request: req, response, env })
+    return await applyCorsHeaders(req, mirrored, env, hnsOriginAllowed)
+  })
 }
 
 async function flushScheduledAnalytics(env: Env): Promise<void> {

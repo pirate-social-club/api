@@ -290,20 +290,54 @@ describe("health route", () => {
     expect(response.headers.get("access-control-allow-origin")).toBeNull()
   })
 
-  test("CORS allows HNS web origins without explicit configuration", async () => {
+  test("CORS allows canonical Pirate web origins without explicit configuration", async () => {
     const appHost = await app.request("http://pirate.test/health", {
       headers: { origin: "https://app.pirate" },
-    })
-    const importedRoot = await app.request("http://pirate.test/health", {
-      headers: { origin: "https://xn--pokmon-dva" },
     })
     const profileHost = await app.request("http://pirate.test/health", {
       headers: { origin: "https://blackbeard.pirate" },
     })
 
     expect(appHost.headers.get("access-control-allow-origin")).toBe("https://app.pirate")
-    expect(importedRoot.headers.get("access-control-allow-origin")).toBe("https://xn--pokmon-dva")
     expect(profileHost.headers.get("access-control-allow-origin")).toBe("https://blackbeard.pirate")
+  })
+
+  test("CORS denies unknown and non-activated imported apex origins", async () => {
+    const apex = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://unactivated-root" },
+    })
+    const appOrigin = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://app.unactivated-root" },
+    })
+
+    expect(apex.headers.get("access-control-allow-origin")).toBeNull()
+    expect(appOrigin.headers.get("access-control-allow-origin")).toBeNull()
+  })
+
+  test("CORS allows both imported surfaces when the root is activated", async () => {
+    const now = new Date().toISOString()
+    const binding = {
+      getByName: () => ({
+        readRoutingSnapshot: async (rootLabel: string) => ({
+          authorityVersion: 1,
+          effective: true,
+          originHostname: `https://${rootLabel}`,
+          reasonCode: "enabled" as const,
+          updatedAt: now,
+        }),
+        applyRoutingSnapshot: async (snapshot: unknown) => snapshot,
+      }),
+    }
+    const env = { HNS_WALLET_ORIGIN_AUTHORITY: binding } as never
+    const apex = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://activated-root" },
+    }, env)
+    const appOrigin = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://app.activated-root" },
+    }, env)
+
+    expect(apex.headers.get("access-control-allow-origin")).toBe("https://activated-root")
+    expect(appOrigin.headers.get("access-control-allow-origin")).toBe("https://app.activated-root")
   })
 
   test("CORS does not treat ordinary web origins as HNS origins", async () => {

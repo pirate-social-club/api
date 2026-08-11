@@ -1,11 +1,6 @@
 import type { Env } from "../../env"
 
 const DEFAULT_ANDROID_KARAOKE_ORIGIN = "https://android.pirate.sc"
-const LEGACY_WALLET_ENABLED_HNS_ORIGINS = new Set([
-  "https://app.dankmeme",
-  "https://app.jazleeuw",
-])
-
 function commaSeparatedValues(value: string | undefined): string[] {
   return String(value || "")
     .split(",")
@@ -59,7 +54,21 @@ export function importedHnsAppRoot(origin: string): string | null {
     : null
 }
 
-function isTrustedHnsWebOrigin(origin: string, importedAppAllowed: boolean): boolean {
+export function importedHnsRootLabel(origin: string): string | null {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null
+  const hostname = url.hostname.toLowerCase()
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(hostname)
+    ? hostname
+    : null
+}
+
+function isTrustedHnsWebOrigin(origin: string, importedOriginAllowed: boolean): boolean {
   let url: URL
   try {
     url = new URL(origin)
@@ -77,7 +86,7 @@ function isTrustedHnsWebOrigin(origin: string, importedAppAllowed: boolean): boo
   }
 
   if (!hostname.includes(".")) {
-    return true
+    return importedOriginAllowed && importedHnsRootLabel(origin) !== null
   }
 
   if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) {
@@ -87,20 +96,15 @@ function isTrustedHnsWebOrigin(origin: string, importedAppAllowed: boolean): boo
   // Imported HNS roots use the dashboard-compatible app.<root> origin. The
   // API remains the canonical HNS service, so these origins need the same
   // CORS treatment as app.pirate without requiring one config entry per root.
-  return importedAppAllowed && importedHnsAppRoot(origin) !== null
+  return importedOriginAllowed && importedHnsAppRoot(origin) !== null
 }
 
 export function configuredCorsOrigin(
   origin: string,
   env: Pick<Env, "CORS_ALLOWED_ORIGINS"> | undefined,
-  importedHnsAppAllowed = false,
+  importedHnsOriginAllowed = false,
 ): string | null {
-  if (
-    isTrustedHnsWebOrigin(
-      origin,
-      importedHnsAppAllowed || LEGACY_WALLET_ENABLED_HNS_ORIGINS.has(origin.toLowerCase()),
-    )
-  ) {
+  if (isTrustedHnsWebOrigin(origin, importedHnsOriginAllowed)) {
     return origin
   }
 
