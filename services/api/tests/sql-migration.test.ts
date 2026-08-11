@@ -302,6 +302,27 @@ describe("sql migration helpers", () => {
     ])
   })
 
+  test("preserves dance cue columns when SQLite skips PostgreSQL constraints", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN start_cue_policy_version TEXT,
+        ADD COLUMN start_cue_kind TEXT,
+        ADD COLUMN start_cue_minimum_hold_ms INTEGER,
+        ADD COLUMN start_cue_observation_window_ms INTEGER,
+        ADD COLUMN start_cue_outcome TEXT,
+        ADD COLUMN scored_window_start_ms INTEGER,
+        ADD CONSTRAINT dance_attempt_session_start_cue_assignment_check CHECK (start_cue_kind IS NULL);
+    `)).toEqual([
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
+    ])
+    expect(toSqliteCompatibleStatements("DROP TRIGGER dance_attempt_session_start_cue_immutable ON dance_attempt_sessions;")).toEqual([])
+  })
+
   test("translates EFP recovery state and review deadlines for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       ALTER TABLE efp_follow_write_intents

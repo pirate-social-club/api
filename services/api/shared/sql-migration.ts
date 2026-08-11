@@ -896,6 +896,25 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     return SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD
   }
 
+  // Migration 0211 adds the cue columns and PostgreSQL CHECK constraints in a
+  // single ALTER TABLE. SQLite cannot add table constraints after the fact;
+  // preserve the columns in the local mirror and let the PostgreSQL migration
+  // enforce the checks in production.
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN START_CUE_POLICY_VERSION ")
+    && normalized.includes("ADD CONSTRAINT DANCE_ATTEMPT_SESSION_START_CUE_ASSIGNMENT_CHECK")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
+    ]
+  }
+
   // Migration 0159 adds two nullable admission-policy columns plus a paired
   // PostgreSQL CHECK in one ALTER TABLE. SQLite only supports one ADD COLUMN
   // per ALTER and cannot add the table-level constraint after creation.
