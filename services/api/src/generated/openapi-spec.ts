@@ -240,6 +240,9 @@ const spec = {
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
           "503": {
             "$ref": "#/components/responses/ServiceUnavailable"
           }
@@ -8999,6 +9002,15 @@ const spec = {
           }
         }
       },
+      "RateLimited": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
       "ServiceUnavailable": {
         "content": {
           "application/json": {
@@ -9018,15 +9030,6 @@ const spec = {
         }
       },
       "BadRequest": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      },
-      "RateLimited": {
         "content": {
           "application/json": {
             "schema": {
