@@ -191,7 +191,7 @@ installation is required. Never print, persist, or commit a package token.
 Memory mode:
 
 1. Set `DEV_MEMORY_STORE_ENABLED=true`.
-2. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET` or `JWT_BASED_AUTH_SHARED_SECRET`.
+2. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`.
 3. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
 4. Run `rtk bun run dev`.
 
@@ -323,9 +323,9 @@ rtk bun run mint:dev-jwt --sub dev-user --wallet 0x11111111111111111111111111111
 
 The script reads:
 
-- `AUTH_UPSTREAM_JWT_SHARED_SECRET` or `JWT_BASED_AUTH_SHARED_SECRET`
-- `AUTH_UPSTREAM_JWT_ISSUER` or `JWT_BASED_AUTH_ISSUERS`
-- `AUTH_UPSTREAM_JWT_AUDIENCE` or `JWT_BASED_AUTH_AUDIENCE`
+- `AUTH_UPSTREAM_JWT_SHARED_SECRET`
+- `AUTH_UPSTREAM_JWT_ISSUER`
+- `AUTH_UPSTREAM_JWT_AUDIENCE`
 
 from `.dev.vars` or the current shell environment.
 

@@ -180,14 +180,14 @@ async function mintJwt(input: { apiBase: string; subject: string }): Promise<str
     "AUTH_UPSTREAM_JWT_ISSUER",
     isStaging
       ? "pirate-staging-upstream"
-      : optionalEnv("JWT_BASED_AUTH_ISSUERS", "pirate-production-upstream").split(",")[0]!,
+      : optionalEnv("AUTH_UPSTREAM_JWT_ISSUER", "pirate-production-upstream").split(",")[0]!,
   )
   const audience = optionalEnv(
     "AUTH_UPSTREAM_JWT_AUDIENCE",
-    isStaging ? "pirate-api-staging" : optionalEnv("JWT_BASED_AUTH_AUDIENCE", "api-core"),
+    isStaging ? "pirate-api-staging" : optionalEnv("AUTH_UPSTREAM_JWT_AUDIENCE", "api-core"),
   )
-  const secret = process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET?.trim() || process.env.JWT_BASED_AUTH_SHARED_SECRET?.trim()
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+  const secret = process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET?.trim()
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
 
   return await new SignJWT({})
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })

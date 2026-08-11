@@ -467,10 +467,10 @@ function validateComments(input: {
 }
 
 async function mintJwt(subject: string, walletAddress?: string): Promise<string> {
-  const issuer = (envValue("AUTH_UPSTREAM_JWT_ISSUER") || envValue("JWT_BASED_AUTH_ISSUERS") || "pirate-dev").split(",")[0]!.trim()
-  const audience = envValue("AUTH_UPSTREAM_JWT_AUDIENCE") || envValue("JWT_BASED_AUTH_AUDIENCE") || "pirate-api"
-  const secret = envValue("AUTH_UPSTREAM_JWT_SHARED_SECRET") || envValue("JWT_BASED_AUTH_SHARED_SECRET")
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+  const issuer = (envValue("AUTH_UPSTREAM_JWT_ISSUER") || "pirate-dev").split(",")[0]!.trim()
+  const audience = envValue("AUTH_UPSTREAM_JWT_AUDIENCE") || "pirate-api"
+  const secret = envValue("AUTH_UPSTREAM_JWT_SHARED_SECRET")
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
   return await new SignJWT(walletAddress ? { wallet_address: walletAddress } : {})
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(issuer)
