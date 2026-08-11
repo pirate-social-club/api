@@ -350,22 +350,15 @@ describe("/bookings routes", () => {
     })
   })
 
-  test("resolves slots through the canonical host route and compatibility alias", async () => {
+  test("resolves slots through the canonical host route", async () => {
     const app = loadApp()
     const first = await app.request(
       "http://pirate.test/bookings/hosts/host_route/slots?from=2026-07-01T10:00:00.000Z&to=2026-07-01T12:00:00.000Z&tz=America/New_York",
       { headers: adminHeaders() },
       env(),
     )
-    const alias = await app.request(
-      "http://pirate.test/bookings/booking-hosts/host_route/slots?from=2026-07-01T10:00:00.000Z&to=2026-07-01T12:00:00.000Z&tz=America/New_York",
-      { headers: adminHeaders() },
-      env(),
-    )
-
     expect(first.status).toBe(200)
-    expect(alias.status).toBe(200)
-    expect(calls.availability).toHaveLength(2)
+    expect(calls.availability).toHaveLength(1)
     expect(calls.availability[0]).toMatchObject({
       executor: dummyExecutor,
       hostUserId: "host_route",
@@ -480,7 +473,7 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "hold_not_found" })
 
     quoteResult = { ok: false, reason: "hold_expired" }
-    const expired = await app.request("http://pirate.test/bookings/booking-holds/hld_route/quote", {
+    const expired = await app.request("http://pirate.test/bookings/holds/hld_route/quote", {
       method: "POST",
       headers: adminHeaders({ "content-type": "application/json" }),
       body: "{}",
@@ -584,7 +577,7 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "not_found" })
   })
 
-  test("returns authoritative cancellation terms and accepts protected or legacy cancellation", async () => {
+  test("returns authoritative cancellation terms and requires the previewed refund to cancel", async () => {
     const app = loadApp()
     const preview = await app.request("http://pirate.test/bookings/bkg_route/cancellation-preview", {
       headers: adminHeaders(),
@@ -592,13 +585,20 @@ describe("/bookings routes", () => {
     expect(preview.status).toBe(200)
     expect(await json(preview)).toMatchObject({ refund_cents: 5000, host_payout_cents: 0 })
 
-    const legacy = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+    const missing = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
       method: "POST",
       headers: adminHeaders({ "content-type": "application/json" }),
       body: "{}",
     }, env())
-    expect(legacy.status).toBe(200)
-    expect(calls.cancel[0]).toMatchObject({ expectedRefundCents: undefined })
+    expect(missing.status).toBe(400)
+    expect(calls.cancel).toEqual([])
+
+    const bodyless = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+    }, env())
+    expect(bodyless.status).toBe(400)
+    expect(calls.cancel).toEqual([])
 
     const cancelled = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
       method: "POST",
@@ -606,7 +606,7 @@ describe("/bookings routes", () => {
       body: JSON.stringify({ expected_refund_cents: 5000 }),
     }, env())
     expect(cancelled.status).toBe(200)
-    expect(calls.cancel[1]).toMatchObject({
+    expect(calls.cancel[0]).toMatchObject({
       executor: dummyExecutor,
       bookingId: "bkg_route",
       actorUserId: "actor_route",
@@ -626,6 +626,34 @@ describe("/bookings routes", () => {
       body: "{",
     }, env())
     expect(invalidJson.status).toBe(400)
+  })
+
+  test("does not mount retired booking-hosts and booking-holds aliases", async () => {
+    const app = loadApp()
+    const requests = [
+      app.request("http://pirate.test/bookings/booking-hosts/host_route/slots", {
+        headers: adminHeaders(),
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-hosts/host_route/holds", {
+        method: "POST",
+        headers: adminHeaders({ "content-type": "application/json" }),
+        body: "{}",
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-holds/hld_route/quote", {
+        method: "POST",
+        headers: adminHeaders(),
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-holds/hld_route/confirm", {
+        method: "POST",
+        headers: adminHeaders(),
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-holds/hld_route/payment-submitted", {
+        method: "POST",
+        headers: adminHeaders(),
+      }, env()),
+    ]
+
+    expect((await Promise.all(requests)).map((response) => response.status)).toEqual([404, 404, 404, 404, 404])
   })
 
   test("returns refreshed cancellation terms when the policy boundary changed", async () => {

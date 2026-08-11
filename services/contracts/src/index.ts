@@ -1307,7 +1307,7 @@ export type BookingCancellationPreview = {
 };
 
 export type CancelBookingRequest = {
-  expected_refund_cents?: number;
+  expected_refund_cents: number;
 };
 
 export type Booking = {

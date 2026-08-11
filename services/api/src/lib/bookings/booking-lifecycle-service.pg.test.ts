@@ -346,6 +346,30 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
     expect(heartbeats[0]?.count).toBe(0);
   });
 
+  test("rejects cancellation when the previewed refund no longer matches", async () => {
+    await seedBooking({ bookingId: "bkg_lifecycle_service_cancel_terms", status: "confirmed", lock: true });
+
+    const cancelled = await cancelGlobalBooking({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_cancel_terms",
+      actorUserId: "host_bkg_lifecycle_service_cancel_terms",
+      nowUtc: "2026-06-11T10:00:00Z",
+      expectedRefundCents: 0,
+    });
+
+    expect(cancelled).toMatchObject({
+      ok: false,
+      reason: "cancellation_terms_changed",
+      preview: { refund_cents: 5000 },
+    });
+    const rows = await repoDb.unsafe(
+      "SELECT status FROM bookings.records WHERE booking_id = $1",
+      ["bkg_lifecycle_service_cancel_terms"],
+    ) as Record<string, unknown>[];
+    expect(rows).toEqual([{ status: "confirmed" }]);
+  });
+
   test("settles global complete, cancel, and no-show with effects and lock release", async () => {
     installSettlementFakes();
     await seedBooking({ bookingId: "bkg_lifecycle_service_complete", status: "live", lock: true });
@@ -375,6 +399,7 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       bookingId: "bkg_lifecycle_service_cancel",
       actorUserId: "host_bkg_lifecycle_service_cancel",
       nowUtc: "2026-06-11T10:00:00Z",
+      expectedRefundCents: 5000,
     });
     expect(cancelled).toMatchObject({
       ok: true,
