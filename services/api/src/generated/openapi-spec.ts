@@ -22201,6 +22201,24 @@ const spec = {
           "thumbnail_ref": {
             "type": "string",
             "nullable": true
+          },
+          "content_safety_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "safe",
+              "sensitive",
+              "adult"
+            ],
+            "nullable": true
+          },
+          "age_gate_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "18_plus"
+            ],
+            "nullable": true
           }
         }
       },

@@ -1040,6 +1040,14 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
 
   let sqliteCompat = statement
   if (
+    normalized.startsWith("INSERT INTO COMMUNITY_HEALTH_SYNC_STATE ")
+    && normalized.includes("ON CONFLICT (PROJECTION_KEY) DO NOTHING")
+  ) {
+    sqliteCompat = sqliteCompat
+      .replace(/INSERT\s+INTO\s+community_health_sync_state/iu, "INSERT OR IGNORE INTO community_health_sync_state")
+      .replace(/\s+ON\s+CONFLICT\s*\(projection_key\)\s+DO\s+NOTHING\s*;?\s*$/iu, ";")
+  }
+  if (
     normalized.startsWith("UPDATE EFP_FOLLOW_WRITE_INTENTS ")
     && normalized.includes("SPONSORSHIP_REVIEW_AFTER = UPDATED_AT + INTERVAL '24 HOURS'")
   ) {

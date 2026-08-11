@@ -526,6 +526,10 @@ type CrosspostSource = {
   author_user_id?: string | null
   author_label?: string | null
   thumbnail_ref?: string | null
+  source_content_safety_state?: Post["content_safety_state"] | null
+  source_age_gate_policy?: Post["age_gate_policy"] | null
+  content_safety_state?: Post["content_safety_state"] | null
+  age_gate_policy?: Post["age_gate_policy"] | null
 }
 
 export type PostEventStatus = "scheduled" | "canceled" | "postponed" | "ended"

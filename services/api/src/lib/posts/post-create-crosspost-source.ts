@@ -66,6 +66,8 @@ export async function resolveCrosspostSource(input: {
       post_id: sourcePost.post_id,
       community_id: sourcePost.community_id,
       captured_at: nowIso(),
+      source_content_safety_state: sourcePost.content_safety_state,
+      source_age_gate_policy: sourcePost.age_gate_policy,
     }
   } finally {
     sourceDb.close()
