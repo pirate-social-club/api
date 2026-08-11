@@ -38,6 +38,42 @@ function fakeProvisioningShard(bindingName: string, calls: Array<{ m: string; in
       calls.push({ m: "communityD1LoadSnapshot", input })
       return { ok: true, value: { rowsAffected: 0, loaded: true } }
     },
+    async execute(input: { communityId: string; statement: string | { sql: string } }) {
+      calls.push({ m: "execute", input })
+      const sql = typeof input.statement === "string" ? input.statement : input.statement.sql
+      if (sql.includes("FROM communities")) {
+        return {
+          ok: true,
+          value: {
+            rows: [{
+              community_id: input.communityId,
+              display_name: "Recent Job Club",
+              description: null,
+              avatar_ref: null,
+              banner_ref: null,
+              status: "active",
+              membership_mode: "request",
+              default_age_gate_policy: "none",
+              allow_anonymous_identity: 0,
+              anonymous_identity_scope: null,
+              donation_policy_mode: "none",
+              donation_partner_id: null,
+              donation_partner_status: "unconfigured",
+              settings_json: null,
+              karaoke_enabled: 0,
+              governance_mode: "centralized",
+              created_by_user_id: "usr_fixture",
+              created_at: "2026-08-11T00:00:00.000Z",
+              updated_at: "2026-08-11T00:00:00.000Z",
+            }],
+          },
+        }
+      }
+      if (sql.includes("FROM community_rules") || sql.includes("FROM community_gate_policies")) {
+        return { ok: true, value: { rows: [] } }
+      }
+      throw new Error(`unexpected snapshot query: ${sql}`)
+    },
   } as unknown as ShardRpc
 }
 
@@ -110,9 +146,11 @@ describe("community provisioning recovery routes", () => {
 
   testWithTimeout("community create returns a recently running D1 job without re-provisioning", async () => {
     const calls: Array<{ m: string; input: unknown }> = []
+    const shard = fakeProvisioningShard("DB_CMTY_RECENT_JOB_TEST", calls)
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "",
-      COMMUNITY_D1_SHARD: fakeProvisioningShard("DB_CMTY_RECENT_JOB_TEST", calls),
+      COMMUNITY_D1_SHARD: shard,
+      COMMUNITY_D1_SHARD_ROUTES: '{"community-d1-shard-staging":"COMMUNITY_D1_SHARD"}',
       COMMUNITY_D1_SHARD_REGION: "weur",
     })
     cleanup = ctx.cleanup
@@ -140,7 +178,14 @@ describe("community provisioning recovery routes", () => {
       }
     }
     expect(firstBody.community.provisioning_state).toBe("active")
-    expect(calls.map((c) => c.m)).toEqual(["communityD1Bind", "communityD1LoadSnapshot"])
+    const firstCallNames = calls.map((c) => c.m)
+    expect(firstCallNames).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+      "execute",
+      "execute",
+      "execute",
+    ])
 
     await ctx.client.execute({
       sql: `
@@ -185,6 +230,10 @@ describe("community provisioning recovery routes", () => {
     expect(secondBody.community.provisioning_state).toBe("provisioning")
     expect(secondBody.job.id).toBe(firstBody.job.id)
     expect(secondBody.job.status).toBe("running")
-    expect(calls.map((c) => c.m)).toEqual(["communityD1Bind", "communityD1LoadSnapshot"])
+    expect(calls.map((c) => c.m).filter((name) => name !== "execute")).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+    ])
+    expect(calls.filter((call) => call.m === "execute")).toHaveLength(6)
   }, 10_000)
 })
