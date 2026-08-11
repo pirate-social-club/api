@@ -7,7 +7,11 @@ import {
   submitDanceAttemptSession,
 } from "./attempt-session-repository"
 
-function fakeClient(budget = { recent_count: 0, active_count: 0, idempotency_count: 0 }) {
+function fakeClient(
+  budget = { recent_count: 0, active_count: 0, idempotency_count: 0 },
+  insertError: unknown = null,
+  userMissing = false,
+) {
   let session: Record<string, unknown> | null = null
   const revision = {
     community_id: "cmty_1",
@@ -33,6 +37,9 @@ function fakeClient(budget = { recent_count: 0, active_count: 0, idempotency_cou
     if (sql.includes("FROM dance_choreography_revisions")) {
       return { rows: [revision] }
     }
+    if (sql.includes("FROM users") && sql.includes("FOR UPDATE")) {
+      return { rows: userMissing ? [] : [{ user_id: args[0] }] }
+    }
     if (sql.includes("AS recent_count")) {
       return { rows: [{
         ...budget,
@@ -40,6 +47,7 @@ function fakeClient(budget = { recent_count: 0, active_count: 0, idempotency_cou
       }] }
     }
     if (sql.includes("INSERT INTO dance_attempt_sessions")) {
+      if (insertError) throw insertError
       if (session) return { rows: [] }
       session = {
         dance_attempt_session_id: args[0],
@@ -157,6 +165,98 @@ describe("dance attempt durable session repository", () => {
       client: fakeClient({ recent_count: 6, active_count: 0, idempotency_count: 0 }).client,
       value,
     })).rejects.toMatchObject({ status: 429, code: "rate_limited" })
+  })
+
+  test("maps the atomic active-session unique race to a conflict", async () => {
+    const value = {
+      sessionId: "dse_race",
+      attemptId: "dat_race",
+      subjectUserId: "usr_1",
+      hostPostId: "post_1",
+      creationIdempotencyKey: "idem_race",
+      activityDate: "2026-07-30",
+      activityTimezone: "UTC",
+      consentPolicyVersion: "dance_recording_v1" as const,
+      consentedAt: "2026-07-30T00:00:00.000Z",
+      consentSource: "api" as const,
+      now: "2026-07-30T00:00:00.000Z",
+      expiresAt: "2026-07-30T00:30:00.000Z",
+    }
+    await expect(createDanceAttemptSession({
+      client: fakeClient(
+        { recent_count: 0, active_count: 0, idempotency_count: 0 },
+        {
+          code: "23505",
+          constraint: "dance_attempt_session_one_active_per_subject_idx",
+          message: "duplicate key value violates unique constraint",
+        },
+      ).client,
+      value,
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "conflict",
+      message: "An active dance session already exists",
+    })
+  })
+
+  test("does not relabel a different unique violation as an active-session conflict", async () => {
+    const value = {
+      sessionId: "dse_other_unique",
+      attemptId: "dat_other_unique",
+      subjectUserId: "usr_1",
+      hostPostId: "post_1",
+      creationIdempotencyKey: "idem_other_unique",
+      activityDate: "2026-07-30",
+      activityTimezone: "UTC",
+      consentPolicyVersion: "dance_recording_v1" as const,
+      consentedAt: "2026-07-30T00:00:00.000Z",
+      consentSource: "api" as const,
+      now: "2026-07-30T00:00:00.000Z",
+      expiresAt: "2026-07-30T00:30:00.000Z",
+    }
+    await expect(createDanceAttemptSession({
+      client: fakeClient(
+        { recent_count: 0, active_count: 0, idempotency_count: 0 },
+        {
+          code: "23505",
+          constraint: "dance_attempt_sessions_subject_user_id_creation_idempotency_key_key",
+          message: "duplicate key value violates unique constraint",
+        },
+      ).client,
+      value,
+    })).rejects.toMatchObject({
+      code: "23505",
+      constraint: "dance_attempt_sessions_subject_user_id_creation_idempotency_key_key",
+    })
+  })
+
+  test("rejects creation when the subject row is absent", async () => {
+    const value = {
+      sessionId: "dse_missing_subject",
+      attemptId: "dat_missing_subject",
+      subjectUserId: "usr_missing",
+      hostPostId: "post_1",
+      creationIdempotencyKey: "idem_missing_subject",
+      activityDate: "2026-07-30",
+      activityTimezone: "UTC",
+      consentPolicyVersion: "dance_recording_v1" as const,
+      consentedAt: "2026-07-30T00:00:00.000Z",
+      consentSource: "api" as const,
+      now: "2026-07-30T00:00:00.000Z",
+      expiresAt: "2026-07-30T00:30:00.000Z",
+    }
+    await expect(createDanceAttemptSession({
+      client: fakeClient(
+        { recent_count: 0, active_count: 0, idempotency_count: 0 },
+        null,
+        true,
+      ).client,
+      value,
+    })).rejects.toMatchObject({
+      status: 409,
+      code: "conflict",
+      message: "Dance session subject user not found",
+    })
   })
 
   test("pins a ready revision and moves through hash-bound upload submission", async () => {
