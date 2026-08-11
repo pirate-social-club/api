@@ -35,6 +35,7 @@ import {
   getGlobalBookingSettlementReview as realGetGlobalBookingSettlementReview,
   getGlobalBookingForParty as realGetGlobalBookingForParty,
   enrichGlobalBookingCounterparties as realEnrichGlobalBookingCounterparties,
+  InvalidBookingListCursorError,
   InvalidBookingSettlementReviewCursorError,
   listPendingGlobalBookingSettlementReviews as realListPendingGlobalBookingSettlementReviews,
   listGlobalBookingsForUser as realListGlobalBookingsForUser,
@@ -294,18 +295,32 @@ bookings.get("/", async (c) => {
   const statusParam = url.searchParams.get("status")
   const statuses = statusParam ? statusParam.split(",").map((status) => status.trim()).filter(Boolean) : undefined
   const sourceCommunityId = optionalSourceCommunityId(url.searchParams.get("source_community_id"))
-  const data = await routeServices().listGlobalBookingsForUser({
-    executor: executor(c),
-    actorUserId: actor.userId,
-    role,
-    sourceCommunityId,
-    statuses,
-  })
-  const enriched = await routeServices().enrichGlobalBookingCounterparties({
-    bookings: data,
-    profileRepository: routeServices().getProfileRepository(c.env),
-  })
-  return c.json({ object: "list", data: enriched, has_more: false }, 200)
+  const limitParam = url.searchParams.get("limit")
+  const limit = limitParam == null ? undefined : Number(limitParam)
+  if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    return c.json({ error: "invalid_limit" }, 400)
+  }
+  try {
+    const page = await routeServices().listGlobalBookingsForUser({
+      executor: executor(c),
+      actorUserId: actor.userId,
+      role,
+      sourceCommunityId,
+      statuses,
+      limit,
+      cursor: url.searchParams.get("cursor"),
+    })
+    const enriched = await routeServices().enrichGlobalBookingCounterparties({
+      bookings: page.data,
+      profileRepository: routeServices().getProfileRepository(c.env),
+    })
+    return c.json({ ...page, data: enriched }, 200)
+  } catch (error) {
+    if (error instanceof InvalidBookingListCursorError) {
+      return c.json({ error: "invalid_cursor" }, 400)
+    }
+    throw error
+  }
 })
 
 bookings.get("/hosts/:hostUserId/slots", slotsHandler)

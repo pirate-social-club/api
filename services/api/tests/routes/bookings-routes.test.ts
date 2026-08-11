@@ -3,6 +3,7 @@ import { Hono } from "hono"
 
 import type { Env } from "../../src/env"
 import type { AuthenticatedEnv } from "../../src/lib/auth-middleware"
+import { InvalidBookingListCursorError } from "../../src/lib/bookings/booking-read-service"
 import { errorResponse } from "../../src/lib/errors"
 import bookings, {
   setGlobalBookingRouteServicesForTests,
@@ -224,7 +225,8 @@ function routeServices(): GlobalBookingRouteServices {
     },
     listGlobalBookingsForUser: async (input: unknown) => {
       calls.listBookings.push(input)
-      return [bookingView]
+      if ((input as { cursor?: string | null }).cursor === "invalid") throw new InvalidBookingListCursorError()
+      return { object: "list", data: [bookingView], has_more: true, next_cursor: "next_route" }
     },
     createGlobalBookingHold: async (input: unknown) => {
       calls.createHold.push(input)
@@ -333,13 +335,13 @@ describe("/bookings routes", () => {
   test("lists bookings with normalized role, statuses, and source community filters", async () => {
     const app = loadApp()
     const res = await app.request(
-      "http://pirate.test/bookings?role=host&status=confirmed, live,,&source_community_id=cmt_source",
+      "http://pirate.test/bookings?role=host&status=confirmed, live,,&source_community_id=cmt_source&limit=25&cursor=cursor_route",
       { headers: adminHeaders() },
       env(),
     )
 
     expect(res.status).toBe(200)
-    expect(await json(res)).toMatchObject({ object: "list", data: [bookingView], has_more: false })
+    expect(await json(res)).toMatchObject({ object: "list", data: [bookingView], has_more: true, next_cursor: "next_route" })
     expect(calls.listBookings).toHaveLength(1)
     expect(calls.listBookings[0]).toMatchObject({
       executor: dummyExecutor,
@@ -347,7 +349,26 @@ describe("/bookings routes", () => {
       role: "host",
       sourceCommunityId: "cmt_source",
       statuses: ["confirmed", "live"],
+      limit: 25,
+      cursor: "cursor_route",
     })
+  })
+
+  test("rejects an invalid booking list limit", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings?limit=101", { headers: adminHeaders() }, env())
+
+    expect(res.status).toBe(400)
+    expect(await json(res)).toEqual({ error: "invalid_limit" })
+    expect(calls.listBookings).toHaveLength(0)
+  })
+
+  test("rejects an invalid booking list cursor", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings?cursor=invalid", { headers: adminHeaders() }, env())
+
+    expect(res.status).toBe(400)
+    expect(await json(res)).toEqual({ error: "invalid_cursor" })
   })
 
   test("resolves slots through the canonical host route", async () => {
