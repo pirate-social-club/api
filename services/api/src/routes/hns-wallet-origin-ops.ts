@@ -2,8 +2,9 @@ import { Hono, type Context } from "hono"
 
 import type { Env } from "../env"
 import { authenticateAdminTokenOnly } from "../lib/auth-middleware"
-import { authError, badRequestError, providerUnavailable } from "../lib/errors"
+import { authError, badRequestError, conflictError, providerUnavailable } from "../lib/errors"
 import {
+  HNS_WALLET_ORIGIN_AUTHORITY_VERSION_CONFLICT,
   hnsWalletOriginAuthorityStub,
   type HnsWalletOriginAuthoritySnapshot,
 } from "../lib/hns-wallet-origin-authority-do"
@@ -57,7 +58,18 @@ async function applyProjection(
 ): Promise<void> {
   const stub = hnsWalletOriginAuthorityStub(env)
   if (!stub) throw providerUnavailable("HNS wallet origin authority projection is unavailable")
-  const applied = await stub.applySnapshot(snapshot)
+  let applied: HnsWalletOriginAuthoritySnapshot
+  try {
+    applied = await stub.applySnapshot(snapshot)
+  } catch (error) {
+    if (
+      error instanceof Error
+      && error.message === HNS_WALLET_ORIGIN_AUTHORITY_VERSION_CONFLICT
+    ) {
+      throw conflictError("HNS wallet origin authority changed concurrently")
+    }
+    throw error
+  }
   if (applied.authorityVersion !== snapshot.authorityVersion || applied.effective !== snapshot.effective) {
     throw providerUnavailable("HNS wallet origin authority projection did not accept the update")
   }

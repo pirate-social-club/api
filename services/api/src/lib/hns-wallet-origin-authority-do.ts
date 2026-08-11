@@ -4,6 +4,8 @@ import type { Env } from "../env"
 
 const STORAGE_KEY_PREFIX = "authority:"
 const SINGLETON_NAME = "hns-wallet-origin-authority-v1"
+export const HNS_WALLET_ORIGIN_AUTHORITY_VERSION_CONFLICT =
+  "hns_wallet_origin_authority_version_conflict"
 
 export type HnsWalletOriginAuthoritySnapshot = {
   authorityVersion: number
@@ -27,6 +29,16 @@ function validSnapshot(snapshot: HnsWalletOriginAuthoritySnapshot): boolean {
     && snapshot.authorityVersion > 0
     && /^app\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(snapshot.originHostname)
     && Number.isFinite(Date.parse(snapshot.updatedAt))
+}
+
+export function sameHnsWalletOriginAuthorityDecision(
+  left: HnsWalletOriginAuthoritySnapshot,
+  right: HnsWalletOriginAuthoritySnapshot,
+): boolean {
+  return left.authorityVersion === right.authorityVersion
+    && left.effective === right.effective
+    && left.originHostname === right.originHostname
+    && left.reasonCode === right.reasonCode
 }
 
 /**
@@ -57,9 +69,12 @@ export class HnsWalletOriginAuthorityDO extends DurableObject<Env> {
     if (
       current
       && current.authorityVersion === snapshot.authorityVersion
-      && JSON.stringify(current) !== JSON.stringify(snapshot)
+      && !sameHnsWalletOriginAuthorityDecision(current, snapshot)
     ) {
-      throw new Error("hns_wallet_origin_authority_version_conflict")
+      throw new Error(HNS_WALLET_ORIGIN_AUTHORITY_VERSION_CONFLICT)
+    }
+    if (current && sameHnsWalletOriginAuthorityDecision(current, snapshot)) {
+      return current
     }
 
     await this.ctx.storage.put(`${STORAGE_KEY_PREFIX}${rootLabel}`, snapshot)
