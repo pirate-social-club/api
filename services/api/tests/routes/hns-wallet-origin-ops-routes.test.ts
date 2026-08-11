@@ -2,6 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test"
 
 import { app } from "../../src/index"
 import type { HnsWalletOriginAuthoritySnapshot } from "../../src/lib/hns-wallet-origin-authority-do"
+import {
+  HNS_WALLET_ORIGIN_AUTHORITY_VERSION_CONFLICT,
+  sameHnsWalletOriginAuthorityDecision,
+} from "../../src/lib/hns-wallet-origin-authority-do"
 import { createRouteTestContext, json } from "../helpers"
 
 let cleanup: (() => Promise<void>) | null = null
@@ -203,6 +207,64 @@ describe("HNS wallet origin operator routes", () => {
       effective: false,
       reasonCode: "revoked",
     })
+
+    const replay = await app.request(adminRequest(
+      "/admin/ops/hns-wallet-origins/revoked-root/revocations",
+      {
+        operator_actor_id: "workspace_operator",
+        reason: "Operator repeated wallet withdrawal",
+      },
+    ), undefined, ctx.env)
+
+    expect(replay.status).toBe(200)
+    expect((await json(replay) as { authority: { authorityVersion: number } }).authority.authorityVersion).toBe(2)
+  })
+
+  test("treats equal-version target decisions with different timestamps as idempotent", () => {
+    const current: HnsWalletOriginAuthoritySnapshot = {
+      authorityVersion: 2,
+      effective: false,
+      originHostname: "app.revoked-root",
+      reasonCode: "revoked",
+      updatedAt: "2026-08-11T00:00:00.000Z",
+    }
+    expect(sameHnsWalletOriginAuthorityDecision(current, {
+      ...current,
+      updatedAt: "2026-08-11T00:00:01.000Z",
+    })).toBe(true)
+    expect(sameHnsWalletOriginAuthorityDecision(current, {
+      ...current,
+      effective: true,
+      reasonCode: "enabled",
+    })).toBe(false)
+  })
+
+  test("returns a typed conflict when the projection rejects a genuine equal-version conflict", async () => {
+    const ctx = await createRouteTestContext({
+      HNS_WALLET_ORIGIN_AUTHORITY: {
+        getByName: () => ({
+          applySnapshot: async () => {
+            throw new Error(HNS_WALLET_ORIGIN_AUTHORITY_VERSION_CONFLICT)
+          },
+          readSnapshot: async () => null,
+        }),
+      } as never,
+      PIRATE_ADMIN_TOKEN: "admin-test-token",
+    })
+    cleanup = ctx.cleanup
+    await insertRootState(ctx, "conflict-root", 1)
+
+    const response = await app.request(adminRequest(
+      "/admin/ops/hns-wallet-origins/conflict-root/registrations",
+      {
+        operator_actor_id: "workspace_operator",
+        reason: "Privy dashboard origin confirmed",
+        registration_reference: "privy-dashboard:app.conflict-root",
+      },
+    ), undefined, ctx.env)
+
+    expect(response.status).toBe(409)
+    expect(await json(response)).toMatchObject({ code: "conflict", retryable: false })
   })
 
   test("hard-denies routing and withdraws wallet access in the same operator action", async () => {
