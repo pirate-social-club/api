@@ -84,9 +84,9 @@ export async function checkHnsEdgeHeartbeatFreshness(
 
   const stale: string[] = []
   for (const expected of HNS_EDGE_ROLES) {
-    if (isMonitoringDeferred(expected, now.getTime())) continue
     const roleIdentity = identity(expected)
     const raw = await kv.get(heartbeatKey(expected))
+    if (!raw && isMonitoringDeferred(expected, now.getTime())) continue
     let state: HeartbeatState | null = null
     try {
       state = raw ? JSON.parse(raw) as HeartbeatState : null

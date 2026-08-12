@@ -111,6 +111,20 @@ describe("HNS edge heartbeat dead-man", () => {
     }
   })
 
+  it("monitors a role immediately after its first heartbeat", async () => {
+    const now = new Date("2026-08-13T12:00:00.000Z")
+    const kv = testKv()
+    const env = { OPS_ALERT_DEDUPE: kv.binding } as Env
+    kv.values.set(
+      "hns-edge-heartbeat:v1:ns1-pirate-fluence:hns-verifier",
+      JSON.stringify({ received_at: new Date(now.getTime() - HNS_EDGE_HEARTBEAT_MAX_AGE_MS - 1).toISOString() }),
+    )
+
+    const result = await checkHnsEdgeHeartbeatFreshness(env, now)
+
+    expect(result.stale).toContain("ns1-pirate-fluence:hns-verifier")
+  })
+
   it("accepts the verification-only Spaces role on ns1", () => {
     expect(isExpectedHnsEdgeRole({
       host: "ns1-pirate-fluence",
