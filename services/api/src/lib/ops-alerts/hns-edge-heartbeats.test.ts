@@ -75,6 +75,56 @@ describe("HNS edge heartbeat dead-man", () => {
     expect(result.stale).toContain("ns1-pirate-fluence:hns-chain-observer")
   })
 
+  it("defers missing-heartbeat alerts for newly monitored roles", async () => {
+    const kv = testKv()
+    const env = {
+      ENVIRONMENT: "test",
+      OPS_ALERT_DEDUPE: kv.binding,
+      OPS_ALERT_WEBHOOK_URL: "https://ops.example/hook",
+    } as Env
+    const originalFetch = globalThis.fetch
+    const deliveredRoles: string[] = []
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { text?: string }
+      if (body.text?.includes("hns-verifier")) deliveredRoles.push("hns-verifier")
+      if (body.text?.includes("hns-public-gateway")) deliveredRoles.push("hns-public-gateway")
+      return new Response(null, { status: 204 })
+    }) as typeof fetch
+    try {
+      const duringGrace = await checkHnsEdgeHeartbeatFreshness(
+        env,
+        new Date("2026-08-17T23:59:59.999Z"),
+      )
+      expect(duringGrace.stale).not.toContain("ns1-pirate-fluence:hns-verifier")
+      expect(duringGrace.stale).not.toContain("ns1-pirate-fluence:hns-public-gateway")
+      expect(deliveredRoles).toEqual([])
+
+      const afterGrace = await checkHnsEdgeHeartbeatFreshness(
+        env,
+        new Date("2026-08-18T00:00:00.000Z"),
+      )
+      expect(afterGrace.stale).toContain("ns1-pirate-fluence:hns-verifier")
+      expect(afterGrace.stale).toContain("ns1-pirate-fluence:hns-public-gateway")
+      expect(deliveredRoles).toEqual(["hns-verifier", "hns-public-gateway"])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  it("monitors a role immediately after its first heartbeat", async () => {
+    const now = new Date("2026-08-13T12:00:00.000Z")
+    const kv = testKv()
+    const env = { OPS_ALERT_DEDUPE: kv.binding } as Env
+    kv.values.set(
+      "hns-edge-heartbeat:v1:ns1-pirate-fluence:hns-verifier",
+      JSON.stringify({ received_at: new Date(now.getTime() - HNS_EDGE_HEARTBEAT_MAX_AGE_MS - 1).toISOString() }),
+    )
+
+    const result = await checkHnsEdgeHeartbeatFreshness(env, now)
+
+    expect(result.stale).toContain("ns1-pirate-fluence:hns-verifier")
+  })
+
   it("accepts the verification-only Spaces role on ns1", () => {
     expect(isExpectedHnsEdgeRole({
       host: "ns1-pirate-fluence",
@@ -86,6 +136,17 @@ describe("HNS edge heartbeat dead-man", () => {
     expect(isExpectedHnsEdgeRole({
       host: "ns1-pirate-fluence",
       role: "hns-state-backup",
+    })).toBe(true)
+  })
+
+  it("accepts the verifier and public gateway roles on ns1", () => {
+    expect(isExpectedHnsEdgeRole({
+      host: "ns1-pirate-fluence",
+      role: "hns-verifier",
+    })).toBe(true)
+    expect(isExpectedHnsEdgeRole({
+      host: "ns1-pirate-fluence",
+      role: "hns-public-gateway",
     })).toBe(true)
   })
 

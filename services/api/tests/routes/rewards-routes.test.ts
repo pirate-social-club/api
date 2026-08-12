@@ -352,11 +352,12 @@ describe("rewards routes", () => {
     const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-owner")
     const stranger = await exchangeJwt(ctx.env, "reward-draft-cancel-stranger")
     await seedCampaignSong(ctx, owner.userId)
+    const createBody = campaignBody({ idempotency_key: "draft-cancel-first" })
 
     const created = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-first" })),
+      body: JSON.stringify(createBody),
     }, ctx.env)
     expect(created.status).toBe(201)
     const campaign = await json(created) as { id: string }
@@ -389,7 +390,7 @@ describe("rewards routes", () => {
     const reusedCreateKey = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-first" })),
+      body: JSON.stringify(createBody),
     }, ctx.env)
     expect(reusedCreateKey.status).toBe(201)
     expect(await json(reusedCreateKey)).toMatchObject({ id: campaign.id, status: "canceled" })
