@@ -5,6 +5,7 @@ import {
   readExerciseType,
   type StudyExerciseRow,
 } from "./post-study-attempt-store"
+import { STUDY_CLOZE_GENERATION_VERSION } from "./post-study-cloze-service"
 
 export async function listExercises(input: {
   client: DbExecutor
@@ -78,7 +79,8 @@ export async function listExercises(input: {
           OR (?7 = 1 AND s.due_at <= ?8)
         )
       UNION ALL
-      SELECT ('stu:' || u.id || ':fill_blank:' || COALESCE(u.source_language, 'source')) AS id,
+      SELECT ('stu:' || u.id || ':fill_blank:v' || c.cloze_version || ':'
+                 || c.source_fingerprint || ':' || u.source_language) AS id,
              u.line_id, u.line_index, 'fill_blank' AS exercise_type,
              'Fill in the lyric.' AS prompt_text, NULL AS question,
              NULL AS reference_text, NULL AS translation_text,
@@ -99,6 +101,8 @@ export async function listExercises(input: {
        AND s.target_language = COALESCE(u.source_language, 'source')
       WHERE u.post_id = ?1
         AND ?5 = 1
+        AND u.source_language IS NOT NULL
+        AND c.cloze_version = ?10
         AND c.status = 'ready'
         AND c.segments_json IS NOT NULL
         AND c.tokens_json IS NOT NULL
@@ -122,6 +126,7 @@ export async function listExercises(input: {
       input.dueReviewServing ? 1 : 0,
       input.now,
       input.limit ?? -1,
+      STUDY_CLOZE_GENERATION_VERSION,
     ],
   })
   return {

@@ -1,9 +1,12 @@
 import type { Client, InStatement } from "../sql-client"
+import { sha256Hex } from "../crypto"
 import { selectStudyUnits, type StudyUnitRow } from "./post-study-unit-service"
 
-// v2 removes answer-bearing token identifiers from the render-safe payload.
-export const STUDY_CLOZE_GENERATION_VERSION = 2
+// v3 rejects low-context/function-word gaps and binds served cards to their
+// collision-resistant source materialization identity.
+export const STUDY_CLOZE_GENERATION_VERSION = 3
 export const STUDY_CLOZE_MAX_ATTEMPTS = 2
+const STUDY_CLOZE_MIN_WORD_LENGTH = 3
 
 export type StudyClozeSegment =
   | { kind: "text"; text: string }
@@ -12,7 +15,64 @@ export type StudyClozeSegment =
 export type StudyClozeToken = { id: string; text: string }
 export type StudyClozePlacement = { blank_id: string; token_id: string }
 
-type WordPart = { end: number; index: number; start: number; text: string }
+type ScriptBucket = "arabic" | "cyrillic" | "devanagari" | "greek" | "hangul" | "hebrew" | "latin"
+type WordPart = { end: number; index: number; ordinal: number; start: number; text: string }
+
+export type StudyClozeUnavailableReason =
+  | "insufficient_distractors"
+  | "no_gap_candidate"
+  | "too_few_words"
+  | "unsupported_language"
+  | "unsupported_script"
+
+type StudyCloze = {
+  correctPlacements: StudyClozePlacement[]
+  segments: StudyClozeSegment[]
+  tokens: StudyClozeToken[]
+}
+
+type StudyClozeAnalysis =
+  | { cloze: StudyCloze; unavailableReason: null }
+  | { cloze: null; unavailableReason: StudyClozeUnavailableReason }
+
+type LanguagePolicy = { bucket: ScriptBucket; stopwords: ReadonlySet<string> }
+
+function words(values: string): ReadonlySet<string> {
+  return new Set(values.split(/\s+/u))
+}
+
+// Intentionally conservative, high-confidence function words. A language is
+// enabled only when it has an explicit script and stopword policy.
+const LANGUAGE_POLICIES: Readonly<Record<string, LanguagePolicy>> = {
+  de: {
+    bucket: "latin",
+    stopwords: words("aber als am an auch auf aus bei bin bis bist da das dass dem den der des die doch du ein eine einem einen einer eines er es für hat haben ich im in ist mit nicht oder sie sind so und vom von vor war waren was wir zu zum zur"),
+  },
+  en: {
+    bucket: "latin",
+    stopwords: words("a about across after all am an and are as at be been before but by could down for from had has have he her hers him his i if in into is it its me my near no not of on or our ours out over past she should so that the their theirs them they this those through to under until up us was we were what when where which who will with would you your yours"),
+  },
+  es: {
+    bucket: "latin",
+    stopwords: words("a al algo antes como con de del el ella ellas ellos en era eran es esa esas ese esos esta estas este estos fue fueron ha han hasta la las lo los más me mi mis no nos o para pero por que se sin su sus te tu tus un una uno unos unas y yo"),
+  },
+  fr: {
+    bucket: "latin",
+    stopwords: words("à au aux avec avant ce ces cette comme dans de des du elle elles en est et eux il ils je la le les leur leurs lui mais me mes moi mon ne nos notre nous on ou par pas pour que qui sa sans se ses son sur ta te tes toi ton tu un une vos votre vous"),
+  },
+  it: {
+    bucket: "latin",
+    stopwords: words("a ad al alla alle allo anche che chi ci con da dal dalla delle di e è era erano gli ha hai hanno i il in io la le lei lo lui ma mi mio nei nel nella no non o per prima più se si sono su sul tra tu un una uno voi"),
+  },
+  pt: {
+    bucket: "latin",
+    stopwords: words("a antes ao aos as com como da das de do dos e ela elas ele eles em era eram essa essas esse esses esta estas este estes eu foi foram há isso isto lhe mais mas me meu minha na nas não no nos o os ou para pela pelas pelo pelos por que se sem seu sua suas seus só também te tu um uma você vocês"),
+  },
+  ru: {
+    bucket: "cyrillic",
+    stopwords: words("а без был была были было быть в вам вас весь во вот все всего всех вы где да для до его ее если есть ещё же за и из или им их к как ко когда кто ли либо мне может мы на над надо нас наш не него нее нет ни но ну о об один он она они оно от по под пока при про с со так такой там те тем то того тоже той только том ты у уже через что чтобы эта эти это этот я"),
+  },
+}
 
 function stableHash(value: string): number {
   let hash = 2166136261
@@ -28,80 +88,116 @@ function wordParts(text: string, language: string | null): WordPart[] {
     const segmenter = new Intl.Segmenter(language ?? undefined, { granularity: "word" })
     return [...segmenter.segment(text)].flatMap((segment, index) =>
       segment.isWordLike
-        ? [{ end: segment.index + segment.segment.length, index, start: segment.index, text: segment.segment }]
+        ? [{ end: segment.index + segment.segment.length, index, ordinal: 0, start: segment.index, text: segment.segment }]
         : [])
+      .map((part, ordinal) => ({ ...part, ordinal }))
   } catch {
     return [...text.matchAll(/[\p{L}\p{N}]+(?:['’][\p{L}\p{N}]+)*/gu)].map((match, index) => ({
       end: (match.index ?? 0) + match[0].length,
       index,
+      ordinal: index,
       start: match.index ?? 0,
       text: match[0],
     }))
   }
 }
 
-function scriptBucket(value: string): string {
+function scriptBucket(value: string): ScriptBucket | null {
   const character = [...value].find((entry) => /[\p{L}\p{N}]/u.test(entry)) ?? ""
   if (/\p{Script=Cyrillic}/u.test(character)) return "cyrillic"
-  if (/\p{Script=Han}/u.test(character)) return "han"
-  if (/\p{Script=Hiragana}|\p{Script=Katakana}/u.test(character)) return "kana"
   if (/\p{Script=Arabic}/u.test(character)) return "arabic"
   if (/\p{Script=Devanagari}/u.test(character)) return "devanagari"
+  if (/\p{Script=Greek}/u.test(character)) return "greek"
+  if (/\p{Script=Hangul}/u.test(character)) return "hangul"
+  if (/\p{Script=Hebrew}/u.test(character)) return "hebrew"
   if (/\p{Script=Latin}/u.test(character)) return "latin"
-  return "other"
+  // Han/Kana, Thai, Khmer, Lao, Myanmar, and every residual script fail closed.
+  return null
 }
 
 function normalizedWord(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
 }
 
-function selectGapParts(unit: StudyUnitRow, parts: WordPart[]): WordPart[] {
+function primaryLanguage(value: string | null): string | null {
+  if (!value?.trim()) return null
+  try {
+    return new Intl.Locale(value).language.toLowerCase()
+  } catch {
+    return value.trim().toLowerCase().split(/[-_]/u)[0] || null
+  }
+}
+
+function languagePolicy(value: string | null): LanguagePolicy | null {
+  const language = primaryLanguage(value)
+  return language ? LANGUAGE_POLICIES[language] ?? null : null
+}
+
+function selectGapParts(unit: StudyUnitRow, parts: WordPart[], policy: LanguagePolicy): WordPart[] {
   const distinct = parts.filter((part, index) => {
     const normalized = normalizedWord(part.text)
-    return normalized.length > 1 && parts.findIndex((candidate) => normalizedWord(candidate.text) === normalized) === index
+    return part.ordinal > 0
+      && scriptBucket(part.text) === policy.bucket
+      && normalized.length >= STUDY_CLOZE_MIN_WORD_LENGTH
+      && !policy.stopwords.has(normalized)
+      && parts.findIndex((candidate) => normalizedWord(candidate.text) === normalized) === index
   })
   if (distinct.length === 0) return []
-  const count = distinct.length >= 6 ? 2 : 1
-  return [...distinct]
+  const ranked = [...distinct]
     .sort((left, right) => {
       const leftRank = stableHash(`${unit.line_id}:${left.index}:${left.text}`)
       const rightRank = stableHash(`${unit.line_id}:${right.index}:${right.text}`)
       return leftRank - rightRank || left.start - right.start
     })
-    .slice(0, count)
-    .sort((left, right) => left.start - right.start)
+  const selected = [ranked[0]!]
+  if (distinct.length >= 6) {
+    const second = ranked.find((candidate) => Math.abs(candidate.ordinal - selected[0]!.ordinal) >= 2)
+    if (second) selected.push(second)
+  }
+  return selected.sort((left, right) => left.start - right.start)
 }
 
 export function buildStudyCloze(
   unit: StudyUnitRow,
   units: StudyUnitRow[],
-): { correctPlacements: StudyClozePlacement[]; segments: StudyClozeSegment[]; tokens: StudyClozeToken[] } | null {
+): StudyCloze | null {
+  return analyzeStudyCloze(unit, units).cloze
+}
+
+export function analyzeStudyCloze(unit: StudyUnitRow, units: StudyUnitRow[]): StudyClozeAnalysis {
   const partsByUnit = new Map(units.map((candidate) => [
     candidate.id,
     wordParts(candidate.prompt_text, candidate.source_language),
   ]))
-  return buildStudyClozeFromParts(unit, units, partsByUnit)
+  return analyzeStudyClozeFromParts(unit, units, partsByUnit)
 }
 
-function buildStudyClozeFromParts(
+function analyzeStudyClozeFromParts(
   unit: StudyUnitRow,
   units: StudyUnitRow[],
   partsByUnit: Map<string, WordPart[]>,
-): { correctPlacements: StudyClozePlacement[]; segments: StudyClozeSegment[]; tokens: StudyClozeToken[] } | null {
+): StudyClozeAnalysis {
   const parts = partsByUnit.get(unit.id) ?? []
-  const gaps = selectGapParts(unit, parts)
-  if (gaps.length === 0) return null
+  const policy = languagePolicy(unit.source_language)
+  if (!policy) return { cloze: null, unavailableReason: "unsupported_language" }
+  if (parts.length < 4) return { cloze: null, unavailableReason: "too_few_words" }
+  if (!parts.some((part) => scriptBucket(part.text) === policy.bucket)) {
+    return { cloze: null, unavailableReason: "unsupported_script" }
+  }
+  const gaps = selectGapParts(unit, parts, policy)
+  if (gaps.length === 0) return { cloze: null, unavailableReason: "no_gap_candidate" }
 
   const visibleWords = new Set(parts.map((part) => normalizedWord(part.text)))
-  const bucket = scriptBucket(gaps[0]!.text)
   const distractorTarget = Math.max(2, 4 - gaps.length)
   const seenDistractors = new Set<string>()
   const distractors = units
+    .filter((candidate) => primaryLanguage(candidate.source_language) === primaryLanguage(unit.source_language))
     .flatMap((candidate) => partsByUnit.get(candidate.id) ?? [])
-    .filter((part) => scriptBucket(part.text) === bucket)
+    .filter((part) => scriptBucket(part.text) === policy.bucket)
     .filter((part) => {
       const normalized = normalizedWord(part.text)
-      if (normalized.length <= 1 || visibleWords.has(normalized) || seenDistractors.has(normalized)) {
+      if (normalized.length < STUDY_CLOZE_MIN_WORD_LENGTH || policy.stopwords.has(normalized)
+        || visibleWords.has(normalized) || seenDistractors.has(normalized)) {
         return false
       }
       // Unit/word traversal is stable; retain the first surface form for a
@@ -115,7 +211,9 @@ function buildStudyClozeFromParts(
       return leftRank - rightRank || left.text.localeCompare(right.text)
     })
     .slice(0, distractorTarget)
-  if (distractors.length < distractorTarget) return null
+  if (distractors.length < distractorTarget) {
+    return { cloze: null, unavailableReason: "insufficient_distractors" }
+  }
 
   const segments: StudyClozeSegment[] = []
   const correctPlacements: StudyClozePlacement[] = []
@@ -139,16 +237,16 @@ function buildStudyClozeFromParts(
   })
   if (cursor < unit.prompt_text.length) segments.push({ kind: "text", text: unit.prompt_text.slice(cursor) })
 
-  return { correctPlacements, segments, tokens }
+  return { cloze: { correctPlacements, segments, tokens }, unavailableReason: null }
 }
 
-function clozeSourceFingerprint(units: StudyUnitRow[]): string {
-  return stableHash(JSON.stringify(units.map((unit) => [
+async function clozeSourceFingerprint(units: StudyUnitRow[]): Promise<string> {
+  return await sha256Hex(JSON.stringify(units.map((unit) => [
     unit.id,
     unit.line_id,
     unit.source_language,
     unit.prompt_text,
-  ]))).toString(16).padStart(8, "0")
+  ])))
 }
 
 function clozeUpsertStatement(input: {
@@ -158,7 +256,7 @@ function clozeUpsertStatement(input: {
   unit: StudyUnitRow
   units: StudyUnitRow[]
 }): InStatement {
-  const cloze = buildStudyClozeFromParts(input.unit, input.units, input.partsByUnit)
+  const cloze = analyzeStudyClozeFromParts(input.unit, input.units, input.partsByUnit).cloze
   return {
     sql: `
       INSERT INTO song_study_unit_cloze (
@@ -197,7 +295,7 @@ export async function ensureStudyClozeRows(client: Client, postId: string): Prom
   // which caller happened to provide the first in-memory slice.
   const units = await selectStudyUnits(client, postId)
   if (units.length === 0) return
-  const fingerprint = clozeSourceFingerprint(units)
+  const fingerprint = await clozeSourceFingerprint(units)
   const existing = await client.execute({
     sql: `SELECT unit_id, source_text, source_fingerprint FROM song_study_unit_cloze WHERE cloze_version >= ?1 AND unit_id IN (${units.map((_, index) => `?${index + 2}`).join(", ")})`,
     args: [STUDY_CLOZE_GENERATION_VERSION, ...units.map((unit) => unit.id)],

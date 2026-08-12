@@ -20,6 +20,7 @@ import {
 } from "../../../src/lib/communities/assistant-policy/credential-service"
 import { runCommunityJob } from "../../../src/lib/communities/jobs/handlers"
 import { hydrateSongStreakSummariesForResponses } from "../../../src/lib/posts/post-read-response"
+import { ensureStudyClozeRows } from "../../../src/lib/posts/post-study-cloze-service"
 import {
   getPostStreakLeaderboard,
   getPostStreakSummary,
@@ -1564,14 +1565,124 @@ describe("post study service", () => {
       type: "fill_blank" as const,
     }
     await submitPostStudyAttemptRaw({ ...base, body })
-    const changed = context.correctPlacements.map((placement, index, placements) => ({
+    const changed = context.correctPlacements.map((placement) => ({
       blank_id: placement.blank_id,
-      token_id: placements[(index + 1) % placements.length]!.token_id,
+      token_id: context.prompt.tokens.find((token) => token.id !== placement.token_id)!.id,
     }))
     await expect(submitPostStudyAttemptRaw({
       ...base,
       body: { ...body, placements: changed },
     })).rejects.toMatchObject({ status: 409 })
+  })
+
+  test("recovers a fingerprint-stale live lesson idempotently without grading", async () => {
+    const context = await reachFillBlankExercise("fill-stale-materialization")
+    const sessionId = context.payload.session!.id!
+    const initialRevision = context.lesson.session_revision
+    await client!.execute({
+      sql: "UPDATE song_study_unit SET prompt_text = ?2 WHERE id = ?1",
+      args: ["stu_2", "Hold every fading memory until the quiet morning"],
+    })
+    await ensureStudyClozeRows(client!, POST_ID)
+
+    const body = {
+      attempt_number: context.lesson.next!.presentation_number,
+      exercise_id: context.prompt.id,
+      idempotency_key: "fill-stale-materialization-submit",
+      placements: context.correctPlacements,
+      session_id: sessionId,
+      type: "fill_blank" as const,
+    }
+    const input = {
+      actor: learnerActor,
+      body,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    }
+    const expectedConflict = {
+      code: "study_session_revision_conflict",
+      details: { lesson: { session_revision: initialRevision + 1 } },
+      status: 409,
+    }
+    await expect(submitPostStudyAttemptRaw(input)).rejects.toMatchObject(expectedConflict)
+    await expect(submitPostStudyAttemptRaw(input)).rejects.toMatchObject(expectedConflict)
+
+    const session = (await client!.execute({
+      sql: "SELECT session_revision, status FROM song_study_session WHERE id = ?1",
+      args: [sessionId],
+    })).rows[0]
+    const staleCards = await client!.execute({
+      sql: `
+        SELECT exercise_id, lesson_resolved
+        FROM song_study_session_exercise
+        WHERE session_id = ?1 AND exercise_id LIKE '%:fill_blank:%'
+      `,
+      args: [sessionId],
+    })
+    expect(Number(session?.session_revision)).toBe(initialRevision + 1)
+    expect(staleCards.rows.length).toBeGreaterThan(0)
+    expect(staleCards.rows.every((row) => Number(row.lesson_resolved) === 1)).toBe(true)
+    expect(Number((await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'",
+    )).rows[0]?.count)).toBe(0)
+    expect(Number((await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_review_state WHERE exercise_type = 'fill_blank'",
+    )).rows[0]?.count)).toBe(0)
+    const snapshots = await client!.execute({
+      sql: `
+        SELECT COUNT(*) AS count, MIN(http_status) AS http_status, MIN(result_kind) AS result_kind
+        FROM song_study_attempt_response
+        WHERE user_id = ?1 AND idempotency_key = ?2
+      `,
+      args: [LEARNER_ID, body.idempotency_key],
+    })
+    expect(snapshots.rows[0]).toMatchObject({ count: 1, http_status: 409, result_kind: "revision_conflict" })
+  })
+
+  test("treats a legacy unversioned live card as v2 and returns typed recovery", async () => {
+    const context = await reachFillBlankExercise("fill-stale-legacy")
+    const sessionId = context.payload.session!.id!
+    const unitId = /^stu:([^:]+):/u.exec(context.prompt.id)?.[1] ?? ""
+    const legacyExerciseId = `stu:${unitId}:fill_blank:en`
+    await client!.batch([
+      {
+        sql: `
+          UPDATE song_study_session_exercise
+          SET exercise_id = ?3
+          WHERE session_id = ?1 AND exercise_id = ?2
+        `,
+        args: [sessionId, context.prompt.id, legacyExerciseId],
+      },
+      {
+        sql: "UPDATE song_study_session SET current_exercise_id = ?2 WHERE id = ?1",
+        args: [sessionId, legacyExerciseId],
+      },
+    ], "write")
+
+    await expect(submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: context.lesson.next!.presentation_number,
+        exercise_id: legacyExerciseId,
+        idempotency_key: "fill-stale-legacy-submit",
+        placements: context.correctPlacements,
+        session_id: sessionId,
+        type: "fill_blank",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    })).rejects.toMatchObject({
+      code: "study_session_revision_conflict",
+      details: { lesson: { session_revision: context.lesson.session_revision + 1 } },
+      status: 409,
+    })
+    expect(Number((await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'",
+    )).rows[0]?.count)).toBe(0)
   })
 
   test("returns locked without exercise content for a non-entitled locked song", async () => {

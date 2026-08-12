@@ -1,0 +1,73 @@
+{
+  "blank_distribution": {
+    "one": 37,
+    "two": 1
+  },
+  "card_digest": "c89bf538f681a1b082f0ecbb7b9fc93fddc98b155d89b7c1f971babb3d3e3fcc",
+  "generated_cards": 38,
+  "samples": [
+    {
+      "answers": ["Hafenlichter"],
+      "blank_count": 1,
+      "id": "german_1",
+      "language": "de",
+      "source": "Die Hafenlichter zeigen unseren sicheren Heimweg"
+    },
+    {
+      "answers": ["said"],
+      "blank_count": 1,
+      "id": "english_1",
+      "language": "en",
+      "source": "You said the harbour lights would guide us home"
+    },
+    {
+      "answers": ["camino"],
+      "blank_count": 1,
+      "id": "spanish_1",
+      "language": "es",
+      "source": "Las luces del puerto guían nuestro camino"
+    },
+    {
+      "answers": ["chemin"],
+      "blank_count": 1,
+      "id": "french_1",
+      "language": "fr",
+      "source": "Les lumières du port guident notre chemin"
+    },
+    {
+      "answers": ["ritorno"],
+      "blank_count": 1,
+      "id": "italian_1",
+      "language": "it",
+      "source": "Le luci del porto guidano il ritorno"
+    },
+    {
+      "answers": ["guiam"],
+      "blank_count": 1,
+      "id": "portuguese_1",
+      "language": "pt",
+      "source": "As luzes do porto guiam nosso caminho"
+    },
+    {
+      "answers": ["домой"],
+      "blank_count": 1,
+      "id": "russian_1",
+      "language": "ru",
+      "source": "Огни гавани ведут нас домой"
+    }
+  ],
+  "total_lines": 46,
+  "unavailable": {
+    "unsupported_language": 8
+  },
+  "violations": {
+    "adjacent_blanks": 0,
+    "audited_function_words": 0,
+    "initial_blanks": 0,
+    "missing_language_cards": 0,
+    "short_line_cards": 0,
+    "unsupported_language_cards": 0
+  },
+  "yield_percent": 82.6,
+  "yield_warning_below_50_percent": false
+}
