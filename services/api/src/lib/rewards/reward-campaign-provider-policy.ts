@@ -18,7 +18,7 @@ export function isNationalityTierRewardIdentityProvider(
   provider: unknown,
 ): provider is Exclude<RewardIdentityProvider, "very"> {
   return isRewardCampaignIdentityProvider(provider)
-    && NATIONALITY_TIER_REWARD_IDENTITY_PROVIDERS.includes(provider)
+    && (NATIONALITY_TIER_REWARD_IDENTITY_PROVIDERS as readonly RewardIdentityProvider[]).includes(provider)
 }
 
 export function isRewardIdentityProviderAllowedForCampaign(
