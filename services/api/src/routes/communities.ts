@@ -17,6 +17,7 @@ import { registerCommunityRightsReviewRoutes } from "./communities-rights-review
 import { registerCommunityRoleRoutes } from "./communities-role-routes"
 import { registerCommunitySettingsRoutes } from "./communities-settings-routes"
 import { registerCommunitySongArtifactRoutes } from "./communities-song-artifacts"
+import { registerCommunityContentBlobRoutes } from "./communities-content-blobs"
 import { registerCommunityStudyRoutes } from "./communities-study-routes"
 import { registerCommunityTelegramRoutes } from "./communities-telegram-routes"
 
@@ -87,6 +88,7 @@ registerCommunityRightsReviewRoutes(communities)
 registerCommunityRoleRoutes(communities)
 registerCommunityCommerceRoutes(communities)
 registerCommunitySongArtifactRoutes(communities)
+registerCommunityContentBlobRoutes(communities)
 registerCommunityLiveRoomRoutes(communities)
 registerCommunityKaraokeSessionRoutes(communities)
 registerCommunityStudyRoutes(communities)

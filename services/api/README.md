@@ -84,9 +84,16 @@ Route registration now lives under `src/routes/`. The community router is intent
 - `communities-commerce.ts`
 - `communities-live-rooms.ts`
 - `communities-song-artifacts.ts`
+- `communities-content-blobs.ts`
 - `communities-telegram-routes.ts`
 
 with shared request helpers in `communities-route-helpers.ts`.
+
+Generic content-blob routes are disabled by default and require both
+`CONTENT_BLOB_UPLOADS_ENABLED=true` and an exact community identifier in
+`CONTENT_BLOB_UPLOAD_COMMUNITY_IDS`. The current proxy lane stores verified
+bytes in the content-neutral namespace and stops at `uploaded` with a pending
+security scan; it cannot publish an asset or mark a blob `ready`.
 
 ## Story/CDR Surface
 
