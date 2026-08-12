@@ -112,6 +112,12 @@ export type HomeFeedCommunityPrefetch = {
   studyEnabled: boolean
 }
 
+export type HomeFeedCommunityPrefetchResult = {
+  communities: Map<string, HomeFeedCommunityPrefetch>
+  operationCount: number
+  shardGroupCount: number
+}
+
 function elapsedMs(startedAt: number): number {
   return Math.round(performance.now() - startedAt)
 }
@@ -165,9 +171,11 @@ export async function prefetchHomeFeedCommunities(input: {
   communityIds: string[]
   communityRepository: HomeFeedCommunityRepository
   env: Env
-}): Promise<Map<string, HomeFeedCommunityPrefetch>> {
+}): Promise<HomeFeedCommunityPrefetchResult> {
   const uniqueCommunityIds = [...new Set(input.communityIds)]
   const schemaStatements = postProjectionSchemaReadStatements()
+  let operationCount = 0
+  let shardGroupCount = 0
   const resultsByCommunityId = await bulkCommunityRead(
     input.env,
     input.communityRepository,
@@ -186,6 +194,10 @@ export async function prefetchHomeFeedCommunities(input: {
         },
       ],
     })),
+    (observedOperationCount, observedShardGroupCount) => {
+      operationCount = observedOperationCount
+      shardGroupCount = observedShardGroupCount
+    },
   )
 
   const prefetched = new Map<string, HomeFeedCommunityPrefetch>()
@@ -207,7 +219,33 @@ export async function prefetchHomeFeedCommunities(input: {
       studyEnabled: Number(identityRow?.study_enabled ?? 0) === 1,
     })
   }
-  return prefetched
+  return {
+    communities: prefetched,
+    operationCount,
+    shardGroupCount,
+  }
+}
+
+const HOME_FEED_COMMUNITY_PHASES = [
+  "total",
+  "open",
+  "batched_reads",
+  "localize",
+  "streaks",
+  "derivatives",
+  "unaccounted",
+] as const
+
+export function summarizeHomeFeedCommunityPhaseTimings(
+  timings: HomeFeedCommunityTiming[],
+): Record<string, number> {
+  const summary: Record<string, number> = {}
+  for (const phase of HOME_FEED_COMMUNITY_PHASES) {
+    const values = timings.map((timing) => timing[`${phase}_ms`])
+    summary[`community_${phase}_sum_ms`] = values.reduce((total, value) => total + value, 0)
+    summary[`community_${phase}_max_ms`] = values.length > 0 ? Math.max(...values) : 0
+  }
+  return summary
 }
 
 async function listLatestThreadSnapshotsForRead(

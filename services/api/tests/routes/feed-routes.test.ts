@@ -163,6 +163,12 @@ describe("feed routes", () => {
       },
     }, ctx.env)
     expect(response.status).toBe(200)
+    expect(response.headers.get("server-timing")).toContain("community-total-max;dur=")
+    expect(response.headers.get("server-timing")).toContain("community-batched-reads-max;dur=")
+    expect(response.headers.get("server-timing")).toContain("community-unaccounted-max;dur=")
+    expect(response.headers.get("x-pirate-home-feed-routing")).toBe(
+      "page_communities=1; prefetch_batches=1; prefetch_operations=1; prefetch_shard_groups=1",
+    )
     const body = await json(response) as {
       items: Array<{
         community: {
