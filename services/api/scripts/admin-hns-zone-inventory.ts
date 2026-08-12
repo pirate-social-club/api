@@ -48,13 +48,13 @@ function stringOrNull(value: unknown): string | null {
 
 function parseJsonStrings(value: unknown): string[] {
   if (Array.isArray(value)) {
-    return value.filter((entry): entry is string => typeof entry === "string" && entry.trim())
+    return value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
   }
   if (typeof value !== "string" || !value.trim()) return []
   try {
     const parsed = JSON.parse(value) as unknown
     return Array.isArray(parsed)
-      ? parsed.filter((entry): entry is string => typeof entry === "string" && entry.trim())
+      ? parsed.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
       : []
   } catch {
     return []
