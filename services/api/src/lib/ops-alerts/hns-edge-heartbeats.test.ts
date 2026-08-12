@@ -93,7 +93,7 @@ describe("HNS edge heartbeat dead-man", () => {
     try {
       const duringGrace = await checkHnsEdgeHeartbeatFreshness(
         env,
-        new Date("2026-08-13T23:59:59.999Z"),
+        new Date("2026-08-17T23:59:59.999Z"),
       )
       expect(duringGrace.stale).not.toContain("ns1-pirate-fluence:hns-verifier")
       expect(duringGrace.stale).not.toContain("ns1-pirate-fluence:hns-public-gateway")
@@ -101,7 +101,7 @@ describe("HNS edge heartbeat dead-man", () => {
 
       const afterGrace = await checkHnsEdgeHeartbeatFreshness(
         env,
-        new Date("2026-08-14T00:00:00.000Z"),
+        new Date("2026-08-18T00:00:00.000Z"),
       )
       expect(afterGrace.stale).toContain("ns1-pirate-fluence:hns-verifier")
       expect(afterGrace.stale).toContain("ns1-pirate-fluence:hns-public-gateway")

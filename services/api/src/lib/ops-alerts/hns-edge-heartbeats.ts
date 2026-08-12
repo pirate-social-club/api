@@ -13,12 +13,12 @@ export const HNS_EDGE_ROLES = [
   {
     host: "ns1-pirate-fluence",
     role: "hns-verifier",
-    monitorFrom: "2026-08-14T00:00:00.000Z",
+    monitorFrom: "2026-08-18T00:00:00.000Z",
   },
   {
     host: "ns1-pirate-fluence",
     role: "hns-public-gateway",
-    monitorFrom: "2026-08-14T00:00:00.000Z",
+    monitorFrom: "2026-08-18T00:00:00.000Z",
   },
   { host: "ns1-pirate-fluence", role: "spaces-verifier" },
   { host: "ns1-pirate-fluence", role: "hns-state-backup" },
