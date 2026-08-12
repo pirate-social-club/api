@@ -103,6 +103,25 @@ comments.post("/:commentId/replies", async (c) => {
       depth: result.depth,
     },
   })
+  if (actor.authType === "admin") {
+    const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_comment"
+    await writeAuditEventForEnv(c.env, {
+      action: operationClass === "launch_seed" ? "community.seed_comment_created" : "community.admin_comment_created",
+      actorId: actor.adminOverride.adminActorId,
+      actorType: "operator",
+      communityId: projection.community_id,
+      targetId: result.comment_id,
+      targetType: "comment",
+      metadata: {
+        operation_class: operationClass,
+        acting_user_id: actor.userId,
+        idempotency_key: body.idempotency_key ?? null,
+        parent_comment_id: commentId,
+        post_id: projection.thread_root_post_id,
+        depth: result.depth,
+      },
+    })
+  }
   return c.json(serializeComment(result), 201)
 })
 

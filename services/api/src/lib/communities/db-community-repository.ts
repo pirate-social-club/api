@@ -33,6 +33,7 @@ export type {
   CommunityPostProjectionRepository,
   CommunityProvisioningRepository,
   CommunityReadRepository,
+  CommunityScheduledJobPollRepository,
   CommunityRepository,
 } from "./community-repository-types"
 
@@ -48,6 +49,7 @@ import {
   getCommunityByRouteSlug,
   getCommunityByNamespaceVerificationId,
   listActiveCommunities,
+  listScheduledCommunityJobPollIds,
   searchActiveCommunities,
   getPrimaryCommunityDatabaseBinding,
   getJobById,
@@ -179,6 +181,14 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     communityIds?: string[]
   }): Promise<CommunityRow[]> {
     return listActiveCommunities(this.client, input)
+  }
+
+  async listScheduledCommunityJobPollIds(input: {
+    maxCommunities: number
+    nowMs?: number
+    priorityCommunityIds?: string[]
+  }): Promise<string[]> {
+    return listScheduledCommunityJobPollIds(this.client, input)
   }
 
   // Settlement-capable routes only (ready D1, not decommissioned). Used by the

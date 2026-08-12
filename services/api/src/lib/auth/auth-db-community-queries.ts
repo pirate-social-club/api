@@ -15,6 +15,7 @@ import {
   toJobRow,
 } from "./auth-db-rows"
 import { firstRow } from "./auth-db-query-helpers"
+import { requiredNumber, requiredString } from "../sql-row"
 
 const COMMUNITY_ROW_BASE_COLUMNS = `
   community_id, creator_user_id, display_name, description, avatar_ref, banner_ref,
@@ -273,6 +274,115 @@ export async function listActiveCommunityRows(
     ],
     input?.requireReadyRouting ? "c" : undefined,
   )
+}
+
+export async function listScheduledCommunityJobPollIds(
+  executor: DbExecutor,
+  input: {
+    maxCommunities: number
+    nowMs?: number
+    priorityCommunityIds?: string[]
+  },
+): Promise<string[]> {
+  const requestedMax = Number.isFinite(input.maxCommunities) ? Math.trunc(input.maxCommunities) : 1
+  const maxCommunities = Math.max(1, Math.min(100, requestedMax))
+  const priorityCommunityIds = Array.from(new Set(
+    (input.priorityCommunityIds ?? []).map((communityId) => communityId.trim()).filter(Boolean),
+  )).slice(0, maxCommunities)
+  const eligibleSql = `
+    FROM communities c
+    WHERE c.status = 'active'
+      AND c.provisioning_state = 'active'
+      AND EXISTS (
+        SELECT 1
+        FROM community_database_routing r
+        WHERE r.community_id = c.community_id
+          AND r.provisioning_state = 'ready'
+          AND r.decommissioned_at IS NULL
+      )
+  `
+  const countResult = await executor.execute({
+    sql: `SELECT COUNT(*) AS active_count ${eligibleSql}`,
+    args: [],
+  })
+  const activeCount = requiredNumber(countResult.rows[0], "active_count")
+  if (activeCount === 0) return []
+
+  const selected: string[] = []
+  if (priorityCommunityIds.length > 0) {
+    const placeholders = priorityCommunityIds.map((_, index) => `?${index + 1}`)
+    const priorityResult = await executor.execute({
+      sql: `
+        SELECT c.community_id
+        ${eligibleSql}
+          AND c.community_id IN (${placeholders.join(", ")})
+        ORDER BY CASE c.community_id
+          ${placeholders.map((placeholder, index) => `WHEN ${placeholder} THEN ${index}`).join("\n          ")}
+          ELSE ${priorityCommunityIds.length}
+        END
+      `,
+      args: priorityCommunityIds,
+    })
+    selected.push(...priorityResult.rows.map((row) => requiredString(row, "community_id")))
+    if (selected.length >= maxCommunities) return selected.slice(0, maxCommunities)
+  }
+
+  const listRemaining = async (input: {
+    order: "newest" | "oldest"
+    limit: number
+    offset?: number
+  }): Promise<string[]> => {
+    if (input.limit <= 0) return []
+    const excludedPlaceholders = selected.map((_, index) => `?${index + 1}`)
+    const limitPlaceholder = `?${selected.length + 1}`
+    const offsetPlaceholder = `?${selected.length + 2}`
+    const result = await executor.execute({
+      sql: `
+        SELECT c.community_id
+        ${eligibleSql}
+          ${selected.length === 0 ? "" : `AND c.community_id NOT IN (${excludedPlaceholders.join(", ")})`}
+        ORDER BY c.created_at ${input.order === "newest" ? "DESC" : "ASC"},
+                 c.community_id ${input.order === "newest" ? "DESC" : "ASC"}
+        LIMIT ${limitPlaceholder}
+        ${input.offset === undefined ? "" : `OFFSET ${offsetPlaceholder}`}
+      `,
+      args: [
+        ...selected,
+        input.limit,
+        ...(input.offset === undefined ? [] : [input.offset]),
+      ],
+    })
+    return result.rows.map((row) => requiredString(row, "community_id"))
+  }
+
+  if (activeCount <= maxCommunities) {
+    selected.push(...await listRemaining({
+      order: "oldest",
+      limit: maxCommunities - selected.length,
+    }))
+    return selected
+  }
+
+  const recentCount = Math.max(
+    0,
+    Math.min(maxCommunities - selected.length, Math.ceil(maxCommunities / 4)),
+  )
+  selected.push(...await listRemaining({ order: "newest", limit: recentCount }))
+
+  const rotatingCount = maxCommunities - selected.length
+  const remainingCount = activeCount - selected.length
+  if (rotatingCount <= 0 || remainingCount <= 0) return selected
+
+  const minuteBucket = Math.floor((input.nowMs ?? Date.now()) / 60_000)
+  const start = (minuteBucket * rotatingCount) % remainingCount
+  const firstCount = Math.min(rotatingCount, remainingCount - start)
+  const firstIds = await listRemaining({ order: "oldest", limit: firstCount, offset: start })
+  selected.push(...firstIds)
+  const wrappedCount = rotatingCount - firstIds.length
+  if (wrappedCount > 0) {
+    selected.push(...await listRemaining({ order: "oldest", limit: wrappedCount, offset: 0 }))
+  }
+  return selected
 }
 
 export async function searchActiveCommunityRows(

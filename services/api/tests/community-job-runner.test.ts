@@ -331,6 +331,9 @@ describe("community-job-runner", () => {
           },
         ]
       },
+      async listScheduledCommunityJobPollIds() {
+        return [communityId]
+      },
     }
 
     const summary = await processAvailableCommunityJobs({
@@ -463,6 +466,9 @@ describe("community-job-runner", () => {
           await betaRepo.getCommunityById("cmt_job_beta"),
         ]
         return communities.filter((community): community is CommunityRow => community != null)
+      },
+      async listScheduledCommunityJobPollIds() {
+        return ["cmt_job_alpha", "cmt_job_beta"]
       },
       async getPrimaryCommunityDatabaseBinding(communityId: string) {
         return communityId === "cmt_job_alpha"
@@ -1716,6 +1722,9 @@ describe("community-job-runner", () => {
           healthyCommunity!,
         ]
       },
+      async listScheduledCommunityJobPollIds() {
+        return [failedCommunityId, communityId]
+      },
       async getPrimaryCommunityDatabaseBinding(id: string) {
         if (id === failedCommunityId) {
           throw new Error("Community database binding has been decommissioned")
@@ -1801,6 +1810,9 @@ describe("community-job-runner", () => {
           },
           healthyCommunity!,
         ]
+      },
+      async listScheduledCommunityJobPollIds() {
+        return [failedCommunityId, communityId]
       },
       async getPrimaryCommunityDatabaseBinding(id: string) {
         if (id === failedCommunityId) {

@@ -6,6 +6,7 @@ import {
   type AdminActorContext,
 } from "../lib/auth-middleware"
 import { assertAgentDelegatedWriteMatchesActor } from "../lib/agents/agent-write-authorization"
+import { writeAuditEventForEnv } from "../lib/audit"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityWriteClient } from "../lib/communities/community-read-access"
@@ -16,6 +17,7 @@ import { buildCommunityActionMatrix } from "../lib/communities/community-capabil
 import { isCommunityLive } from "../lib/communities/community-status"
 import { upsertCommunityMembership } from "../lib/communities/membership/membership-state-store"
 import { createComment } from "../lib/comments/comment-service"
+import { enforceCommentCreateRateLimit } from "../lib/comment-create-rate-limit"
 import { getCommentById } from "../lib/comments/community-comment-store"
 import type { CreateCommentRequest } from "../lib/comments/comment-types"
 import { authError, badRequestError, eligibilityFailed, HttpError } from "../lib/errors"
@@ -439,6 +441,25 @@ async function callCreatePostTool(c: McpContext, rawArgs: unknown) {
     profileRepository: getProfileRepository(c.env),
     communityRepository,
   })
+  if (actor.authType === "admin") {
+    const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_post"
+    await writeAuditEventForEnv(c.env, {
+      action: operationClass === "launch_seed" ? "community.seed_post_created" : "community.admin_post_created",
+      actorId: actor.adminOverride.adminActorId,
+      actorType: "operator",
+      communityId,
+      targetId: result.post_id,
+      targetType: "post",
+      metadata: {
+        operation_class: operationClass,
+        acting_user_id: actor.userId,
+        idempotency_key: body.idempotency_key ?? null,
+        post_type: result.post_type,
+        status: result.status,
+        transport: "mcp",
+      },
+    })
+  }
   const post = serializePost(result)
   const links = mcpPostLinks(c, { postId: post.id, communityId: post.community })
   return {
@@ -627,6 +648,7 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
   const body = buildCreateCommentBody(args)
   let userId: string
   let bypassAuthorAccessChecks = false
+  let authenticatedActor: ActorContext | AdminActorContext | null = null
   if ((body.authorship_mode ?? "human_direct") === "guest") {
     const guestId = readRequiredString(args.guest_id, "guest_id")
     const communityRepository = getCommunityRepository(c.env)
@@ -706,7 +728,9 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
     }
   } else {
     const actor = await authenticateMcpWrite(c)
+    authenticatedActor = actor
     if (actor.authType !== "admin") {
+      await enforceCommentCreateRateLimit(c.env.COMMENT_CREATE_RATE_LIMITER, actor.userId)
       assertAgentDelegatedWriteMatchesActor({ actor, body })
     }
     userId = actor.userId
@@ -739,6 +763,26 @@ async function callReplyTool(c: McpContext, rawArgs: unknown) {
     communityRepository,
     waitUntil: getWaitUntil(c),
   })
+  if (authenticatedActor?.authType === "admin") {
+    const operationClass = c.req.header("x-admin-operation-class")?.trim() || "admin_comment"
+    await writeAuditEventForEnv(c.env, {
+      action: operationClass === "launch_seed" ? "community.seed_comment_created" : "community.admin_comment_created",
+      actorId: authenticatedActor.adminOverride.adminActorId,
+      actorType: "operator",
+      communityId: target.communityId,
+      targetId: result.comment_id,
+      targetType: "comment",
+      metadata: {
+        operation_class: operationClass,
+        acting_user_id: authenticatedActor.userId,
+        idempotency_key: body.idempotency_key ?? null,
+        parent_comment_id: target.parentCommentId,
+        post_id: target.threadRootPostId,
+        depth: result.depth,
+        transport: "mcp",
+      },
+    })
+  }
   const comment = serializeComment(result)
   const postLinks = mcpPostLinks(c, {
     postId: comment.thread_root_post,

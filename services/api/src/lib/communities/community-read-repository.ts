@@ -7,6 +7,7 @@ import {
   getJobRowById,
   getLatestCommunityProvisioningJobRow,
   listActiveCommunityRows,
+  listScheduledCommunityJobPollIds as listScheduledCommunityJobPollIdRows,
   searchActiveCommunityRows,
 } from "../auth/auth-db-community-queries"
 import type {
@@ -152,6 +153,17 @@ export async function listActiveCommunities(
   },
 ): Promise<CommunityRow[]> {
   return listActiveCommunityRows(client, input)
+}
+
+export async function listScheduledCommunityJobPollIds(
+  client: Client,
+  input: {
+    maxCommunities: number
+    nowMs?: number
+    priorityCommunityIds?: string[]
+  },
+): Promise<string[]> {
+  return listScheduledCommunityJobPollIdRows(client, input)
 }
 
 export async function searchActiveCommunities(

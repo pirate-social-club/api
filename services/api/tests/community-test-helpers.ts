@@ -7,6 +7,7 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
   CommunityReadRepository,
+  CommunityScheduledJobPollRepository,
 } from "../src/lib/communities/db-community-repository"
 import type { ParticipationFollowRepository } from "../src/lib/communities/membership/open-participation"
 import { insertPost } from "../src/lib/posts/community-post-create-store"
@@ -119,6 +120,7 @@ function buildCommunityRow(input: {
 
 export type TestCommunityRepository =
   & CommunityReadRepository
+  & CommunityScheduledJobPollRepository
   & CommunityDatabaseBindingRepository
   & CommunityPostProjectionRepository
   & CommunityCommentProjectionRepository
@@ -175,6 +177,9 @@ export function buildTestCommunityRepository(input: {
     },
     async listActiveCommunities() {
       return [community]
+    },
+    async listScheduledCommunityJobPollIds() {
+      return [community.community_id]
     },
     async searchActiveCommunities(searchInput: { query: string; limit: number }) {
       const normalizedQuery = searchInput.query.trim().toLowerCase()

@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto"
 import { createMiddleware } from "hono/factory"
-import { authError, eligibilityFailed } from "./errors"
+import { AuthenticationFailureError, authError, eligibilityFailed } from "./errors"
 import { getControlPlaneAgentOwnershipRepository } from "./agents/agent-ownership-repository"
 import { getUserRepository } from "./auth/repositories"
 import { DEFAULT_PIRATE_APP_SCOPE, verifyPirateAccessToken } from "./auth/pirate-session-token"
@@ -153,7 +153,10 @@ export async function authenticateAdminUserOrAgentDelegated(input: {
 
   try {
     return await authenticateUserToken({ env: input.env, token })
-  } catch {
+  } catch (error) {
+    if (!(error instanceof AuthenticationFailureError)) {
+      throw error
+    }
     return authenticateAgentDelegatedToken({ env: input.env, token })
   }
 }
