@@ -3,6 +3,7 @@ import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import { getCommentById } from "../../../src/lib/comments/community-comment-store"
 import { computeCommentSourceHash } from "../../../src/lib/localization/content-source-hash"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import type { Env } from "../../../src/types"
 import { json, mintUpstreamJwt } from "../../helpers"
 
@@ -30,7 +31,7 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
     },
   }, env)
   const body = await json(response) as { access_token: string; user: { id: string } }
-  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
+  return { accessToken: body.access_token, userId: decodePublicUserId(body.user.id) }
 }
 
 export async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {

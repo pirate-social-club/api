@@ -4,6 +4,7 @@ import { app } from "../../src/index"
 import { buildLocalCommunityDbUrl } from "../../src/lib/communities/community-local-db"
 import { computePostSourceHash } from "../../src/lib/localization/content-source-hash"
 import { getPostById } from "../../src/lib/posts/community-post-query-store"
+import { decodePublicUserId } from "../../src/lib/public-ids"
 import type { Env } from "../../src/types"
 import { solveTestAltchaPayload } from "../altcha-test-helpers"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
@@ -34,7 +35,7 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
     },
   }, env)
   const body = await json(response) as { access_token: string; user: { id: string } }
-  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
+  return { accessToken: body.access_token, userId: decodePublicUserId(body.user.id) }
 }
 
 async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {

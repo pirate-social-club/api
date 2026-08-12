@@ -470,7 +470,7 @@ describe("comments routes", () => {
       agent_ownership_provider_snapshot: string | null
     }
     expect(topLevelBody.authorship_mode).toBe("user_agent")
-    expect(topLevelBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(topLevelBody.agent).toBe(ownershipCompleteBody.agent_id)
     expect(topLevelBody.agent_ownership_record).toBe(`aor_${ownershipCompleteBody.resolved_agent_ownership_record_id}`)
     expect(topLevelBody.agent_handle_snapshot).toBe("reply-bot.clawitzer")
     expect(topLevelBody.agent_display_name_snapshot).toBe("Reply Bot")
@@ -521,7 +521,7 @@ describe("comments routes", () => {
     }
     expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.authorship_mode).toBe("user_agent")
-    expect(replyBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(replyBody.agent).toBe(ownershipCompleteBody.agent_id)
   })
 
   test("delegated agent access tokens can create top-level comments and nested replies", async () => {
@@ -656,7 +656,7 @@ describe("comments routes", () => {
       agent: string | null
     }
     expect(topLevelBody.authorship_mode).toBe("user_agent")
-    expect(topLevelBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(topLevelBody.agent).toBe(ownershipCompleteBody.agent_id)
 
     const replyUrl = `http://pirate.test/comments/${topLevelBody.id}/replies`
     const replyPayload = {
@@ -702,7 +702,7 @@ describe("comments routes", () => {
     }
     expect(replyBody.parent_comment).toBe(topLevelBody.id)
     expect(replyBody.authorship_mode).toBe("user_agent")
-    expect(replyBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(replyBody.agent).toBe(ownershipCompleteBody.agent_id)
   })
 
   test("replies_only communities with a self lane reject derived clawkey agent comment writes", async () => {
@@ -1241,7 +1241,7 @@ describe("comments routes", () => {
     }
     expect(lockBody.replies_locked).toBe(true)
     expect(lockBody.replies_lock_reason).toBe("settle down")
-    expect(lockBody.replies_locked_by_user).toBe(`usr_${moderator.userId}`)
+    expect(lockBody.replies_locked_by_user).toBe(moderator.userId)
 
     const remove = await requestJson(
       `http://pirate.test/comments/${modRemoveBody.id}/remove`,

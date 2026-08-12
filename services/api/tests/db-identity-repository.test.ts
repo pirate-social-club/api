@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { DatabaseIdentityRepository } from "../src/lib/auth/db-identity-repository"
+import { decodePublicUserId } from "../src/lib/public-ids"
 import type { Client, InStatement, QueryResult, Transaction } from "../src/lib/sql-client"
 import type { UpstreamIdentity, UpstreamWalletIdentity } from "../src/types"
 import { createControlPlaneTestClient } from "./helpers"
@@ -397,10 +398,10 @@ describe("control-plane identity repository", () => {
     const externalAttachment = session.wallet_attachments.find((attachment) => attachment.wallet_address === WALLET_B)
     expect(externalAttachment).toBeDefined()
 
-    const user = await repo.setIdentityWallet(session.user.id.replace(/^usr_/, ""), externalAttachment!.wallet_attachment)
+    const user = await repo.setIdentityWallet(decodePublicUserId(session.user.id), externalAttachment!.wallet_attachment)
     expect(user?.primary_wallet_attachment_id).toBe(externalAttachment!.wallet_attachment)
 
-    const attachments = await repo.getWalletAttachmentsByUserId(session.user.id.replace(/^usr_/, ""))
+    const attachments = await repo.getWalletAttachmentsByUserId(decodePublicUserId(session.user.id))
     expect(attachments.find((attachment) => attachment.is_primary)?.wallet_address).toBe(WALLET_B)
   })
 
@@ -428,7 +429,7 @@ describe("control-plane identity repository", () => {
 
     const ownerWalletId = owner.wallet_attachments[0]!.wallet_attachment
     await expect(
-      repo.setIdentityWallet(other.user.id.replace(/^usr_/, ""), ownerWalletId),
+      repo.setIdentityWallet(decodePublicUserId(other.user.id), ownerWalletId),
     ).rejects.toThrow()
   })
 
@@ -467,7 +468,7 @@ describe("control-plane identity repository", () => {
         WHERE user_id = ?1
           AND status = 'active'
       `,
-      args: [first.user.id.replace(/^usr_/, "")],
+      args: [decodePublicUserId(first.user.id)],
     })
     expect(Number(linkCount.rows[0]?.count ?? 0)).toBe(2)
 

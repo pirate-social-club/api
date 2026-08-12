@@ -1,4 +1,5 @@
 import { app } from "../../../src/index"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import { json, mintUpstreamJwt } from "../../helpers"
 import type { Env } from "../../../src/types"
 
@@ -41,7 +42,7 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
   const body = await json(response) as { access_token: string; user: { id: string } }
   return {
     accessToken: body.access_token,
-    userId: body.user.id.replace(/^usr_/, ""),
+    userId: decodePublicUserId(body.user.id),
   }
 }
 

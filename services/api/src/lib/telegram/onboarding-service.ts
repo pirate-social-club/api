@@ -10,7 +10,7 @@ import { mintPirateAccessToken } from "../auth/pirate-session-token"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { getJoinEligibility } from "../communities/membership/eligibility-service"
 import { joinCommunity } from "../communities/membership/request-service"
-import { publicCommunityId } from "../public-ids"
+import { decodePublicUserId, publicCommunityId, publicId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
 import { rowValue, stringOrNull } from "../sql-row"
 import type { Client } from "../sql-client"
@@ -678,7 +678,7 @@ export async function exchangeTelegramOnboardingSession(input: {
   const session = await getSessionRepository(input.env).exchangeIdentity(identity)
   const userId = await resolveCanonicalUserId({
     env: input.env,
-    userId: session.user.id.replace(/^usr_/, ""),
+    userId: decodePublicUserId(session.user.id),
   })
   await upsertTelegramAccount({
     client: getControlPlaneClient(input.env),
@@ -747,7 +747,7 @@ export async function exchangeTelegramOnboardingSession(input: {
     telegram_user_id: telegramUser.id,
     ...session,
     access_token: accessToken,
-    user: { ...session.user, id: `usr_${userId}` },
+    user: { ...session.user, id: publicId(userId, "usr") },
     profile: syncedProfile ?? session.profile,
     eligibility,
     membership_result: membershipResult,

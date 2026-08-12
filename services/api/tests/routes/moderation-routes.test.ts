@@ -6,7 +6,7 @@ import {
   listStoryRegisteredAssetProjectionRows,
   upsertStoryRegisteredAssetProjection,
 } from "../../src/lib/communities/commerce/derivative-source-projection"
-import { decodePublicPostId } from "../../src/lib/public-ids"
+import { decodePublicPostId, decodePublicUserId } from "../../src/lib/public-ids"
 import type { Env } from "../../src/types"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
 
@@ -36,7 +36,7 @@ async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken: string
     },
   }, env)
   const body = await json(response) as { access_token: string; user: { id: string } }
-  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
+  return { accessToken: body.access_token, userId: decodePublicUserId(body.user.id) }
 }
 
 async function completeUniqueHumanVerification(env: Env, accessToken: string): Promise<void> {

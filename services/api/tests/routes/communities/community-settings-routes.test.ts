@@ -319,7 +319,7 @@ membership_mode: "request",
 
     expect(updatedCommunity.id).toBe(`com_${communityCreateBody.community.id.replace(/^com_/, "")}`)
     expect(updatedCommunity.community_id).toBe(undefined)
-    expect(updatedCommunity.created_by_user).toBe(`usr_${session.userId}`)
+    expect(updatedCommunity.created_by_user).toBe(session.userId)
     expect(updatedCommunity.created_by_user_id).toBe(undefined)
     expect(updatedCommunity.label_policy?.label_enabled).toBe(true)
     expect(updatedCommunity.label_policy?.definitions?.[0]?.label).toBe("Discussion")
@@ -584,11 +584,11 @@ membership_mode: "request",
     expect(bindings.rows).toEqual([
       {
         namespace_role: "primary",
-        namespace_verification_id: primaryVerification.replace(/^nv_/, ""),
+        namespace_verification_id: primaryVerification,
       },
       {
         namespace_role: "mirror",
-        namespace_verification_id: mirrorVerification.replace(/^nv_/, ""),
+        namespace_verification_id: mirrorVerification,
       },
     ])
 

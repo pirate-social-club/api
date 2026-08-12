@@ -1,6 +1,7 @@
 import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
 import type { Env } from "../../../src/types"
 import { json, mintUpstreamJwt } from "../../helpers"
@@ -29,7 +30,7 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
     },
   }, env)
   const body = await json(response) as { access_token: string; user: { id: string } }
-  return { accessToken: body.access_token, userId: body.user.id.replace(/^usr_/, "") }
+  return { accessToken: body.access_token, userId: decodePublicUserId(body.user.id) }
 }
 
 export async function prepareVerifiedNamespace(env: Env, accessToken: string): Promise<string> {

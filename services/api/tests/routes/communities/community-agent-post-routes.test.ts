@@ -189,9 +189,9 @@ membership_mode: "request",
       agent_owner_handle_snapshot: string | null
       agent_ownership_provider_snapshot: string | null
     }
-    expect(createdPostBody.author_user).toBe(`usr_${member.userId}`)
+    expect(createdPostBody.author_user).toBe(member.userId)
     expect(createdPostBody.authorship_mode).toBe("user_agent")
-    expect(createdPostBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(createdPostBody.agent).toBe(ownershipCompleteBody.agent_id)
     expect(createdPostBody.agent_ownership_record).toBe(`aor_${ownershipCompleteBody.resolved_agent_ownership_record_id}`)
     expect(createdPostBody.agent_handle_snapshot).toBe("captain-bot.clawitzer")
     expect(createdPostBody.agent_display_name_snapshot).toBe("Captain Bot")
@@ -373,7 +373,7 @@ membership_mode: "request",
       agent: string | null
     }
     expect(createdPostBody.authorship_mode).toBe("user_agent")
-    expect(createdPostBody.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(createdPostBody.agent).toBe(ownershipCompleteBody.agent_id)
   })
 
   test("community post create derives clawkey acceptance from the very lane and enforces the daily agent post cap", async () => {

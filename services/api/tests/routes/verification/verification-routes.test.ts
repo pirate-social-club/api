@@ -13,6 +13,7 @@ import {
   verifyAndConsumeAltchaProof,
 } from "../../../src/lib/verification/altcha-provider"
 import { prepareVerifiedNamespace } from "../communities/community-routes-test-helpers"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import {
   exchangeJwt,
   requestJson,
@@ -1419,7 +1420,7 @@ describe("verification routes", () => {
         WHERE user_id = ?1
         LIMIT 1
       `,
-      args: [session.user.id.replace(/^usr_/, "")],
+      args: [decodePublicUserId(session.user.id)],
     })
     expect(row.rows[0]?.verification_state).toBe("unverified")
     expect(row.rows[0]?.capability_provider).toBeNull()

@@ -582,7 +582,7 @@ describe("agent routes", () => {
 
     const session = await exchangeJwt(ctx.env, "agent-list-pagination-user")
     await createSelfVerifiedSession(ctx.env, session.accessToken)
-    const userId = `usr_${session.userId.replace(/^usr_/, "")}`
+    const userId = session.userId
     await ctx.client.execute({
       sql: `
         INSERT INTO user_agents (agent_id, owner_user_id, display_name, status, created_at, updated_at)
@@ -684,7 +684,7 @@ describe("agent routes", () => {
     expect(publicAgentBody.agent.agent).toBe(seedBody.agent_id)
     expect(publicAgentBody.agent.display_name).toBe("Night Signal")
     expect(publicAgentBody.agent.ownership_provider).toBeNull()
-    expect(publicAgentBody.owner.user).toBe(`usr_${ownerSession.userId}`)
+    expect(publicAgentBody.owner.user).toBe(ownerSession.userId)
     expect(publicAgentBody.owner.global_handle.label).toMatch(/\.pirate$/)
   })
 
@@ -861,8 +861,8 @@ describe("agent routes", () => {
       expires_at: string
       refresh_expires_at: string | null
     }
-    expect(issueBody.agent).toBe(`agt_${completedBody.agent_id}`)
-    expect(issueBody.owner_user).toBe(`usr_${session.userId}`)
+    expect(issueBody.agent).toBe(completedBody.agent_id)
+    expect(issueBody.owner_user).toBe(session.userId)
     expect(issueBody.current_ownership_record).toBe(`aor_${completedBody.resolved_agent_ownership_record_id}`)
     expect(issueBody.token_type).toBe("Bearer")
     expect(issueBody.access_token).toMatch(/^agtok_/)
@@ -886,7 +886,7 @@ describe("agent routes", () => {
       access_token: string
       refresh_token: string
     }
-    expect(refreshBody.agent).toBe(`agt_${completedBody.agent_id}`)
+    expect(refreshBody.agent).toBe(completedBody.agent_id)
     expect(refreshBody.current_ownership_record).toBe(`aor_${completedBody.resolved_agent_ownership_record_id}`)
     expect(refreshBody.access_token).toMatch(/^agtok_/)
     expect(refreshBody.refresh_token).toMatch(/^agrf_/)

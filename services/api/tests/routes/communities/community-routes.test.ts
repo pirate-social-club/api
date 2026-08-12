@@ -332,7 +332,7 @@ describe("community routes", () => {
     expect(attachedCommunity.route_slug).toBe("piratecommunityroot")
 
     const attachedState = await getCommunityControlPlaneState(ctx.env, communityCreateBody.community.id.replace(/^com_/, ""))
-    expect(attachedState.namespaceVerificationId).toBe(stripPublicPrefix(namespaceVerificationId, "nv"))
+    expect(attachedState.namespaceVerificationId).toBe(namespaceVerificationId)
     expect(attachedState.routeSlug).toBe("piratecommunityroot")
 
     const communityBySlug = await app.request(`http://pirate.test/communities/piratecommunityroot`, {
@@ -1411,7 +1411,7 @@ describe("community routes", () => {
     expect(postBody.community).toBe(communityCreateBody.community.id)
     expect(postBody.status).toBe("published")
     expect(postBody.title).toBe("Hello Pirate")
-    expect(postBody.author_user).toBe(`usr_${session.userId}`)
+    expect(postBody.author_user).toBe(session.userId)
 
     const retriedPost = await requestJson(
       `http://pirate.test/communities/${communityCreateBody.community.id.replace(/^com_/, "")}/posts`,
