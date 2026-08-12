@@ -21,6 +21,7 @@ import type {
   RewardVerificationState,
 } from "../../types"
 import { rewardPayoutPublicStage } from "./reward-payout-public-stage"
+import { rewardPayoutsEnabled } from "./reward-feature-flags"
 
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
 
@@ -293,7 +294,10 @@ export async function getRewardsSummaryForUser(input: {
     recent_qualifications: qualificationRows.rows.map(serializeRewardQualification),
     pending_verification: pendingVerification,
     cashout: {
-      eligible: balanceCents >= minCashoutCents && verificationState === "verified",
+      eligible:
+        rewardPayoutsEnabled(input.env)
+        && balanceCents >= minCashoutCents
+        && verificationState === "verified",
       min_cents: minCashoutCents,
       verification_state: verificationState,
       verification_provider: hasNullifier?.provider ?? null,
