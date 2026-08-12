@@ -1863,6 +1863,41 @@ describe("rewards routes", () => {
     expect(response.status).toBe(401)
   })
 
+  test("GET /me/rewards advertises cashout eligibility only while payouts are enabled", async () => {
+    const ctx = await createRouteTestContext({
+      REWARDS_READS_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
+      REWARDS_IDENTITY_PROVIDER: "self",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-cashout-capability-user")
+    const now = "2026-08-12T12:00:00.000Z"
+    await addNullifier(ctx, session.userId, now)
+    await addRewardEvent(ctx, session.userId, 100, now)
+
+    const readEligibility = async (): Promise<boolean> => {
+      const response = await app.request(
+        "http://pirate.test/me/rewards",
+        { headers: authHeaders(session.accessToken) },
+        ctx.env,
+      )
+      expect(response.status).toBe(200)
+      return (await json(response) as { cashout: { eligible: boolean } }).cashout.eligible
+    }
+
+    expect(await readEligibility()).toBe(true)
+
+    ctx.env.REWARDS_PAYOUTS_ENABLED = "false"
+    expect(await readEligibility()).toBe(false)
+
+    ctx.env.REWARDS_PAYOUTS_ENABLED = undefined
+    expect(await readEligibility()).toBe(false)
+  })
+
   test("selects a nullifier-scoped nationality document through the authenticated rewards route", async () => {
     const ctx = await createRouteTestContext({ REWARDS_IDENTITY_PROVIDER: "self" })
     cleanup = ctx.cleanup

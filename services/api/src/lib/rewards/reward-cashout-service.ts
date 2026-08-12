@@ -36,6 +36,7 @@ import {
   payoutWaitSeconds,
   readFreshPayoutCapacity,
 } from "./reward-payout-fairness"
+import { rewardPayoutsEnabled } from "./reward-feature-flags"
 
 const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000]
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
@@ -125,10 +126,6 @@ function parseConfiguredCents(raw: string | undefined, fallback: number): number
   if (!trimmed) return fallback
   const parsed = Number(trimmed)
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback
-}
-
-function rewardPayoutsEnabled(env: Pick<Env, "REWARDS_PAYOUTS_ENABLED">): boolean {
-  return String(env.REWARDS_PAYOUTS_ENABLED ?? "").trim().toLowerCase() === "true"
 }
 
 async function warnPayoutScheduler(
