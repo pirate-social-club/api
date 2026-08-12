@@ -99,7 +99,7 @@ jobs:
 
       - name: Install Playwright browser
         working-directory: web
-        run: bunx playwright install --with-deps chromium
+        run: bunx playwright install chromium
 
       - name: Require the requested API commit on staging
         working-directory: web
