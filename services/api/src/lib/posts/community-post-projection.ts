@@ -1,4 +1,5 @@
 import type { DbExecutor } from "../db-helpers"
+import type { InStatement, QueryResult } from "../sql-client"
 
 export const MAX_POST_JSON_PROJECTION_LENGTH = 128 * 1024
 
@@ -54,13 +55,24 @@ export type PostProjectionSchema = {
   hasLyricsLanguageColumns: boolean
 }
 
-export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
-  const result = await executor.execute("PRAGMA table_info(posts)")
-  const columnNames = new Set(result.rows.map((row) => String(row.name ?? "")))
-  const assetResult = await executor.execute("PRAGMA table_info(assets)")
-  const assetColumnNames = new Set(assetResult.rows.map((row) => String(row.name ?? "")))
-  const postEventsResult = await executor.execute("PRAGMA table_info(post_events)")
-  const rightsHoldsResult = await executor.execute("PRAGMA table_info(rights_holds)")
+export function postProjectionSchemaReadStatements(): InStatement[] {
+  return ["posts", "assets", "post_events", "rights_holds"].map((table) => ({
+    sql: `PRAGMA table_info(${table})`,
+  }))
+}
+
+export function postProjectionSchemaFromResults(
+  results: readonly QueryResult[],
+): PostProjectionSchema {
+  if (results.length !== 4) {
+    throw new Error(`Expected 4 post projection schema results, received ${results.length}`)
+  }
+  const [postsResult, assetsResult, postEventsResult, rightsHoldsResult] = results
+  if (!postsResult || !assetsResult || !postEventsResult || !rightsHoldsResult) {
+    throw new Error("Post projection schema results are incomplete")
+  }
+  const columnNames = new Set(postsResult.rows.map((row) => String(row.name ?? "")))
+  const assetColumnNames = new Set(assetsResult.rows.map((row) => String(row.name ?? "")))
   return {
     hasAssetStoryColumns: assetColumnNames.has("asset_id")
       && assetColumnNames.has("community_id")
@@ -81,8 +93,7 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("publish_failure_message")
       && columnNames.has("publish_failure_retryable")
       && columnNames.has("publish_failed_at"),
-    // 1143 is transitional/deferred: shards that have not received the fleet run yet
-    // (including quarantined ones) must project NULL rather than fail the query.
+    // 1143 remains transitional until the fleet requirement is promoted.
     hasLyricsLanguageColumns: columnNames.has("lyrics_language")
       && columnNames.has("lyrics_language_confidence")
       && columnNames.has("lyrics_language_reliable")
@@ -90,6 +101,14 @@ export async function resolvePostProjectionSchema(executor: DbExecutor): Promise
       && columnNames.has("lyrics_language_detected_at")
       && columnNames.has("lyrics_language_source_hash"),
   }
+}
+
+export async function resolvePostProjectionSchema(executor: DbExecutor): Promise<PostProjectionSchema> {
+  const results: QueryResult[] = []
+  for (const statement of postProjectionSchemaReadStatements()) {
+    results.push(await executor.execute(statement))
+  }
+  return postProjectionSchemaFromResults(results)
 }
 
 export function postSelectColumnsForSchema(schema: PostProjectionSchema): string {

@@ -11,10 +11,12 @@ import type {
   HomeFeedSort,
 } from "../../types"
 import {
+  prefetchHomeFeedCommunities,
   readHomeFeedCommunityItems,
   resolveTopCommunitiesIdentity,
   serializeHomeFeedCommunitySummary,
   type HomeFeedCommunityIdentity,
+  type HomeFeedCommunityPrefetch,
   type HomeFeedCommunityTiming,
   type HomeFeedWaitUntil,
 } from "./home-feed-community-reader"
@@ -1193,7 +1195,9 @@ export async function listHomeFeed(input: {
   phaseTimings.projections_and_rank_ms = elapsedMs(phaseStartedAt)
 
   const communityIdentityById = new Map<string, HomeFeedCommunityIdentity | null>()
+  const communityPrefetchById = new Map<string, HomeFeedCommunityPrefetch>()
   const communityTimings: HomeFeedCommunityTiming[] = []
+  let communityPrefetchMs = 0
 
   phaseStartedAt = performance.now()
   const hydrateRows = async (
@@ -1205,7 +1209,25 @@ export async function listHomeFeed(input: {
       rows.push(row)
       rowsByCommunityId.set(row.community_id, rows)
     }
+    const missingPrefetchCommunityIds = [...rowsByCommunityId.keys()]
+      .filter((communityId) => !communityPrefetchById.has(communityId))
+    if (missingPrefetchCommunityIds.length > 0) {
+      const prefetchStartedAt = performance.now()
+      const prefetched = await prefetchHomeFeedCommunities({
+        communityIds: missingPrefetchCommunityIds,
+        communityRepository: input.communityRepository,
+        env: input.env,
+      })
+      for (const [communityId, value] of prefetched) {
+        communityPrefetchById.set(communityId, value)
+      }
+      communityPrefetchMs += elapsedMs(prefetchStartedAt)
+    }
     const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
+      const prefetch = communityPrefetchById.get(communityId)
+      if (!prefetch) {
+        throw new Error(`Home feed prefetch is missing for ${communityId}`)
+      }
       const result = await readHomeFeedCommunityItems({
         env: input.env,
         communityId,
@@ -1217,6 +1239,7 @@ export async function listHomeFeed(input: {
         userId: input.userId,
         locale: input.locale,
         ageGateState,
+        prefetch,
         waitUntil: input.waitUntil,
       })
       communityIdentityById.set(communityId, result.identity)
@@ -1290,6 +1313,7 @@ export async function listHomeFeed(input: {
     nextCursor = videoPage.nextCursor
   }
   phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
+  phaseTimings.community_prefetch_ms = communityPrefetchMs
   phaseTimings.order_items_ms = 0
 
   if (shadowControlPlane) {

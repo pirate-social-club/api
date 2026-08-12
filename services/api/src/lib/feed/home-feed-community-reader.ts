@@ -1,6 +1,11 @@
 import type { DbExecutor } from "../db-helpers"
-import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
-import type { Client } from "../sql-client"
+import { createCoalescingReadClient } from "../coalescing-read-client"
+import {
+  bulkCommunityRead,
+  openCommunityReadClient,
+  openCommunityWriteClient,
+} from "../communities/community-read-access"
+import type { ReadClient } from "../sql-client"
 import {
   buildMembershipGateExpressionFromPolicy,
   buildMembershipGateSummariesFromPolicy,
@@ -28,8 +33,10 @@ import { serializeLocalizedPostResponse } from "../../serializers/post"
 import { publicCommunityId } from "../public-ids"
 import {
   postAssetStoryJoinForSchema,
+  postProjectionSchemaFromResults,
+  postProjectionSchemaReadStatements,
   postSelectColumnsForSchema,
-  resolvePostProjectionSchema,
+  type PostProjectionSchema,
 } from "../posts/community-post-projection"
 import { resolveCommunityAvatarRef } from "../communities/community-identity-media"
 import {
@@ -77,10 +84,7 @@ export type HomeFeedCommunityTiming = {
   total_ms: number
   open_ms: number
   identity_ms: number
-  viewer_gate_ms: number
-  posts_ms: number
-  snapshots_ms: number
-  votes_ms: number
+  batched_reads_ms: number
   localize_ms: number
   crosspost_ms: number
   author_handles_ms: number
@@ -101,6 +105,13 @@ export type HomeFeedCommunityReadResult = {
   timing: HomeFeedCommunityTiming
 }
 
+export type HomeFeedCommunityPrefetch = {
+  identity: HomeFeedCommunityIdentity | null
+  karaokeEnabled: boolean
+  postProjectionSchema: PostProjectionSchema
+  studyEnabled: boolean
+}
+
 function elapsedMs(startedAt: number): number {
   return Math.round(performance.now() - startedAt)
 }
@@ -118,12 +129,15 @@ function placeholders(count: number): string {
   return Array.from({ length: count }, (_, index) => `?${index + 1}`).join(", ")
 }
 
-async function listPostsById(client: Client, postIds: string[]): Promise<Map<string, Post>> {
+async function listPostsById(
+  client: ReadClient,
+  postIds: string[],
+  projectionSchema: PostProjectionSchema,
+): Promise<Map<string, Post>> {
   if (postIds.length === 0) {
     return new Map()
   }
 
-  const projectionSchema = await resolvePostProjectionSchema(client)
   const result = await client.execute({
     sql: `
       SELECT ${postSelectColumnsForSchema(projectionSchema)}
@@ -142,8 +156,62 @@ async function listPostsById(client: Client, postIds: string[]): Promise<Map<str
   return postsById
 }
 
+/**
+ * Inspect transitional post schemas and load stable community settings before
+ * hydration. Grouping these operations uses one shard RPC instead of the old
+ * sequence of schema and policy reads for every community slice.
+ */
+export async function prefetchHomeFeedCommunities(input: {
+  communityIds: string[]
+  communityRepository: HomeFeedCommunityRepository
+  env: Env
+}): Promise<Map<string, HomeFeedCommunityPrefetch>> {
+  const uniqueCommunityIds = [...new Set(input.communityIds)]
+  const schemaStatements = postProjectionSchemaReadStatements()
+  const resultsByCommunityId = await bulkCommunityRead(
+    input.env,
+    input.communityRepository,
+    uniqueCommunityIds.map((communityId) => ({
+      communityId,
+      statements: [
+        ...schemaStatements,
+        {
+          sql: `
+            SELECT display_name, avatar_ref, karaoke_enabled, study_enabled
+            FROM communities
+            WHERE community_id = ?1
+            LIMIT 1
+          `,
+          args: [communityId],
+        },
+      ],
+    })),
+  )
+
+  const prefetched = new Map<string, HomeFeedCommunityPrefetch>()
+  for (const communityId of uniqueCommunityIds) {
+    const results = resultsByCommunityId.get(communityId)
+    if (!results || results.length !== schemaStatements.length + 1) {
+      throw new Error(`Home feed prefetch results are incomplete for ${communityId}`)
+    }
+    const identityRow = results[schemaStatements.length]?.rows[0]
+    prefetched.set(communityId, {
+      identity: identityRow
+        ? {
+            displayName: String(identityRow.display_name),
+            avatarRef: identityRow.avatar_ref == null ? null : String(identityRow.avatar_ref),
+          }
+        : null,
+      karaokeEnabled: Number(identityRow?.karaoke_enabled ?? 0) === 1,
+      postProjectionSchema: postProjectionSchemaFromResults(results.slice(0, schemaStatements.length)),
+      studyEnabled: Number(identityRow?.study_enabled ?? 0) === 1,
+    })
+  }
+  return prefetched
+}
+
 async function listLatestThreadSnapshotsForRead(
-  client: Client,
+  client: ReadClient,
   threadRootPostIds: string[],
 ): Promise<Map<string, CommentThreadSnapshot | null>> {
   if (threadRootPostIds.length === 0) {
@@ -173,7 +241,7 @@ async function listLatestThreadSnapshotsForRead(
 }
 
 async function listViewerVotes(input: {
-  client: Client
+  client: ReadClient
   postIds: string[]
   userId: string | null
 }): Promise<Map<string, -1 | 1 | null>> {
@@ -246,7 +314,7 @@ function enqueuePostReadJobs(input: {
         jobs: input.jobs,
       })
     } finally {
-      db.close()
+      await db.close()
     }
   }).catch((error: unknown) => {
     console.error("[home-feed] deferred post read job enqueue failed", {
@@ -314,7 +382,7 @@ export function withHomeFeedCommunityIdentity(
 }
 
 async function getHomeFeedViewerGateState(input: {
-  client: Client
+  client: ReadClient
   communityId: string
   displayName: string
   userId: string | null
@@ -426,6 +494,7 @@ export async function readHomeFeedCommunityItems(input: {
   userId: string | null
   locale?: string | null
   ageGateState: AgeGateViewerState | null
+  prefetch: HomeFeedCommunityPrefetch
   waitUntil?: HomeFeedWaitUntil
 }): Promise<HomeFeedCommunityReadResult> {
   const communityStartedAt = performance.now()
@@ -448,10 +517,7 @@ export async function readHomeFeedCommunityItems(input: {
         total_ms: elapsedMs(communityStartedAt),
         open_ms: openMs,
         identity_ms: 0,
-        viewer_gate_ms: 0,
-        posts_ms: 0,
-        snapshots_ms: 0,
-        votes_ms: 0,
+        batched_reads_ms: 0,
         localize_ms: 0,
         crosspost_ms: 0,
         author_handles_ms: 0,
@@ -468,73 +534,73 @@ export async function readHomeFeedCommunityItems(input: {
     }
   }
   try {
-    const identityStartedAt = performance.now()
-    const identity = await getHomeFeedCommunityIdentity(db.client, input.communityId)
-    const identityMs = elapsedMs(identityStartedAt)
+    const identity = input.prefetch.identity
+    const identityMs = 0
     const communitySummary = input.baseCommunity
       ? withHomeFeedCommunityIdentity(input.baseCommunity, identity)
       : null
-    const viewerGateStartedAt = performance.now()
-    const viewerGateState = await getHomeFeedViewerGateState({
-      client: db.client,
-      communityId: input.communityId,
-      displayName: communitySummary?.display_name ?? identity?.displayName ?? input.communityId,
-      userId: input.userId,
-    })
-    const viewerGateMs = elapsedMs(viewerGateStartedAt)
     const communityItems: HomeFeedItem[] = []
-    const postsStartedAt = performance.now()
-    const postsById = await listPostsById(db.client, input.rows.map((row) => row.source_post_id))
-    const postsMs = elapsedMs(postsStartedAt)
-    const publishedRows = input.rows.filter((row) => {
-      const post = postsById.get(row.source_post_id)
-      return post
-        && post.status === "published"
-        && (post.visibility !== "members_only" || input.memberCommunityIdSet.has(input.communityId))
-    })
-    const publishedPostIds = publishedRows.map((row) => row.source_post_id)
-    const snapshotsStartedAt = performance.now()
-    const threadSnapshotsByPostId = await listLatestThreadSnapshotsForRead(db.client, publishedPostIds)
-    const snapshotsMs = elapsedMs(snapshotsStartedAt)
-    const votesStartedAt = performance.now()
-    const viewerVotesByPostId = await listViewerVotes({
-      client: db.client,
-      postIds: publishedPostIds,
-      userId: input.userId,
-    })
-    const votesMs = elapsedMs(votesStartedAt)
-    const publishedPosts = publishedPostIds
-      .map((postId) => postsById.get(postId))
-      .filter((post): post is Post => Boolean(post))
-    const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
-    const [communityLabels, authorCommunityRoleByUserId, contentTranslations] = await Promise.all([
+    const projectedPostIds = input.rows.map((row) => row.source_post_id)
+    const coalescedReads = createCoalescingReadClient(db.client)
+    const batchedReadsStartedAt = performance.now()
+    const [
+      viewerGateState,
+      postsById,
+      threadSnapshotsByPostId,
+      viewerVotesByPostId,
+      communityLabels,
+      authorCommunityRoleByUserId,
+      contentTranslations,
+    ] = await Promise.all([
+      getHomeFeedViewerGateState({
+        client: coalescedReads,
+        communityId: input.communityId,
+        displayName: communitySummary?.display_name ?? identity?.displayName ?? input.communityId,
+        userId: input.userId,
+      }),
+      listPostsById(
+        coalescedReads,
+        projectedPostIds,
+        input.prefetch.postProjectionSchema,
+      ),
+      listLatestThreadSnapshotsForRead(coalescedReads, projectedPostIds),
+      listViewerVotes({
+        client: coalescedReads,
+        postIds: projectedPostIds,
+        userId: input.userId,
+      }),
       listCommunityLabels({
-        executor: db.client,
+        executor: coalescedReads,
         communityId: input.communityId,
         includeArchived: true,
       }),
       listHomeFeedAuthorCommunityRoles({
-        executor: db.client,
+        executor: coalescedReads,
         communityId: input.communityId,
-        userIds: publishedPosts
-          .filter((post) => post.identity_mode === "public")
-          .map((post) => post.author_user_id)
+        userIds: input.rows
+          .filter((row) => row.identity_mode !== "anonymous")
+          .map((row) => row.author_user_id)
           .filter((userId): userId is string => Boolean(userId)),
       }),
       listContentTranslationsForContentIds({
-        executor: db.client,
+        executor: coalescedReads,
         contentType: "post",
-        contentIds: publishedPostIds,
-        locale: resolvedLocale,
+        contentIds: projectedPostIds,
+        locale: normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE,
       }),
     ])
+    const batchedReadsMs = elapsedMs(batchedReadsStartedAt)
     const communityLabelById = new Map(communityLabels.map((label) => [label.label_id, label] as const))
     const contentTranslationByKey = new Map(
       contentTranslations.map((translation) => [contentTranslationLookupKey(translation), translation] as const),
     )
     const postReadJobs: HomeFeedPostReadJob[] = []
-    const studyEnabledCache = new Map<string, Promise<boolean>>()
-    const karaokeEnabledCache = new Map<string, Promise<boolean>>()
+    const studyEnabledCache = new Map<string, Promise<boolean>>([
+      [input.communityId, Promise.resolve(input.prefetch.studyEnabled)],
+    ])
+    const karaokeEnabledCache = new Map<string, Promise<boolean>>([
+      [input.communityId, Promise.resolve(input.prefetch.karaokeEnabled)],
+    ])
     const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
     let localizeMs = 0
     for (const row of input.rows) {
@@ -648,10 +714,7 @@ export async function readHomeFeedCommunityItems(input: {
     const totalMs = elapsedMs(communityStartedAt)
     const accountedMs = openMs
       + identityMs
-      + viewerGateMs
-      + postsMs
-      + snapshotsMs
-      + votesMs
+      + batchedReadsMs
       + localizeMs
       + crosspostMs
       + authorHandlesMs
@@ -669,10 +732,7 @@ export async function readHomeFeedCommunityItems(input: {
         total_ms: totalMs,
         open_ms: openMs,
         identity_ms: identityMs,
-        viewer_gate_ms: viewerGateMs,
-        posts_ms: postsMs,
-        snapshots_ms: snapshotsMs,
-        votes_ms: votesMs,
+        batched_reads_ms: batchedReadsMs,
         localize_ms: localizeMs,
         crosspost_ms: crosspostMs,
         author_handles_ms: authorHandlesMs,
@@ -688,6 +748,6 @@ export async function readHomeFeedCommunityItems(input: {
       },
     }
   } finally {
-    db.close()
+    await db.close()
   }
 }
