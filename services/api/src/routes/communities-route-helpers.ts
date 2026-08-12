@@ -97,8 +97,9 @@ export function getRequestOrigin(c: Pick<AuthenticatedRouteContext, "req">): str
   return new URL(c.req.url).origin
 }
 
-export async function readSongArtifactContent(
+export async function readUploadContent(
   c: Pick<AuthenticatedRouteContext, "req">,
+  requiredMessage: string,
 ): Promise<ArrayBuffer> {
   const contentType = String(c.req.header("content-type") || "").toLowerCase()
   if (contentType.includes("application/json")) {
@@ -121,7 +122,13 @@ export async function readSongArtifactContent(
 
   const raw = await c.req.arrayBuffer().catch(() => null)
   if (!raw || raw.byteLength === 0) {
-    throw badRequestError("Song artifact content is required")
+    throw badRequestError(requiredMessage)
   }
   return raw
+}
+
+export async function readSongArtifactContent(
+  c: Pick<AuthenticatedRouteContext, "req">,
+): Promise<ArrayBuffer> {
+  return await readUploadContent(c, "Song artifact content is required")
 }

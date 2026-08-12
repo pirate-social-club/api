@@ -11,6 +11,8 @@ import {
 import type { Env } from "../../env"
 import { FILEBASE_SONG_ARTIFACT_STORAGE_PROVIDER } from "./song-artifact-storage-provider"
 
+export { uploadFilebaseObject } from "../storage/filebase-object"
+
 export type SongArtifactKind =
   | "primary_audio"
   | "cover_art"
@@ -214,49 +216,6 @@ export function buildSongArtifactObjectKey(
 export function buildIpfsGatewayUrl(env: Env, cid: string): string {
   const gateway = String(env.IPFS_GATEWAY_URL || "https://dweb.link/ipfs").trim()
   return `${gateway.replace(/\/+$/, "")}/${encodeURIComponent(cid)}`
-}
-
-export async function uploadFilebaseObject(input: {
-  env: Env
-  objectKey: string
-  mimeType: string
-  bytes: Uint8Array
-}): Promise<{
-  storageBucket: string
-  storageObjectKey: string
-  storageEndpoint: string
-  contentHash: string
-  ipfsCid: string
-}> {
-  const normalizedMimeType = input.mimeType.trim().toLowerCase()
-  const payloadHash = await sha256Hex(input.bytes)
-  const request = await buildS3SignedRequest({
-    method: "PUT",
-    config: resolveFilebaseConfig(input.env),
-    objectKey: input.objectKey,
-    payloadHash,
-    headers: {
-      "content-type": normalizedMimeType,
-    },
-    body: toArrayBuffer(input.bytes),
-  })
-  const response = await fetchFilebaseWithTimeout(request, "Filebase object upload")
-  if (!response.ok) {
-    const responseText = await response.text().catch(() => "")
-    throw providerUnavailable(
-      `Filebase object upload failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`,
-    )
-  }
-
-  const ipfsCid = await readFilebaseCid({ response })
-  const config = resolveFilebaseConfig(input.env)
-  return {
-    storageBucket: config.bucket,
-    storageObjectKey: input.objectKey,
-    storageEndpoint: config.endpoint.toString(),
-    contentHash: `0x${payloadHash}`,
-    ipfsCid,
-  }
 }
 
 export async function uploadSongArtifactBytes(input: {
