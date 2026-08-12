@@ -3,6 +3,11 @@ import {
   CONTENT_SOURCE_STORAGE_NAMESPACE,
   contentSourceObjectKey,
 } from "@pirate/content-source-protocol"
+import type {
+  ContentSecurityScanJob,
+  ContentSecurityScanResult,
+  ContentSourceReadOutcome,
+} from "../content-security/content-security-types"
 import { conflictError, providerUnavailable } from "../errors"
 
 export const CONTENT_SOURCE_STORAGE_PROVIDER = "cloudflare_r2_private"
@@ -19,7 +24,7 @@ type StoredContentSource = {
   content_sha256: string
 }
 
-function requireBroker(env: Env): { service: Fetcher; secret: string } {
+export function requireContentSourceBroker(env: Env): { service: Fetcher; secret: string } {
   const secret = env.CONTENT_SOURCE_BROKER_SHARED_SECRET?.trim() ?? ""
   if (!env.CONTENT_SOURCE_BROKER || !secret) {
     throw providerUnavailable("Content source storage is not configured")
@@ -28,7 +33,7 @@ function requireBroker(env: Env): { service: Fetcher; secret: string } {
 }
 
 export function assertContentSourceBrokerConfigured(env: Env): void {
-  requireBroker(env)
+  requireContentSourceBroker(env)
 }
 
 function isStoredContentSource(value: unknown, expected: {
@@ -59,7 +64,7 @@ export async function storeContentSource(input: {
   storageEndpoint: string
   contentHash: string
 }> {
-  const { service, secret } = requireBroker(input.env)
+  const { service, secret } = requireContentSourceBroker(input.env)
   let response: Response
   try {
     response = await service.fetch(new Request(
@@ -101,4 +106,135 @@ export async function storeContentSource(input: {
     storageEndpoint: CONTENT_SOURCE_STORAGE_ENDPOINT,
     contentHash: `0x${input.sha256}`,
   }
+}
+
+function boundedText(value: unknown, maxLength = 256): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : null
+}
+
+function parseContentSecurityScanResult(value: unknown): ContentSecurityScanResult | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const outcome = record.outcome
+  const findingCode = record.finding == null ? null : boundedText(record.finding)
+  const errorCode = record.error_code == null ? null : boundedText(record.error_code)
+  if (outcome !== "clean" && outcome !== "suspicious" && outcome !== "malicious" && outcome !== "error") {
+    return null
+  }
+  if (outcome === "malicious" && (!findingCode || errorCode)) return null
+  if (outcome === "error" && (findingCode || !errorCode)) return null
+  if ((outcome === "clean" || outcome === "suspicious") && errorCode) return null
+  if (record.engine !== "clamav") return null
+  if (typeof record.size_bytes !== "number" || !Number.isSafeInteger(record.size_bytes) || record.size_bytes <= 0) {
+    return null
+  }
+  if (typeof record.duration_ms !== "number" || !Number.isSafeInteger(record.duration_ms) || record.duration_ms < 0) {
+    return null
+  }
+  const job = boundedText(record.job, 132)
+  const contentSha256 = boundedText(record.content_sha256, 64)
+  const policyVersion = boundedText(record.policy_version)
+  const engineVersion = boundedText(record.engine_version)
+  const signatureVersion = boundedText(record.signature_version)
+  const signatureDate = boundedText(record.signature_date)
+  const engineImageDigest = boundedText(record.engine_image_digest, 71)
+  const definitionDigest = boundedText(record.definition_digest, 64)
+  if (
+    !job
+    || !contentSha256
+    || !/^[a-f0-9]{64}$/u.test(contentSha256)
+    || !policyVersion
+    || !engineVersion
+    || !signatureVersion
+    || !signatureDate
+    || !Number.isFinite(Date.parse(signatureDate))
+    || !engineImageDigest
+    || !/^sha256:[a-f0-9]{64}$/u.test(engineImageDigest)
+    || !definitionDigest
+    || !/^[a-f0-9]{64}$/u.test(definitionDigest)
+  ) return null
+  return {
+    job,
+    contentSha256,
+    sizeBytes: record.size_bytes,
+    outcome,
+    policyVersion,
+    engineVersion,
+    signatureVersion,
+    signatureDate,
+    engineImageDigest,
+    definitionDigest,
+    findingCode,
+    errorCode,
+    durationMs: record.duration_ms,
+  }
+}
+
+export class ContentSourceScanError extends Error {
+  constructor(
+    readonly code: string,
+    readonly retryable: boolean,
+    readonly readOutcome: ContentSourceReadOutcome,
+    readonly bytesRead: number,
+  ) {
+    super("Content source scan failed")
+  }
+}
+
+function brokerErrorCode(value: unknown): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "invalid_broker_response"
+  const code = (value as Record<string, unknown>).code
+  return typeof code === "string" && /^[a-z0-9_]{1,64}$/u.test(code) ? code : "invalid_broker_response"
+}
+
+function readOutcomeForBrokerCode(code: string): ContentSourceReadOutcome {
+  if (code === "source_missing") return "source_missing"
+  if (code === "source_metadata_mismatch") return "metadata_mismatch"
+  if (code === "scanner_unavailable" || code === "scanner_not_configured") return "stream_error"
+  return "scanner_rejected"
+}
+
+export async function scanContentSource(input: {
+  env: Env
+  job: ContentSecurityScanJob
+}): Promise<{
+  result: ContentSecurityScanResult
+  bytesRead: number
+  readOutcome: ContentSourceReadOutcome
+}> {
+  const { service, secret } = requireContentSourceBroker(input.env)
+  let response: Response
+  try {
+    response = await service.fetch(new Request(
+      `https://content-source-broker.internal/objects/${encodeURIComponent(input.job.contentBlobId)}/scan`,
+      {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "x-content-scan-job": input.job.scanJobId,
+          "x-content-sha256": input.job.expectedContentHash.slice(2),
+          "x-content-size": String(input.job.expectedSizeBytes),
+        },
+      },
+    ))
+  } catch {
+    throw new ContentSourceScanError("broker_unavailable", true, "stream_error", 0)
+  }
+  const bytesReadText = response.headers.get("x-content-source-bytes-read")
+  const bytesRead = bytesReadText == null ? 0 : Number(bytesReadText)
+  if (!Number.isSafeInteger(bytesRead) || bytesRead < 0 || bytesRead > input.job.expectedSizeBytes) {
+    throw new ContentSourceScanError("invalid_bytes_read", false, "metadata_mismatch", 0)
+  }
+  const body = await response.json().catch(() => null)
+  const result = parseContentSecurityScanResult(body)
+  if (result) {
+    return {
+      result,
+      bytesRead,
+      readOutcome: response.ok ? "completed" : "scanner_rejected",
+    }
+  }
+  const code = brokerErrorCode(body)
+  const retryable = response.status === 429 || response.status >= 500
+  throw new ContentSourceScanError(code, retryable, readOutcomeForBrokerCode(code), bytesRead)
 }

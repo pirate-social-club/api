@@ -18,9 +18,11 @@ export const CONTENT_BLOB_COLUMNS = `
   content_blob_id, community_id, uploader_user_id, status, validation_profile,
   declared_filename, declared_mime_type, declared_size_bytes, declared_content_hash,
   detected_mime_type, verified_size_bytes, verified_content_hash, security_scan_state,
-  plaintext_retention_state, storage_ref, storage_provider, storage_bucket,
+  security_scan_profile, scanner_engine_version, scanner_signature_version,
+  security_scan_result_ref, security_scanned_at, plaintext_retention_state,
+  plaintext_purged_at, storage_ref, storage_provider, storage_bucket,
   storage_object_key, storage_endpoint, gateway_url, ipfs_cid, rejection_code,
-  created_at, updated_at
+  claim_kind, claim_ref, claimed_at, created_at, updated_at
 `
 
 export const CONTENT_UPLOAD_SESSION_COLUMNS = `
@@ -44,7 +46,13 @@ export function toContentBlobRow(row: unknown): ContentBlobRow {
     verified_size_bytes: numberOrNull(rowValue(row, "verified_size_bytes")),
     verified_content_hash: stringOrNull(rowValue(row, "verified_content_hash")),
     security_scan_state: requiredString(row, "security_scan_state") as ContentBlobSecurityScanState,
+    security_scan_profile: stringOrNull(rowValue(row, "security_scan_profile")),
+    scanner_engine_version: stringOrNull(rowValue(row, "scanner_engine_version")),
+    scanner_signature_version: stringOrNull(rowValue(row, "scanner_signature_version")),
+    security_scan_result_ref: stringOrNull(rowValue(row, "security_scan_result_ref")),
+    security_scanned_at: stringOrNull(rowValue(row, "security_scanned_at")),
     plaintext_retention_state: requiredString(row, "plaintext_retention_state") as ContentBlobPlaintextRetentionState,
+    plaintext_purged_at: stringOrNull(rowValue(row, "plaintext_purged_at")),
     storage_ref: requiredString(row, "storage_ref"),
     storage_provider: stringOrNull(rowValue(row, "storage_provider")),
     storage_bucket: stringOrNull(rowValue(row, "storage_bucket")),
@@ -53,6 +61,9 @@ export function toContentBlobRow(row: unknown): ContentBlobRow {
     gateway_url: stringOrNull(rowValue(row, "gateway_url")),
     ipfs_cid: stringOrNull(rowValue(row, "ipfs_cid")),
     rejection_code: stringOrNull(rowValue(row, "rejection_code")),
+    claim_kind: stringOrNull(rowValue(row, "claim_kind")) as ContentBlobRow["claim_kind"],
+    claim_ref: stringOrNull(rowValue(row, "claim_ref")),
+    claimed_at: stringOrNull(rowValue(row, "claimed_at")),
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }

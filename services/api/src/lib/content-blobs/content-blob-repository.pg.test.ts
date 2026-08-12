@@ -61,7 +61,13 @@ describe.skipIf(!RUN)("content blob repository (real Postgres)", () => {
         verified_size_bytes BIGINT,
         verified_content_hash TEXT,
         security_scan_state TEXT NOT NULL DEFAULT 'pending',
+        security_scan_profile TEXT,
+        scanner_engine_version TEXT,
+        scanner_signature_version TEXT,
+        security_scan_result_ref TEXT,
+        security_scanned_at TIMESTAMPTZ,
         plaintext_retention_state TEXT NOT NULL DEFAULT 'active',
+        plaintext_purged_at TIMESTAMPTZ,
         storage_ref TEXT NOT NULL UNIQUE,
         storage_provider TEXT,
         storage_bucket TEXT,
@@ -70,6 +76,9 @@ describe.skipIf(!RUN)("content blob repository (real Postgres)", () => {
         gateway_url TEXT,
         ipfs_cid TEXT,
         rejection_code TEXT,
+        claim_kind TEXT,
+        claim_ref TEXT,
+        claimed_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL
       );

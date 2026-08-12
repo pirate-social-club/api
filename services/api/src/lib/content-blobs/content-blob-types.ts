@@ -46,7 +46,13 @@ export type ContentBlobRow = {
   verified_size_bytes: number | null
   verified_content_hash: string | null
   security_scan_state: ContentBlobSecurityScanState
+  security_scan_profile: string | null
+  scanner_engine_version: string | null
+  scanner_signature_version: string | null
+  security_scan_result_ref: string | null
+  security_scanned_at: string | null
   plaintext_retention_state: ContentBlobPlaintextRetentionState
+  plaintext_purged_at: string | null
   storage_ref: string
   storage_provider: string | null
   storage_bucket: string | null
@@ -55,6 +61,9 @@ export type ContentBlobRow = {
   gateway_url: string | null
   ipfs_cid: string | null
   rejection_code: string | null
+  claim_kind: "asset_payload" | "song_artifact" | "deck_import" | null
+  claim_ref: string | null
+  claimed_at: string | null
   created_at: string
   updated_at: string
 }
