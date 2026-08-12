@@ -287,6 +287,22 @@ describe("sql migration helpers", () => {
     `)).toEqual([])
   })
 
+  test("rebuilds scanner releases when migration 0222 broadens revocation", () => {
+    const statements = toSqliteCompatibleStatements(`
+      ALTER TABLE content_security_scanner_releases
+        ADD CONSTRAINT content_security_scanner_release_lifecycle_check CHECK (
+          (status = 'staged' AND activated_at IS NULL AND retired_at IS NULL)
+          OR (status = 'active' AND activated_at IS NOT NULL AND retired_at IS NULL)
+          OR (status = 'retired' AND activated_at IS NOT NULL AND retired_at IS NOT NULL)
+          OR (status = 'revoked' AND retired_at IS NOT NULL)
+        );
+    `)
+
+    expect(statements).toHaveLength(5)
+    expect(statements.join("\n")).toContain("status = 'revoked' AND retired_at IS NOT NULL")
+    expect(statements.join("\n")).toContain("idx_content_security_scanner_releases_active_profile")
+  })
+
   test("skips PostgreSQL function-backed triggers for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       CREATE FUNCTION reject_term_changes()

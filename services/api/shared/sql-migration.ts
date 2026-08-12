@@ -317,6 +317,111 @@ const SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD = [
   `,
 ]
 
+// Migration 0222 broadens the release lifecycle so an operator can reject a
+// staged scanner build without fabricating an activation timestamp, and can
+// revoke a retired build after later evidence invalidates it. SQLite cannot
+// replace the inline 0219 CHECK, so rebuild the local mirror at the dialect
+// boundary while preserving the immutable release identity and active-profile
+// uniqueness enforced by the canonical Postgres schema.
+const SQLITE_CONTENT_SECURITY_SCANNER_RELEASE_LIFECYCLE_REBUILD = [
+  `
+    CREATE TABLE content_security_scanner_releases_sqlite_rebuild (
+      scanner_release_id TEXT PRIMARY KEY,
+      security_scan_profile TEXT NOT NULL
+        CHECK (length(trim(security_scan_profile)) > 0),
+      status TEXT NOT NULL CHECK (
+        status IN ('staged', 'active', 'retired', 'revoked')
+      ),
+      source_revision TEXT NOT NULL CHECK (length(trim(source_revision)) > 0),
+      runtime_lock_sha256 TEXT NOT NULL CHECK (
+        length(runtime_lock_sha256) = 64
+        AND runtime_lock_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      base_image_digest TEXT NOT NULL CHECK (
+        length(base_image_digest) = 71
+        AND substr(base_image_digest, 1, 7) = 'sha256:'
+        AND substr(base_image_digest, 8) NOT GLOB '*[^0-9a-f]*'
+      ),
+      engine_image_digest TEXT NOT NULL CHECK (
+        length(engine_image_digest) = 71
+        AND substr(engine_image_digest, 1, 7) = 'sha256:'
+        AND substr(engine_image_digest, 8) NOT GLOB '*[^0-9a-f]*'
+      ),
+      engine_version TEXT NOT NULL CHECK (length(trim(engine_version)) > 0),
+      signature_version TEXT NOT NULL CHECK (length(trim(signature_version)) > 0),
+      signature_date TEXT NOT NULL,
+      definition_digest TEXT NOT NULL CHECK (
+        length(definition_digest) = 64
+        AND definition_digest NOT GLOB '*[^0-9a-f]*'
+      ),
+      deployed_image_digest TEXT NOT NULL CHECK (
+        length(deployed_image_digest) = 71
+        AND substr(deployed_image_digest, 1, 7) = 'sha256:'
+        AND substr(deployed_image_digest, 8) NOT GLOB '*[^0-9a-f]*'
+      ),
+      sbom_ref TEXT NOT NULL CHECK (length(trim(sbom_ref)) > 0),
+      corpus_evidence_ref TEXT NOT NULL
+        CHECK (length(trim(corpus_evidence_ref)) > 0),
+      created_at TEXT NOT NULL,
+      activated_at TEXT,
+      retired_at TEXT,
+      CONSTRAINT content_security_scanner_release_lifecycle_check CHECK (
+        (status = 'staged' AND activated_at IS NULL AND retired_at IS NULL)
+        OR (status = 'active' AND activated_at IS NOT NULL AND retired_at IS NULL)
+        OR (status = 'retired' AND activated_at IS NOT NULL AND retired_at IS NOT NULL)
+        OR (status = 'revoked' AND retired_at IS NOT NULL)
+      )
+    );
+  `,
+  `
+    INSERT INTO content_security_scanner_releases_sqlite_rebuild (
+      scanner_release_id,
+      security_scan_profile,
+      status,
+      source_revision,
+      runtime_lock_sha256,
+      base_image_digest,
+      engine_image_digest,
+      engine_version,
+      signature_version,
+      signature_date,
+      definition_digest,
+      deployed_image_digest,
+      sbom_ref,
+      corpus_evidence_ref,
+      created_at,
+      activated_at,
+      retired_at
+    )
+    SELECT
+      scanner_release_id,
+      security_scan_profile,
+      status,
+      source_revision,
+      runtime_lock_sha256,
+      base_image_digest,
+      engine_image_digest,
+      engine_version,
+      signature_version,
+      signature_date,
+      definition_digest,
+      deployed_image_digest,
+      sbom_ref,
+      corpus_evidence_ref,
+      created_at,
+      activated_at,
+      retired_at
+    FROM content_security_scanner_releases;
+  `,
+  `DROP TABLE content_security_scanner_releases;`,
+  `ALTER TABLE content_security_scanner_releases_sqlite_rebuild RENAME TO content_security_scanner_releases;`,
+  `
+    CREATE UNIQUE INDEX idx_content_security_scanner_releases_active_profile
+      ON content_security_scanner_releases(security_scan_profile)
+      WHERE status = 'active';
+  `,
+]
+
 // Migration 0153 adds seven columns plus table-level CHECK/FK constraints in
 // one PostgreSQL ALTER TABLE. SQLite supports neither comma-separated ADD
 // COLUMN clauses nor ADD CONSTRAINT, so rebuild the table while preserving all
@@ -975,6 +1080,12 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
+    if (
+      normalized.includes("CONTENT_SECURITY_SCANNER_RELEASE_LIFECYCLE_CHECK")
+      && normalized.includes("ALTER TABLE CONTENT_SECURITY_SCANNER_RELEASES")
+    ) {
+      return SQLITE_CONTENT_SECURITY_SCANNER_RELEASE_LIFECYCLE_REBUILD
+    }
     if (
       normalized.includes("NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_CHECK")
       && normalized.includes("ALTER TABLE NAMESPACE_VERIFICATIONS")
