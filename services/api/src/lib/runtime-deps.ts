@@ -138,7 +138,8 @@ type RequestControlPlaneStore = {
 const requestControlPlaneStore = new AsyncLocalStorage<RequestControlPlaneStore>()
 
 export function isPostgresControlPlaneUrl(value: string): boolean {
-  return value.startsWith("postgres://") || value.startsWith("postgresql://")
+  const normalized = value.trim().toLowerCase()
+  return normalized.startsWith("postgres://") || normalized.startsWith("postgresql://")
 }
 
 export function resolveControlPlanePostgresConnectionString(env: Env, fallbackUrl: string): string {

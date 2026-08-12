@@ -673,7 +673,7 @@ jobs:
         working-directory: services/api
         run: bun run test:unit
 
-      - name: Run bookings production-path real-Postgres test
+      - name: Run production-path real-Postgres tests
         id: test-bookings-production-path
         # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated
         # fetch-types typecheck drift) failed, so this bookings coverage is observed on its own merits.
@@ -686,11 +686,13 @@ jobs:
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
           BOOKINGS_PG_CI_REQUIRED: "true"
           PUBLIC_ARTIFACT_GRANT_PG_CI_REQUIRED: "true"
+          HOME_FEED_PG_CI_REQUIRED: "true"
           BOOKINGS_PG_SENTINEL_PATH: "/tmp/host-config-repository-production-path-pg-suite-complete"
         run: |
           rm -f "$BOOKINGS_PG_SENTINEL_PATH"
           bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
           bun test src/lib/song-artifacts/public-song-artifact-grant-repository.pg.test.ts
+          bun test src/lib/feed/home-feed-service.production-path.pg.test.ts
           test "$(cat "$BOOKINGS_PG_SENTINEL_PATH")" = "host-config-repository-production-path-postgres-suite-complete"
 
       - name: Run API coverage report
