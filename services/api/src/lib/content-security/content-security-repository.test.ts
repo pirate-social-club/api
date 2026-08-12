@@ -116,6 +116,11 @@ describe("content security scan repository", () => {
   test("leases once and atomically projects clean immutable evidence", async () => {
     const { database, client, job } = await createAndLease()
     expect(job.attemptCount).toBe(1)
+    expect(job).toMatchObject({
+      validationProfile: "download_file_v1",
+      declaredFilename: null,
+      declaredMimeType: "text/csv",
+    })
     expect(await leaseContentSecurityScanJob({
       client,
       scanJobId: job.scanJobId,
@@ -140,6 +145,11 @@ describe("content security scan repository", () => {
         definitionDigest: DEFINITION,
         findingCode: null,
         errorCode: null,
+        formatPolicyVersion: "text-download-formats-v1",
+        formatOutcome: "allow",
+        detectedMimeType: "text/csv",
+        formatFindingCode: null,
+        formatErrorCode: null,
         durationMs: 24,
       },
       scanResultId: "csr_mismatched_fixture",
@@ -166,6 +176,11 @@ describe("content security scan repository", () => {
         definitionDigest: DEFINITION,
         findingCode: null,
         errorCode: null,
+        formatPolicyVersion: "text-download-formats-v1",
+        formatOutcome: "allow",
+        detectedMimeType: "text/csv",
+        formatFindingCode: null,
+        formatErrorCode: null,
         durationMs: 24,
       },
       scanResultId: "csr_result_fixture",
@@ -242,6 +257,51 @@ describe("content security scan repository", () => {
     }))
   })
 
+  test("rejects invalid format evidence without calling clean malware malicious", async () => {
+    const { database, client, job } = await createAndLease()
+    expect(await finishContentSecurityScanResult({
+      client,
+      job,
+      result: {
+        job: job.scanJobId,
+        contentSha256: HASH.slice(2),
+        sizeBytes: 12,
+        outcome: "clean",
+        policyVersion: "clamav-text-v1",
+        engineVersion: "1.5.4",
+        signatureVersion: "signatures-fixture",
+        signatureDate: NOW,
+        engineImageDigest: ENGINE_IMAGE,
+        definitionDigest: DEFINITION,
+        findingCode: null,
+        errorCode: null,
+        formatPolicyVersion: "text-download-formats-v1",
+        formatOutcome: "reject",
+        detectedMimeType: null,
+        formatFindingCode: "spreadsheet_formula_candidate",
+        formatErrorCode: null,
+        durationMs: 24,
+      },
+      scanResultId: "csr_format_rejected_fixture",
+      sourceReadAuditId: "cra_format_rejected_fixture",
+      readOutcome: "completed",
+      bytesRead: 12,
+      startedAt: "2026-08-13T00:00:01.000Z",
+      completedAt: "2026-08-13T00:00:02.000Z",
+    })).toBe("succeeded")
+
+    const blob = await database.client.execute({
+      sql: "SELECT status, security_scan_state, detected_mime_type, rejection_code FROM content_blobs WHERE content_blob_id = ?1",
+      args: [job.contentBlobId],
+    })
+    expect(blob.rows[0]).toEqual(expect.objectContaining({
+      status: "rejected",
+      security_scan_state: "clean",
+      detected_mime_type: null,
+      rejection_code: "content_format_rejected",
+    }))
+  })
+
   test("records a terminal scanner error without treating the blob as verified", async () => {
     const { database, client, job } = await createAndLease(1)
     expect(await finishContentSecurityScanResult({
@@ -260,6 +320,11 @@ describe("content security scan repository", () => {
         definitionDigest: DEFINITION,
         findingCode: null,
         errorCode: "engine_error",
+        formatPolicyVersion: "text-download-formats-v1",
+        formatOutcome: "allow",
+        detectedMimeType: "text/csv",
+        formatFindingCode: null,
+        formatErrorCode: null,
         durationMs: 24,
       },
       scanResultId: "csr_error_fixture",

@@ -303,6 +303,28 @@ describe("sql migration helpers", () => {
     expect(statements.join("\n")).toContain("idx_content_security_scanner_releases_active_profile")
   })
 
+  test("adds migration 0223 format evidence columns to the sqlite mirror", () => {
+    const statements = toSqliteCompatibleStatements(`
+      ALTER TABLE content_security_scan_results
+        ADD COLUMN content_format_policy_version TEXT,
+        ADD COLUMN content_format_outcome TEXT,
+        ADD COLUMN detected_mime_type TEXT,
+        ADD COLUMN content_format_finding_code TEXT,
+        ADD COLUMN content_format_error_code TEXT,
+        ADD CONSTRAINT content_security_scan_results_format_evidence_check CHECK (
+          content_format_outcome IN ('allow', 'reject', 'error')
+        );
+    `)
+
+    expect(statements).toEqual([
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_policy_version TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_outcome TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN detected_mime_type TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_finding_code TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_error_code TEXT;",
+    ])
+  })
+
   test("skips PostgreSQL function-backed triggers for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       CREATE FUNCTION reject_term_changes()

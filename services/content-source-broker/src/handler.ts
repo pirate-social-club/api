@@ -182,6 +182,12 @@ async function scanSourceObject(
   if (!isContentScanJobRef(jobRef)) {
     throw new BrokerRequestError(400, "invalid_request", "Invalid scan job reference")
   }
+  const validationProfile = requiredHeader(request, "x-content-validation-profile")
+  const declaredMimeType = requiredHeader(request, "x-content-declared-mime-type")
+  const declaredFilename = request.headers.get("x-content-declared-filename-base64url")?.trim() ?? ""
+  if (validationProfile.length > 64 || declaredMimeType.length > 255 || declaredFilename.length > 1368) {
+    throw new BrokerRequestError(400, "invalid_request", "Content policy metadata exceeds its limit")
+  }
   const scannerSecret = env.CONTENT_MALWARE_SCANNER_SHARED_SECRET?.trim() ?? ""
   if (!scannerSecret) {
     throw new BrokerRequestError(503, "scanner_not_configured", "Scanner authentication is not configured")
@@ -213,6 +219,9 @@ async function scanSourceObject(
           "x-content-scan-job": jobRef,
           "x-content-sha256": expected.sha256,
           "x-content-size": String(expected.sizeBytes),
+          "x-content-validation-profile": validationProfile,
+          "x-content-declared-mime-type": declaredMimeType,
+          ...(declaredFilename ? { "x-content-declared-filename-base64url": declaredFilename } : {}),
         },
         body: countedBody,
       },

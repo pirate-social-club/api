@@ -1079,6 +1079,23 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  // Migration 0223 adds nullable format-evidence columns and a PostgreSQL
+  // table CHECK in one statement. Existing SQLite fixture rows safely receive
+  // NULLs; PostgreSQL remains the authority for the cross-column constraint.
+  if (
+    normalized.startsWith("ALTER TABLE CONTENT_SECURITY_SCAN_RESULTS ")
+    && normalized.includes("ADD COLUMN CONTENT_FORMAT_POLICY_VERSION ")
+    && normalized.includes("ADD CONSTRAINT CONTENT_SECURITY_SCAN_RESULTS_FORMAT_EVIDENCE_CHECK")
+  ) {
+    return [
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_policy_version TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_outcome TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN detected_mime_type TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_finding_code TEXT;",
+      "ALTER TABLE content_security_scan_results ADD COLUMN content_format_error_code TEXT;",
+    ]
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
     if (
       normalized.includes("CONTENT_SECURITY_SCANNER_RELEASE_LIFECYCLE_CHECK")

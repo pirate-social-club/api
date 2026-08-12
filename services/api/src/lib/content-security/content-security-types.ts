@@ -42,6 +42,9 @@ export type ContentSecurityScanJob = {
   requestReason: ContentSecurityScanRequestReason
   expectedContentHash: string
   expectedSizeBytes: number
+  validationProfile: "download_file_v1" | "deck_import_csv_v1"
+  declaredFilename: string | null
+  declaredMimeType: string
   attemptCount: number
   maxAttempts: number
   leaseOwner: string
@@ -60,6 +63,11 @@ export type ContentSecurityScanResult = {
   definitionDigest: string
   findingCode: string | null
   errorCode: string | null
+  formatPolicyVersion: string
+  formatOutcome: "allow" | "reject" | "error"
+  detectedMimeType: string | null
+  formatFindingCode: string | null
+  formatErrorCode: string | null
   durationMs: number
 }
 

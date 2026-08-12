@@ -33,6 +33,9 @@ function toLeasedJob(row: unknown): ContentSecurityScanJob {
     requestReason: requiredString(row, "request_reason") as ContentSecurityScanJob["requestReason"],
     expectedContentHash: requiredString(row, "expected_content_hash"),
     expectedSizeBytes: requiredNumber(row, "expected_size_bytes"),
+    validationProfile: requiredString(row, "validation_profile") as ContentSecurityScanJob["validationProfile"],
+    declaredFilename: stringOrNull(rowValue(row, "declared_filename")),
+    declaredMimeType: requiredString(row, "declared_mime_type"),
     attemptCount: requiredNumber(row, "attempt_count"),
     maxAttempts: requiredNumber(row, "max_attempts"),
     leaseOwner: requiredString(row, "lease_owner"),
@@ -245,12 +248,14 @@ export async function leaseContentSecurityScanJob(input: {
         SELECT jobs.scan_job_id, jobs.content_blob_id, jobs.scan_sequence,
                jobs.request_reason, jobs.expected_content_hash,
                jobs.expected_size_bytes, jobs.attempt_count, jobs.max_attempts,
-               jobs.lease_owner, releases.scanner_release_id,
+               jobs.lease_owner, blobs.validation_profile, blobs.declared_filename,
+               blobs.declared_mime_type, releases.scanner_release_id,
                releases.security_scan_profile, releases.engine_version,
                releases.signature_version, releases.signature_date,
                releases.engine_image_digest, releases.definition_digest,
                releases.deployed_image_digest
         FROM content_security_scan_jobs AS jobs
+        JOIN content_blobs AS blobs ON blobs.content_blob_id = jobs.content_blob_id
         JOIN content_security_scanner_releases AS releases
           ON releases.scanner_release_id = jobs.scanner_release_id
         WHERE jobs.scan_job_id = ?1 AND jobs.lease_owner = ?2
@@ -378,10 +383,11 @@ export async function finishContentSecurityScanResult(input: {
     throw internalError("Content security scan result identity does not match its job")
   }
   return await withTransaction(input.client, "write", async (tx) => {
-    const retryable = input.result.outcome === "error" && input.job.attemptCount < input.job.maxAttempts
+    const processingError = input.result.outcome === "error" || input.result.formatOutcome === "error"
+    const retryable = processingError && input.job.attemptCount < input.job.maxAttempts
     const jobStatus = retryable
       ? "retryable_error"
-      : input.result.outcome === "error" ? "dead_lettered" : "succeeded"
+      : processingError ? "dead_lettered" : "succeeded"
     const jobUpdate = await tx.execute({
       sql: `
         UPDATE content_security_scan_jobs
@@ -398,7 +404,7 @@ export async function finishContentSecurityScanResult(input: {
       `,
       args: [
         jobStatus,
-        input.result.outcome === "error" ? input.result.errorCode : null,
+        processingError ? input.result.errorCode ?? input.result.formatErrorCode : null,
         input.completedAt,
         input.job.scanJobId,
         input.job.leaseOwner,
@@ -413,10 +419,13 @@ export async function finishContentSecurityScanResult(input: {
           attempt_number, content_hash, size_bytes, outcome, security_scan_profile,
           scanner_policy_version, engine_version, signature_version, signature_date,
           engine_image_digest, definition_digest, finding_code, error_code,
-          duration_ms, recorded_at
+          content_format_policy_version, content_format_outcome,
+          detected_mime_type, content_format_finding_code,
+          content_format_error_code, duration_ms, recorded_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
-          ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+          ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+          ?18, ?19, ?20, ?21, ?22, ?23, ?24
         )
       `,
       args: [
@@ -437,6 +446,11 @@ export async function finishContentSecurityScanResult(input: {
         input.result.definitionDigest,
         input.result.findingCode,
         input.result.errorCode,
+        input.result.formatPolicyVersion,
+        input.result.formatOutcome,
+        input.result.detectedMimeType,
+        input.result.formatFindingCode,
+        input.result.formatErrorCode,
         input.result.durationMs,
         input.completedAt,
       ],
@@ -445,10 +459,14 @@ export async function finishContentSecurityScanResult(input: {
 
     const blobStatus = input.result.outcome === "malicious"
       ? "rejected"
-      : input.result.outcome === "error" ? "failed" : "verifying"
+      : input.result.outcome === "error" || input.result.formatOutcome === "error"
+        ? "failed"
+        : input.result.formatOutcome === "reject" ? "rejected" : "verifying"
     const rejectionCode = input.result.outcome === "malicious"
       ? "malware_detected"
-      : input.result.outcome === "error" ? "security_scan_failed" : null
+      : input.result.outcome === "error" || input.result.formatOutcome === "error"
+        ? "security_scan_failed"
+        : input.result.formatOutcome === "reject" ? "content_format_rejected" : null
     const blobUpdate = await tx.execute({
       sql: `
         UPDATE content_blobs
@@ -460,10 +478,11 @@ export async function finishContentSecurityScanResult(input: {
             security_scan_result_ref = ?6,
             security_scanned_at = ?7,
             rejection_code = ?8,
+            detected_mime_type = ?9,
             updated_at = ?7
-        WHERE content_blob_id = ?9
-          AND verified_content_hash = ?10
-          AND verified_size_bytes = ?11
+        WHERE content_blob_id = ?10
+          AND verified_content_hash = ?11
+          AND verified_size_bytes = ?12
           AND status IN ('uploaded', 'verifying')
       `,
       args: [
@@ -475,6 +494,7 @@ export async function finishContentSecurityScanResult(input: {
         input.scanResultId,
         input.completedAt,
         rejectionCode,
+        input.result.formatOutcome === "allow" ? input.result.detectedMimeType : null,
         input.job.contentBlobId,
         input.job.expectedContentHash,
         input.job.expectedSizeBytes,
