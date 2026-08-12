@@ -127,6 +127,12 @@ import { reconcileSubmittedRewardPayouts } from "./lib/rewards/reward-cashout-se
 import { reconcileRewardCampaigns } from "./lib/rewards/reward-campaign-reconciler"
 import { consumeRewardQualificationWakeups } from "./lib/rewards/reward-qualification-wakeup-consumer"
 import type { RewardQualificationWakeup } from "./lib/rewards/reward-qualification-wakeup"
+import { consumeContentSecurityScans } from "./lib/content-security/content-security-consumer"
+import {
+  isContentSecurityScanQueueName,
+  redispatchStaleContentSecurityScanJobs,
+} from "./lib/content-security/content-security-queue"
+import type { ContentSecurityScanMessage } from "./lib/content-security/content-security-types"
 import { runWithRewardReconciliationLock } from "./lib/rewards/reward-reconciliation-lock"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
 import { reconcileConfirmingRewardCampaignFunding } from "./lib/rewards/reward-funding-confirmation-reconciler"
@@ -1938,11 +1944,21 @@ export function scheduledMinimumPriorityStarts(
     + (canRunHnsRootObserver ? 1 : 0)
 }
 
-const handler: ExportedHandler<Env, RewardQualificationWakeup> = {
+const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityScanMessage> = {
   fetch: fetchApi,
 
-  queue: (batch, env) => withRequestControlPlaneClients(() =>
-    consumeRewardQualificationWakeups({ batch, env })),
+  queue: (batch, env) => withRequestControlPlaneClients(() => {
+    if (isContentSecurityScanQueueName(batch.queue)) {
+      return consumeContentSecurityScans({
+        batch: batch as MessageBatch<ContentSecurityScanMessage>,
+        env,
+      })
+    }
+    return consumeRewardQualificationWakeups({
+      batch: batch as MessageBatch<RewardQualificationWakeup>,
+      env,
+    })
+  }),
 
   scheduled: (controller, env, ctx) => {
     if (shouldRunPublicReadCacheCanary(env, controller.scheduledTime || Date.now())) {
@@ -1984,6 +2000,26 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup> = {
       runStorySettlementCoordinatorWatchdog(env).catch((error) => {
         console.error("[scheduled] Story settlement coordinator watchdog crashed (fail-soft)", error)
       }),
+    )
+    ctx.waitUntil(
+      withRequestControlPlaneClients(() => redispatchStaleContentSecurityScanJobs({ env }))
+        .then((result) => {
+          if (result.enabled && (result.cancelled > 0 || result.selected > 0 || result.failed > 0)) {
+            console.info(JSON.stringify({
+              component: "content_security_scan",
+              operation: "redispatch",
+              ...result,
+            }))
+          }
+        })
+        .catch((error) => {
+          console.error(JSON.stringify({
+            component: "content_security_scan",
+            operation: "redispatch",
+            outcome: "failed",
+            error_class: error instanceof Error ? error.name : "unknown",
+          }))
+        }),
     )
     ctx.waitUntil(
       runRuntimeWalletFundingWatchdog(env).catch((error) => {

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { app } from "../../../src/index"
+import type { ContentSecurityScanMessage } from "../../../src/lib/content-security/content-security-types"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt } from "../communities/community-routes-test-helpers"
 import { createOpenSongCommunity } from "../song-artifacts/song-artifact-locked-test-helpers"
@@ -54,6 +55,40 @@ describe("content blob routes", () => {
     cleanup = ctx.cleanup
     ctx.env.CONTENT_BLOB_UPLOADS_ENABLED = "true"
     ctx.env.CONTENT_SOURCE_BROKER_SHARED_SECRET = "fixture-broker-secret"
+    ctx.env.CONTENT_SECURITY_SCAN_ENQUEUE_ENABLED = "true"
+    ctx.env.CONTENT_SECURITY_SCAN_PROFILE = "clamav-text-v1"
+    const scanMessages: ContentSecurityScanMessage[] = []
+    ctx.env.CONTENT_SECURITY_SCAN_QUEUE = {
+      metrics: async () => ({ backlogCount: 0, backlogBytes: 0 }),
+      send: async (message) => {
+        scanMessages.push(message)
+        return { metadata: { metrics: { backlogCount: 1, backlogBytes: 32 } } }
+      },
+      sendBatch: async () => ({ metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } } }),
+    }
+    const releaseNow = "2026-08-13T00:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO content_security_scanner_releases (
+          scanner_release_id, security_scan_profile, status, source_revision,
+          runtime_lock_sha256, base_image_digest, engine_image_digest, engine_version,
+          signature_version, signature_date, definition_digest, deployed_image_digest,
+          sbom_ref, corpus_evidence_ref, created_at, activated_at
+        ) VALUES (
+          'csr_route_fixture', 'clamav-text-v1', 'active', 'revision-fixture',
+          ?1, ?2, ?3, '1.5.4', 'signatures-fixture', ?4, ?5, ?6,
+          'sbom-fixture', 'corpus-fixture', ?4, ?4
+        )
+      `,
+      args: [
+        "a".repeat(64),
+        `sha256:${"b".repeat(64)}`,
+        `sha256:${"c".repeat(64)}`,
+        releaseNow,
+        "d".repeat(64),
+        `sha256:${"e".repeat(64)}`,
+      ],
+    })
     const session = await exchangeJwt(ctx.env, "content-blob-owner-fixture")
     const communityId = await createOpenSongCommunity(ctx.env, session.accessToken, "Content Blob Owner Fixture")
     ctx.env.CONTENT_BLOB_UPLOAD_COMMUNITY_IDS = communityId
@@ -131,6 +166,25 @@ describe("content blob routes", () => {
     expect(uploaded.verified_size_bytes).toBe(bytes.byteLength)
     expect(uploaded.verified_content_hash).toMatch(/^0x[a-f0-9]{64}$/)
     expect(uploaded.upload_url).toBeNull()
+    expect(scanMessages).toEqual([{
+      schema_version: 1,
+      scan_job_id: expect.stringMatching(/^csj_/),
+    }])
+    const scanJobs = await ctx.client.execute({
+      sql: `
+        SELECT scan_job_id, content_blob_id, status, expected_content_hash, expected_size_bytes
+        FROM content_security_scan_jobs
+        WHERE content_blob_id = ?1
+      `,
+      args: [created.id],
+    })
+    expect(scanJobs.rows).toEqual([expect.objectContaining({
+      scan_job_id: scanMessages[0]?.scan_job_id,
+      content_blob_id: created.id,
+      status: "queued",
+      expected_content_hash: uploaded.verified_content_hash,
+      expected_size_bytes: bytes.byteLength,
+    })])
 
     const readResponse = await app.request(
       `http://pirate.test/communities/${communityId}/content-blobs/${created.id}`,

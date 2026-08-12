@@ -3,6 +3,10 @@ import { conflictError, internalError, notFoundError } from "../errors"
 import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
 import {
+  insertContentSecurityScanJob,
+} from "../content-security/content-security-repository"
+import type { ContentSecurityScannerRelease } from "../content-security/content-security-types"
+import {
   CONTENT_BLOB_COLUMNS,
   CONTENT_UPLOAD_SESSION_COLUMNS,
   toContentBlobRow,
@@ -227,6 +231,11 @@ export async function markProxyContentBlobUploaded(input: {
   gatewayUrl: string | null
   ipfsCid: string | null
   completedAt: string
+  scanJob?: {
+    scanJobId: string
+    scannerRelease: ContentSecurityScannerRelease
+    maxAttempts: number
+  }
 }): Promise<OwnedContentBlob> {
   await withTransaction(input.client, "write", async (tx) => {
     const sessionResult = await tx.execute({
@@ -285,6 +294,19 @@ export async function markProxyContentBlobUploaded(input: {
     })
     if ((blobResult.rowsAffected ?? 0) !== 1) {
       throw conflictError("Content blob is not ready to complete")
+    }
+    if (input.scanJob) {
+      await insertContentSecurityScanJob({
+        executor: tx,
+        scanJobId: input.scanJob.scanJobId,
+        contentBlobId: input.contentBlobId,
+        scannerRelease: input.scanJob.scannerRelease,
+        requestReason: "initial_upload",
+        expectedContentHash: input.verifiedContentHash,
+        expectedSizeBytes: input.verifiedSizeBytes,
+        maxAttempts: input.scanJob.maxAttempts,
+        now: input.completedAt,
+      })
     }
   })
 
