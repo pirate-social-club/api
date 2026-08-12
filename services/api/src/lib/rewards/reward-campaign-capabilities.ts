@@ -2,6 +2,10 @@ import type { Env } from "../../env"
 import { decodePublicPostId } from "../public-ids"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
+import {
+  FLAT_REWARD_IDENTITY_PROVIDERS,
+  NATIONALITY_TIER_REWARD_IDENTITY_PROVIDERS,
+} from "./reward-campaign-provider-policy"
 
 export type RewardCampaignCapabilities = {
   enabled: boolean
@@ -14,6 +18,8 @@ export type RewardCampaignCapabilities = {
   default_duration_seconds: number
   eligible_activities: Array<"study" | "karaoke" | "either">
   nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview" | "enabled"
+  flat_identity_providers: Array<"self" | "zkpassport" | "very">
+  nationality_tier_identity_providers: Array<"self" | "zkpassport">
   chain_id: number
   token_address: string
 }
@@ -38,6 +44,8 @@ const DISABLED: RewardCampaignCapabilities = {
   default_duration_seconds: 0,
   eligible_activities: [],
   nationality_payout_tiers: "unavailable",
+  flat_identity_providers: [],
+  nationality_tier_identity_providers: [],
   chain_id: 0,
   token_address: "",
 }
@@ -76,6 +84,8 @@ export function getRewardCampaignCapabilities(env: Env, postId: string): RewardC
     // environment-wide provider remains relevant only to historical uniform
     // pools and must not hide Self/ZKPassport tier creation.
     nationality_payout_tiers: "enabled",
+    flat_identity_providers: [...FLAT_REWARD_IDENTITY_PROVIDERS],
+    nationality_tier_identity_providers: [...NATIONALITY_TIER_REWARD_IDENTITY_PROVIDERS],
     chain_id: config.chainId,
     token_address: config.tokenAddress,
     // Deliberately omits rpcUrl (may carry a provider credential) and

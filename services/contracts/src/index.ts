@@ -3179,6 +3179,8 @@ export type RewardCampaignCapabilities = {
   default_duration_seconds: number;
   eligible_activities: Array<RewardCampaignEligibleActivity>;
   nationality_payout_tiers: "unavailable" | "draft_only" | "binding_preview" | "enabled";
+  flat_identity_providers: Array<RewardCampaignIdentityProvider>;
+  nationality_tier_identity_providers: Array<RewardCampaignIdentityProvider>;
   chain_id: number;
   token_address: string;
 };
@@ -3216,7 +3218,7 @@ export type RewardCampaign = {
   post: string;
   song_artifact_bundle: string;
   song_owner: string;
-  reward_identity_provider: "self" | "zkpassport" | "very";
+  reward_identity_provider: RewardCampaignIdentityProvider;
   status: RewardCampaignStatus;
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
@@ -3247,7 +3249,7 @@ export type RewardCampaign = {
 export type RewardCampaignCreateRequest = {
   community: string;
   post: string;
-  reward_identity_provider: "self" | "zkpassport" | "very";
+  reward_identity_provider: RewardCampaignIdentityProvider;
   eligible_activity: RewardCampaignEligibleActivity;
   min_score_bps: number;
   daily_reward_cents: number;
@@ -3286,7 +3288,7 @@ export type RewardCampaignFundingQuote = {
 export type RewardCampaignFundingQuoteRequest = {
   amount_cents: number;
   idempotency_key: string;
-  reward_identity_provider?: "self" | "zkpassport" | "very";
+  reward_identity_provider?: RewardCampaignIdentityProvider;
 };
 
 export type RewardCampaignFundingConfirmRequest = {
@@ -4500,6 +4502,8 @@ type ResolvedBookingSlot = {
   priceCents: number;
   available: boolean;
 };
+
+type RewardCampaignIdentityProvider = "self" | "zkpassport" | "very";
 
 type RewardPendingVerificationSummary = {
   count: number;

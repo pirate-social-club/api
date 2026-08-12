@@ -41,6 +41,10 @@ import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
 import { normalizeIdentityCountryCode } from "../identity/country-codes"
 import { isLearnerVisibleRewardCampaign, learnerVisibleRewardCampaignSql } from "./reward-campaign-visibility"
+import {
+  isRewardCampaignIdentityProvider,
+  isRewardIdentityProviderAllowedForCampaign,
+} from "./reward-campaign-provider-policy"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -336,20 +340,11 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
   }
   const normalizedTiers = normalizePayoutTiers(input.payout_tiers)
   const rewardIdentityProvider = input.reward_identity_provider
-  if (
-    rewardIdentityProvider !== "self"
-    && rewardIdentityProvider !== "zkpassport"
-    && rewardIdentityProvider !== "very"
-  ) {
+  if (!isRewardCampaignIdentityProvider(rewardIdentityProvider)) {
     throw badRequestError("reward_identity_provider is invalid")
   }
-  const requiredProvider: RewardCampaignIdentityProvider = normalizedTiers.length > 0 ? "self" : "very"
-  if (rewardIdentityProvider !== requiredProvider) {
-    throw badRequestError(
-      normalizedTiers.length > 0
-        ? "Nationality bounties require Self passport verification"
-        : "Flat bounties require Very person verification",
-    )
+  if (!isRewardIdentityProviderAllowedForCampaign(rewardIdentityProvider, normalizedTiers.length > 0)) {
+    throw badRequestError("Nationality bounties require Self or ZKPassport verification")
   }
   const normalizedDailyReward = cents(input.daily_reward_cents, "daily_reward_cents", false)
   const normalizedDefaultAmount = input.default_amount_cents === undefined

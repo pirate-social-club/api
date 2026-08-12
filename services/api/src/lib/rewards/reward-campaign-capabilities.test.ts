@@ -39,6 +39,8 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.chain_id).toBe(84_532)
     expect(capabilities.eligible_activities).toEqual(["study", "karaoke", "either"])
     expect(capabilities.nationality_payout_tiers).toBe("enabled")
+    expect(capabilities.flat_identity_providers).toEqual(["self", "zkpassport", "very"])
+    expect(capabilities.nationality_tier_identity_providers).toEqual(["self", "zkpassport"])
   })
 
   test("reports tier funding from per-pool support, independent of the legacy environment provider", () => {
@@ -101,6 +103,8 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.chain_id).toBe(0)
     expect(capabilities.eligible_activities).toEqual([])
     expect(capabilities.nationality_payout_tiers).toBe("unavailable")
+    expect(capabilities.flat_identity_providers).toEqual([])
+    expect(capabilities.nationality_tier_identity_providers).toEqual([])
   })
 
   test("reports disabled rather than throwing when the configuration is invalid", () => {

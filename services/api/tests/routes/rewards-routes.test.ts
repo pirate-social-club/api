@@ -716,16 +716,6 @@ describe("rewards routes", () => {
         reward_period_cap_cents: 80,
         idempotency_key: "tier-very-provider",
       }),
-      campaignBody({
-        reward_identity_provider: "zkpassport",
-        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
-        reward_period_cap_cents: 80,
-        idempotency_key: "tier-zkpassport-provider",
-      }),
-      campaignBody({
-        reward_identity_provider: "self",
-        idempotency_key: "flat-self-provider",
-      }),
     ]
     for (const body of cases) {
       const response = await app.request("http://pirate.test/reward_campaigns", {
@@ -734,6 +724,39 @@ describe("rewards routes", () => {
         body: JSON.stringify(body),
       }, ctx.env)
       expect(response.status).toBe(400)
+    }
+  })
+
+  test("accepts every identity provider supported by the campaign shape", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-provider-selection")
+
+    const cases = [
+      { provider: "self", tiered: false },
+      { provider: "zkpassport", tiered: false },
+      { provider: "very", tiered: false },
+      { provider: "self", tiered: true },
+      { provider: "zkpassport", tiered: true },
+    ] as const
+    for (const [index, testCase] of cases.entries()) {
+      const post = `pst_reward_campaign_provider_${index}`
+      await seedCampaignSong(ctx, session.userId, post)
+      const response = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify(campaignBody({
+          post,
+          reward_identity_provider: testCase.provider,
+          ...(testCase.tiered ? {
+            payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+            reward_period_cap_cents: 80,
+          } : {}),
+          idempotency_key: `reward-campaign-provider-${index}`,
+        })),
+      }, ctx.env)
+      expect(response.status).toBe(201)
+      expect(await json(response)).toMatchObject({ reward_identity_provider: testCase.provider })
     }
   })
 
@@ -828,7 +851,7 @@ describe("rewards routes", () => {
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
       body: JSON.stringify({ ...createBody, reward_identity_provider: "zkpassport" }),
     }, ctx.env)
-    expect(changedProviderReplay.status).toBe(400)
+    expect(changedProviderReplay.status).toBe(409)
 
     const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
       method: "POST",

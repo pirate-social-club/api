@@ -18463,6 +18463,8 @@ const spec = {
           "default_duration_seconds",
           "eligible_activities",
           "nationality_payout_tiers",
+          "flat_identity_providers",
+          "nationality_tier_identity_providers",
           "chain_id",
           "token_address"
         ],
@@ -18512,6 +18514,18 @@ const spec = {
               "enabled"
             ]
           },
+          "flat_identity_providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
+            }
+          },
+          "nationality_tier_identity_providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
+            }
+          },
           "chain_id": {
             "type": "integer",
             "minimum": 1
@@ -18546,12 +18560,7 @@ const spec = {
             "type": "string"
           },
           "reward_identity_provider": {
-            "type": "string",
-            "enum": [
-              "self",
-              "zkpassport",
-              "very"
-            ]
+            "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
           },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
@@ -18745,12 +18754,7 @@ const spec = {
             "type": "string"
           },
           "reward_identity_provider": {
-            "type": "string",
-            "enum": [
-              "self",
-              "zkpassport",
-              "very"
-            ]
+            "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
           },
           "status": {
             "$ref": "#/components/schemas/RewardCampaignStatus"
@@ -19017,12 +19021,7 @@ const spec = {
             "type": "string"
           },
           "reward_identity_provider": {
-            "type": "string",
-            "enum": [
-              "self",
-              "zkpassport",
-              "very"
-            ]
+            "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
           }
         }
       },
@@ -24513,6 +24512,14 @@ const spec = {
           "study",
           "karaoke",
           "either"
+        ]
+      },
+      "RewardCampaignIdentityProvider": {
+        "type": "string",
+        "enum": [
+          "self",
+          "zkpassport",
+          "very"
         ]
       },
       "RewardCampaignPayoutTier": {
