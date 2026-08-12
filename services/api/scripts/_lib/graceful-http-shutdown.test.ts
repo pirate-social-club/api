@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { createGracefulHttpShutdownHandler } from "./graceful-http-shutdown"
+import {
+  createGracefulBunHttpShutdownHandler,
+  createGracefulHttpShutdownHandler,
+} from "./graceful-http-shutdown"
 
 function fakeServer(closeError?: Error) {
   let closeCalls = 0
@@ -97,5 +100,29 @@ describe("graceful HTTP shutdown", () => {
     expect(closeIdleConnectionsCalls).toBe(1)
     expect(exitCodes).toEqual([1])
     expect(errors).toEqual(["test service did not stop within 10ms; forcing exit"])
+  })
+})
+
+describe("graceful Bun HTTP shutdown", () => {
+  test("waits for Bun server stop before exiting cleanly", async () => {
+    const exits: number[] = []
+    let resolveStop: (() => void) | undefined
+    const server = {
+      stop: () => new Promise<void>((resolve) => {
+        resolveStop = resolve
+      }),
+    }
+    const shutdown = createGracefulBunHttpShutdownHandler(server, {
+      service: "scanner-fixture",
+      exit: (code) => exits.push(code),
+      log: () => undefined,
+      logError: () => undefined,
+    })
+
+    shutdown("SIGTERM")
+    expect(exits).toEqual([])
+    resolveStop?.()
+    await Promise.resolve()
+    expect(exits).toEqual([0])
   })
 })

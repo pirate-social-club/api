@@ -150,8 +150,38 @@ export function checkRuntimeImageShutdownEntrypoint(file, source) {
     : [`${file}: missing tini shutdown ENTRYPOINT`];
 }
 
+export function checkScannerImageSupplyChain(file, source) {
+  const failures = [];
+  const fromLines = source.split("\n").filter((line) => /^\s*FROM\s+/u.test(line));
+  if (fromLines.length < 2 || fromLines.some((line) => !line.includes("@sha256:"))) {
+    failures.push(`${file}: every base image must use an immutable sha256 digest`);
+  }
+  if (!/^\s*ARG CLAMAV_DEFINITION_DIGEST=[a-f0-9]{64}\s*$/mu.test(source)) {
+    failures.push(`${file}: missing pinned ClamAV definition digest`);
+  }
+  if (!/^\s*USER clamav\s*$/mu.test(source)) {
+    failures.push(`${file}: scanner must run as the clamav user`);
+  }
+  if (/\bfreshclam\b/u.test(source.replace(/^\s*#.*$/gmu, ""))) {
+    failures.push(`${file}: runtime definition updates are forbidden`);
+  }
+  return failures;
+}
+
+export function checkScannerContainerIsolation(file, source) {
+  const failures = [];
+  if (!/^\s*enableInternet\s*=\s*false\s*$/mu.test(source)) {
+    failures.push(`${file}: scanner container internet access must be disabled`);
+  }
+  if (!/^\s*sleepAfter\s*=\s*"30s"\s*$/mu.test(source)) {
+    failures.push(`${file}: scanner container must retain the 30-second idle timeout`);
+  }
+  return failures;
+}
+
 function checkRuntimeImageDockerfiles() {
   const dockerfiles = [
+    "services/api/Dockerfile.content-malware-scanner",
     "services/api/Dockerfile.song-preview",
     "services/api/Dockerfile.zkpassport-verifier",
   ];
@@ -160,8 +190,16 @@ function checkRuntimeImageDockerfiles() {
     return [
       ...checkRuntimeImageDockerfileContent(file, source),
       ...checkRuntimeImageShutdownEntrypoint(file, source),
+      ...(file.endsWith("Dockerfile.content-malware-scanner")
+        ? checkScannerImageSupplyChain(file, source)
+        : []),
     ];
   });
+  const scannerWorker = "services/content-malware-scanner-container/src/index.ts";
+  failures.push(...checkScannerContainerIsolation(
+    scannerWorker,
+    fs.readFileSync(path.join(repoRoot, scannerWorker), "utf8"),
+  ));
 
   return { label: "runtime-image-dockerfiles", failures };
 }

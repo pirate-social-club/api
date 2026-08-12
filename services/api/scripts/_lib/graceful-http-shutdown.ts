@@ -5,6 +5,10 @@ type ShutdownServer = {
   closeIdleConnections(): void
 }
 
+type BunShutdownServer = {
+  stop(closeActiveConnections?: boolean): Promise<void>
+}
+
 type GracefulHttpShutdownOptions = {
   service: string
   forceExitAfterMs?: number
@@ -54,6 +58,49 @@ export function installGracefulHttpShutdown(
   options: GracefulHttpShutdownOptions,
 ): void {
   const shutdown = createGracefulHttpShutdownHandler(server, options)
+  process.once("SIGTERM", shutdown)
+  process.once("SIGINT", shutdown)
+}
+
+export function createGracefulBunHttpShutdownHandler(
+  server: BunShutdownServer,
+  options: GracefulHttpShutdownOptions,
+): (signal: NodeJS.Signals) => void {
+  const exit = options.exit ?? ((code: number) => process.exit(code))
+  const log = options.log ?? console.log
+  const logError = options.logError ?? console.error
+  const forceExitAfterMs = options.forceExitAfterMs ?? DEFAULT_FORCE_EXIT_AFTER_MS
+  let shuttingDown = false
+
+  return (signal) => {
+    if (shuttingDown) return
+    shuttingDown = true
+    log(`${options.service} received ${signal}; shutting down`)
+
+    const forceExitTimer = setTimeout(() => {
+      logError(`${options.service} did not stop within ${forceExitAfterMs}ms; forcing exit`)
+      exit(1)
+    }, forceExitAfterMs)
+    forceExitTimer.unref()
+
+    void server.stop(false).then(() => {
+      clearTimeout(forceExitTimer)
+      log(`${options.service} stopped`)
+      exit(0)
+    }).catch((error: unknown) => {
+      clearTimeout(forceExitTimer)
+      const message = error instanceof Error ? error.message : "unknown error"
+      logError(`${options.service} shutdown failed: ${message}`)
+      exit(1)
+    })
+  }
+}
+
+export function installGracefulBunHttpShutdown(
+  server: BunShutdownServer,
+  options: GracefulHttpShutdownOptions,
+): void {
+  const shutdown = createGracefulBunHttpShutdownHandler(server, options)
   process.once("SIGTERM", shutdown)
   process.once("SIGINT", shutdown)
 }

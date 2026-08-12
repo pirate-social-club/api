@@ -14,6 +14,8 @@ on:
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
+      - "services/content-malware-scanner-container/**"
+      - "services/content-malware-scanner-runtime/**"
       - "services/contracts/**"
       - "services/dance-grader/**"
       - "services/shared/**"
@@ -39,6 +41,8 @@ on:
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
+      - "services/content-malware-scanner-container/**"
+      - "services/content-malware-scanner-runtime/**"
       - "services/contracts/**"
       - "services/dance-grader/**"
       - "services/shared/**"
@@ -651,6 +655,41 @@ jobs:
       - name: Audit song preview runtime dependencies
         working-directory: services/song-preview-runtime
         run: bun audit --audit-level=high
+
+      - name: Install content malware scanner container dependencies
+        working-directory: services/content-malware-scanner-container
+        run: bun install --frozen-lockfile
+
+      - name: Audit content malware scanner container dependencies
+        working-directory: services/content-malware-scanner-container
+        run: bun audit --audit-level=high
+
+      - name: Typecheck content malware scanner container
+        working-directory: services/content-malware-scanner-container
+        run: bun run check
+
+      - name: Test content malware scanner container
+        working-directory: services/content-malware-scanner-container
+        run: bun run test
+
+      - name: Install content malware scanner runtime dependencies
+        working-directory: services/content-malware-scanner-runtime
+        run: bun install --frozen-lockfile
+
+      - name: Audit content malware scanner runtime dependencies
+        working-directory: services/content-malware-scanner-runtime
+        run: bun audit --audit-level=high
+
+      - name: Typecheck content malware scanner runtime
+        working-directory: services/content-malware-scanner-runtime
+        run: bun run check
+
+      - name: Test content malware scanner runtime
+        working-directory: services/content-malware-scanner-runtime
+        run: bun run test
+
+      - name: Build and verify content malware scanner image
+        run: docker build --file services/api/Dockerfile.content-malware-scanner --tag content-malware-scanner:ci services
 
       - name: Install API dependencies
         working-directory: services/api

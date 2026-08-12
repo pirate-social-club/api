@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import {
   checkRuntimeImageDockerfileContent,
   checkRuntimeImageShutdownEntrypoint,
+  checkScannerContainerIsolation,
+  checkScannerImageSupplyChain,
 } from "./check-repo-hygiene.mjs";
 
 const FILE = "Dockerfile.fixture";
@@ -53,7 +55,11 @@ describe("runtime image Dockerfile guard: rejected forms", () => {
   });
 
   test("current production Dockerfiles pass", () => {
-    for (const file of ["services/api/Dockerfile.song-preview", "services/api/Dockerfile.zkpassport-verifier"]) {
+    for (const file of [
+      "services/api/Dockerfile.content-malware-scanner",
+      "services/api/Dockerfile.song-preview",
+      "services/api/Dockerfile.zkpassport-verifier",
+    ]) {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       expect(checkRuntimeImageDockerfileContent(file, source)).toEqual([]);
     }
@@ -76,9 +82,57 @@ describe("runtime image Dockerfile guard: graceful shutdown", () => {
   });
 
   test("current production Dockerfiles use tini", () => {
-    for (const file of ["services/api/Dockerfile.song-preview", "services/api/Dockerfile.zkpassport-verifier"]) {
+    for (const file of [
+      "services/api/Dockerfile.content-malware-scanner",
+      "services/api/Dockerfile.song-preview",
+      "services/api/Dockerfile.zkpassport-verifier",
+    ]) {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       expect(checkRuntimeImageShutdownEntrypoint(file, source)).toEqual([]);
     }
+  });
+});
+
+describe("scanner image supply-chain guard", () => {
+  const valid = `
+FROM runtime@sha256:${"1".repeat(64)} AS runtime
+FROM engine@sha256:${"2".repeat(64)}
+ARG CLAMAV_DEFINITION_DIGEST=${"3".repeat(64)}
+USER clamav
+`;
+
+  test("accepts digest-pinned non-root images", () => {
+    expect(checkScannerImageSupplyChain(FILE, valid)).toEqual([]);
+  });
+
+  test("rejects floating bases, mutable definitions, and root runtime", () => {
+    const failures = checkScannerImageSupplyChain(FILE, `
+FROM runtime:latest
+FROM engine:stable
+RUN freshclam
+`);
+    expect(failures).toHaveLength(4);
+  });
+
+  test("the production scanner Dockerfile passes", () => {
+    const file = "services/api/Dockerfile.content-malware-scanner";
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    expect(checkScannerImageSupplyChain(file, source)).toEqual([]);
+  });
+});
+
+describe("scanner container isolation guard", () => {
+  test("accepts no-egress, short-idle configuration", () => {
+    expect(checkScannerContainerIsolation(FILE, 'enableInternet = false\nsleepAfter = "30s"')).toEqual([]);
+  });
+
+  test("rejects internet access and a longer idle window", () => {
+    expect(checkScannerContainerIsolation(FILE, 'enableInternet = true\nsleepAfter = "10m"')).toHaveLength(2);
+  });
+
+  test("the production scanner worker passes", () => {
+    const file = "services/content-malware-scanner-container/src/index.ts";
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    expect(checkScannerContainerIsolation(file, source)).toEqual([]);
   });
 });
