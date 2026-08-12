@@ -521,6 +521,20 @@ async function applyStudyMigration(): Promise<void> {
       }
     }
   }
+  const clozeTables = await client.execute(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'song_study_unit_cloze'",
+  )
+  if (clozeTables.rows.length <= 0) {
+    const path = fileURLToPath(
+      new URL("../../../test-fixtures/db/community-template/migrations/1156_song_study_fill_blank.sql", import.meta.url),
+    )
+    const raw = await readFile(path, "utf8")
+    for (const statement of splitSqlStatements(raw)) {
+      for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+        await client.execute(sqliteStatement)
+      }
+    }
+  }
 }
 
 async function seedCommunity(input: { studyEnabled?: boolean } = {}): Promise<void> {
@@ -709,6 +723,66 @@ async function seedReadyPack(): Promise<void> {
     ]),
     NOW,
   ])
+}
+
+async function reachFillBlankExercise(idempotencyPrefix: string) {
+  const featureEnv = env({ SONG_STUDY_FILL_BLANK_ENABLED: "true" })
+  await seedSongPost()
+  await seedReadyPack()
+  const payload = await getPostStudyPayload({
+    actor: learnerActor,
+    communityId: COMMUNITY_ID,
+    communityRepository: repo,
+    env: featureEnv,
+    postId: POST_ID,
+    targetLanguage: "es",
+  })
+  let lesson = payload.lesson
+  if (!payload.session?.id || !lesson) throw new Error("fill-blank test session was not created")
+  let step = 0
+  while (lesson.next?.prompt.type !== "fill_blank") {
+    const next = lesson.next
+    const prompt = next?.prompt
+    if (!next || !prompt) throw new Error("fill-blank test session completed before enrichment")
+    if (prompt.type === "fill_blank") throw new Error("fill-blank loop did not terminate")
+    const selectedOptionId = prompt.type === "translation_choice"
+      ? String((await client!.execute({
+          sql: "SELECT correct_option_id FROM song_study_unit_localization WHERE unit_id = ?1 AND target_language = 'es'",
+          args: [/^stu:([^:]+):/u.exec(prompt.id)?.[1] ?? ""],
+        })).rows[0]?.correct_option_id)
+      : null
+    const result = await submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: next.presentation_number,
+        exercise_id: prompt.id,
+        idempotency_key: `${idempotencyPrefix}-advance-${step}`,
+        session_id: payload.session.id,
+        session_revision: lesson.session_revision,
+        ...(prompt.type === "translation_choice"
+          ? { selected_option_id: selectedOptionId!, type: "translation_choice" as const }
+          : { transcript: prompt.reference_text, type: "say_it_back" as const }),
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: featureEnv,
+      postId: POST_ID,
+    })
+    if (!result.lesson) throw new Error("fill-blank test transition omitted lesson")
+    lesson = result.lesson
+    step += 1
+  }
+  const prompt = lesson.next?.prompt
+  if (!prompt || prompt.type !== "fill_blank") throw new Error("fill-blank test did not reach enrichment")
+  const row = await client!.execute({
+    sql: "SELECT correct_placements_json FROM song_study_unit_cloze WHERE unit_id = ?1",
+    args: [/^stu:([^:]+):/u.exec(prompt.id)?.[1] ?? ""],
+  })
+  const correctPlacements = JSON.parse(String(row.rows[0]?.correct_placements_json)) as Array<{
+    blank_id: string
+    token_id: string
+  }>
+  return { correctPlacements, featureEnv, lesson, payload, prompt }
 }
 
 async function seedLongReadyPack(lineCount = 20): Promise<void> {
@@ -1338,6 +1412,166 @@ describe("post study service", () => {
 
     const attempts = await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt")
     expect(Number(attempts.rows[0]?.count ?? 0)).toBe(0)
+  })
+
+  test("grades correct fill-blank placements and replays the identical attempt", async () => {
+    const context = await reachFillBlankExercise("fill-correct")
+    const body = {
+      attempt_number: context.lesson.next!.presentation_number,
+      exercise_id: context.prompt.id,
+      idempotency_key: "fill-correct-submit",
+      placements: context.correctPlacements,
+      session_id: context.payload.session!.id!,
+      session_revision: context.lesson.session_revision,
+      type: "fill_blank" as const,
+    }
+    const input = {
+      actor: learnerActor,
+      body,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    }
+    const result = await submitPostStudyAttemptRaw(input)
+    const replay = await submitPostStudyAttemptRaw(input)
+
+    expect(result).toMatchObject({
+      correct_placements: context.correctPlacements,
+      exercise_id: context.prompt.id,
+      outcome: "correct",
+    })
+    expect(replay).toEqual(result)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'")).rows[0]?.count)).toBe(1)
+  })
+
+  test("keeps the fill-blank answer withheld on a retryable miss", async () => {
+    const context = await reachFillBlankExercise("fill-wrong")
+    const unused = new Set<string>()
+    const wrongPlacements = context.correctPlacements.map((placement) => {
+      const token = context.prompt.tokens.find((candidate) =>
+        candidate.id !== placement.token_id && !unused.has(candidate.id))!
+      unused.add(token.id)
+      return { blank_id: placement.blank_id, token_id: token.id }
+    })
+    const result = await submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: context.lesson.next!.presentation_number,
+        exercise_id: context.prompt.id,
+        idempotency_key: "fill-wrong-submit",
+        placements: wrongPlacements,
+        session_id: context.payload.session!.id!,
+        session_revision: context.lesson.session_revision,
+        type: "fill_blank",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    })
+
+    expect(result.outcome).toBe("incorrect")
+    expect(result.attempts_remaining).toBeGreaterThan(0)
+    expect(result.correct_placements).toBeUndefined()
+  })
+
+  test("rejects malformed fill-blank placements without writing an attempt", async () => {
+    const context = await reachFillBlankExercise("fill-invalid")
+    const submit = (placements: Array<{ blank_id: string; token_id: string }>) => submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: context.lesson.next!.presentation_number,
+        exercise_id: context.prompt.id,
+        idempotency_key: `fill-invalid-${placements.length}-${placements[0]?.token_id ?? "empty"}`,
+        placements,
+        session_id: context.payload.session!.id!,
+        session_revision: context.lesson.session_revision,
+        type: "fill_blank",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    })
+
+    await expect(submit([])).rejects.toMatchObject({ status: 400 })
+    await expect(submit(context.correctPlacements.map((placement) => ({
+      ...placement,
+      token_id: "unknown_token",
+    })))).rejects.toMatchObject({ status: 400 })
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'")).rows[0]?.count)).toBe(0)
+  })
+
+  test("rejects fill-blank submissions after the rollout flag is disabled", async () => {
+    const context = await reachFillBlankExercise("fill-kill-switch")
+    await expect(submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: context.lesson.next!.presentation_number,
+        exercise_id: context.prompt.id,
+        idempotency_key: "fill-kill-switch-submit",
+        placements: context.correctPlacements,
+        session_id: context.payload.session!.id!,
+        session_revision: context.lesson.session_revision,
+        type: "fill_blank",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_FILL_BLANK_ENABLED: "false" }),
+      postId: POST_ID,
+    })).rejects.toMatchObject({ status: 404 })
+  })
+
+  test("degrades malformed persisted fill-blank segments without a study 500", async () => {
+    const context = await reachFillBlankExercise("fill-malformed-segments")
+    const unitId = /^stu:([^:]+):/u.exec(context.prompt.id)?.[1] ?? ""
+    await client!.execute({
+      sql: "UPDATE song_study_unit_cloze SET segments_json = '{broken' WHERE unit_id = ?1",
+      args: [unitId],
+    })
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+    const fill = payload.exercises.find((exercise) => exercise.id === context.prompt.id)
+    expect(payload.access).toBe("ready")
+    expect(fill?.type).toBe("fill_blank")
+    expect(fill?.type === "fill_blank" ? fill.segments : null).toEqual([])
+  })
+
+  test("rejects idempotency-key reuse with different fill-blank placements", async () => {
+    const context = await reachFillBlankExercise("fill-idempotency")
+    const base = {
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    }
+    const body = {
+      attempt_number: context.lesson.next!.presentation_number,
+      exercise_id: context.prompt.id,
+      idempotency_key: "fill-idempotency-submit",
+      placements: context.correctPlacements,
+      session_id: context.payload.session!.id!,
+      session_revision: context.lesson.session_revision,
+      type: "fill_blank" as const,
+    }
+    await submitPostStudyAttemptRaw({ ...base, body })
+    const changed = context.correctPlacements.map((placement, index, placements) => ({
+      blank_id: placement.blank_id,
+      token_id: placements[(index + 1) % placements.length]!.token_id,
+    }))
+    await expect(submitPostStudyAttemptRaw({
+      ...base,
+      body: { ...body, placements: changed },
+    })).rejects.toMatchObject({ status: 409 })
   })
 
   test("returns locked without exercise content for a non-entitled locked song", async () => {
@@ -5022,6 +5256,25 @@ describe("post study same-language suppression", () => {
     expect(serialized).not.toContain("translation_choice")
     expect(serialized).not.toContain("SAME_LANG_TRANSLATION_MARKER")
     expect(serialized).not.toContain("SAME_LANG_DISTRACTOR_B")
+  })
+
+  test("does not create an unqualifiable fill-only same-language lesson", async () => {
+    await seedSongPost()
+    await seedSameLanguageUnits("en")
+    await client!.execute("UPDATE song_study_unit SET say_it_back_status = 'unavailable'")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_FILL_BLANK_ENABLED: "true" }),
+      postId: POST_ID,
+      targetLanguage: "en",
+    })
+
+    expect(payload.access).toBe("unavailable")
+    expect(payload.exercise_count).toBe(0)
+    expect(payload.exercises).toEqual([])
   })
 
   test("treats a regional source (en-US) as the same language as an en target", async () => {

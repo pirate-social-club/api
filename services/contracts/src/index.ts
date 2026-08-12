@@ -2496,6 +2496,27 @@ export type SongStudyExercise = ({
   first_outcome: "correct" | "incorrect" | "revealed" | null;
 } | {
   id: string;
+  type: "fill_blank";
+  line_id: string;
+  line_index: number;
+  prompt_text: string;
+  segments: Array<({
+    kind: "text";
+    text: string;
+  } | {
+    kind: "blank";
+    id: string;
+  })>;
+  tokens: Array<{
+    id: string;
+    text: string;
+  }>;
+  max_attempts: number;
+  presentation_count: number;
+  mastered: boolean;
+  first_outcome: "correct" | "incorrect" | "revealed" | null;
+} | {
+  id: string;
   type: "translation_choice";
   line_id: string;
   line_index: number;
@@ -2515,7 +2536,7 @@ export type SongStudyRenderSafeExercise = SongStudyExercise;
 
 export type SongStudyLessonNext = {
   exercise_id: string;
-  type: "say_it_back" | "translation_choice";
+  type: "say_it_back" | "translation_choice" | "fill_blank";
   is_reappearance: boolean;
   presentation_number: number;
   attempts_this_appearance: number;
@@ -2545,11 +2566,15 @@ export type SongStudyAttemptRequest = {
   idempotency_key: string;
   session_id: string;
   exercise_id: string;
-  type: "say_it_back" | "translation_choice";
+  type: "say_it_back" | "translation_choice" | "fill_blank";
   attempt_number: number;
   session_revision?: number;
   selected_option_id?: string;
   transcript?: string;
+  placements?: Array<{
+    blank_id: string;
+    token_id: string;
+  }>;
   transcription_language_code?: string;
   transcription_language_probability?: number;
   timezone?: string;
@@ -2561,6 +2586,10 @@ export type SongStudyAttemptResult = {
   outcome: "correct" | "incorrect" | "revealed" | "ungradable";
   attempts_remaining: number;
   correct_option_id?: string;
+  correct_placements?: Array<{
+    blank_id: string;
+    token_id: string;
+  }>;
   feedback?: {
     matched?: Array<string>;
     missing?: Array<string>;

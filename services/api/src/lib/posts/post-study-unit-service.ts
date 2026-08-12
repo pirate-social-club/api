@@ -171,6 +171,10 @@ async function deleteStudyUnits(client: Client, unitIds: string[]): Promise<void
     args: unitIds,
   })
   await client.execute({
+    sql: `DELETE FROM song_study_unit_cloze WHERE unit_id IN (${placeholders})`,
+    args: unitIds,
+  })
+  await client.execute({
     sql: `DELETE FROM song_study_unit WHERE id IN (${placeholders})`,
     args: unitIds,
   })

@@ -23,6 +23,7 @@ function readString(value: unknown): string | null {
 export function studyAttemptRequestFingerprint(input: {
   attemptNumber: number
   exerciseId: string
+  placements?: Array<{ blank_id: string; token_id: string }> | null
   selectedOptionId: string | null
   sessionId: string
   sessionRevision: number | null
@@ -34,6 +35,7 @@ export function studyAttemptRequestFingerprint(input: {
   return JSON.stringify({
     attempt_number: input.attemptNumber,
     exercise_id: input.exerciseId,
+    placements: input.placements ?? null,
     selected_option_id: input.selectedOptionId,
     session_id: input.sessionId,
     session_revision: input.sessionRevision,

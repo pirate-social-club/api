@@ -5,6 +5,7 @@ import {
   ensureStudySession,
   getStudySessionSummary,
   interleaveStudySessionCandidates,
+  selectStudySessionCandidates,
   recordStudySessionPresentation as recordStudySessionPresentationRaw,
   requireStudySessionForAttempt,
 } from "./post-study-session-service"
@@ -135,6 +136,19 @@ describe("server-owned study sessions", () => {
       "line_0_say", "line_1_say", "line_2_say",
       "line_0_translation", "line_1_translation", "line_2_translation",
     ])
+  })
+
+  test("does not let non-reward enrichment displace ten qualifying cards", () => {
+    const qualifying = Array.from({ length: 12 }, (_, index) => exercise(index))
+    const enrichment = Array.from({ length: 4 }, (_, index) => ({
+      ...exercise(index),
+      exercise_type: "fill_blank" as const,
+      id: `fill_${index}`,
+      qualifies_for_reward: false,
+    }))
+    const selected = selectStudySessionCandidates([...qualifying, ...enrichment])
+    expect(selected).toHaveLength(10)
+    expect(selected.every((candidate) => candidate.qualifies_for_reward !== false)).toBe(true)
   })
 
   test("serves every unseen card before returning an incorrect card", async () => {

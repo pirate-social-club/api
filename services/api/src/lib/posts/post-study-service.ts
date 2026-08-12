@@ -28,11 +28,18 @@ import {
   getExerciseForAttempt,
   getReviewState,
   readString,
+  readExerciseType,
   upsertReviewState,
   type ExerciseType,
   type StudyAttemptRow,
   type StudyExerciseRow,
 } from "./post-study-attempt-store"
+import {
+  ensureStudyClozeRows,
+  type StudyClozePlacement,
+  type StudyClozeSegment,
+  type StudyClozeToken,
+} from "./post-study-cloze-service"
 import { classifyStudyGenerationError } from "./post-study-generation-helpers"
 import {
   canReadPostForStudy,
@@ -144,6 +151,7 @@ type StudyExerciseAvailability = {
   canonicalExerciseRows: StudyExerciseRow[]
   exerciseCount: number
   includeSayItBack: boolean
+  includeFillBlank: boolean
   includeTranslation: boolean
   pack: StudyPack | null
   unavailableReason?: StudyUnavailableReason
@@ -188,6 +196,19 @@ type SongStudyExercise =
       question: string
       type: "translation_choice"
     }
+  | {
+      first_outcome: AttemptOutcome | null
+      id: string
+      line_id: string
+      line_index: number
+      mastered: boolean
+      max_attempts: number
+      presentation_count: number
+      prompt_text: string
+      segments: StudyClozeSegment[]
+      tokens: StudyClozeToken[]
+      type: "fill_blank"
+    }
 
 type SongStudySessionSummary = StudySessionSummary
 
@@ -218,6 +239,7 @@ export type SongStudyAttemptRequest = {
   idempotency_key?: unknown
   session_id?: unknown
   session_revision?: unknown
+  placements?: unknown
   selected_option_id?: unknown
   transcription_language_code?: unknown
   transcription_language_probability?: unknown
@@ -229,6 +251,7 @@ export type SongStudyAttemptRequest = {
 export type SongStudyAttemptResult = {
   attempts_remaining: number
   correct_option_id?: string
+  correct_placements?: StudyClozePlacement[]
   exercise_id: string
   feedback?: {
     matched: string[]
@@ -370,6 +393,11 @@ function dueReviewServingEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_DUE_REVIEW_SERVING_ENABLED, false)
 }
 
+function fillBlankEnabled(env: Env | null | undefined): boolean {
+  if (!env) return false
+  return envFlag(env.SONG_STUDY_FILL_BLANK_ENABLED, false)
+}
+
 function ungradableRerecordEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_UNGRADABLE_RERECORD_ENABLED, false)
 }
@@ -461,6 +489,7 @@ async function resolveCapabilityStudyUnits(input: {
             post_id: input.post.post_id,
             source_language: input.post.source_language ?? null,
           })
+      if (fillBlankEnabled(input.env)) await ensureStudyClozeRows(input.artifactWriteClient, input.post.post_id)
       await enqueueStudyGenerationIfNeeded({
         client: input.artifactWriteClient,
         communityId: input.post.community_id,
@@ -512,6 +541,7 @@ async function resolveStudyExerciseAvailability(input: {
   units: StudyUnitRow[]
   unitsPersisted: boolean
 }): Promise<StudyExerciseAvailability> {
+  const includeFillBlank = fillBlankEnabled(input.env)
   const includeTranslation = !isSameLanguageStudyPair(input.post.source_language, input.targetLanguage)
   const [includeSayItBack, pack] = await Promise.all([
     resolveHasActiveElevenLabsCredential({
@@ -533,6 +563,7 @@ async function resolveStudyExerciseAvailability(input: {
       canonicalExerciseRows: [],
       exerciseCount: 0,
       includeSayItBack,
+      includeFillBlank,
       includeTranslation,
       pack,
       unavailableReason: pack.unavailable_reason ?? "generation_failed",
@@ -544,6 +575,7 @@ async function resolveStudyExerciseAvailability(input: {
       client: input.client,
       dueReviewServing: false,
       includeSayItBack,
+      includeFillBlank,
       includeTranslation,
       now: nowIso(),
       postId: input.post.post_id,
@@ -555,12 +587,18 @@ async function resolveStudyExerciseAvailability(input: {
     ? input.units.length
     : 0
   const exerciseCount = canonicalExerciseResult.totalCount + virtualSayItBackCount
-  if (exerciseCount > 0) {
+  const hasQualifyingExercise = virtualSayItBackCount > 0
+    || canonicalExerciseRows.some((exercise) => exercise.qualifies_for_reward !== false)
+  // Fill blank is enrichment, not a replacement for the reward-bearing lesson.
+  // Keeping this boundary also preserves the pre-feature unavailable state for
+  // same-language songs without a speech provider.
+  if (exerciseCount > 0 && hasQualifyingExercise) {
     return {
       access: "ready",
       canonicalExerciseRows,
       exerciseCount,
       includeSayItBack,
+      includeFillBlank,
       includeTranslation,
       pack,
     }
@@ -572,6 +610,7 @@ async function resolveStudyExerciseAvailability(input: {
       canonicalExerciseRows,
       exerciseCount: 0,
       includeSayItBack,
+      includeFillBlank,
       includeTranslation,
       pack,
     }
@@ -582,6 +621,7 @@ async function resolveStudyExerciseAvailability(input: {
     canonicalExerciseRows,
     exerciseCount: 0,
     includeSayItBack,
+    includeFillBlank,
     includeTranslation,
     pack,
     unavailableReason: includeSayItBack ? "no_lyrics" : "missing_transcription_provider",
@@ -702,6 +742,54 @@ function orderOptionsForLearner(options: Array<{ id: string; text: string }>, se
   })
 }
 
+function parseClozeSegments(value: string | null): StudyClozeSegment[] {
+  if (!value) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(value) as unknown
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const segments: StudyClozeSegment[] = []
+  for (const item of parsed) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return []
+    const record = item as Record<string, unknown>
+    if (record.kind === "text") {
+      if (typeof record.text === "string") segments.push({ kind: "text", text: record.text })
+      continue
+    }
+    if (record.kind === "blank") {
+      const id = readString(record.id)
+      if (id) segments.push({ id, kind: "blank" })
+    }
+  }
+  return segments
+}
+
+function parseClozePlacements(value: unknown): StudyClozePlacement[] | null {
+  let parsed: unknown = value
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value) as unknown
+    } catch {
+      return null
+    }
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return null
+  const placements = parsed.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return []
+    const record = item as Record<string, unknown>
+    const blankId = readString(record.blank_id)
+    const tokenId = readString(record.token_id)
+    return blankId && tokenId ? [{ blank_id: blankId, token_id: tokenId }] : []
+  })
+  if (placements.length !== parsed.length) return null
+  if (new Set(placements.map((placement) => placement.blank_id)).size !== placements.length) return null
+  if (new Set(placements.map((placement) => placement.token_id)).size !== placements.length) return null
+  return placements.sort((left, right) => left.blank_id.localeCompare(right.blank_id, undefined, { numeric: true }))
+}
+
 function toExercise(
   row: StudyExerciseRow,
   learnerSeed: string,
@@ -730,7 +818,22 @@ function toExercise(
       type: "translation_choice",
     }
   }
-  return {
+  if (row.exercise_type === "fill_blank") {
+    return {
+      first_outcome: progress.firstOutcome,
+      id: row.id,
+      line_id: row.line_id,
+      line_index: row.line_index,
+      mastered: progress.mastered,
+      max_attempts: STUDY_SESSION_MAX_CARD_PRESENTATIONS,
+      presentation_count: progress.presentationCount,
+      prompt_text: row.prompt_text,
+      segments: parseClozeSegments(row.segments_json ?? null),
+      tokens: orderOptionsForLearner(parseOptions(row.tokens_json ?? null), `${learnerSeed}:${row.id}`),
+      type: "fill_blank",
+    }
+  }
+  if (row.exercise_type === "say_it_back") return {
     first_outcome: progress.firstOutcome,
     id: row.id,
     line_id: row.line_id,
@@ -743,6 +846,7 @@ function toExercise(
     translation_text: row.translation_text,
     type: "say_it_back",
   }
+  throw new Error(`Unsupported study exercise type: ${String(row.exercise_type)}`)
 }
 
 async function buildStudyLessonState(input: {
@@ -915,6 +1019,7 @@ export async function getPostStudyPayload(input: {
         unavailable_reason: "no_lyrics",
       }
     }
+    if (fillBlankEnabled(input.env)) await ensureStudyClozeRows(db.client, input.postId)
     await enqueueStudyGenerationIfNeeded({
       client: db.client,
       communityId: input.communityId,
@@ -934,15 +1039,16 @@ export async function getPostStudyPayload(input: {
       unitsPersisted: true,
     })
     const pack = availability.pack
-    if (availability.access === "unavailable" && availability.unavailableReason === "generation_failed") {
+    if (availability.access === "unavailable") {
       return {
         ...basePayload({ access: "unavailable", post, targetLanguage: pack?.target_language ?? targetLanguage }),
         source_language: pack?.source_language ?? post.source_language,
-        unavailable_reason: availability.unavailableReason,
+        unavailable_reason: availability.unavailableReason ?? "missing_transcription_provider",
       }
     }
 
     const includeSayItBack = availability.includeSayItBack
+    const includeFillBlank = availability.includeFillBlank
     const includeTranslation = availability.includeTranslation
     const translationStatus: SongStudyPayload["translation_status"] = !includeTranslation
       ? "not_applicable"
@@ -958,12 +1064,15 @@ export async function getPostStudyPayload(input: {
       client: db.client,
       dueReviewServing: reServeDueReviews,
       includeSayItBack,
+      includeFillBlank,
       includeTranslation,
       now,
       postId: input.postId,
       targetLanguage,
       userId: input.actor.userId,
-      limit: STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
+      limit: includeFillBlank
+        ? STUDY_SESSION_DISTINCT_EXERCISE_LIMIT * 3
+        : STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
     })
     const studySession = await ensureStudySession({
       available: canonicalExerciseRows,
@@ -982,6 +1091,7 @@ export async function getPostStudyPayload(input: {
       ? await getNextDueAt({
         client: db.client,
         includeSayItBack,
+        includeFillBlank,
         includeTranslation,
         now,
         postId: input.postId,
@@ -1145,7 +1255,12 @@ export async function runSongStudyGenerate(input: CommunityJobHandlerInput): Pro
 
 function resultFromAttempt(
   row: StudyAttemptRow,
-  exercise: { correct_option_id: string | null; exercise_type: ExerciseType; max_attempts: number },
+  exercise: {
+    correct_option_id: string | null
+    correct_placements_json?: string | null
+    exercise_type: ExerciseType
+    max_attempts: number
+  },
   lesson: SongStudyLessonState,
   session?: StudySessionSummary,
 ): SongStudyAttemptResult {
@@ -1154,6 +1269,9 @@ function resultFromAttempt(
     attempts_remaining: Math.max(0, STUDY_SESSION_MAX_CARD_PRESENTATIONS - row.attempt_number),
     ...(exercise.exercise_type === "translation_choice" && exercise.correct_option_id
       ? { correct_option_id: exercise.correct_option_id }
+      : {}),
+    ...(exercise.exercise_type === "fill_blank" && row.outcome !== "incorrect" && exercise.correct_placements_json
+      ? { correct_placements: parseClozePlacements(exercise.correct_placements_json) ?? undefined }
       : {}),
     exercise_id: row.exercise_id,
     ...(feedback ? { feedback } : {}),
@@ -1174,12 +1292,14 @@ function assertEquivalentIdempotentRetry(input: {
 }): void {
   const selectedOptionId = readString(input.body.selected_option_id)
   const transcript = readString(input.body.transcript)
+  const placements = parseClozePlacements(input.body.placements)
   const same = input.existing.exercise_id === input.exerciseId
     && input.existing.type === input.type
     && input.existing.attempt_number === input.attemptNumber
     && input.existing.study_session_id === readString(input.body.session_id)
     && input.existing.selected_option_id === selectedOptionId
     && input.existing.transcript === transcript
+    && input.existing.placements_json === (placements ? JSON.stringify(placements) : null)
   if (!same) {
     throw conflictError("idempotency_key was reused with a different study attempt payload")
   }
@@ -1223,6 +1343,7 @@ function projectStudyStreakCount(input: {
 
 async function getStudyAttemptProgressSnapshot(input: {
   client: ReadClient
+  includeFillBlank: boolean
   includeSayItBack: boolean
   includeTranslation: boolean
   now: string
@@ -1268,6 +1389,7 @@ async function getStudyAttemptProgressSnapshot(input: {
   const nextDueAt = await getNextDueAt({
     client: input.client,
     includeSayItBack: input.includeSayItBack,
+    includeFillBlank: input.includeFillBlank,
     includeTranslation: input.includeTranslation,
     now: input.now,
     postId: input.postId,
@@ -1298,9 +1420,10 @@ export async function submitPostStudyAttempt(input: {
   const idempotencyKey = readRequiredString(input.body.idempotency_key, "idempotency_key")
   const sessionId = readRequiredString(input.body.session_id, "session_id")
   const exerciseId = readRequiredString(input.body.exercise_id, "exercise_id")
-  const type = readRequiredString(input.body.type, "type") as ExerciseType
-  if (type !== "say_it_back" && type !== "translation_choice") {
-    throw badRequestError("type must be say_it_back or translation_choice")
+  const type = readExerciseType(readRequiredString(input.body.type, "type"))
+  if (!type) throw badRequestError("type must be say_it_back, translation_choice, or fill_blank")
+  if (type === "fill_blank" && !fillBlankEnabled(input.env)) {
+    throw notFoundError("Study exercise not found")
   }
   const attemptNumber = readAttemptNumber(input.body.attempt_number)
   const sessionRevision = readOptionalSessionRevision(input.body.session_revision)
@@ -1314,6 +1437,7 @@ export async function submitPostStudyAttempt(input: {
   const requestFingerprint = studyAttemptRequestFingerprint({
     attemptNumber,
     exerciseId,
+    placements: parseClozePlacements(input.body.placements),
     selectedOptionId: readString(input.body.selected_option_id),
     sessionId,
     sessionRevision: sessionRevision ?? null,
@@ -1453,6 +1577,7 @@ export async function submitPostStudyAttempt(input: {
         const progress = await getStudyAttemptProgressSnapshot({
           client: db.client,
           includeSayItBack: true,
+          includeFillBlank: fillBlankEnabled(input.env),
           includeTranslation: !isSameLanguageStudyPair(responsePost.source_language, finalizedSessionState.targetLanguage),
           now: snapshot.materializationContext?.completed_at ?? nowIso(),
           postId: input.postId,
@@ -1695,16 +1820,35 @@ export async function submitPostStudyAttempt(input: {
     let correct = false
     let selectedOptionId: string | null = null
     let transcript: string | null = null
+    let placements: StudyClozePlacement[] | null = null
     let feedback: SongStudyAttemptResult["feedback"] | undefined
     let rating: FsrsRating | null = null
     let voiceOverlap = 1
     if (type === "translation_choice") {
       selectedOptionId = readRequiredString(input.body.selected_option_id, "selected_option_id")
-      if (readString(input.body.transcript)) throw badRequestError("transcript is only valid for say_it_back")
+      if (readString(input.body.transcript) || input.body.placements != null) {
+        throw badRequestError("only selected_option_id is valid for translation_choice")
+      }
       correct = Boolean(exercise.correct_option_id && selectedOptionId === exercise.correct_option_id)
-    } else {
+    } else if (type === "fill_blank") {
+      if (readString(input.body.selected_option_id) || readString(input.body.transcript)) {
+        throw badRequestError("only placements is valid for fill_blank")
+      }
+      placements = parseClozePlacements(input.body.placements)
+      const expected = parseClozePlacements(exercise.correct_placements_json ?? null)
+      if (!placements || !expected || placements.length !== expected.length) {
+        throw badRequestError("placements must assign every fill_blank slot exactly once")
+      }
+      const allowedTokens = new Set(parseOptions(exercise.tokens_json ?? null).map((token) => token.id))
+      if (placements.some((placement) => !allowedTokens.has(placement.token_id))) {
+        throw badRequestError("placements contains an unknown token")
+      }
+      correct = JSON.stringify(placements) === JSON.stringify(expected)
+    } else if (type === "say_it_back") {
       transcript = readRequiredString(input.body.transcript, "transcript")
-      if (readString(input.body.selected_option_id)) throw badRequestError("selected_option_id is only valid for translation_choice")
+      if (readString(input.body.selected_option_id) || input.body.placements != null) {
+        throw badRequestError("only transcript is valid for say_it_back")
+      }
       const reference = exercise.reference_text || exercise.prompt_text
       const grade = gradeSayItBack({
         attemptNumber,
@@ -1716,6 +1860,8 @@ export async function submitPostStudyAttempt(input: {
       feedback = grade.feedback
       rating = grade.rating
       voiceOverlap = grade.overlap
+    } else {
+      throw badRequestError("Unsupported study exercise type")
     }
     const outcome: AttemptOutcome = correct
       ? "correct"
@@ -1776,6 +1922,9 @@ export async function submitPostStudyAttempt(input: {
         ...(!useUngradable && type === "translation_choice" && exercise.correct_option_id
           ? { correct_option_id: exercise.correct_option_id }
           : {}),
+        ...(!useUngradable && type === "fill_blank" && outcome !== "incorrect" && exercise.correct_placements_json
+          ? { correct_placements: parseClozePlacements(exercise.correct_placements_json) ?? undefined }
+          : {}),
         exercise_id: exercise.id,
         ...(feedback ? { feedback } : {}),
         lesson,
@@ -1820,13 +1969,13 @@ export async function submitPostStudyAttempt(input: {
           INSERT INTO song_study_attempt (
             id, user_id, post_id, exercise_id, line_id, exercise_type,
             target_language, study_pack_version, attempt_number, idempotency_key,
-            selected_option_id, transcript, outcome, feedback_json, fsrs_rating, created_at,
+            selected_option_id, transcript, placements_json, outcome, feedback_json, fsrs_rating, created_at,
             study_session_id, presentation_number
           )
-          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?9
+          SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?9
           WHERE EXISTS (
             SELECT 1 FROM song_study_attempt_response r
-            WHERE r.user_id = ?2 AND r.idempotency_key = ?10 AND r.commit_token = ?18
+            WHERE r.user_id = ?2 AND r.idempotency_key = ?10 AND r.commit_token = ?19
           )
         `,
         args: [
@@ -1842,6 +1991,7 @@ export async function submitPostStudyAttempt(input: {
           idempotencyKey,
           selectedOptionId,
           transcript,
+          placements ? JSON.stringify(placements) : null,
           outcome,
           feedback ? JSON.stringify(feedback) : null,
           rating,

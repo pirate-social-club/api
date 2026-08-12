@@ -75,7 +75,7 @@ const NEXT_PAGE_INDEX = 99
 const CALLBACK_PREFIX = "study"
 const LOCALIZATION_CHECK_PREFIX = "study-check"
 
-type ChatStudyActionKind = "select_song" | "answer_choice" | "await_voice" | "none"
+type ChatStudyActionKind = "select_song" | "answer_choice" | "answer_fill_blank" | "await_voice" | "none"
 
 type ChatStudySession = {
   actionKind: ChatStudyActionKind
@@ -153,6 +153,150 @@ function actionToken(): string {
 
 function callbackData(token: string, index: number): string {
   return `${CALLBACK_PREFIX}:${token}:${index}`
+}
+
+// Callback indexes are interpreted only inside answer_fill_blank actions. Keep
+// token indexes below 96 so these controls cannot shadow a word-bank token;
+// 99 is also used by song pagination, under the disjoint select_song action.
+const FILL_BLANK_UNDO_INDEX = 96
+const FILL_BLANK_CLEAR_INDEX = 97
+const FILL_BLANK_SUBMIT_INDEX = 99
+
+function fillBlankPayload(input: {
+  attemptNumber: number
+  exercise: Extract<TelegramStudyLessonNext["prompt"], { type: "fill_blank" }>
+  sessionId: string | null
+  sessionRevision: number | undefined
+  shared: Record<string, unknown>
+}): Record<string, unknown> {
+  if (input.exercise.tokens.length >= FILL_BLANK_UNDO_INDEX) {
+    throw new Error("Fill-blank token bank exceeds Telegram callback capacity")
+  }
+  return {
+    ...input.shared,
+    attemptNumber: input.attemptNumber,
+    blankIds: input.exercise.segments.flatMap((segment) => segment.kind === "blank" ? [segment.id] : []),
+    exerciseId: input.exercise.id,
+    promptText: input.exercise.prompt_text,
+    segments: input.exercise.segments,
+    selectedTokenIds: [],
+    sessionId: input.sessionId,
+    sessionRevision: input.sessionRevision,
+    tokenIds: input.exercise.tokens.map((token) => token.id),
+    tokenTexts: input.exercise.tokens.map((token) => token.text),
+  }
+}
+
+function refreshedFillBlankPayload(input: {
+  attemptNumber: number
+  exercise: Extract<TelegramStudyLessonNext["prompt"], { type: "fill_blank" }>
+  existing: Record<string, unknown>
+  progressLabel: string | null
+  sessionId: string | null
+  sessionRevision: number | undefined
+}): Record<string, unknown> {
+  const fresh = fillBlankPayload({
+    attemptNumber: input.attemptNumber,
+    exercise: input.exercise,
+    sessionId: input.sessionId,
+    sessionRevision: input.sessionRevision,
+    shared: input.existing,
+  })
+  const tokenIds = new Set(input.exercise.tokens.map((token) => token.id))
+  const blankCount = input.exercise.segments.filter((segment) => segment.kind === "blank").length
+  const selectedTokenIds = Array.isArray(input.existing.selectedTokenIds)
+    ? input.existing.selectedTokenIds
+        .filter((value): value is string => typeof value === "string" && tokenIds.has(value))
+        .slice(0, blankCount)
+    : []
+  return { ...fresh, progressLabel: input.progressLabel, selectedTokenIds }
+}
+
+function fillBlankText(payload: Record<string, unknown>): string {
+  const segments = Array.isArray(payload.segments) ? payload.segments : []
+  const tokenIds = Array.isArray(payload.tokenIds) ? payload.tokenIds.filter((value): value is string => typeof value === "string") : []
+  const tokenTexts = Array.isArray(payload.tokenTexts) ? payload.tokenTexts.filter((value): value is string => typeof value === "string") : []
+  const selected = Array.isArray(payload.selectedTokenIds)
+    ? payload.selectedTokenIds.filter((value): value is string => typeof value === "string")
+    : []
+  let blankIndex = 0
+  return segments.map((segment) => {
+    if (!segment || typeof segment !== "object" || Array.isArray(segment)) return ""
+    const record = segment as Record<string, unknown>
+    if (record.kind === "text") return typeof record.text === "string" ? record.text : ""
+    if (record.kind !== "blank") return ""
+    const tokenId = selected[blankIndex++]
+    const tokenText = tokenId ? tokenTexts[tokenIds.indexOf(tokenId)] : null
+    return tokenText ? `【${tokenText}】` : `【${String(blankIndex)}】`
+  }).join("")
+}
+
+function fillBlankMarkup(payload: Record<string, unknown>, token: string) {
+  const tokenIds = Array.isArray(payload.tokenIds) ? payload.tokenIds.filter((value): value is string => typeof value === "string") : []
+  const tokenTexts = Array.isArray(payload.tokenTexts) ? payload.tokenTexts.filter((value): value is string => typeof value === "string") : []
+  const selected = new Set(Array.isArray(payload.selectedTokenIds)
+    ? payload.selectedTokenIds.filter((value): value is string => typeof value === "string")
+    : [])
+  const available = tokenIds.flatMap((id, index) => selected.has(id) ? [] : [{ id, index, text: tokenTexts[index] ?? "" }])
+  const rows: Array<Array<{ callback_data: string; text: string }>> = []
+  for (let index = 0; index < available.length; index += 3) {
+    rows.push(available.slice(index, index + 3).map((item) => ({
+      callback_data: callbackData(token, item.index),
+      text: item.text.slice(0, 40),
+    })))
+  }
+  rows.push([
+    { callback_data: callbackData(token, FILL_BLANK_UNDO_INDEX), text: "↩" },
+    { callback_data: callbackData(token, FILL_BLANK_CLEAR_INDEX), text: "⌫" },
+    ...(selected.size === (Array.isArray(payload.blankIds) ? payload.blankIds.length : 0)
+      ? [{ callback_data: callbackData(token, FILL_BLANK_SUBMIT_INDEX), text: "✓" }]
+      : []),
+  ])
+  return { inline_keyboard: rows }
+}
+
+function updatedFillBlankSelection(
+  payload: Record<string, unknown>,
+  callbackIndex: number,
+): string[] {
+  const tokenIds = Array.isArray(payload.tokenIds)
+    ? payload.tokenIds.filter((value): value is string => typeof value === "string")
+    : []
+  const blankCount = Array.isArray(payload.blankIds) ? payload.blankIds.length : 0
+  const selected = Array.isArray(payload.selectedTokenIds)
+    ? payload.selectedTokenIds.filter((value): value is string => typeof value === "string")
+    : []
+  if (callbackIndex === FILL_BLANK_UNDO_INDEX) return selected.slice(0, -1)
+  if (callbackIndex === FILL_BLANK_CLEAR_INDEX) return []
+  if (callbackIndex === FILL_BLANK_SUBMIT_INDEX) return selected
+  const tokenId = tokenIds[callbackIndex]
+  return tokenId && !selected.includes(tokenId) && selected.length < blankCount
+    ? [...selected, tokenId]
+    : selected
+}
+
+function fillBlankPlacements(payload: Record<string, unknown>): Array<{ blank_id: string; token_id: string }> | null {
+  const blankIds = Array.isArray(payload.blankIds)
+    ? payload.blankIds.filter((value): value is string => typeof value === "string")
+    : []
+  const selected = Array.isArray(payload.selectedTokenIds)
+    ? payload.selectedTokenIds.filter((value): value is string => typeof value === "string")
+    : []
+  return blankIds.length > 0 && selected.length === blankIds.length
+    ? blankIds.map((blankId, index) => ({ blank_id: blankId, token_id: selected[index]! }))
+    : null
+}
+
+export const __telegramStudyFillBlankTestHooks = {
+  clearIndex: FILL_BLANK_CLEAR_INDEX,
+  fillBlankMarkup,
+  fillBlankPlacements,
+  fillBlankPayload,
+  fillBlankText,
+  refreshedFillBlankPayload,
+  submitIndex: FILL_BLANK_SUBMIT_INDEX,
+  undoIndex: FILL_BLANK_UNDO_INDEX,
+  updatedFillBlankSelection,
 }
 
 function localizationCheckData(sessionId: string): string {
@@ -1066,6 +1210,40 @@ async function presentNextExercise(input: {
     await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: input.session.id })
     return
   }
+  if (exercise.type === "fill_blank") {
+    const payload = fillBlankPayload({
+      attemptNumber: next.presentation_number,
+      exercise,
+      sessionId: studySessionId,
+      sessionRevision: lesson?.session_revision,
+      shared: {
+        deliveryMode: isStudyDeliveryMode(input.session.actionPayload.deliveryMode) ? input.session.actionPayload.deliveryMode : "text",
+        localizationNoticeSent,
+        progressLabel,
+        songTitle: study?.title ?? input.session.actionPayload.songTitle,
+      },
+    })
+    const token = await updateSessionAction({
+      actionKind: "answer_fill_blank",
+      actionPayload: payload,
+      env: input.env,
+      exerciseId: exercise.id,
+      session: input.session,
+      studySessionId,
+    })
+    const sent = await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: [progressLabel, exercise.prompt_text, fillBlankText(payload)]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
+      reply_markup: fillBlankMarkup(payload, token),
+    })
+    await recordSessionPromptDelivery({ actionToken: token, env: input.env, messageId: sent.message_id, sessionId: input.session.id })
+    return
+  }
+  if (exercise.type !== "say_it_back") {
+    throw new Error("Unsupported Telegram study exercise type")
+  }
   const nextToken = actionToken()
   await createTelegramChatStudyVoiceIntent({
     actor,
@@ -1251,7 +1429,7 @@ async function resendActiveTelegramStudyExercise(input: {
         AND telegram_community_bot_id = ?2
         AND telegram_user_id = ?3
         AND status = 'active'
-        AND action_kind IN ('answer_choice', 'await_voice')
+        AND action_kind IN ('answer_choice', 'answer_fill_blank', 'await_voice')
         AND expires_at > ?4
       LIMIT 1
     `,
@@ -1272,11 +1450,13 @@ async function resendActiveTelegramStudyExercise(input: {
   const next = study.lesson?.next
   const progressLabel = study.lesson ? telegramStudyProgressLabel(study.lesson, copy) : null
   if (!next) return false
-  if (session.actionKind !== "answer_choice" && session.actionKind !== "await_voice") return false
+  if (session.actionKind !== "answer_choice" && session.actionKind !== "answer_fill_blank" && session.actionKind !== "await_voice") return false
   const translationPrompt = next.prompt.type === "translation_choice" ? next.prompt : null
+  const fillBlankPrompt = next.prompt.type === "fill_blank" ? next.prompt : null
   const sayItBackPrompt = next.prompt.type === "say_it_back" ? next.prompt : null
   const retryFeedback = stringOrNull(session.actionPayload.retryFeedback)
   if (session.actionKind === "answer_choice" && (next.type !== "translation_choice" || !translationPrompt)) return false
+  if (session.actionKind === "answer_fill_blank" && (next.type !== "fill_blank" || !fillBlankPrompt)) return false
   if (session.actionKind === "await_voice" && (next.type !== "say_it_back" || !sayItBackPrompt)) return false
   const refreshedPayload = session.actionKind === "answer_choice"
     ? {
@@ -1291,7 +1471,16 @@ async function resendActiveTelegramStudyExercise(input: {
         ...(study.title ? { songTitle: study.title } : {}),
         progressLabel,
       }
-    : {
+    : session.actionKind === "answer_fill_blank"
+      ? refreshedFillBlankPayload({
+          attemptNumber: next.presentation_number,
+          exercise: fillBlankPrompt!,
+          existing: session.actionPayload,
+          progressLabel,
+          sessionId: study.session?.id ?? stringOrNull(session.actionPayload.sessionId),
+          sessionRevision: study.lesson?.session_revision,
+        })
+      : {
         ...session.actionPayload,
         exerciseId: next.exercise_id,
         referenceText: sayItBackPrompt?.reference_text ?? "",
@@ -1332,6 +1521,17 @@ async function resendActiveTelegramStudyExercise(input: {
           }]),
         ],
       },
+    })
+    await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
+    return true
+  }
+  if (session.actionKind === "answer_fill_blank") {
+    const sent = await sendTelegramMessage(input.bot, {
+      chat_id: input.chatId,
+      text: [progressLabel, fillBlankPrompt!.prompt_text, fillBlankText(refreshedPayload)]
+        .filter((value): value is string => Boolean(value))
+        .join("\n\n"),
+      reply_markup: fillBlankMarkup(refreshedPayload, session.actionToken),
     })
     await recordSessionPromptDelivery({ actionToken: session.actionToken, env: input.env, messageId: sent.message_id, sessionId: session.id })
     return true
@@ -1878,6 +2078,89 @@ export async function handleTelegramChatStudyCallback(input: {
         session,
         suppressFeedback: true,
       })
+    } else if (session.actionKind === "answer_fill_blank") {
+      let selectedTokenIds = Array.isArray(session.actionPayload.selectedTokenIds)
+        ? session.actionPayload.selectedTokenIds.filter((value): value is string => typeof value === "string")
+        : []
+      const exerciseId = stringOrNull(session.actionPayload.exerciseId)
+      const studySessionId = stringOrNull(session.actionPayload.sessionId)
+      const attemptNumber = Number(session.actionPayload.attemptNumber)
+      const callbackMessageId = Number(input.callback.message?.message_id)
+      if (!session.postId || !exerciseId || !studySessionId || !Number.isSafeInteger(attemptNumber)) {
+        throw new Error("Study answer is no longer available")
+      }
+      if (parsed.index === FILL_BLANK_SUBMIT_INDEX) {
+        const placements = fillBlankPlacements(session.actionPayload)
+        if (!placements) {
+          await finishCallback({ callbackQueryId, env: input.env })
+          return true
+        }
+        const result = await submitPostStudyAttempt({
+          actor: { authType: "user", userId: session.userId },
+          body: {
+            attempt_number: attemptNumber,
+            exercise_id: exerciseId,
+            idempotency_key: `telegram-chat-study:${session.id}:${session.actionToken}`,
+            placements,
+            session_id: studySessionId,
+            ...(Number.isSafeInteger(Number(session.actionPayload.sessionRevision))
+              ? { session_revision: Number(session.actionPayload.sessionRevision) }
+              : {}),
+            type: "fill_blank",
+          },
+          communityId: session.communityId,
+          communityRepository: getCommunityRepository(input.env),
+          env: input.env,
+          postId: session.postId,
+        })
+        if (Number.isSafeInteger(callbackMessageId)) {
+          const corrected = result.correct_placements
+            ? { ...session.actionPayload, selectedTokenIds: result.correct_placements.map((placement) => placement.token_id) }
+            : session.actionPayload
+          const verdict = result.outcome === "correct" ? "✅" : "❌"
+          await editTelegramMessageText(input.bot, {
+            chat_id: chatId,
+            message_id: callbackMessageId,
+            text: [stringOrNull(session.actionPayload.promptText), fillBlankText(corrected), verdict]
+              .filter((value): value is string => Boolean(value))
+              .join("\n\n"),
+            reply_markup: { inline_keyboard: [] },
+          }).catch(() => undefined)
+        }
+        await presentNextExercise({
+          bot: input.bot,
+          chatId,
+          env: input.env,
+          lastResult: result,
+          session,
+          suppressFeedback: true,
+        })
+      } else {
+        selectedTokenIds = updatedFillBlankSelection(session.actionPayload, parsed.index)
+        const actionPayload = { ...session.actionPayload, selectedTokenIds }
+        const token = await updateSessionAction({
+          actionKind: "answer_fill_blank",
+          actionPayload,
+          env: input.env,
+          exerciseId,
+          session,
+          studySessionId,
+        })
+        if (Number.isSafeInteger(callbackMessageId)) {
+          await editTelegramMessageText(input.bot, {
+            chat_id: chatId,
+            message_id: callbackMessageId,
+            text: [
+              stringOrNull(session.actionPayload.progressLabel),
+              stringOrNull(session.actionPayload.promptText),
+              fillBlankText(actionPayload),
+            ]
+              .filter((value): value is string => Boolean(value))
+              .join("\n\n"),
+            reply_markup: fillBlankMarkup(actionPayload, token),
+          }).catch(() => undefined)
+        }
+      }
     }
     await finishCallback({ callbackQueryId, env: input.env })
   } catch (error) {
