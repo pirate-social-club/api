@@ -3,6 +3,7 @@
 import type { Env } from "../src/env"
 import type { DbExecutor } from "../src/lib/db-helpers"
 import type { QueryResultRow } from "../src/lib/sql-client"
+import { writeFile } from "node:fs/promises"
 
 /**
  * Read-only control-plane half of the HNS zone GC dry run.
@@ -235,6 +236,6 @@ if (import.meta.main) {
   const { withStandaloneControlPlaneClient } = await import("../src/lib/runtime-deps")
   const inventory = await withStandaloneControlPlaneClient(env, (client) =>
     readHnsZoneControlPlaneInventory(client))
-  await Bun.write(outputPath, `${JSON.stringify(inventory, null, 2)}\n`)
+  await writeFile(outputPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8")
   console.log(JSON.stringify({ output: outputPath, roots: inventory.roots.length, read_only: true }, null, 2))
 }
