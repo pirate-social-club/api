@@ -64,9 +64,36 @@ describe("runReconciliationSweep (step 5 part 2)", () => {
 
   test("resets + releases a never-loaded binding and marks routing degraded", async () => {
     const calls: string[] = []
-    const r = await runReconciliationSweep(deps({ calls }))
+    const releaseArgs: unknown[] = []
+    const r = await runReconciliationSweep(deps({
+      calls,
+      shardRelease: async (...args) => {
+        calls.push("release")
+        releaseArgs.push(...args)
+        return { ok: true, value: { released: true } }
+      },
+    }))
     expect(r).toEqual({ scanned: 1, advanced: 0, released: 1, orphanReleased: 0, errors: [] })
     expect(calls).toEqual(["reset", "release", "degraded"])
+    expect(releaseArgs).toEqual(["DB_CMTY_1", "cmt_1", 1])
+  })
+
+  test("does not reset or release when a stuck route points at a reallocated pool row", async () => {
+    const calls: string[] = []
+    const r = await runReconciliationSweep(deps({
+      calls,
+      shardGetPoolRow: async () => ({
+        ok: true,
+        value: { row: { ...poolRow({ lastLoadedAt: null }), communityId: "cmt_new_owner", version: 4 } },
+      }),
+    }))
+    expect(r.released).toBe(0)
+    expect(r.errors).toEqual([{
+      communityId: "cmt_1",
+      bindingName: "DB_CMTY_1",
+      reason: "pool allocation changed for stuck binding",
+    }])
+    expect(calls).toEqual([])
   })
 
   test("RACE: reset refused with shard_binding_loaded → advances instead of releasing", async () => {
@@ -129,9 +156,10 @@ describe("runReconciliationSweep (step 5 part 2)", () => {
         // first loaded (advance), second never-loaded (release)
         shardGetPoolRow: async (binding) => {
           n++
+          const communityId = binding === "DB_CMTY_1" ? "cmt_1" : "cmt_2"
           return {
             ok: true,
-            value: { row: poolRow({ lastLoadedAt: binding === "DB_CMTY_1" ? "t1" : null }) },
+            value: { row: { ...poolRow({ lastLoadedAt: binding === "DB_CMTY_1" ? "t1" : null }), bindingName: binding, communityId } },
           }
         },
       }),

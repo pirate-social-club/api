@@ -7,6 +7,8 @@ import { monitorRewardCampaigns, rewardCampaignAccountingAlertDetails } from "./
 function configuredEnv(overrides: Partial<Env> = {}): Env {
   return {
     REWARDS_CAMPAIGNS_ENABLED: "true",
+    REWARDS_ACCRUAL_ENABLED: "true",
+    REWARDS_PAYOUTS_ENABLED: "true",
     REWARDS_CAMPAIGN_CHAIN_ID: "84532",
     REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
     REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",
@@ -81,5 +83,48 @@ describe("reward campaign incident alert evidence", () => {
       computed_credited_cents: "2",
       credited_delta_cents: "-2",
     })
+  })
+})
+
+describe("reward campaign finality chain isolation", () => {
+  test("queries only effects funded on the currently configured chain", async () => {
+    const observed: Array<{ sql: string; args: unknown[] }> = []
+    const client = {
+      execute: async (query: string | { sql: string; args?: unknown[] }) => {
+        const sql = typeof query === "string" ? query : query.sql
+        const args = typeof query === "string" ? [] : (query.args ?? [])
+        observed.push({ sql, args })
+        if (sql.includes("FROM reward_campaign_monitor_state")) return { rows: [] }
+        if (sql.includes("UPDATE reward_campaign_incidents i")) return { rows: [], rowsAffected: 0 }
+        if (sql.includes("COUNT(*) AS count FROM reward_campaign_accounting_reconciliation")) return { rows: [{ count: 0 }] }
+        if (sql.includes("SELECT * FROM reward_campaign_accounting_reconciliation")) return { rows: [] }
+        if (sql.includes("COUNT(*) AS count FROM reward_campaign_funding_effects")) return { rows: [{ count: 0 }] }
+        if (sql.includes("SELECT f.reward_campaign_funding_effect_id")) return { rows: [] }
+        if (sql.includes("INSERT INTO reward_campaign_monitor_state")) {
+          return { rows: [{ first_attempted_scan_at: "2026-08-01T00:00:00.000Z", last_successful_scan_at: "2026-08-01T00:00:00.000Z" }] }
+        }
+        throw new Error(`unexpected query: ${sql}`)
+      },
+    } as unknown as Client
+
+    await monitorRewardCampaigns({
+      env: configuredEnv({
+        REWARDS_CAMPAIGN_ALERT_OWNER: "reward-operator",
+        REWARDS_CAMPAIGN_ALERT_DESTINATION: "ops@example.test",
+        OPS_ALERT_WEBHOOK_URL: "https://ops.example.test/hook",
+      }),
+      client,
+      now: "2026-08-01T00:00:00.000Z",
+    })
+
+    const effectQueries = observed.filter(({ sql }) => (
+      sql.includes("COUNT(*) AS count FROM reward_campaign_funding_effects f")
+      || sql.includes("SELECT f.reward_campaign_funding_effect_id")
+    ))
+    expect(effectQueries).toHaveLength(2)
+    expect(effectQueries[0]?.sql).toContain("f.chain_id = ?1")
+    expect(effectQueries[0]?.args).toEqual([84532])
+    expect(effectQueries[1]?.sql).toContain("f.chain_id = ?1")
+    expect(effectQueries[1]?.args.slice(0, 2)).toEqual([84532, 100])
   })
 })

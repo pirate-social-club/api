@@ -131,6 +131,125 @@ const SQLITE_NAMESPACE_VERIFICATIONS_SPACES_ROOT_LABEL_ASCII_TRIGGERS = [
   `,
 ]
 
+// Migration 0198 widens challenge_kind on an existing PostgreSQL CHECK.
+// SQLite cannot alter that inline constraint, so rebuild the session table and
+// preserve every column/index while admitting the same enum as PostgreSQL.
+const SQLITE_NAMESPACE_VERIFICATION_SESSIONS_CHALLENGE_KIND_REBUILD = [
+  `
+    CREATE TABLE namespace_verification_sessions_sqlite_rebuild (
+      namespace_verification_session_id TEXT PRIMARY KEY,
+      namespace_verification_id TEXT,
+      user_id TEXT NOT NULL,
+      family TEXT NOT NULL CHECK (family IN ('hns', 'spaces')),
+      submitted_root_label TEXT NOT NULL,
+      normalized_root_label TEXT,
+      status TEXT NOT NULL CHECK (status IN (
+        'draft', 'inspecting', 'dns_setup_required', 'challenge_required',
+        'challenge_pending', 'verifying', 'verified', 'failed', 'expired', 'disputed'
+      )),
+      challenge_host TEXT,
+      challenge_txt_value TEXT,
+      setup_nameservers_json JSONB,
+      challenge_kind TEXT CHECK (
+        challenge_kind IS NULL OR challenge_kind IN ('dns_txt', 'hns_import', 'fabric_txt_publish')
+      ),
+      challenge_payload_json JSONB,
+      challenge_expires_at TIMESTAMPTZ,
+      ownership_source TEXT CHECK (
+        ownership_source IS NULL OR ownership_source IN (
+          'hns_parent_chain_txt', 'owner_authoritative_dns_txt'
+        )
+      ),
+      authority_health_verified INTEGER CHECK (
+        authority_health_verified IS NULL OR authority_health_verified IN (0, 1)
+      ),
+      root_exists INTEGER CHECK (root_exists IS NULL OR root_exists IN (0, 1)),
+      root_control_verified INTEGER CHECK (root_control_verified IS NULL OR root_control_verified IN (0, 1)),
+      expiry_horizon_sufficient INTEGER CHECK (expiry_horizon_sufficient IS NULL OR expiry_horizon_sufficient IN (0, 1)),
+      routing_enabled INTEGER CHECK (routing_enabled IS NULL OR routing_enabled IN (0, 1)),
+      pirate_dns_authority_verified INTEGER CHECK (pirate_dns_authority_verified IS NULL OR pirate_dns_authority_verified IN (0, 1)),
+      club_attach_allowed INTEGER CHECK (club_attach_allowed IS NULL OR club_attach_allowed IN (0, 1)),
+      pirate_web_routing_allowed INTEGER CHECK (pirate_web_routing_allowed IS NULL OR pirate_web_routing_allowed IN (0, 1)),
+      pirate_subdomain_issuance_allowed INTEGER CHECK (pirate_subdomain_issuance_allowed IS NULL OR pirate_subdomain_issuance_allowed IN (0, 1)),
+      control_class TEXT CHECK (control_class IS NULL OR control_class IN (
+        'single_holder_root', 'multisig_controlled_root', 'dao_controlled_root', 'burned_or_immutable_root'
+      )),
+      operation_class TEXT CHECK (operation_class IS NULL OR operation_class IN (
+        'owner_managed_namespace', 'routing_only_namespace',
+        'pirate_delegated_namespace', 'owner_signed_updates_namespace'
+      )),
+      anchor_height BIGINT,
+      anchor_block_hash TEXT,
+      anchor_root_hash TEXT,
+      proof_root_hash TEXT,
+      observation_provider TEXT,
+      evidence_bundle_ref TEXT,
+      failure_reason TEXT,
+      accepted_at TIMESTAMPTZ,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(user_id)
+    );
+  `,
+  `
+    INSERT INTO namespace_verification_sessions_sqlite_rebuild
+    SELECT
+      namespace_verification_session_id,
+      namespace_verification_id,
+      user_id,
+      family,
+      submitted_root_label,
+      normalized_root_label,
+      status,
+      challenge_host,
+      challenge_txt_value,
+      setup_nameservers_json,
+      challenge_kind,
+      challenge_payload_json,
+      challenge_expires_at,
+      ownership_source,
+      authority_health_verified,
+      root_exists,
+      root_control_verified,
+      expiry_horizon_sufficient,
+      routing_enabled,
+      pirate_dns_authority_verified,
+      club_attach_allowed,
+      pirate_web_routing_allowed,
+      pirate_subdomain_issuance_allowed,
+      control_class,
+      operation_class,
+      anchor_height,
+      anchor_block_hash,
+      anchor_root_hash,
+      proof_root_hash,
+      observation_provider,
+      evidence_bundle_ref,
+      failure_reason,
+      accepted_at,
+      expires_at,
+      created_at,
+      updated_at
+    FROM namespace_verification_sessions;
+  `,
+  `DROP TABLE namespace_verification_sessions;`,
+  `ALTER TABLE namespace_verification_sessions_sqlite_rebuild RENAME TO namespace_verification_sessions;`,
+  `
+    CREATE UNIQUE INDEX idx_namespace_verification_sessions_verification_id
+      ON namespace_verification_sessions(namespace_verification_id)
+      WHERE namespace_verification_id IS NOT NULL;
+  `,
+  `
+    CREATE INDEX idx_namespace_verification_sessions_user_status
+      ON namespace_verification_sessions(user_id, status);
+  `,
+  `
+    CREATE INDEX idx_namespace_verification_sessions_root_status
+      ON namespace_verification_sessions(normalized_root_label, status);
+  `,
+]
+
 // SQLite cannot ALTER a CHECK constraint, and simply dropping the ADD CONSTRAINT
 // (as every other constraint statement is) would leave the baseline's inline
 // CHECK rejecting assertion names introduced by later migrations. Rebuild the
@@ -198,6 +317,480 @@ const SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD = [
   `,
 ]
 
+// Migration 0153 adds seven columns plus table-level CHECK/FK constraints in
+// one PostgreSQL ALTER TABLE. SQLite supports neither comma-separated ADD
+// COLUMN clauses nor ADD CONSTRAINT, so rebuild the table while preserving all
+// 0152 invariants. The fixture itself remains byte-identical to Core; this is
+// the dialect boundary used by every control-plane fixture.
+const SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD = [
+  `
+    CREATE TABLE hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label TEXT PRIMARY KEY,
+      rollover_state TEXT NOT NULL CHECK (
+        rollover_state IN (
+          'none',
+          'required',
+          'new_key_prepublished',
+          'new_ds_pending',
+          'overlap',
+          'old_ds_removal_pending'
+        )
+      ),
+      expected_keyset_id TEXT,
+      expected_ds_derived_at TIMESTAMPTZ,
+      pending_keyset_id TEXT,
+      pending_evidence_kind TEXT CHECK (
+        pending_evidence_kind IS NULL OR pending_evidence_kind IN (
+          'wallet_transaction_id',
+          'mempool_observation',
+          'user_acknowledgement'
+        )
+      ),
+      pending_evidence_ref TEXT,
+      pending_evidence_at TIMESTAMPTZ,
+      last_parent_observation_id TEXT,
+      last_parent_observation_outcome TEXT CHECK (
+        last_parent_observation_outcome IS NULL
+        OR last_parent_observation_outcome = 'succeeded'
+      ),
+      last_parent_observation_attempt_at TIMESTAMPTZ,
+      state_changed_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL,
+      authority_redundancy_ok INTEGER CHECK (
+        authority_redundancy_ok IS NULL OR authority_redundancy_ok IN (0, 1)
+      ),
+      last_redundancy_observation_id TEXT,
+      last_redundancy_observation_outcome TEXT CHECK (
+        last_redundancy_observation_outcome IS NULL
+        OR last_redundancy_observation_outcome = 'succeeded'
+      ),
+      last_redundancy_observation_at TIMESTAMPTZ,
+      last_redundancy_observation_attempt_at TIMESTAMPTZ,
+      canonical_routing_eligible INTEGER NOT NULL DEFAULT 0 CHECK (
+        canonical_routing_eligible IN (0, 1)
+      ),
+      routing_hard_denied INTEGER NOT NULL DEFAULT 0 CHECK (
+        routing_hard_denied IN (0, 1)
+      ),
+      FOREIGN KEY (expected_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (pending_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (
+        last_parent_observation_id,
+        normalized_root_label,
+        last_parent_observation_outcome
+      ) REFERENCES hns_root_parent_observations(
+        parent_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      FOREIGN KEY (
+        last_redundancy_observation_id,
+        normalized_root_label,
+        last_redundancy_observation_outcome
+      ) REFERENCES hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      CONSTRAINT hns_root_delegation_state_pending_evidence_complete CHECK (
+        (pending_evidence_kind IS NULL
+          AND pending_evidence_ref IS NULL
+          AND pending_evidence_at IS NULL)
+        OR (pending_evidence_kind IS NOT NULL
+          AND pending_evidence_ref IS NOT NULL
+          AND pending_evidence_at IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_last_observation_complete CHECK (
+        (last_parent_observation_id IS NULL
+          AND last_parent_observation_outcome IS NULL)
+        OR (last_parent_observation_id IS NOT NULL
+          AND last_parent_observation_outcome IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_redundancy_complete CHECK (
+        (authority_redundancy_ok IS NULL
+          AND last_redundancy_observation_id IS NULL
+          AND last_redundancy_observation_outcome IS NULL
+          AND last_redundancy_observation_at IS NULL)
+        OR (authority_redundancy_ok IS NOT NULL
+          AND last_redundancy_observation_id IS NOT NULL
+          AND last_redundancy_observation_outcome = 'succeeded'
+          AND last_redundancy_observation_at IS NOT NULL)
+      )
+    );
+  `,
+  `
+    INSERT INTO hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at
+    )
+    SELECT
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at
+    FROM hns_root_delegation_state;
+  `,
+  `DROP TABLE hns_root_delegation_state;`,
+  `ALTER TABLE hns_root_delegation_state_sqlite_rebuild RENAME TO hns_root_delegation_state;`,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_observation_due
+      ON hns_root_delegation_state(
+        (last_parent_observation_attempt_at IS NOT NULL),
+        last_parent_observation_attempt_at
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_last_observation
+      ON hns_root_delegation_state(last_parent_observation_id);
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_rollover
+      ON hns_root_delegation_state(rollover_state)
+      WHERE rollover_state <> 'none';
+  `,
+]
+
+// Migration 0154 adds provenance columns and table-level constraints to an FK
+// parent. Fixtures intentionally remain byte-identical to Core, so rebuild the
+// SQLite mirror here. Legacy successful rows are classified during the copy,
+// before the new completeness checks begin enforcing the canonical backfill.
+const SQLITE_HNS_ROOT_REDUNDANCY_OBSERVATIONS_PROVENANCE_REBUILD = [
+  `
+    CREATE TABLE hns_root_redundancy_observations_sqlite_rebuild (
+      redundancy_observation_id TEXT PRIMARY KEY,
+      normalized_root_label TEXT NOT NULL,
+      outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'failed')),
+      provider TEXT NOT NULL,
+      failure_code TEXT,
+      observed_parent_ns_json TEXT,
+      authority_redundancy_ok INTEGER CHECK (
+        authority_redundancy_ok IS NULL OR authority_redundancy_ok IN (0, 1)
+      ),
+      observed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      evidence_class TEXT CHECK (
+        evidence_class IS NULL OR evidence_class IN (
+          'local_single_vantage',
+          'external_multi_vantage'
+        )
+      ),
+      quorum_policy_version TEXT,
+      independent_vantage_count INTEGER CHECK (
+        independent_vantage_count IS NULL OR independent_vantage_count > 0
+      ),
+      independent_asn_count INTEGER CHECK (
+        independent_asn_count IS NULL OR independent_asn_count > 0
+      ),
+      CONSTRAINT hns_root_redundancy_observations_result_matches_outcome CHECK (
+        (outcome = 'failed'
+          AND failure_code IS NOT NULL
+          AND observed_parent_ns_json IS NULL
+          AND authority_redundancy_ok IS NULL)
+        OR (outcome = 'succeeded'
+          AND failure_code IS NULL
+          AND observed_parent_ns_json IS NOT NULL
+          AND authority_redundancy_ok IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_redundancy_observations_evidence_matches_outcome CHECK (
+        (outcome = 'failed'
+          AND evidence_class IS NULL
+          AND quorum_policy_version IS NULL
+          AND independent_vantage_count IS NULL
+          AND independent_asn_count IS NULL)
+        OR (outcome = 'succeeded'
+          AND evidence_class IS NOT NULL
+          AND independent_vantage_count IS NOT NULL
+          AND independent_asn_count IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_redundancy_observations_multivantage_is_independent CHECK (
+        evidence_class IS DISTINCT FROM 'external_multi_vantage'
+        OR (quorum_policy_version IS NOT NULL
+          AND independent_vantage_count >= 2
+          AND independent_asn_count >= 2)
+      )
+    );
+  `,
+  `
+    INSERT INTO hns_root_redundancy_observations_sqlite_rebuild (
+      redundancy_observation_id,
+      normalized_root_label,
+      outcome,
+      provider,
+      failure_code,
+      observed_parent_ns_json,
+      authority_redundancy_ok,
+      observed_at,
+      created_at,
+      evidence_class,
+      quorum_policy_version,
+      independent_vantage_count,
+      independent_asn_count
+    )
+    SELECT
+      redundancy_observation_id,
+      normalized_root_label,
+      outcome,
+      provider,
+      failure_code,
+      observed_parent_ns_json,
+      authority_redundancy_ok,
+      observed_at,
+      created_at,
+      CASE WHEN outcome = 'succeeded' THEN 'local_single_vantage' END,
+      NULL,
+      CASE WHEN outcome = 'succeeded' THEN 1 END,
+      CASE WHEN outcome = 'succeeded' THEN 1 END
+    FROM hns_root_redundancy_observations;
+  `,
+  `DROP TABLE hns_root_redundancy_observations;`,
+  `ALTER TABLE hns_root_redundancy_observations_sqlite_rebuild RENAME TO hns_root_redundancy_observations;`,
+  `
+    CREATE UNIQUE INDEX idx_hns_root_redundancy_observations_id_root_outcome
+      ON hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_redundancy_observations_root
+      ON hns_root_redundancy_observations(normalized_root_label, observed_at DESC);
+  `,
+]
+
+// The same migration replaces the state-row completeness constraint and adds a
+// composite FK carrying evidence_class. Classify copied established findings
+// in the INSERT so the rebuilt table is coherent before the fixture's UPDATE.
+const SQLITE_HNS_ROOT_DELEGATION_STATE_PROVENANCE_REBUILD = [
+  `
+    CREATE TABLE hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label TEXT PRIMARY KEY,
+      rollover_state TEXT NOT NULL CHECK (
+        rollover_state IN (
+          'none',
+          'required',
+          'new_key_prepublished',
+          'new_ds_pending',
+          'overlap',
+          'old_ds_removal_pending'
+        )
+      ),
+      expected_keyset_id TEXT,
+      expected_ds_derived_at TEXT,
+      pending_keyset_id TEXT,
+      pending_evidence_kind TEXT CHECK (
+        pending_evidence_kind IS NULL OR pending_evidence_kind IN (
+          'wallet_transaction_id',
+          'mempool_observation',
+          'user_acknowledgement'
+        )
+      ),
+      pending_evidence_ref TEXT,
+      pending_evidence_at TEXT,
+      last_parent_observation_id TEXT,
+      last_parent_observation_outcome TEXT CHECK (
+        last_parent_observation_outcome IS NULL
+        OR last_parent_observation_outcome = 'succeeded'
+      ),
+      last_parent_observation_attempt_at TEXT,
+      state_changed_at TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      authority_redundancy_ok INTEGER CHECK (
+        authority_redundancy_ok IS NULL OR authority_redundancy_ok IN (0, 1)
+      ),
+      last_redundancy_observation_id TEXT,
+      last_redundancy_observation_outcome TEXT CHECK (
+        last_redundancy_observation_outcome IS NULL
+        OR last_redundancy_observation_outcome = 'succeeded'
+      ),
+      last_redundancy_observation_at TEXT,
+      last_redundancy_observation_attempt_at TEXT,
+      canonical_routing_eligible INTEGER NOT NULL DEFAULT 0 CHECK (
+        canonical_routing_eligible IN (0, 1)
+      ),
+      routing_hard_denied INTEGER NOT NULL DEFAULT 0 CHECK (
+        routing_hard_denied IN (0, 1)
+      ),
+      authority_redundancy_evidence_class TEXT CHECK (
+        authority_redundancy_evidence_class IS NULL
+        OR authority_redundancy_evidence_class IN (
+          'local_single_vantage',
+          'external_multi_vantage'
+        )
+      ),
+      FOREIGN KEY (expected_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (pending_keyset_id, normalized_root_label)
+        REFERENCES hns_root_issued_keysets(issued_keyset_id, normalized_root_label),
+      FOREIGN KEY (
+        last_parent_observation_id,
+        normalized_root_label,
+        last_parent_observation_outcome
+      ) REFERENCES hns_root_parent_observations(
+        parent_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      FOREIGN KEY (
+        last_redundancy_observation_id,
+        normalized_root_label,
+        last_redundancy_observation_outcome
+      ) REFERENCES hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome
+      ),
+      FOREIGN KEY (
+        last_redundancy_observation_id,
+        normalized_root_label,
+        last_redundancy_observation_outcome,
+        authority_redundancy_evidence_class
+      ) REFERENCES hns_root_redundancy_observations(
+        redundancy_observation_id,
+        normalized_root_label,
+        outcome,
+        evidence_class
+      ),
+      CONSTRAINT hns_root_delegation_state_pending_evidence_complete CHECK (
+        (pending_evidence_kind IS NULL
+          AND pending_evidence_ref IS NULL
+          AND pending_evidence_at IS NULL)
+        OR (pending_evidence_kind IS NOT NULL
+          AND pending_evidence_ref IS NOT NULL
+          AND pending_evidence_at IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_last_observation_complete CHECK (
+        (last_parent_observation_id IS NULL
+          AND last_parent_observation_outcome IS NULL)
+        OR (last_parent_observation_id IS NOT NULL
+          AND last_parent_observation_outcome IS NOT NULL)
+      ),
+      CONSTRAINT hns_root_delegation_state_redundancy_complete CHECK (
+        (authority_redundancy_ok IS NULL
+          AND authority_redundancy_evidence_class IS NULL
+          AND last_redundancy_observation_id IS NULL
+          AND last_redundancy_observation_outcome IS NULL
+          AND last_redundancy_observation_at IS NULL)
+        OR (authority_redundancy_ok IS NOT NULL
+          AND authority_redundancy_evidence_class IS NOT NULL
+          AND last_redundancy_observation_id IS NOT NULL
+          AND last_redundancy_observation_outcome = 'succeeded'
+          AND last_redundancy_observation_at IS NOT NULL)
+      )
+    );
+  `,
+  `
+    INSERT INTO hns_root_delegation_state_sqlite_rebuild (
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at,
+      authority_redundancy_ok,
+      last_redundancy_observation_id,
+      last_redundancy_observation_outcome,
+      last_redundancy_observation_at,
+      last_redundancy_observation_attempt_at,
+      canonical_routing_eligible,
+      routing_hard_denied,
+      authority_redundancy_evidence_class
+    )
+    SELECT
+      normalized_root_label,
+      rollover_state,
+      expected_keyset_id,
+      expected_ds_derived_at,
+      pending_keyset_id,
+      pending_evidence_kind,
+      pending_evidence_ref,
+      pending_evidence_at,
+      last_parent_observation_id,
+      last_parent_observation_outcome,
+      last_parent_observation_attempt_at,
+      state_changed_at,
+      created_at,
+      updated_at,
+      authority_redundancy_ok,
+      last_redundancy_observation_id,
+      last_redundancy_observation_outcome,
+      last_redundancy_observation_at,
+      last_redundancy_observation_attempt_at,
+      canonical_routing_eligible,
+      routing_hard_denied,
+      CASE
+        WHEN authority_redundancy_ok IS NOT NULL THEN 'local_single_vantage'
+      END
+    FROM hns_root_delegation_state;
+  `,
+  `DROP TABLE hns_root_delegation_state;`,
+  `ALTER TABLE hns_root_delegation_state_sqlite_rebuild RENAME TO hns_root_delegation_state;`,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_observation_due
+      ON hns_root_delegation_state(
+        (last_parent_observation_attempt_at IS NOT NULL),
+        last_parent_observation_attempt_at
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_last_observation
+      ON hns_root_delegation_state(last_parent_observation_id);
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_rollover
+      ON hns_root_delegation_state(rollover_state)
+      WHERE rollover_state <> 'none';
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_redundancy_due
+      ON hns_root_delegation_state(
+        (last_redundancy_observation_attempt_at IS NOT NULL),
+        last_redundancy_observation_attempt_at
+      );
+  `,
+  `
+    CREATE INDEX idx_hns_root_delegation_state_rollout
+      ON hns_root_delegation_state(
+        routing_hard_denied,
+        canonical_routing_eligible
+      );
+  `,
+]
+
 // Drop leading blank / `--` comment lines so statement-type detection sees the real SQL. The
 // splitter glues a file's leading comment block onto its first statement; without this, a
 // skippable Postgres-only statement (e.g. `ALTER TABLE ... OWNER TO`) preceded by comments would
@@ -227,11 +820,50 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   // PostgreSQL trigger functions and EXECUTE FUNCTION triggers have no SQLite
   // equivalent. Local mirrors exercise application behavior; the real-PostgreSQL
   // reward suite applies the canonical migration and verifies these guards.
-  if (normalized.startsWith("CREATE FUNCTION ")) {
+  if (
+    normalized.startsWith("CREATE FUNCTION ")
+    || normalized.startsWith("CREATE OR REPLACE FUNCTION ")
+  ) {
     return []
   }
-  if (normalized.startsWith("CREATE TRIGGER ") && normalized.includes(" EXECUTE FUNCTION ")) {
+  if (
+    (
+      normalized.startsWith("CREATE TRIGGER ")
+      || normalized.startsWith("CREATE CONSTRAINT TRIGGER ")
+    )
+    && normalized.includes(" EXECUTE FUNCTION ")
+  ) {
     return []
+  }
+
+  // PostgreSQL spells trigger removal as `DROP TRIGGER ... ON table`; SQLite
+  // has no table qualifier and does not carry the function-backed trigger in
+  // its local mirror in the first place.
+  if (normalized.startsWith("DROP TRIGGER ") && normalized.includes(" ON ")) {
+    return []
+  }
+
+  // The canonical dance cue backfill hashes ids with PostgreSQL-only crypto
+  // functions. Local SQLite mirrors need the same completeness invariant, not
+  // byte-identical bucket assignment, so use a stable portable bucket there.
+  if (
+    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("GET_BYTE(DECODE(MD5(DANCE_ATTEMPT_SESSION_ID)")
+  ) {
+    return [`
+      UPDATE dance_attempt_sessions
+      SET start_cue_policy_version = 'dance_start_cue_gross_body_v1',
+          start_cue_kind = CASE (length(dance_attempt_session_id) % 3)
+            WHEN 0 THEN 'hands_on_head'
+            WHEN 1 THEN 'arms_t'
+            ELSE 'hands_on_hips'
+          END,
+          start_cue_minimum_hold_ms = 500,
+          start_cue_observation_window_ms = 2500,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')
+        AND start_cue_policy_version IS NULL;
+    `]
   }
 
   if (normalized.startsWith("GRANT ")) {
@@ -260,7 +892,86 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" DROP CONSTRAINT ")) {
+    if (
+      normalized.startsWith("ALTER TABLE HNS_ROOT_DELEGATION_STATE ")
+      && normalized.includes("HNS_ROOT_DELEGATION_STATE_REDUNDANCY_COMPLETE")
+      && normalized.includes("AUTHORITY_REDUNDANCY_EVIDENCE_CLASS")
+    ) {
+      return SQLITE_HNS_ROOT_DELEGATION_STATE_PROVENANCE_REBUILD
+    }
     return []
+  }
+
+  if (
+    normalized.startsWith("ALTER TABLE HNS_ROOT_REDUNDANCY_OBSERVATIONS ")
+    && normalized.includes("ADD COLUMN EVIDENCE_CLASS ")
+    && normalized.includes("INDEPENDENT_ASN_COUNT")
+  ) {
+    return SQLITE_HNS_ROOT_REDUNDANCY_OBSERVATIONS_PROVENANCE_REBUILD
+  }
+
+  if (
+    normalized.startsWith("ALTER TABLE HNS_ROOT_DELEGATION_STATE ")
+    && normalized.includes("ADD COLUMN AUTHORITY_REDUNDANCY_OK ")
+    && normalized.includes("HNS_ROOT_DELEGATION_STATE_REDUNDANCY_COMPLETE")
+  ) {
+    return SQLITE_HNS_ROOT_DELEGATION_STATE_REDUNDANCY_REBUILD
+  }
+
+  // Migration 0211 adds the cue columns and PostgreSQL CHECK constraints in a
+  // single ALTER TABLE. SQLite cannot add table constraints after the fact;
+  // preserve the columns in the local mirror and let the PostgreSQL migration
+  // enforce the checks in production.
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN START_CUE_POLICY_VERSION ")
+    && normalized.includes("ADD CONSTRAINT DANCE_ATTEMPT_SESSION_START_CUE_ASSIGNMENT_CHECK")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_policy_version TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_kind TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_minimum_hold_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_observation_window_ms INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN start_cue_outcome TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN scored_window_start_ms INTEGER;",
+    ]
+  }
+
+  // The production backfill uses PostgreSQL's md5/decode/get_byte functions
+  // to spread legacy sessions across cue kinds. SQLite has no equivalents;
+  // retain deterministic assignment in the mirror using the session-id length.
+  if (
+    normalized.startsWith("UPDATE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("GET_BYTE(DECODE(MD5(")
+  ) {
+    return [`
+      UPDATE dance_attempt_sessions
+      SET start_cue_policy_version = 'dance_start_cue_gross_body_v1',
+          start_cue_kind = CASE (length(dance_attempt_session_id) % 3)
+            WHEN 0 THEN 'hands_on_head'
+            WHEN 1 THEN 'arms_t'
+            ELSE 'hands_on_hips'
+          END,
+          start_cue_minimum_hold_ms = 500,
+          start_cue_observation_window_ms = 2500,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE status IN ('initialized', 'uploading', 'submitted', 'grading')
+        AND start_cue_policy_version IS NULL;
+    `]
+  }
+
+  // Migration 0159 adds two nullable admission-policy columns plus a paired
+  // PostgreSQL CHECK in one ALTER TABLE. SQLite only supports one ADD COLUMN
+  // per ALTER and cannot add the table-level constraint after creation.
+  if (
+    normalized.startsWith("ALTER TABLE REWARD_CAMPAIGN_FUNDING_EFFECTS ")
+    && normalized.includes("ADD COLUMN ADMITTED_REFUND_POLICY_VERSION ")
+    && normalized.includes("ADD COLUMN ADMITTED_MAX_REFUND_ATOMIC ")
+  ) {
+    return [
+      "ALTER TABLE reward_campaign_funding_effects ADD COLUMN admitted_refund_policy_version TEXT;",
+      "ALTER TABLE reward_campaign_funding_effects ADD COLUMN admitted_max_refund_atomic TEXT;",
+    ]
   }
 
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
@@ -273,10 +984,78 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     if (normalized.includes("NAMESPACE_VERIFICATION_ASSERTIONS_ASSERTION_NAME_CHECK")) {
       return SQLITE_NAMESPACE_VERIFICATION_ASSERTIONS_NAME_CHECK_REBUILD
     }
+    if (
+      normalized.includes("NAMESPACE_VERIFICATION_SESSIONS_CHALLENGE_KIND_CHECK")
+      && normalized.includes("'HNS_IMPORT'")
+    ) {
+      return SQLITE_NAMESPACE_VERIFICATION_SESSIONS_CHALLENGE_KIND_REBUILD
+    }
     return []
   }
 
+  if (
+    normalized.startsWith("ALTER TABLE EFP_FOLLOW_PROJECTION_STATE ")
+    && normalized.includes("ADD COLUMN LAST_RECONCILED_AT ")
+    && normalized.includes("ADD COLUMN LAST_RECONCILIATION_ERROR ")
+  ) {
+    return [
+      "ALTER TABLE efp_follow_projection_state ADD COLUMN last_reconciled_at TEXT;",
+      "ALTER TABLE efp_follow_projection_state ADD COLUMN last_reconciliation_error TEXT;",
+    ]
+  }
+
+  if (
+    normalized.startsWith("ALTER TABLE EFP_FOLLOW_WRITE_INTENTS ")
+    && normalized.includes("ADD COLUMN SEMANTIC_ATTEMPT_KEY ")
+    && normalized.includes("ADD COLUMN SPONSORSHIP_BUDGET_DATE ")
+    && normalized.includes("ADD COLUMN SPONSORSHIP_REVIEW_AFTER ")
+  ) {
+    return [
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN semantic_attempt_key TEXT;",
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN sponsorship_budget_date TEXT;",
+      "ALTER TABLE efp_follow_write_intents ADD COLUMN sponsorship_review_after TEXT;",
+    ]
+  }
+
+  // PostgreSQL permits several ADD COLUMN clauses in one ALTER TABLE while
+  // SQLite accepts exactly one. Keep specialized rebuild/type-conversion cases
+  // above this generic nullable-column fallback.
+  const multiAddColumn = stripLeadingComments(statement).match(
+    /^\s*ALTER\s+TABLE\s+([^\s]+)\s+([\s\S]*?)\s*;?\s*$/iu,
+  )
+  if (multiAddColumn) {
+    const clauses = multiAddColumn[2]
+      ?.replace(/;\s*$/u, "")
+      .split(/\s*,\s*(?=ADD\s+COLUMN\s+)/iu)
+    if (
+      clauses
+      && clauses.length > 1
+      && clauses.every((clause) => /^ADD\s+COLUMN\s+/iu.test(clause.trim()))
+    ) {
+      return clauses.flatMap((clause) => toSqliteCompatibleStatements(
+        `ALTER TABLE ${multiAddColumn[1]} ${clause.trim()};`,
+      ))
+    }
+  }
+
   let sqliteCompat = statement
+  if (
+    normalized.startsWith("INSERT INTO COMMUNITY_HEALTH_SYNC_STATE ")
+    && normalized.includes("ON CONFLICT (PROJECTION_KEY) DO NOTHING")
+  ) {
+    sqliteCompat = sqliteCompat
+      .replace(/INSERT\s+INTO\s+community_health_sync_state/iu, "INSERT OR IGNORE INTO community_health_sync_state")
+      .replace(/\s+ON\s+CONFLICT\s*\(projection_key\)\s+DO\s+NOTHING\s*;?\s*$/iu, ";")
+  }
+  if (
+    normalized.startsWith("UPDATE EFP_FOLLOW_WRITE_INTENTS ")
+    && normalized.includes("SPONSORSHIP_REVIEW_AFTER = UPDATED_AT + INTERVAL '24 HOURS'")
+  ) {
+    sqliteCompat = sqliteCompat.replace(
+      /updated_at\s*\+\s*INTERVAL\s*'24 hours'/iu,
+      "datetime(updated_at, '+24 hours')",
+    )
+  }
   if (normalized.startsWith("CREATE TABLE IF NOT EXISTS COMMUNITY_ASSISTANT_CREDENTIALS")) {
     sqliteCompat = sqliteCompat.replace(
       /provider\s+IN\s+\('openrouter'\)/i,
@@ -311,6 +1090,20 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
         "source IN ('song_engagement_reconciler', 'reward_campaign_reconciler')",
       )
   }
+  if (normalized.startsWith("CREATE TABLE REWARD_CAMPAIGN_FUNDING_EFFECTS")) {
+    // PostgreSQL migration 0148 expands the custody-state constraints through
+    // ALTER TABLE, which SQLite cannot mirror. Build fresh local/test databases
+    // with the final enum and receipt invariants in the original CREATE TABLE.
+    sqliteCompat = sqliteCompat
+      .replace(
+        /'quoted',\s*'confirming',\s*'confirmed',\s*'failed',\s*'refunded'/i,
+        "'quoted', 'confirming', 'confirmed', 'failed', 'refund_pending', 'refunded'",
+      )
+      .replace(
+        /status\s+IN\s*\(\s*'confirmed',\s*'refunded'\s*\)/gi,
+        "status IN ('confirmed', 'refund_pending', 'refunded')",
+      )
+  }
   if (normalized.startsWith("CREATE TABLE COMMUNITY_DATABASE_ROUTING")) {
     // Migration 0124 drops the Turso `backend` column, but it does so inside a
     // Postgres DO block that this SQLite mirror skips — so the column survives here.
@@ -343,6 +1136,11 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
       const expectedLength = Number(hexLength) + 2
       return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 2) = '0x' AND substr(${column}, 3) NOT GLOB '*[^0-9a-f]*'`
     },
+  )
+  sqliteCompat = sqliteCompat.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^\[0-9a-f\]\{(\d+)\}\$'/g,
+    (_match, column: string, hexLength: string) =>
+      `length(${column}) = ${Number(hexLength)} AND ${column} NOT GLOB '*[^0-9a-f]*'`,
   )
 
   return [sqliteCompat]

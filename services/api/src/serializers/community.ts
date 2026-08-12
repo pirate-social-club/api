@@ -11,10 +11,16 @@ import {
   publicCommunityId,
   publicId,
 } from "../lib/public-ids"
+import { communityPresentationFromRow } from "../lib/communities/community-presentation"
 
 type CurrentCommunityResponse = ContractCommunity & Pick<Community, "localized_text">
 
 export function serializeCommunity(community: Community): CurrentCommunityResponse {
+  const presentation = communityPresentationFromRow({
+    branding_json: community.branding_json ?? "{}",
+    default_surface: community.default_surface ?? "threads",
+    video_feed_enabled: community.video_feed_enabled ?? true,
+  })
   return {
     id: publicCommunityId(community.community_id),
     object: "community",
@@ -22,6 +28,9 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     description: community.description,
     avatar_ref: community.avatar_ref,
     banner_ref: community.banner_ref,
+    branding: presentation.branding,
+    default_surface: presentation.default_surface,
+    video_feed_enabled: presentation.video_feed_enabled,
     store_url: community.store_url,
     store_label: community.store_label,
     country_code: community.country_code,
@@ -37,6 +46,7 @@ export function serializeCommunity(community: Community): CurrentCommunityRespon
     allow_anonymous_identity: community.allow_anonymous_identity,
     anonymous_identity_scope: community.anonymous_identity_scope,
     human_verification_lane: community.human_verification_lane,
+    preferred_verification_provider: community.preferred_verification_provider ?? null,
     human_verification_lane_origin: community.human_verification_lane_origin,
     allowed_disclosed_qualifiers: community.allowed_disclosed_qualifiers,
     allow_qualifiers_on_anonymous_posts: community.allow_qualifiers_on_anonymous_posts,
@@ -105,6 +115,9 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     localized_text: preview.localized_text,
     avatar_ref: preview.avatar_ref,
     banner_ref: preview.banner_ref,
+    branding: preview.branding,
+    default_surface: preview.default_surface,
+    video_feed_enabled: preview.video_feed_enabled,
     store_url: preview.store_url,
     store_label: preview.store_label,
     country_code: preview.country_code,
@@ -121,6 +134,7 @@ export function serializeCommunityPreview(preview: CommunityPreview): CurrentCom
     allowed_disclosed_qualifiers: preview.allowed_disclosed_qualifiers,
     allow_qualifiers_on_anonymous_posts: preview.allow_qualifiers_on_anonymous_posts,
     human_verification_lane: preview.human_verification_lane,
+    preferred_verification_provider: preview.preferred_verification_provider ?? null,
     member_count: preview.member_count,
     follower_count: preview.follower_count,
     donation_policy_mode: preview.donation_policy_mode,

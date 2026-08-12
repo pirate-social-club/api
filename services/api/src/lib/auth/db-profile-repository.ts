@@ -36,6 +36,32 @@ import {
 import { assertRedditHandleClaimEligible, buildRedditHandleClaimQuote } from "./reddit-handle-claim-policy"
 import { makeId } from "../helpers"
 import { resolveVerifiedEnsProfile } from "./ens-linked-handle-service"
+
+const ENS_RESOLUTION_TIMEOUT_MS = 3_000
+const ENS_RESOLUTION_TIMED_OUT = Symbol("ens_resolution_timed_out")
+
+let ensResolutionTimeoutMs = ENS_RESOLUTION_TIMEOUT_MS
+
+export function setEnsResolutionTimeoutForTests(timeoutMs: number | null): void {
+  ensResolutionTimeoutMs = timeoutMs ?? ENS_RESOLUTION_TIMEOUT_MS
+}
+
+async function resolveVerifiedEnsProfileWithTimeout(
+  env: Env,
+  walletAddress: string,
+): Promise<Awaited<ReturnType<typeof resolveVerifiedEnsProfile>> | typeof ENS_RESOLUTION_TIMED_OUT> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      resolveVerifiedEnsProfile(env, walletAddress),
+      new Promise<typeof ENS_RESOLUTION_TIMED_OUT>((resolve) => {
+        timeoutId = setTimeout(() => resolve(ENS_RESOLUTION_TIMED_OUT), ensResolutionTimeoutMs)
+      }),
+    ])
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId)
+  }
+}
 import type { PublicProfileResolution } from "./repositories"
 import { unixSeconds } from "../../serializers/time"
 import { publicCommunityId } from "../public-ids"
@@ -436,7 +462,7 @@ export class DatabaseProfileRepository {
           tier,
           issuance_source,
           redirect_target_global_handle_id,
-          price_paid_usd,
+          price_paid_cents,
           global_handle_paid_quote_id,
           free_rename_consumed,
           issued_at,
@@ -454,7 +480,7 @@ export class DatabaseProfileRepository {
         input.desired.labelDisplay,
         input.tier,
         input.issuanceSource,
-        input.pricePaidCents == null ? null : input.pricePaidCents / 100,
+        input.pricePaidCents ?? null,
         input.paidQuoteId ?? null,
         updatedAt,
       ],
@@ -756,7 +782,7 @@ export class DatabaseProfileRepository {
     const existingForQuote = (await this.client.execute({
       sql: `
         SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-               redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+               redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
                replaced_at, created_at, updated_at
         FROM global_handles
         WHERE global_handle_paid_quote_id = ?1
@@ -801,7 +827,7 @@ export class DatabaseProfileRepository {
     const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
       env: this.env,
       quoteId,
-      amountUsd: priceCents / 100,
+      amountCents: priceCents,
       buyerAddress: buyerWalletAddress,
       fundingTxRef: body.funding_tx_ref,
     })
@@ -832,7 +858,7 @@ export class DatabaseProfileRepository {
         const existing = (await tx.execute({
           sql: `
             SELECT global_handle_id, user_id, label_normalized, label_display, status, tier, issuance_source,
-                   redirect_target_global_handle_id, price_paid_usd, free_rename_consumed, issued_at,
+                   redirect_target_global_handle_id, price_paid_cents, free_rename_consumed, issued_at,
                    replaced_at, created_at, updated_at
             FROM global_handles
             WHERE global_handle_paid_quote_id = ?1
@@ -999,7 +1025,19 @@ export class DatabaseProfileRepository {
       return await this.identityRepository.getProfileByUserId(userId)
     }
 
-    const resolvedEnsProfile = await resolveVerifiedEnsProfile(this.env, primaryWalletRow.wallet_address_display)
+    const ensLookup = await resolveVerifiedEnsProfileWithTimeout(
+      this.env,
+      primaryWalletRow.wallet_address_display,
+    )
+    if (ensLookup === ENS_RESOLUTION_TIMED_OUT || ensLookup.status === "unavailable") {
+      console.warn("[auth] ENS profile resolution unavailable; preserving existing linked handles", {
+        reason: ensLookup === ENS_RESOLUTION_TIMED_OUT ? "timeout" : "provider_error",
+        timeout_ms: ensResolutionTimeoutMs,
+        user_id: userId,
+      })
+      return await this.identityRepository.getProfileByUserId(userId)
+    }
+    const resolvedEnsProfile = ensLookup.status === "resolved" ? ensLookup.profile : null
     const updatedAt = nowIso()
     const tx = await this.client.transaction("write")
 

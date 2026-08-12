@@ -5,22 +5,28 @@ pool watchdog reports low free capacity. This procedure is for staging only.
 Production refill should follow the same bind-before-insert invariant, but must
 use production names, production bindings, and the production deploy protocol.
 
-The pool is intentionally monotonic: creating a smoke community consumes a
-binding, and archiving the community does not reclaim it. Do not build or use a
-loaded-community reset as smoke cleanup.
+Archiving a community does not reclaim its binding. Loaded databases must never
+be passed to the provisioning reset path. Reviewed cleanup of recognized,
+archived staging smoke communities uses the separately fenced decommission path
+in [staging-community-d1-reclamation.md](./staging-community-d1-reclamation.md).
+Do not use reclamation as a shortcut around this refill procedure when safe
+candidate evidence is unavailable.
 
 ## Detection And Release Gate
 
 The API scheduled handler checks capacity every minute. It emits an ops alert
-when free capacity is at or below `COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD`
-(`8` in staging and `15` in production). That alert remains the continuous
-detection path.
+when free capacity reaches `COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD` (`8` in
+staging and `15` in production), or when the faster of the trailing 24-hour and
+seven-day allocation rates predicts exhaustion within
+`COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS` (72 hours by default). The alert
+includes both window counts, the selected hourly burn rate, and forecast hours
+remaining. That alert remains the continuous detection path.
 
 `GET /health/provisioning` independently reads the live shard-pool stats. It
-returns `503 d1_pool_low_capacity` at or below the same threshold, and
-`503 d1_pool_stats_unavailable` when the stats RPC fails. Release smoke calls
-this endpoint, so a deployment cannot report healthy while community creation
-is already near exhaustion.
+reports low-but-nonzero capacity as degraded while remaining HTTP 200, returns
+503 only at exhaustion, and fails closed with `d1_pool_stats_unavailable` when
+the stats RPC fails. Release smoke calls this endpoint without turning a refill
+warning into a release outage.
 
 Do not treat an absent or missed email as proof that the pool is healthy. Check
 the health endpoint or query `d1_pool` directly before a release validation that
@@ -105,7 +111,7 @@ Deploy the staging shard from the clean refill worktree before inserting pool
 rows:
 
 ```bash
-rtk bunx wrangler deploy --env=""
+rtk bun run deploy -- --env=""
 ```
 
 Confirm Wrangler prints the newly added `env.DB_CMTY_NNNN` bindings in the deploy

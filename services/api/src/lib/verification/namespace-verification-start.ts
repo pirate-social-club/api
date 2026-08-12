@@ -6,9 +6,13 @@ import {
 } from "../auth/auth-serializers"
 import {
   assertHnsRootLabel,
-  inspectHnsRoot,
   normalizeHnsRootLabel,
 } from "./hns-verifier"
+import { prepareHnsImportChallenge } from "./hns-import-challenge"
+import {
+  releaseHnsImportSessionLock,
+  reserveHnsImportSessionLock,
+} from "./hns-import-session-lock"
 import {
   inspectSpacesNamespace,
   mintSpacesChallenge,
@@ -16,18 +20,12 @@ import {
 } from "./spaces-verifier"
 import type { Env } from "../../env"
 import type { NamespaceVerificationSession } from "../../types"
+import { resolveHnsObservationProviderFallback } from "./namespace-observation-provider"
 import {
-  HNS_VERIFIER_OBSERVATION_PROVIDER,
-  resolveHnsObservationProviderFallback,
-} from "./namespace-observation-provider"
-import {
-  deriveHnsInspectionSnapshot,
   getHnsChallengeTtlHours,
   getNamespaceVerificationSessionRowForUser,
-  isHnsVerifierConfigured,
   isProductionEnv,
   isSpacesVerifierConfigured,
-  serializeSetupNameservers,
   type HnsSessionAssertionSnapshot,
 } from "./verification-shared"
 import { assertNamespaceRootLabelIsAttachable } from "./namespace-root-policy"
@@ -117,14 +115,25 @@ export async function startNamespaceVerificationSession(
   } else {
     assertHnsRootLabel(normalizedRootLabel)
     const challengeExpiresAt = new Date(now.getTime() + getHnsChallengeTtlHours(env) * 60 * 60 * 1000).toISOString()
+    await reserveHnsImportSessionLock(client, {
+      normalizedRootLabel,
+      sessionId,
+      userId: input.userId,
+      expiresAt: challengeExpiresAt,
+      now: createdAt,
+    })
+    try {
     const challengeHost = normalizedRootLabel
     const challengeTxtValue = `pirate-verification=${sessionId}`
-    let status: NamespaceVerificationSession["status"] = "challenge_required"
+    let status: NamespaceVerificationSession["status"] = "dns_setup_required"
     let challengeKind: NamespaceVerificationSession["challenge_kind"] = "dns_txt"
     let persistedChallengeHost: string | null = challengeHost
     let persistedChallengeTxtValue: string | null = challengeTxtValue
     let persistedSetupNameservers: string | null = null
+    let persistedChallengePayload: string | null = null
     let persistedChallengeExpiresAt: string | null = challengeExpiresAt
+    let anchorHeight: number | null = null
+    let anchorBlockHash: string | null = null
     let failureReason: string | null = null
     let observationProvider = resolveHnsObservationProviderFallback(env)
     let inspectionSnapshot: HnsSessionAssertionSnapshot = {
@@ -140,16 +149,18 @@ export async function startNamespaceVerificationSession(
       operationClass: null,
     }
 
-    if (isHnsVerifierConfigured(env)) {
-      const inspection = await inspectHnsRoot(env, {
-        rootLabel: normalizedRootLabel,
-      })
-      inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
-      persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
-      observationProvider = inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
-    } else {
-      throw providerUnavailable("HNS verifier is not configured")
-    }
+    const prepared = await prepareHnsImportChallenge(env, {
+      rootLabel: normalizedRootLabel,
+      challengeTxtValue,
+    })
+    status = "challenge_required"
+    challengeKind = "hns_import"
+    inspectionSnapshot = prepared.inspectionSnapshot
+    observationProvider = prepared.observationProvider
+    persistedSetupNameservers = prepared.setupNameservers
+    persistedChallengePayload = JSON.stringify(prepared.challengePayload)
+    anchorHeight = prepared.anchorHeight
+    anchorBlockHash = prepared.anchorBlockHash
 
     await client.execute({
       sql: `
@@ -159,11 +170,11 @@ export async function startNamespaceVerificationSession(
           root_exists, root_control_verified, expiry_horizon_sufficient, routing_enabled,
           pirate_dns_authority_verified, club_attach_allowed, pirate_web_routing_allowed,
           pirate_subdomain_issuance_allowed, control_class, operation_class, observation_provider,
-          evidence_bundle_ref, failure_reason, accepted_at, expires_at, created_at, updated_at
+          evidence_bundle_ref, failure_reason, accepted_at, anchor_height, anchor_block_hash, expires_at, created_at, updated_at
         ) VALUES (
-          ?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8, ?9, ?10, ?11,
-          ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
-          NULL, ?23, NULL, ?24, ?25, ?25
+          ?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+          ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23,
+          NULL, ?24, NULL, ?25, ?26, ?27, ?28, ?28
         )
       `,
       args: [
@@ -174,6 +185,7 @@ export async function startNamespaceVerificationSession(
         normalizedRootLabel,
         status,
         challengeKind,
+        persistedChallengePayload,
         persistedChallengeHost,
         persistedChallengeTxtValue,
         persistedSetupNameservers,
@@ -190,10 +202,16 @@ export async function startNamespaceVerificationSession(
         inspectionSnapshot.operationClass ?? null,
         observationProvider,
         failureReason,
+        anchorHeight,
+        anchorBlockHash,
         expiresAt,
         createdAt,
       ],
     })
+    } catch (error) {
+      await releaseHnsImportSessionLock(client, { normalizedRootLabel, sessionId })
+      throw error
+    }
   }
 
   const row = await getNamespaceVerificationSessionRowForUser(client, sessionId, input.userId)

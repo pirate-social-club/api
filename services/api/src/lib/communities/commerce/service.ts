@@ -20,6 +20,7 @@ import { logPipelineInfo } from "../../observability/pipeline-log"
 import { sha256Hex } from "../../crypto"
 import type { UserRepository } from "../../auth/repositories"
 import {
+  buildStoryVideoMetadataMedia,
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
   type StoryLicensePreset,
@@ -110,6 +111,12 @@ async function retryExistingStoryRoyaltyRegistration(input: {
         assetKind: asset.asset_kind,
         accessMode: asset.access_mode,
         bundle: input.bundle ?? null,
+        media: buildStoryVideoMetadataMedia({
+          post: input.post,
+          storageRef: asset.primary_content_ref,
+          mimeType: input.post.media_refs?.[0]?.mime_type ?? null,
+          contentHash: asset.primary_content_hash,
+        }),
         primaryContentHash: resolvedPrimaryContentHash,
       })
       if (royaltyRegistration) {
@@ -540,6 +547,12 @@ export async function createAssetForPost(input: {
             // Story metadata is permanent: an unknown access mode must never expose media.
             accessMode: input.post.access_mode ?? "locked",
             bundle: input.bundle ?? null,
+            media: buildStoryVideoMetadataMedia({
+              post: input.post,
+              storageRef: input.storageRef,
+              mimeType: input.mimeType,
+              contentHash: input.contentHash,
+            }),
             primaryContentHash: resolvedPrimaryContentHash,
             royaltyShares: storyRoyaltySharesForRegistration,
           })

@@ -10,6 +10,7 @@ import {
 import {
   getActiveCommunityTelegramBotUsername,
   getCommunityTelegramBot,
+  refreshCommunityTelegramBotWebhook,
   revokeCommunityTelegramBot,
   saveCommunityTelegramBot,
 } from "../lib/telegram/community-bot-service"
@@ -20,8 +21,73 @@ import {
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
 import { notFoundError } from "../lib/errors"
+import {
+  connectTelegramChannelDestination,
+  enqueueTelegramChannelBackfill,
+  getTelegramChannelDestination,
+  unlinkTelegramChannelDestination,
+} from "../lib/telegram/channel-destination-service"
 
 export function registerCommunityTelegramRoutes(communities: Hono<AuthenticatedEnv>): void {
+  communities.get("/:communityId/telegram-channel", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    return c.json(await getTelegramChannelDestination({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    }), 200)
+  })
+
+  communities.post("/:communityId/telegram-channel", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await optionalJsonBody<{ telegram_chat?: unknown; publication_mode?: unknown }>(
+      c,
+      "Invalid Telegram channel payload",
+    )
+    return c.json(await connectTelegramChannelDestination({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      body,
+    }), 200)
+  })
+
+  communities.post("/:communityId/telegram-channel/setup-intents", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await createTelegramSetupIntent({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      setupKind: "channel",
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/telegram-channel/unlink", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    return c.json(await unlinkTelegramChannelDestination({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    }), 200)
+  })
+
+  communities.post("/:communityId/telegram-channel/backfill", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await optionalJsonBody<{ limit?: unknown }>(c, "Invalid Telegram channel backfill payload")
+    return c.json(await enqueueTelegramChannelBackfill({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+      limit: body?.limit,
+    }), 202)
+  })
+
   communities.get("/:communityId/telegram-bot-username", async (c) => {
     const communityIdentifier = c.req.param("communityId")?.trim()
     const communityRepository = getCommunityRepository(c.env)
@@ -69,6 +135,17 @@ export function registerCommunityTelegramRoutes(communities: Hono<AuthenticatedE
   communities.post("/:communityId/telegram-bot/revoke", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await revokeCommunityTelegramBot({
+      env: c.env,
+      communityRepository,
+      communityId,
+      actor,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/telegram-bot/refresh-webhook", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const result = await refreshCommunityTelegramBotWebhook({
       env: c.env,
       communityRepository,
       communityId,

@@ -20,7 +20,11 @@ import {
   markPostPublishRequestStatus,
 } from "./community-post-publish-request-store"
 import { getPostById } from "./community-post-query-store"
-import { markPostDeleted } from "./community-post-mutation-store"
+import {
+  markPostDeleted,
+  markPostPublished,
+  markPostPublishFailed,
+} from "./community-post-mutation-store"
 import { resolvePostProjectionSchema } from "./community-post-projection"
 import { consumeSongPostBundle } from "../song-artifacts/song-artifact-post-resolution-service"
 import {
@@ -33,6 +37,12 @@ import {
   requireMemberAccess,
 } from "./post-access"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
+import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import {
+  allowsNonMemberPowParticipation,
+  followCommunityAfterParticipation,
+  type ParticipationFollowRepository,
+} from "../communities/membership/open-participation"
 import {
   enqueueEmbedHydrateIfNeeded,
   enqueuePostLabelIfNeeded,
@@ -44,11 +54,11 @@ import {
 } from "../communities/jobs/store"
 import { enqueueVideoMediaAnalysisIfEnabled } from "../communities/jobs/video-media-analysis-handler"
 import { processCommunityJobById } from "../communities/jobs/runner"
-import type { CommunityJobRepository } from "../communities/jobs/runner-types"
+import { getBackgroundCommunityJobRepository } from "../communities/jobs/background-job-repository"
 import { SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR } from "../communities/jobs/post-publish-finalize-handler"
-import { conflictError, eligibilityFailed, internalError, providerUnavailable } from "../errors"
+import { conflictError, eligibilityFailed, internalError, notFoundError, providerUnavailable } from "../errors"
 import { nowIso } from "../helpers"
-import { withRequestControlPlaneClients } from "../runtime-deps"
+import { withBackgroundControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
 import type { Env } from "../../env"
 import type { Asset, CreatePostRequest, Post } from "../../types"
@@ -68,18 +78,123 @@ let postAssetCreatorForRuntime: PostAssetCreator = createAssetForPost
 let songPostAssetCreatorForRuntime: SongPostAssetCreator = createSongAssetForPost
 let postCommunityWriteOpenerForRuntime: PostCommunityWriteOpener = openCommunityWriteClient
 
+/**
+ * A second request may observe a post while its original listing work is still
+ * running. Only resume processing posts after this window so retries can
+ * recover an interrupted request without racing an in-flight one.
+ */
+export const POST_LISTING_RECOVERY_MIN_AGE_MS = 60_000
+
+export function deferPostPublicationForListing(
+  analysisOverride: Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status">,
+  hasListingDraft: boolean,
+): Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy" | "status"> {
+  return hasListingDraft && analysisOverride.status === "published"
+    ? { ...analysisOverride, status: "processing" }
+    : analysisOverride
+}
+
+export function shouldResumePostListingDraft(input: {
+  post: Pick<Post, "status" | "publish_failure_code" | "asset_id" | "created_at">
+  hasListingDraft: boolean
+  publishMode?: CreatePostRequest["publish_mode"] | null
+  nowMs?: number
+}): boolean {
+  const createdAtMs = Date.parse(input.post.created_at)
+  const processingIsStale = Number.isFinite(createdAtMs)
+    && (input.nowMs ?? Date.now()) - createdAtMs >= POST_LISTING_RECOVERY_MIN_AGE_MS
+
+  return input.hasListingDraft
+    && Boolean(input.post.asset_id?.trim())
+    && (
+      (
+        input.post.status === "failed"
+        && input.post.publish_failure_code === "listing_creation_failed"
+      )
+      || (
+        input.post.status === "processing"
+        && input.publishMode !== "async"
+        && processingIsStale
+      )
+    )
+}
+
+async function ensurePostListingDraft(input: {
+  env: Env
+  userId: string
+  communityId: string
+  post: Post
+  listingDraft: NonNullable<CreatePostRequest["listing_draft"]>
+  communityRepository: CommunityDatabaseBindingRepository & CommunityReadRepository
+  userRepository: UserRepository
+  client: DbExecutor
+}): Promise<void> {
+  if (!input.post.asset_id?.trim()) {
+    throw internalError("Post listing draft is missing its asset")
+  }
+  const existingListing = await getListingRowByAssetId(
+    input.client,
+    input.communityId,
+    input.post.asset_id,
+  )
+  if (existingListing) return
+  await createCommunityListingInTransaction({
+    env: input.env,
+    userId: input.userId,
+    communityId: input.communityId,
+    body: {
+      ...input.listingDraft,
+      asset: `asset_${input.post.asset_id}`,
+      live_room: null,
+      replay_asset: null,
+    },
+    communityRepository: input.communityRepository as unknown as Parameters<typeof createCommunityListingInTransaction>[0]["communityRepository"],
+    userRepository: input.userRepository,
+    client: input.client,
+  })
+}
+
+async function enqueueTelegramPublicationIfPublished(input: {
+  client: DbExecutor
+  communityId: string
+  post: Post
+  createdAt: string
+}): Promise<void> {
+  if (input.post.status !== "published" || input.post.visibility !== "public") return
+  try {
+    await enqueueCommunityJob({
+      client: input.client,
+      communityId: input.communityId,
+      jobType: "telegram_post_publish",
+      subjectType: "post",
+      subjectId: input.post.post_id,
+      createdAt: input.createdAt,
+    })
+  } catch (error) {
+    console.error("[posts] Telegram publication enqueue failed", {
+      community_id: input.communityId,
+      post_id: input.post.post_id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 async function processImmediatePostPublishFinalize(input: {
   env: Env
   communityId: string
   jobId: string
   songArtifactBundleId: string | null
-  communityRepository: CommunityJobRepository
 }): Promise<void> {
-  const finalizeResult = await processCommunityJobById({
+  // Constructed here — inside the background control-plane scope — never
+  // passed in from the request: a request-scoped repository's control-plane
+  // client is closed once the response is produced, while this task is still
+  // running (the "Client was closed and is not queryable" finalize failure).
+  const communityRepository = getBackgroundCommunityJobRepository(input.env)
+  const finalizeResult = await communityJobProcessorForRuntime({
     env: input.env,
     communityId: input.communityId,
     jobId: input.jobId,
-    communityRepository: input.communityRepository,
+    communityRepository,
   })
   if (
     finalizeResult?.status !== "failed"
@@ -94,7 +209,7 @@ async function processImmediatePostPublishFinalize(input: {
   // finalize instead of waiting for the global community rotation.
   const db = await postCommunityWriteOpenerForRuntime(
     input.env,
-    input.communityRepository,
+    communityRepository,
     input.communityId,
   )
   let previewJob
@@ -112,21 +227,48 @@ async function processImmediatePostPublishFinalize(input: {
     return
   }
 
-  const previewResult = await processCommunityJobById({
+  const previewResult = await communityJobProcessorForRuntime({
     env: input.env,
     communityId: input.communityId,
     jobId: previewJob.job_id,
-    communityRepository: input.communityRepository,
+    communityRepository,
   })
   if (previewResult?.status !== "succeeded") {
     return
   }
-  await processCommunityJobById({
+  await communityJobProcessorForRuntime({
     env: input.env,
     communityId: input.communityId,
     jobId: input.jobId,
-    communityRepository: input.communityRepository,
+    communityRepository,
   })
+}
+
+export function scheduleImmediatePostPublishFinalize(input: {
+  env: Env
+  communityId: string
+  postId: string
+  jobId: string
+  songArtifactBundleId: string | null
+  waitUntil?: PostWaitUntil
+}): void {
+  input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
+    try {
+      await processImmediatePostPublishFinalize({
+        env: input.env,
+        communityId: input.communityId,
+        jobId: input.jobId,
+        songArtifactBundleId: input.songArtifactBundleId,
+      })
+    } catch (error) {
+      console.error("[posts] immediate publish finalize job processing failed", {
+        community_id: input.communityId,
+        post_id: input.postId,
+        job_id: input.jobId,
+        error,
+      })
+    }
+  }))
 }
 
 export function setPostAssetCreatorsForTests(input: {
@@ -139,6 +281,13 @@ export function setPostAssetCreatorsForTests(input: {
 
 export function setPostCommunityWriteOpenerForTests(input: PostCommunityWriteOpener | null): void {
   postCommunityWriteOpenerForRuntime = input ?? openCommunityWriteClient
+}
+
+type CommunityJobProcessor = typeof processCommunityJobById
+let communityJobProcessorForRuntime: CommunityJobProcessor = processCommunityJobById
+
+export function setCommunityJobProcessorForTests(processor: CommunityJobProcessor | null): void {
+  communityJobProcessorForRuntime = processor ?? processCommunityJobById
 }
 
 export { moderationSeverityFromProviderResult } from "./post-moderation-recording"
@@ -160,7 +309,7 @@ export {
   listCommunityPosts,
   listPublicCommunityPosts,
 } from "./post-read-service"
-export { castPostVote } from "./post-votes"
+export { castPostVote, clearPostVote } from "./post-votes"
 
 export async function syncRetriedPostProjection(input: {
   communityRepository: Pick<PostServiceCommunityRepository, "updateCommunityPostProjectionPayload" | "updateCommunityPostProjectionStatus">
@@ -239,12 +388,12 @@ export async function retryPostPublish(input: {
       post: updated,
       updatedAt: retryAt,
     })
-    input.waitUntil?.(withRequestControlPlaneClients(async () => {
-      await processCommunityJobById({
+    input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
+      await communityJobProcessorForRuntime({
         env: input.env,
         communityId: input.communityId,
         jobId: job.job_id,
-        communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+        communityRepository: getBackgroundCommunityJobRepository(input.env),
       })
     }))
     return updated
@@ -257,6 +406,7 @@ type PostServiceCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
   & CommunityPostProjectionRepository
+  & ParticipationFollowRepository
 
 async function enqueueLockedAssetDeliveryJobIfRequested(input: {
   env: Env
@@ -282,13 +432,13 @@ async function enqueueLockedAssetDeliveryJobIfRequested(input: {
     createdAt: input.createdAt,
   })
 
-  input.waitUntil?.(withRequestControlPlaneClients(async () => {
+  input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
     try {
-      await processCommunityJobById({
+      await communityJobProcessorForRuntime({
         env: input.env,
         communityId: input.communityId,
         jobId: job.job_id,
-        communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+        communityRepository: getBackgroundCommunityJobRepository(input.env),
       })
     } catch (error) {
       console.error("[posts] immediate locked delivery job processing failed", {
@@ -326,8 +476,22 @@ export async function createPost(input: {
   const db = await postCommunityWriteOpenerForRuntime(input.env, input.communityRepository, input.communityId)
   try {
     const postAnalysisProvider = resolvePostAnalysisProvider(input.env)
+    let nonMemberPowAuthor = false
     if (!input.bypassAuthorAccessChecks) {
-      await requireMemberAccess(db.client, input.communityId, input.userId)
+      const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
+      if (!canAccessCommunity(membership)) {
+        // PoW-only communities admit non-member posts: the action gate below
+        // demands a post-scoped ALTCHA proof, which is all joining would prove.
+        // Everything else keeps the 404 membership mask.
+        nonMemberPowAuthor = await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: input.communityId,
+          membership,
+        })
+        if (!nonMemberPowAuthor) {
+          throw notFoundError("Community not found")
+        }
+      }
       await enforceCommunityActionGate({
         env: input.env,
         client: db.client,
@@ -356,6 +520,56 @@ export async function createPost(input: {
         incomingPublishMode: input.body.publish_mode,
       })) {
         throw conflictError("idempotency_key was already used with a different post create payload")
+      }
+      if (input.body.listing_draft && shouldResumePostListingDraft({
+        post: existing,
+        hasListingDraft: true,
+        publishMode: input.body.publish_mode,
+      })) {
+        await ensurePostListingDraft({
+          env: input.env,
+          userId: input.userId,
+          communityId: input.communityId,
+          post: existing,
+          listingDraft: input.body.listing_draft,
+          communityRepository: input.communityRepository,
+          userRepository: input.userRepository,
+          client: db.client,
+        })
+        const restored = await markPostPublished({
+          executor: db.client,
+          postId: existing.post_id,
+          analysisState: existing.analysis_state,
+          contentSafetyState: existing.content_safety_state,
+          ageGatePolicy: existing.age_gate_policy,
+          now: nowIso(),
+        })
+        await input.communityRepository.recordCommunityPostProjection({
+          communityId: input.communityId,
+          sourcePostId: restored.post_id,
+          authorUserId: restored.author_user_id ?? null,
+          identityMode: restored.identity_mode,
+          postType: restored.post_type,
+          status: restored.status,
+          visibility: restored.visibility,
+          sourceCreatedAt: restored.created_at,
+          projectedPayloadJson: JSON.stringify(restored),
+          actorUserId: input.userId,
+          createdAt: restored.updated_at,
+        })
+        await enqueueTelegramPublicationIfPublished({
+          client: db.client,
+          communityId: input.communityId,
+          post: restored,
+          createdAt: restored.updated_at,
+        })
+        schedulePublicPostCachePurge({
+          env: input.env,
+          communityId: input.communityId,
+          postId: restored.post_id,
+          waitUntil: input.waitUntil,
+        })
+        return restored
       }
       return existing
     }
@@ -393,6 +607,10 @@ export async function createPost(input: {
       communityRepository: input.communityRepository,
       postAnalysisProvider,
     })
+    const initialAnalysisOverride = deferPostPublicationForListing(
+      analysisOverride,
+      Boolean(input.body.listing_draft),
+    )
     const createdAt = nowIso()
     // Resolve the projection schema BEFORE the write tx — a buffered D1 write tx
     // can't see schema reads (or any read) until commit; threaded into insertPost.
@@ -415,7 +633,7 @@ export async function createPost(input: {
         createdAt,
         projectionSchema,
         idempotencyBodyHash: projectionSchema.hasAsyncPublishColumns ? idempotencyBodyHash : null,
-        analysisOverride,
+        analysisOverride: initialAnalysisOverride,
         agentWriteAuthorization: agentWriteAuthorization ?? undefined,
       })
 
@@ -502,27 +720,25 @@ export async function createPost(input: {
       throw internalError("Post row is missing after insert")
     }
 
+    if (nonMemberPowAuthor) {
+      await followCommunityAfterParticipation({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        communityId: input.communityId,
+        userId: input.userId,
+      })
+    }
+
     if (input.body.publish_mode === "async") {
       if (postPublishFinalizeJobId) {
-        const jobId = postPublishFinalizeJobId
-        input.waitUntil?.(withRequestControlPlaneClients(async () => {
-          try {
-            await processImmediatePostPublishFinalize({
-              env: input.env,
-              communityId: input.communityId,
-              jobId,
-              songArtifactBundleId: post.song_artifact_bundle_id ?? null,
-              communityRepository: input.communityRepository as unknown as CommunityJobRepository,
-            })
-          } catch (error) {
-            console.error("[posts] immediate publish finalize job processing failed", {
-              community_id: input.communityId,
-              post_id: post.post_id,
-              job_id: jobId,
-              error,
-            })
-          }
-        }))
+        scheduleImmediatePostPublishFinalize({
+          env: input.env,
+          communityId: input.communityId,
+          postId: post.post_id,
+          jobId: postPublishFinalizeJobId,
+          songArtifactBundleId: post.song_artifact_bundle_id ?? null,
+          waitUntil: input.waitUntil,
+        })
       }
       await input.communityRepository.recordCommunityPostProjection({
         communityId: input.communityId,
@@ -535,6 +751,12 @@ export async function createPost(input: {
         sourceCreatedAt: post.created_at,
         projectedPayloadJson: JSON.stringify(post),
         actorUserId: input.userId,
+        createdAt,
+      })
+      await enqueueTelegramPublicationIfPublished({
+        client: db.client,
+        communityId: input.communityId,
+        post,
         createdAt,
       })
       schedulePublicPostCachePurge({
@@ -605,38 +827,80 @@ export async function createPost(input: {
         })
       })
     }
+    let postCommitAssetTasksCompleted = false
+    let completedPost = post
     try {
       for (const runPostCommitAssetTask of postCommitAssetTasks) {
         await runPostCommitAssetTask()
       }
-      if (input.body.listing_draft && post.asset_id?.trim()) {
-        const existingListing = await getListingRowByAssetId(db.client, input.communityId, post.asset_id)
-        if (!existingListing) {
-          await createCommunityListingInTransaction({
+      postCommitAssetTasksCompleted = true
+
+      if (post.post_type === "video" && resolvedVideoAsset) {
+        // Soundtrack rights analysis is advisory (never blocks publication),
+        // but enqueue it before listing creation so a listing retry cannot skip it.
+        try {
+          await enqueueVideoMediaAnalysisIfEnabled({
             env: input.env,
-            userId: input.userId,
-            communityId: input.communityId,
-            body: {
-              ...input.body.listing_draft,
-              asset: `asset_${post.asset_id}`,
-              live_room: null,
-              replay_asset: null,
-            },
-            communityRepository: input.communityRepository as unknown as Parameters<typeof createCommunityListingInTransaction>[0]["communityRepository"],
-            userRepository: input.userRepository,
             client: db.client,
+            communityId: input.communityId,
+            postId: post.post_id,
+            storageObjectKey: resolvedVideoAsset.upload.storage_object_key,
+            mimeType: resolvedVideoAsset.upload.mime_type,
+            durationMs: (input.body as Extract<CreatePostRequest, { post_type: "video" }>)
+              .media_refs?.[0]?.duration_ms ?? null,
+            createdAt,
+          })
+        } catch (error) {
+          console.error("[posts] video media analysis enqueue failed", {
+            community_id: input.communityId,
+            post_id: post.post_id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
+
+      if (input.body.listing_draft && post.asset_id?.trim()) {
+        await ensurePostListingDraft({
+          env: input.env,
+          userId: input.userId,
+          communityId: input.communityId,
+          post,
+          listingDraft: input.body.listing_draft,
+          communityRepository: input.communityRepository,
+          userRepository: input.userRepository,
+          client: db.client,
+        })
+        if (post.status === "processing") {
+          completedPost = await markPostPublished({
+            executor: db.client,
+            postId: post.post_id,
+            analysisState: post.analysis_state,
+            contentSafetyState: post.content_safety_state,
+            ageGatePolicy: post.age_gate_policy,
+            now: nowIso(),
           })
         }
       }
     } catch (error) {
       try {
-        await markPostDeleted({
-          executor: db.client,
-          postId: post.post_id,
-          now: nowIso(),
-        })
+        if (postCommitAssetTasksCompleted && input.body.listing_draft && post.asset_id?.trim()) {
+          await markPostPublishFailed({
+            executor: db.client,
+            postId: post.post_id,
+            failureCode: "listing_creation_failed",
+            failureMessage: "The paid post was prepared, but its listing could not be created. Try publishing again.",
+            retryable: true,
+            now: nowIso(),
+          })
+        } else {
+          await markPostDeleted({
+            executor: db.client,
+            postId: post.post_id,
+            now: nowIso(),
+          })
+        }
       } catch (cleanupError) {
-        console.error("[posts] failed to delete post after asset creation failure", {
+        console.error("[posts] failed to persist post recovery state after a post-commit failure", {
           community_id: input.communityId,
           post_id: post.post_id,
           asset_id: post.asset_id ?? null,
@@ -646,59 +910,41 @@ export async function createPost(input: {
       throw error
     }
 
-    if (post.post_type === "video" && resolvedVideoAsset) {
-      // Soundtrack rights analysis is advisory (never blocks or deletes the
-      // post), so an enqueue failure must not fail the publish.
-      try {
-        await enqueueVideoMediaAnalysisIfEnabled({
-          env: input.env,
-          client: db.client,
-          communityId: input.communityId,
-          postId: post.post_id,
-          storageObjectKey: resolvedVideoAsset.upload.storage_object_key,
-          mimeType: resolvedVideoAsset.upload.mime_type,
-          durationMs: (input.body as Extract<CreatePostRequest, { post_type: "video" }>)
-            .media_refs?.[0]?.duration_ms ?? null,
-          createdAt,
-        })
-      } catch (error) {
-        console.error("[posts] video media analysis enqueue failed", {
-          community_id: input.communityId,
-          post_id: post.post_id,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      }
-    }
-
     await input.communityRepository.recordCommunityPostProjection({
       communityId: input.communityId,
-      sourcePostId: post.post_id,
-      authorUserId: post.author_user_id ?? null,
-      identityMode: post.identity_mode,
-      postType: post.post_type,
-      status: post.status,
-      visibility: post.visibility,
-      sourceCreatedAt: post.created_at,
-      projectedPayloadJson: JSON.stringify(post),
+      sourcePostId: completedPost.post_id,
+      authorUserId: completedPost.author_user_id ?? null,
+      identityMode: completedPost.identity_mode,
+      postType: completedPost.post_type,
+      status: completedPost.status,
+      visibility: completedPost.visibility,
+      sourceCreatedAt: completedPost.created_at,
+      projectedPayloadJson: JSON.stringify(completedPost),
       actorUserId: input.userId,
+      createdAt,
+    })
+    await enqueueTelegramPublicationIfPublished({
+      client: db.client,
+      communityId: input.communityId,
+      post: completedPost,
       createdAt,
     })
     schedulePublicPostCachePurge({
       env: input.env,
       communityId: input.communityId,
-      postId: post.post_id,
+      postId: completedPost.post_id,
       waitUntil: input.waitUntil,
     })
 
-    if (post.post_type === "song" && post.song_artifact_bundle_id) {
+    if (completedPost.post_type === "song" && completedPost.song_artifact_bundle_id) {
       await consumeSongPostBundle({
         env: input.env,
         communityId: input.communityId,
-        songArtifactBundleId: post.song_artifact_bundle_id,
+        songArtifactBundleId: completedPost.song_artifact_bundle_id,
       })
     }
 
-    return post
+    return completedPost
   } finally {
     db.close()
   }

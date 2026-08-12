@@ -75,6 +75,12 @@ export function serializePost(post: Post): CurrentPostResponse {
     creator_relation: post.creator_relation,
     promotion_disclosure: post.promotion_disclosure,
     source_language: post.source_language,
+    lyrics_language: post.lyrics_language ?? null,
+    lyrics_language_confidence: post.lyrics_language_confidence ?? null,
+    lyrics_language_reliable: post.lyrics_language_reliable ?? false,
+    lyrics_language_detector: post.lyrics_language_detector ?? null,
+    lyrics_language_detected_at: post.lyrics_language_detected_at ?? null,
+    lyrics_language_source_hash: post.lyrics_language_source_hash ?? null,
     translation_policy: post.translation_policy,
     access_mode: post.access_mode,
     asset: post.asset_id ? publicId(post.asset_id, "asset") : null,
@@ -97,6 +103,8 @@ export function serializePost(post: Post): CurrentPostResponse {
           author_user: post.crosspost_source.author_user_id ? `usr_${post.crosspost_source.author_user_id}` : null,
           author_label: post.crosspost_source.author_label ?? null,
           thumbnail_ref: post.crosspost_source.thumbnail_ref ?? null,
+          content_safety_state: post.crosspost_source.content_safety_state ?? null,
+          age_gate_policy: post.crosspost_source.age_gate_policy ?? null,
         }
       : null,
     song_mode: post.song_mode,
@@ -165,6 +173,11 @@ function pruneLinkEnrichmentTranslations(
 
 export function serializeLocalizedPostResponse(response: LocalizedPostResponse, options?: { surface: "home_feed" }): ContractLocalizedPostResponse {
   const serializedPost = serializePost(response.post)
+  // `sensitive` is warning-only. Only an unresolved 18+ proof gate suppresses
+  // media capability URLs from the response payload.
+  if (response.age_gate_viewer_state === "proof_required") {
+    serializedPost.media_refs = undefined
+  }
   if (options?.surface === "home_feed") {
     serializedPost.link_enrichment = pruneLinkEnrichmentTranslations(
       serializedPost.link_enrichment as Record<string, unknown> | null | undefined,

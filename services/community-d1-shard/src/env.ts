@@ -29,9 +29,13 @@ export interface Env {
    * `wrangler secret put SHARD_ADMIN_TOKEN --env staging`.
    */
   SHARD_ADMIN_TOKEN?: string
+  /** Explicit kill switch for destructive loaded-binding reclamation. Staging only. */
+  STAGING_RECLAIM_ENABLED?: string
+  /** Native Cloudflare Worker version identity for deployment attestation. */
+  CF_VERSION_METADATA?: WorkerVersionMetadata
   /** PR2 pilot D1 (added to wrangler.jsonc at provisioning time). */
   DB_CMTY_PILOT?: D1Database
   /** PR2 pilot D1 (the second pilot community, "fixture"). */
   DB_CMTY_FIXTURE?: D1Database
-  [binding: string]: D1Database | string | undefined
+  [binding: string]: D1Database | WorkerVersionMetadata | string | undefined
 }

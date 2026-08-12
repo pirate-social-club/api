@@ -2,6 +2,7 @@ import type { DbExecutor } from "../../db-helpers"
 import { executeFirst } from "../../db-helpers"
 import { makeId } from "../../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "./runner-types"
 
 export type CommunityJobType =
   | "comment_projection_sync"
@@ -24,6 +25,8 @@ export type CommunityJobType =
   | "live_room_recording_ingest"
   | "live_room_viewer_sessions_prune"
   | "video_media_analysis"
+  | "video_audio_catalog_unenroll"
+  | "telegram_post_publish"
 type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 export type CommunityJobCheckpoint =
   | "attempt_started"
@@ -238,6 +241,9 @@ export async function enqueueCommunityJob(input: {
   // write guard rejects reads). Callers inside a write tx accept that a fresh subject's
   // job is enqueued without the dedup optimization (jobs are idempotent on the runner).
   dedupe?: boolean
+  // Translation reads use a source-hash-specific subject. Reuse an exhausted
+  // failure for that exact source instead of starting another retry cycle.
+  reuseTerminalFailure?: boolean
 }): Promise<CommunityJobRow> {
   if (input.dedupe !== false) {
     const existing = await findLatestCommunityJobBySubjectAndType({
@@ -247,7 +253,18 @@ export async function enqueueCommunityJob(input: {
       subjectId: input.subjectId,
     })
 
-    if (existing && (existing.status === "queued" || existing.status === "running")) {
+    if (
+      existing
+      && (
+        existing.status === "queued"
+        || existing.status === "running"
+        || (
+          input.reuseTerminalFailure === true
+          && existing.status === "failed"
+          && existing.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS
+        )
+      )
+    ) {
       return existing
     }
   }

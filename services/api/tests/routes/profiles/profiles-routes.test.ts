@@ -57,7 +57,7 @@ function setSuccessfulPaidHandleFundingVerifier(env: Env, withObservation = fals
     fromAddress: input.buyerAddress,
     toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(env),
     tokenAddress: resolvePirateCheckoutUsdcTokenAddress(env),
-    amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+    amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
     chainRef: "eip155:84532",
     ...(withObservation ? {
       observation: {
@@ -184,7 +184,14 @@ describe("profile routes", () => {
         unique_human: { state: "unverified", provider: null, mechanism: null, verified_at: null },
         age_over_18: { state: "unverified", provider: null, proof_type: null, mechanism: null, verified_at: null },
         minimum_age: { state: "unverified", provider: null, proof_type: null, value: null, mechanism: null, verified_at: null },
-        nationality: { state: "verified", provider: "self", proof_type: "nationality", value: "USA", mechanism: null, verified_at: "2026-04-24T00:00:00.000Z" },
+        nationality: {
+          state: "verified",
+          provider: "self",
+          proof_type: "nationality",
+          value: "USA",
+          mechanism: null,
+          verified_at: new Date().toISOString(),
+        },
         gender: { state: "unverified", provider: null, proof_type: null, value: null, mechanism: null, verified_at: null },
         wallet_score: { state: "unverified", provider: null, mechanism: null, verified_at: null },
       })],
@@ -407,7 +414,39 @@ describe("profile routes", () => {
     expect(analyticsProperties.handle_length).toBe(12)
   })
 
-  test("global handle rename returns conflict when the desired label is already active", async () => {
+  test("the current global handle is a successful no-op instead of a bad request", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "profile-current-handle-user")
+    const meResponse = await app.request("http://pirate.test/profiles/me", {
+      headers: { authorization: `Bearer ${session.accessToken}` },
+    }, ctx.env)
+    expect(meResponse.status).toBe(200)
+    const me = await json(meResponse) as { global_handle: { label: string } }
+
+    const quoteResponse = await requestJson("http://pirate.test/profiles/me/quote-handle-upgrade", "POST", {
+      desired_label: me.global_handle.label,
+    }, ctx.env, session.accessToken)
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as {
+      desired_label: string
+      eligible: boolean
+      reason: string | null
+    }
+    expect(quote.desired_label).toBe(me.global_handle.label)
+    expect(quote.eligible).toBe(false)
+    expect(quote.reason).toBe("Desired label is already active")
+
+    const renameResponse = await requestJson("http://pirate.test/profiles/me/rename-global-handle", "POST", {
+      desired_label: me.global_handle.label,
+    }, ctx.env, session.accessToken)
+    expect(renameResponse.status).toBe(200)
+    const renamed = await json(renameResponse) as { label: string }
+    expect(renamed.label).toBe(me.global_handle.label)
+  })
+
+  test("global handle rename returns conflict when another user owns the desired label", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
 
@@ -613,7 +652,7 @@ describe("profile routes", () => {
         fromAddress: input.buyerAddress,
         toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(ctx.env),
         tokenAddress: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
-        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
         chainRef: "eip155:84532",
       }
     })
@@ -879,7 +918,7 @@ describe("profile routes", () => {
         fromAddress: input.buyerAddress,
         toAddress: input.quote.funding_destination_address ?? resolvePirateCheckoutOperatorAddress(ctx.env),
         tokenAddress: resolvePirateCheckoutUsdcTokenAddress(ctx.env),
-        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
         chainRef: "eip155:84532",
       }
     })

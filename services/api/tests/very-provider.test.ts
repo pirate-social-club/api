@@ -282,6 +282,7 @@ describe("Very provider adapter", () => {
       { result: true, pseudonym: "0" },
       { result: { valid: true, pseudonym: "0" } },
       { data: { verified: true, pseudonym: "0" } },
+      { data: { verified: true, pseudonym: 0 } },
     ]
     let responseIndex = 0
     await withMockedFetch(() => (async () => {
@@ -304,6 +305,37 @@ describe("Very provider adapter", () => {
         })
         expect(outcome.status).toBe("verified")
       }
+    })
+  })
+
+  test("configured provider rejects a different numeric pseudonym", async () => {
+    const { getVeryProvider } = require("../src/lib/verification/very-provider") as typeof import("../src/lib/verification/very-provider")
+    const provider = getVeryProvider({
+      VERY_API_URL: "https://very.example.com",
+      VERY_APP_ID: "test-app",
+    } as any)
+
+    await withMockedFetch(() => (async () => new Response(JSON.stringify({
+      status: "valid",
+      data: { pseudonym: 1 },
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })), async () => {
+      const outcome = await provider.getSessionOutcome({
+        upstreamSessionRef: "very-upstream-ref-123",
+        providerPayloadRef: "proof-payload-123",
+        expectedBinding: {
+          uniqueness_domain: "pirate-unique-human-v0",
+          binding_value: "0",
+          binding_field: "pseudonym",
+          challenge_expires_at: 4_070_908_800,
+        },
+      })
+      expect(outcome).toMatchObject({
+        status: "failed",
+        failureReason: "very_session_binding_mismatch",
+      })
     })
   })
 })

@@ -9,9 +9,11 @@ import type { Env } from "../../env"
 import { envFlag } from "../helpers"
 import { getSongArtifactBundle } from "../song-artifacts/song-artifact-repository"
 import {
+  isKaraokeAttemptRankEligible,
   recordKaraokeAttempt,
   type KaraokeAttemptCompletionReason,
 } from "./karaoke-attempt-service"
+import { claimStreakTimezonePin, prepareStreakWrite } from "../posts/post-study-streak-write-service"
 import { getKaraokeSessionCreationRecordBySession } from "./session-creation-repository"
 
 export interface FinalizeKaraokeAttemptResult {
@@ -39,6 +41,58 @@ function isSummary(value: unknown): value is KaraokeSessionSummary {
     && typeof summary.noRecognitionLineCount === "number"
     && typeof summary.lowConfidenceLineCount === "number"
     && (summary.timingTrend === "early" || summary.timingTrend === "late" || summary.timingTrend === "mixed" || summary.timingTrend === "on_time")
+}
+
+/**
+ * Emits the take's timing-calibration verdict as a structured log line.
+ *
+ * Timing was pulled from grading in v3 precisely because we could not see, from
+ * production, WHY it was producing nonsense — the attempt row keeps only a null
+ * timing score and a coarse trend, and the per-line measurements die with the
+ * session. This is the cheapest durable fix: the offset the scorer estimated,
+ * the residual spread, and the reason it did or did not count, on every
+ * finalize, with no schema change and no raw audio/transcript.
+ *
+ * Read defensively: a client (or an API bundling an older karaoke-runtime) may
+ * send a summary with no calibration block at all.
+ */
+function logTimingCalibration(input: {
+  summary: KaraokeSessionSummary
+  sessionId: string
+  attemptId: string
+  communityId: string
+  postId: string
+}): void {
+  const calibration = (input.summary as Partial<KaraokeSessionSummary> & {
+    timingCalibration?: {
+      state?: unknown
+      reason?: unknown
+      offsetMs?: unknown
+      rawOffsetMs?: unknown
+      residualSpreadMs?: unknown
+      measuredLineCount?: unknown
+      matchedWordCount?: unknown
+    }
+  }).timingCalibration
+
+  console.info("[karaoke-scoring] timing calibration", {
+    attempt_id: input.attemptId,
+    community_id: input.communityId,
+    matched_word_count: calibration?.matchedWordCount ?? null,
+    measured_line_count: calibration?.measuredLineCount ?? null,
+    offset_ms: calibration?.offsetMs ?? null,
+    post_id: input.postId,
+    raw_offset_ms: calibration?.rawOffsetMs ?? null,
+    residual_spread_ms: calibration?.residualSpreadMs ?? null,
+    scored_line_count: input.summary.scoredLineCount,
+    session_id: input.sessionId,
+    // "absent" distinguishes a pre-v4 client from a v4 client that failed to
+    // calibrate — without it the two look identical in the logs.
+    state: calibration?.state ?? "absent",
+    timing_reason: calibration?.reason ?? null,
+    timing_score: input.summary.timingScore,
+    timing_trend: input.summary.timingTrend,
+  })
 }
 
 function requireDateString(value: unknown, field: string): string {
@@ -88,10 +142,12 @@ function parseStoredScoringPolicy(json: string | null): { model: string; provide
 
 export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
   activityDate: string
+  activityTimezone: string | null
   attemptId: string
   completedAt: string
   completionReason: KaraokeAttemptCompletionReason
   sessionId: string
+  sessionStartedAt: string | null
   summary: KaraokeSessionSummary
 } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -105,12 +161,22 @@ export function parseFinalizeKaraokeAttemptPayload(value: unknown): {
   if (!isSummary(record.summary)) {
     throw new HttpError(400, "invalid_karaoke_finalize_payload", "summary is invalid", false)
   }
+  // Optional streak-owner-timezone metadata. Older runtimes do not send these;
+  // invalid values are dropped here and re-validated at pin resolution.
+  const activityTimezone = typeof record.activity_timezone === "string" && record.activity_timezone.trim()
+    ? record.activity_timezone.trim()
+    : null
+  const sessionStartedAt = typeof record.session_started_at === "string" && Number.isFinite(Date.parse(record.session_started_at))
+    ? record.session_started_at
+    : null
   return {
     activityDate: requireDateString(record.activity_date, "activity_date"),
+    activityTimezone,
     attemptId: requireString(record.attempt_id, "attempt_id"),
     completedAt: requireIsoString(record.completed_at, "completed_at"),
     completionReason,
     sessionId: requireString(record.session_id, "session_id"),
+    sessionStartedAt,
     summary: record.summary,
   }
 }
@@ -171,6 +237,42 @@ export async function finalizeKaraokeAttempt(input: {
       }
     }
 
+    logTimingCalibration({
+      attemptId: input.payload.attemptId,
+      communityId: creation.communityId,
+      postId: creation.postId,
+      sessionId: input.payload.sessionId,
+      summary: input.payload.summary,
+    })
+
+    // The pin claim is a compare-and-swap that must COMMIT before the
+    // preparation read (concurrent first qualifiers can't out-race it), and
+    // the preparation read must happen before the buffered write tx opens.
+    const streakPreparation = isKaraokeAttemptRankEligible({
+      completionReason: input.payload.completionReason,
+      summary: input.payload.summary,
+    })
+      ? await (async () => {
+        await claimStreakTimezonePin({
+          client: db.client,
+          communityId: creation.communityId,
+          now: input.payload.completedAt,
+          postId: creation.postId,
+          timezoneCandidate: input.payload.activityTimezone,
+          userId: creation.subjectUserId,
+        })
+        return prepareStreakWrite({
+          activityInstant: input.payload.sessionStartedAt ?? input.payload.completedAt,
+          client: db.client,
+          now: input.payload.completedAt,
+          postId: creation.postId,
+          qualified: true,
+          timezoneCandidate: input.payload.activityTimezone,
+          userId: creation.subjectUserId,
+        })
+      })()
+      : undefined
+
     const tx = await db.client.transaction("write")
     try {
       const result = await recordKaraokeAttempt({
@@ -185,6 +287,7 @@ export async function finalizeKaraokeAttempt(input: {
         scoringModel: scoringPolicy.model,
         scoringProvider: scoringPolicy.provider,
         sessionId: input.payload.sessionId,
+        streakPreparation,
         summary: input.payload.summary,
         userId: creation.subjectUserId,
         attemptKnownAbsent: true,

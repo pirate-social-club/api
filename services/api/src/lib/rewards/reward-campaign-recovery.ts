@@ -5,6 +5,7 @@ import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
 import { nowIso } from "../helpers"
+import { resolveOptionalRewardCampaignAssetConfig } from "./reward-campaign-config"
 import {
   checkRewardCampaignFundingFinality,
   createRewardCampaignFinalityProvider,
@@ -12,6 +13,11 @@ import {
   verifyRewardCampaignFinalityChain,
 } from "./reward-campaign-finality"
 import { requireRewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
+
+export function resolveRewardCampaignRecoveryFinalityConfig(env: Env): { rpcUrl: string; chainId: number } | null {
+  const asset = resolveOptionalRewardCampaignAssetConfig(env)
+  return asset ? { rpcUrl: asset.rpcUrl, chainId: asset.chainId } : null
+}
 
 export async function recoverRewardCampaignIncident(input: {
   env: Env
@@ -39,16 +45,15 @@ export async function recoverRewardCampaignIncident(input: {
     args: [input.campaignId],
   })
   if (effects.rows.length === 0) throw conflictError("Campaign has no confirmed funding to verify")
-  const rpcUrl = String(input.env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
-  const chainId = Number(input.env.REWARDS_CAMPAIGN_CHAIN_ID)
+  const config = resolveRewardCampaignRecoveryFinalityConfig(input.env)
   const provider = input.finalityProvider
-    ?? (rpcUrl && Number.isSafeInteger(chainId) && chainId > 0
-      ? createRewardCampaignFinalityProvider(rpcUrl, chainId)
+    ?? (config
+      ? createRewardCampaignFinalityProvider(config.rpcUrl, config.chainId)
       : null)
-  if (!provider || !Number.isSafeInteger(chainId) || chainId <= 0) {
+  if (!provider || !config) {
     throw conflictError("Campaign finality verification is unavailable")
   }
-  if (!await verifyRewardCampaignFinalityChain(provider, chainId)) {
+  if (!await verifyRewardCampaignFinalityChain(provider, config.chainId)) {
     throw conflictError("Campaign finality verification is on the wrong chain")
   }
   for (const effect of effects.rows) {

@@ -149,6 +149,34 @@ async function updateLocalNamespaceHandlePolicySettings(input: {
   }
 }
 
+async function updateLocalNamespaceClaimGateExpression(input: {
+  communityDbRoot: string
+  communityId: string
+  expressionJson: string
+}): Promise<void> {
+  const client = createClient({
+    url: buildLocalCommunityDbUrl(input.communityDbRoot, input.communityId),
+  })
+  try {
+    await client.execute({
+      sql: `
+        UPDATE namespace_handle_claim_gate_policies
+        SET expression_json = ?2,
+            updated_at = ?3
+        WHERE namespace_handle_policy_id = (
+          SELECT namespace_handle_policy_id
+          FROM namespace_handle_policies
+          WHERE community_id = ?1
+          LIMIT 1
+        )
+      `,
+      args: [input.communityId, input.expressionJson, new Date().toISOString()],
+    })
+  } finally {
+    client.close()
+  }
+}
+
 async function markLocalCommunityMemberLeft(input: {
   communityDbRoot: string
   communityId: string
@@ -296,6 +324,113 @@ async function countLocalHandleQuotes(input: {
 }
 
 describe("community handle routes", () => {
+  test("claim stays bound to the quoted namespace when the community primary changes", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "quoted-namespace-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const quoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "deckhand" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(quoteResponse.status).toBe(200)
+    const quote = await json(quoteResponse) as { id: string }
+    const local = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    let quotedNamespaceId = ""
+    try {
+      const quoted = await local.execute({
+        sql: `
+          SELECT namespace_id
+          FROM community_handle_claim_quotes
+          WHERE handle_claim_quote_id = ?1
+        `,
+        args: [rawHandleQuoteId(quote.id)],
+      })
+      quotedNamespaceId = String(quoted.rows[0]?.namespace_id ?? "")
+      expect(quotedNamespaceId).not.toBe("")
+      const now = new Date().toISOString()
+      await local.execute({
+        sql: `
+          UPDATE namespace_bindings
+          SET namespace_role = 'mirror', updated_at = ?2
+          WHERE namespace_id = ?1
+        `,
+        args: [quotedNamespaceId, now],
+      })
+      await local.execute({
+        sql: `
+          INSERT INTO namespace_bindings (
+            namespace_id, community_id, namespace_verification_id,
+            display_label, normalized_label, resolver_label, route_family,
+            status, created_at, updated_at, namespace_role
+          ) VALUES (
+            'ns_replacement_primary', ?1, 'namespace_replacement_primary',
+            'replacement-root', 'replacement-root', 'replacement-root', 'hns',
+            'active', ?2, ?2, 'primary'
+          )
+        `,
+        args: [communityId, now],
+      })
+      await local.execute({
+        sql: `
+          INSERT INTO namespace_handle_policies (
+            namespace_handle_policy_id, community_id, namespace_id,
+            policy_template, pricing_model, membership_required_for_claim,
+            settings_json, created_at, updated_at, claims_enabled,
+            claim_gate_mode, claim_gate_expression_ref, eligibility_timing,
+            revision
+          )
+          SELECT 'nhp_replacement_primary', community_id, 'ns_replacement_primary',
+                 policy_template, pricing_model, membership_required_for_claim,
+                 settings_json, ?2, ?2, claims_enabled,
+                 claim_gate_mode, claim_gate_expression_ref, eligibility_timing,
+                 revision
+          FROM namespace_handle_policies
+          WHERE namespace_id = ?1
+        `,
+        args: [quotedNamespaceId, now],
+      })
+    } finally {
+      local.close()
+    }
+
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      { quote: quote.id },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(claimResponse.status).toBe(200)
+
+    const readback = createClient({
+      url: buildLocalCommunityDbUrl(ctx.communityDbRoot, communityId),
+    })
+    try {
+      const claimed = await readback.execute({
+        sql: `
+          SELECT namespace_id
+          FROM community_handles
+          WHERE handle_claim_quote_id = ?1
+        `,
+        args: [rawHandleQuoteId(quote.id)],
+      })
+      expect(claimed.rows[0]?.namespace_id).toBe(quotedNamespaceId)
+      expect(claimed.rows[0]?.namespace_id).not.toBe("ns_replacement_primary")
+    } finally {
+      readback.close()
+    }
+  })
+
   test("member can quote and claim a free namespace handle", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -916,7 +1051,7 @@ describe("community handle routes", () => {
       fromAddress: input.buyerAddress,
       toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
       tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+      amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
       chainRef: "eip155:84532",
       observation: {
         chainId: 84532,
@@ -1020,8 +1155,28 @@ describe("community handle routes", () => {
     }
     expect(policy.claim_gate_mode).toBe("explicit")
     expect(policy.claim_gate_expression_ref?.startsWith("hcgp_")).toBe(true)
-    expect(policy.claim_gate_expression).toEqual(expression)
+    expect(policy.claim_gate_expression).toEqual({
+      version: 1,
+      expression: {
+        op: "gate",
+        gate: { gate_id: expect.stringMatching(/^gate_content_[a-f0-9]{32}$/), type: "unique_human", provider: "very" },
+      },
+    })
     expect(policy.eligibility_timing).toBe("claim_time")
+
+    // Historical/raw storage could bypass request validation. The claim read path
+    // must repair identity-only defects rather than turning every quote into a 500.
+    await updateLocalNamespaceClaimGateExpression({
+      communityDbRoot: ctx.communityDbRoot,
+      communityId,
+      expressionJson: JSON.stringify({
+        version: 1,
+        expression: {
+          op: "gate",
+          gate: { gate_id: "not valid!", type: "unique_human", provider: "very" },
+        },
+      }),
+    })
 
     const quoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
@@ -1068,6 +1223,314 @@ describe("community handle routes", () => {
       claim_gate_expression: null,
       eligibility_timing: "claim_time",
     })
+  })
+
+  test("handle-policy revisions reject stale atomic rule replacement while legacy writes still advance", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-policy-revision-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const expression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: { type: "unique_human" as const, provider: "very" as const },
+      },
+    }
+
+    const loadedResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {},
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(loadedResponse.status).toBe(200)
+    const loaded = await json(loadedResponse) as { revision: number }
+    expect(loaded.revision).toBeGreaterThanOrEqual(2)
+
+    const firstResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        expected_revision: loaded.revision,
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["charizard"] },
+          claim_gate_expression: expression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(firstResponse.status).toBe(200)
+    const first = await json(firstResponse) as { revision: number; label_claim_rules: unknown[] }
+    expect(first.revision).toBe(loaded.revision + 1)
+    expect(first.label_claim_rules).toHaveLength(1)
+
+    const staleResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        expected_revision: loaded.revision,
+        claims_enabled: false,
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["gengar"] },
+          claim_gate_expression: expression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(staleResponse.status).toBe(409)
+    const conflict = await json(staleResponse) as {
+      code: string
+      details: {
+        current_policy: {
+          revision: number
+          claims_enabled: boolean
+          label_claim_rules: Array<{ selector: { labels: string[] | null } }>
+        }
+      }
+    }
+    expect(conflict.code).toBe("conflict")
+    expect(conflict.details.current_policy.revision).toBe(first.revision)
+    expect(conflict.details.current_policy.claims_enabled).toBe(true)
+    expect(conflict.details.current_policy.label_claim_rules[0]?.selector.labels).toEqual(["charizard"])
+
+    // Omission remains backward compatible and still advances the revision. These
+    // writes may serialize to the same updated_at second; revision remains exact.
+    const legacyResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { claims_enabled: false },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(legacyResponse.status).toBe(200)
+    const legacy = await json(legacyResponse) as { revision: number; claims_enabled: boolean }
+    expect(legacy.revision).toBe(first.revision + 1)
+    expect(legacy.claims_enabled).toBe(false)
+  })
+
+  test("per-label claim rules gate specific labels and bind {label} into inventory facets", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const creator = await exchangeJwt(ctx.env, "community-handle-label-rule-creator")
+    const namespaceVerification = await prepareVerifiedNamespace(ctx.env, creator.accessToken)
+    const communityId = await createNamespaceBackedCommunity({
+      accessToken: creator.accessToken,
+      env: ctx.env,
+      namespaceVerification,
+    })
+    const humanExpression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: { type: "unique_human" as const, provider: "very" as const },
+      },
+    }
+    const boundInventoryExpression = {
+      version: 1 as const,
+      expression: {
+        op: "gate" as const,
+        gate: {
+          type: "erc721_inventory_match" as const,
+          provider: "courtyard" as const,
+          chain_namespace: "eip155:137" as const,
+          contract_address: "0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD",
+          min_quantity: 1,
+          match: { category: "trading_card", subject: "{label}" },
+        },
+      },
+    }
+
+    const strayPlaceholderResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["charizard"] },
+          claim_gate_expression: {
+            version: 1,
+            expression: { op: "gate", gate: { type: "nationality", allowed: ["{label}"] } },
+          },
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    // Gate-expression validation rejects the placeholder as an invalid country code
+    // (403 eligibility_failed is the gate-validation convention).
+    expect(strayPlaceholderResponse.status).toBe(403)
+
+    const invalidLabelResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [{
+          selector: { type: "exact", labels: ["Not A Label"] },
+          claim_gate_expression: humanExpression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(invalidLabelResponse.status).toBe(400)
+
+    const updateResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [
+          { selector: { type: "exact", labels: ["charizard"] }, claim_gate_expression: humanExpression },
+          { selector: { type: "any" }, claim_gate_expression: boundInventoryExpression },
+        ],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(updateResponse.status).toBe(200)
+    const policy = await json(updateResponse) as {
+      claim_gate_mode: string
+      label_claim_rules: Array<{
+        id: string
+        position: number
+        selector: { type: string; labels: string[] | null }
+        claim_gate_expression: unknown
+      }>
+    }
+    expect(policy.claim_gate_mode).toBe("none")
+    expect(policy.label_claim_rules).toHaveLength(2)
+    expect(policy.label_claim_rules[0]?.id.startsWith("hlcr_")).toBe(true)
+    expect(policy.label_claim_rules[0]?.position).toBe(0)
+    expect(policy.label_claim_rules[0]?.selector).toEqual({ type: "exact", labels: ["charizard"] })
+    expect(policy.label_claim_rules[1]?.selector).toEqual({ type: "any", labels: null })
+
+    const stableIds = policy.label_claim_rules.map((rule) => rule.id)
+    const stableUpdateResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [
+          {
+            id: stableIds[0],
+            selector: { type: "exact", labels: ["charizard", "charmeleon"] },
+            claim_gate_expression: humanExpression,
+          },
+          {
+            id: stableIds[1],
+            selector: { type: "any" },
+            claim_gate_expression: boundInventoryExpression,
+          },
+        ],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(stableUpdateResponse.status).toBe(200)
+    const stablePolicy = await json(stableUpdateResponse) as typeof policy
+    expect(stablePolicy.label_claim_rules.map((rule) => rule.id)).toEqual(stableIds)
+    expect(stablePolicy.label_claim_rules[0]?.selector.labels).toEqual(["charizard", "charmeleon"])
+
+    const unknownRuleResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      {
+        label_claim_rules: [{
+          id: `hlcr_${"0".repeat(32)}`,
+          selector: { type: "exact", labels: ["charizard"] },
+          claim_gate_expression: humanExpression,
+        }],
+      },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(unknownRuleResponse.status).toBe(400)
+
+    // First-match order: "charizard" hits the exact unique_human rule, not the any-rule.
+    const gatedQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "charizard" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(gatedQuoteResponse.status).toBe(200)
+    const gatedQuote = await json(gatedQuoteResponse) as {
+      id: string
+      eligible: boolean
+      reason: string | null
+      claim_gate: {
+        source: string
+        satisfied: boolean
+        label_claim_rule: string | null
+        expression: { expression: { gate?: { type?: string } } }
+        summaries: Array<{ gate_type: string }>
+      } | null
+    }
+    expect(gatedQuote.eligible).toBe(false)
+    expect(gatedQuote.reason).toBe("This name has additional eligibility requirements that are not satisfied")
+    expect(gatedQuote.claim_gate?.source).toBe("label_rule")
+    expect(gatedQuote.claim_gate?.satisfied).toBe(false)
+    expect(gatedQuote.claim_gate?.label_claim_rule?.startsWith("hlcr_")).toBe(true)
+    expect(gatedQuote.claim_gate?.label_claim_rule).toBe(stableIds[0])
+    expect(gatedQuote.claim_gate?.expression.expression.gate?.type).toBe("unique_human")
+    expect(gatedQuote.claim_gate?.summaries.map((summary) => summary.gate_type)).toEqual(["unique_human"])
+
+    const claimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      { quote: gatedQuote.id },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(claimResponse.status).toBe(403)
+    expect(await json(claimResponse)).toMatchObject({
+      code: "eligibility_failed",
+      details: { claim_gate_source: "label_rule" },
+    })
+
+    // The any-rule binds {label} into the inventory facet: the resolved expression
+    // quoted for "gengar" carries subject "gengar", and evaluation fails closed
+    // while the inventory provider is unreachable in tests.
+    const boundQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "gengar" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(boundQuoteResponse.status).toBe(200)
+    const boundQuote = await json(boundQuoteResponse) as {
+      eligible: boolean
+      reason: string | null
+      claim_gate: {
+        source: string
+        expression: { expression: { gate?: { match?: Record<string, unknown> } } }
+      } | null
+    }
+    expect(boundQuote.eligible).toBe(false)
+    expect(boundQuote.claim_gate?.source).toBe("label_rule")
+    expect(boundQuote.claim_gate?.expression.expression.gate?.match).toEqual({
+      category: "trading_card",
+      subject: "gengar",
+    })
+
+    // Clearing the rules restores the open namespace default.
+    const clearResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { label_claim_rules: [] },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(clearResponse.status).toBe(200)
+    expect((await json(clearResponse) as { label_claim_rules: unknown[] }).label_claim_rules).toEqual([])
+
+    const openQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "charizard" },
+      ctx.env,
+      creator.accessToken,
+    )
+    expect(openQuoteResponse.status).toBe(200)
+    const openQuote = await json(openQuoteResponse) as { eligible: boolean; claim_gate: unknown }
+    expect(openQuote.eligible).toBe(true)
+    expect(openQuote.claim_gate).toBeNull()
   })
 
   test("paid quote reserves the label before funding and consumes the reservation on claim", async () => {
@@ -1172,7 +1635,7 @@ describe("community handle routes", () => {
         fromAddress: input.buyerAddress,
         toAddress: input.quote.funding_destination_address ?? "0x5000000000000000000000000000000000000005",
         tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-        amountAtomic: String(BigInt(Math.round(input.quote.final_price_usd * 1_000_000))),
+        amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
         chainRef: "eip155:84532",
       }
     })

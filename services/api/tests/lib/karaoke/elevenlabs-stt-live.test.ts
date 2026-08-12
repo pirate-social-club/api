@@ -76,6 +76,7 @@ describe("ElevenLabs realtime STT (live, opt-in)", () => {
       const adapter = new ElevenLabsKaraokeSttAdapter({ apiKey, connect: bunWebSocketConnect, retention: "not_stored" })
       await adapter.start({
         attemptId: "attempt-live",
+        initialSequence: 0,
         onMessage: async (message) => {
           messages.push(message)
         },

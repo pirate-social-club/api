@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   capStoryRoyaltyRpcFeeResponseForTests,
   capStoryRoyaltyWriteContractRequestForTests,
+  buildStoryVideoMetadataMedia,
   classifyStoryRegistrationFailure,
   maybeRegisterStoryRoyaltyForAsset,
   withStoryRegistrationRetry,
@@ -18,6 +19,30 @@ const GAS_POLICY: DirectTxGasPolicy = {
 }
 
 const GAS_LIMIT_PADDING = 15_000n
+
+describe("buildStoryVideoMetadataMedia", () => {
+  test("keeps the public post URL separate from the upload reference used for verification", () => {
+    expect(buildStoryVideoMetadataMedia({
+      post: {
+        post_type: "video",
+        media_refs: [{
+          storage_ref: "https://api.pirate.test/communities/cmt_1/song-artifacts/sau_1/content",
+          mime_type: "video/mp4",
+          poster_ref: "https://dweb.link/ipfs/poster",
+        }],
+      } as any,
+      storageRef: "https://dweb.link/ipfs/video",
+      mimeType: "video/mp4",
+      contentHash: `0x${"a".repeat(64)}`,
+    })).toEqual({
+      mediaUrl: "https://api.pirate.test/communities/cmt_1/song-artifacts/sau_1/content",
+      verificationStorageRef: "https://dweb.link/ipfs/video",
+      mediaType: "video/mp4",
+      mediaHash: `0x${"a".repeat(64)}`,
+      imageUrl: "https://dweb.link/ipfs/poster",
+    })
+  })
+})
 
 function rpcResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } })

@@ -20,6 +20,31 @@ export type StoryRegisteredAssetProjection = {
   createdAt: string
 }
 
+export type StoryRegisteredAssetProjectionSource = {
+  asset_id: string
+  community_id: string
+  source_post_id: string
+  display_title: string | null
+  creator_user_id: string
+  asset_kind: Asset["asset_kind"]
+  license_preset: Asset["license_preset"] | null
+  commercial_rev_share_pct: number | null
+  story_ip_id: string
+  story_license_terms_id: string
+}
+
+export type EligibleStoryParentProjection = {
+  communityId: string
+  assetId: string
+  storyIpId: string
+  storyLicenseTermsId: string
+}
+
+export type EligibleStoryParentAssetResolution =
+  | { status: "resolved"; parent: EligibleStoryParentProjection }
+  | { status: "not_found" }
+  | { status: "ambiguous" }
+
 function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | undefined): Asset["asset_kind"] | null {
   if (kind === "song") return "song_audio"
   if (kind === "video") return "video_file"
@@ -29,6 +54,16 @@ function assetKindForDerivativeSourceKind(kind: DerivativeSourceKind | null | un
 function escapeLikePattern(value: string): string {
   return value.replace(/[\\%_]/g, (match) => `\\${match}`)
 }
+
+const ELIGIBLE_STORY_PARENT_FILTERS = [
+  "source_post_status = 'published'",
+  "license_preset = 'commercial-remix'",
+  "commercial_rev_share_pct > 0",
+  "story_ip_id IS NOT NULL",
+  "story_ip_id != ''",
+  "story_license_terms_id IS NOT NULL",
+  "story_license_terms_id != ''",
+] as const
 
 function derivativeSourceLikePattern(value: string): string {
   return `%${escapeLikePattern(value.slice(0, 48).toLowerCase())}%`
@@ -120,14 +155,7 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
   limit: number
 }): Promise<DerivativeSourceRow[]> {
   const client = getControlPlaneClient(input.env)
-  const filters = [
-    "source_post_status = 'published'",
-    "story_ip_id IS NOT NULL",
-    "story_ip_id != ''",
-    "story_license_terms_id IS NOT NULL",
-    "story_license_terms_id != ''",
-    "commercial_rev_share_pct > 0",
-  ]
+  const filters: string[] = [...ELIGIBLE_STORY_PARENT_FILTERS]
   const args: Array<string | number> = []
   let nextArg = 1
   const assetKind = assetKindForDerivativeSourceKind(input.kind)
@@ -172,6 +200,102 @@ export async function listStoryRegisteredAssetProjectionRows(input: {
   }))
 }
 
+function eligibleStoryParentFromRow(row: Record<string, unknown>): EligibleStoryParentProjection {
+  return {
+    communityId: requiredString(row, "community_id"),
+    assetId: requiredString(row, "asset_id"),
+    storyIpId: requiredString(row, "story_ip_id"),
+    storyLicenseTermsId: requiredString(row, "story_license_terms_id"),
+  }
+}
+
+export async function findEligibleStoryParentProjectionByRef(input: {
+  env: Env
+  storyIpId: string
+  storyLicenseTermsId: string
+}): Promise<EligibleStoryParentProjection | null> {
+  const client = getControlPlaneClient(input.env)
+  const result = await client.execute({
+    sql: `
+      SELECT community_id, asset_id, story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS.join("\n        AND ")}
+        AND LOWER(story_ip_id) = ?1
+        AND story_license_terms_id = ?2
+      LIMIT 1
+    `,
+    args: [input.storyIpId.trim().toLowerCase(), input.storyLicenseTermsId.trim()],
+  })
+  return result.rows[0] ? eligibleStoryParentFromRow(result.rows[0]) : null
+}
+
+export async function findStoryRegisteredAssetProjectionSources(input: {
+  env: Env
+  refs: Array<{ storyIp: string; licenseTermsId: string }>
+}): Promise<StoryRegisteredAssetProjectionSource[]> {
+  const refs = Array.from(new Map(input.refs.map((ref) => [
+    `${ref.storyIp.trim().toLowerCase()}:${ref.licenseTermsId.trim()}`,
+    {
+      storyIp: ref.storyIp.trim(),
+      licenseTermsId: ref.licenseTermsId.trim(),
+    },
+  ] as const)).values()).filter((ref) => ref.storyIp && ref.licenseTermsId)
+  if (refs.length === 0) return []
+
+  const args: Array<string | number> = []
+  const clauses = refs.map((ref, index) => {
+    const offset = index * 2
+    args.push(ref.storyIp, ref.licenseTermsId)
+    return `(LOWER(story_ip_id) = LOWER(?${offset + 1}) AND story_license_terms_id = ?${offset + 2})`
+  })
+  const result = await getControlPlaneClient(input.env).execute({
+    sql: `
+      SELECT asset_id, community_id, source_post_id, display_title, creator_user_id,
+             asset_kind, license_preset, commercial_rev_share_pct,
+             story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE source_post_status = 'published'
+        AND (${clauses.join(" OR ")})
+      ORDER BY updated_at DESC, asset_id DESC
+    `,
+    args,
+  })
+
+  return result.rows.map((row) => ({
+    asset_id: requiredString(row, "asset_id"),
+    community_id: requiredString(row, "community_id"),
+    source_post_id: requiredString(row, "source_post_id"),
+    display_title: stringOrNull(row, "display_title"),
+    creator_user_id: requiredString(row, "creator_user_id"),
+    asset_kind: requiredString(row, "asset_kind") as Asset["asset_kind"],
+    license_preset: stringOrNull(row, "license_preset") as Asset["license_preset"] | null,
+    commercial_rev_share_pct: numberOrNull(row, "commercial_rev_share_pct"),
+    story_ip_id: requiredString(row, "story_ip_id"),
+    story_license_terms_id: requiredString(row, "story_license_terms_id"),
+  }))
+}
+
+export async function resolveEligibleStoryParentProjectionByAssetId(input: {
+  env: Env
+  assetId: string
+}): Promise<EligibleStoryParentAssetResolution> {
+  const client = getControlPlaneClient(input.env)
+  const result = await client.execute({
+    sql: `
+      SELECT community_id, asset_id, story_ip_id, story_license_terms_id
+      FROM story_registered_asset_projections
+      WHERE ${ELIGIBLE_STORY_PARENT_FILTERS.join("\n        AND ")}
+        AND asset_id = ?1
+      ORDER BY updated_at DESC, community_id ASC
+      LIMIT 2
+    `,
+    args: [input.assetId],
+  })
+  if (result.rows.length === 0) return { status: "not_found" }
+  if (result.rows.length > 1) return { status: "ambiguous" }
+  return { status: "resolved", parent: eligibleStoryParentFromRow(result.rows[0]) }
+}
+
 export async function findZeroRevenueShareStoryParentIpIds(input: {
   env: Env
   storyIpIds: string[]
@@ -194,39 +318,4 @@ export async function findZeroRevenueShareStoryParentIpIds(input: {
     args: storyIpIds,
   })
   return new Set(result.rows.map((row) => requiredString(row, "story_ip_id").toLowerCase()))
-}
-
-export async function findZeroRevenueShareStoryParentRefs(input: {
-  env: Env
-  refs: Array<{ storyIpId: string; licenseTermsId: string }>
-}): Promise<Set<string>> {
-  const refs = Array.from(new Map(input.refs.map((ref) => {
-    const normalized = {
-      storyIpId: ref.storyIpId.trim().toLowerCase(),
-      licenseTermsId: ref.licenseTermsId.trim(),
-    }
-    return [`${normalized.storyIpId}:${normalized.licenseTermsId}`, normalized] as const
-  })).values()).filter((ref) => ref.storyIpId && ref.licenseTermsId)
-  if (refs.length === 0) return new Set()
-
-  const clauses: string[] = []
-  const args: string[] = []
-  for (const ref of refs) {
-    const nextArg = args.length + 1
-    clauses.push(`(LOWER(story_ip_id) = ?${nextArg} AND story_license_terms_id = ?${nextArg + 1})`)
-    args.push(ref.storyIpId, ref.licenseTermsId)
-  }
-  const client = getControlPlaneClient(input.env)
-  const result = await client.execute({
-    sql: `
-      SELECT story_ip_id, story_license_terms_id
-      FROM story_registered_asset_projections
-      WHERE (${clauses.join(" OR ")})
-        AND commercial_rev_share_pct <= 0
-    `,
-    args,
-  })
-  return new Set(result.rows.map((row) =>
-    `${requiredString(row, "story_ip_id").toLowerCase()}:${requiredString(row, "story_license_terms_id")}`
-  ))
 }

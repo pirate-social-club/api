@@ -18,7 +18,9 @@ import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { resolveRewardCampaignConfig, type RewardCampaignConfig } from "./reward-campaign-config"
+import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
+import { decodePublicCommunityId, decodePublicPostId } from "../public-ids"
 import {
   KARAOKE_MIN_MEASURED_LINES,
   KARAOKE_PLATFORM_MIN_SCORE_BPS,
@@ -28,7 +30,17 @@ import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
 import {
   assertRewardsCampaignAndSettlementChainsMatch,
   resolveRewardsSettlementChainId,
+  resolveRewardsSettlementRpcUrlForChain,
 } from "../communities/bookings/booking-chain-config"
+import {
+  assertContributionWithinRefundPolicy,
+  observeRewardVaultRefundPolicy,
+  type RewardVaultRefundPolicyObserver,
+} from "./reward-vault-refund-policy"
+import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
+import { rewardCampaignAlertOwnership } from "./reward-campaign-alert-config"
+import { normalizeIdentityCountryCode } from "../identity/country-codes"
+import { isLearnerVisibleRewardCampaign, learnerVisibleRewardCampaignSql } from "./reward-campaign-visibility"
 
 /**
  * Machine-readable funding-confirmation outcomes. A money-moving client must be able to tell
@@ -37,7 +49,7 @@ import {
  * Terminal (never retry the transfer):
  *   FUNDING_TRANSACTION_ALREADY_CONSUMED — the hash funded something else
  *   FUNDING_TRANSACTION_MISMATCH         — this quote is bound to a different hash
- *   FUNDING_QUOTE_EXPIRED                — the transfer was MINED after the quote lapsed
+ *   refund_pending status                — treasury received funds that cannot be applied
  * Recoverable (re-quote and start a new transfer):
  *   FUNDING_QUOTE_ALREADY_CLAIMED        — the quote is spent or refunded
  *
@@ -47,8 +59,23 @@ import {
  */
 const FUNDING_TRANSACTION_ALREADY_CONSUMED = "funding_transaction_already_consumed"
 const FUNDING_TRANSACTION_MISMATCH = "funding_transaction_mismatch"
-const FUNDING_QUOTE_EXPIRED = "funding_quote_expired"
 const FUNDING_QUOTE_ALREADY_CLAIMED = "funding_quote_already_claimed"
+const POOL_EXISTS = "pool_exists"
+// Long enough for a Base Sepolia receipt/confirmation race, short enough that a
+// rewarder cannot revive an abandoned schedule hours later. A late acceptance
+// preserves the requested duration but starts a fresh effective window.
+export const LATE_FUNDING_ACCEPTANCE_GRACE_SECONDS = 5 * 60
+
+export function rewardSongPoolRegisterSql(postgres: boolean): string {
+  const timestamp = postgres ? "CAST(?4 AS TIMESTAMPTZ)" : "CAST(?4 AS TEXT)"
+  return `
+  INSERT INTO reward_song_pools (
+    community_id, post_id, reward_campaign_id, created_at, updated_at
+  ) VALUES (?1, ?2, ?3, ${timestamp}, ${timestamp})
+  ON CONFLICT (community_id, post_id) DO NOTHING
+  RETURNING reward_campaign_id
+`
+}
 
 export type RewardCampaignTarget = {
   communityId: string
@@ -72,23 +99,31 @@ export type RewardSongOwnerPolicy = {
 
 const CAMPAIGN_COLUMNS = `
   reward_campaign_id, rewarder_user_id, community_id, post_id,
-  song_artifact_bundle_id, song_owner_user_id, status, eligible_activity,
+  song_artifact_bundle_id, song_owner_user_id, reward_identity_provider,
+  status, eligible_activity,
   min_score_bps, daily_reward_cents, milestone_7_cents, milestone_30_cents,
+  default_amount_cents, max_claim_cents, payout_tiers_json,
   reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
   credited_cents, paid_cents, refunded_cents, starts_at, ends_at,
   activated_at, exhausted_at, ended_at, canceled_at, created_at,
   (SELECT chain_id FROM reward_campaign_funding_effects
     WHERE reward_campaign_id = reward_campaigns.reward_campaign_id
       AND status = 'confirmed'
-    ORDER BY confirmed_at DESC, reward_campaign_funding_effect_id DESC
-    LIMIT 1) AS chain_id
+    ORDER BY confirmed_at ASC, reward_campaign_funding_effect_id ASC
+    LIMIT 1) AS chain_id,
+  (SELECT tx_hash FROM reward_campaign_funding_effects
+    WHERE reward_campaign_id = reward_campaigns.reward_campaign_id
+      AND status = 'confirmed'
+    ORDER BY confirmed_at ASC, reward_campaign_funding_effect_id ASC
+    LIMIT 1) AS funding_tx_hash
 `
 
 const FUNDING_COLUMNS = `
   reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
   chain_id, token_address, expected_amount_cents, expected_amount_atomic,
   sender_address, treasury_address, tx_hash, status, failure_reason,
-  expires_at, confirmed_at, confirmed_block_number, confirmed_block_hash, created_at
+  expires_at, confirmed_at, confirmed_block_number, confirmed_block_hash,
+  admitted_refund_policy_version, admitted_max_refund_atomic, created_at
 `
 
 function integer(value: unknown): number {
@@ -109,6 +144,42 @@ function queryResultRow(value: unknown): QueryResultRow | null {
     : null
 }
 
+type RewardCampaignPayoutTier = RewardCampaign["payout_tiers"][number]
+type RewardCampaignIdentityProvider = RewardCampaign["reward_identity_provider"]
+
+function payoutTiers(value: unknown): RewardCampaignPayoutTier[] {
+  let decoded = value
+  if (typeof decoded === "string") {
+    try {
+      decoded = JSON.parse(decoded)
+    } catch {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+  }
+  if (!Array.isArray(decoded) || decoded.length > 10) {
+    throw new Error("reward campaign payout tiers are corrupt")
+  }
+  return decoded.map((tier) => {
+    if (!tier || typeof tier !== "object" || Array.isArray(tier)) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    const record = tier as Record<string, unknown>
+    if (
+      !Array.isArray(record.nationalities)
+      || record.nationalities.length === 0
+      || !Number.isSafeInteger(record.amount_cents)
+      || Number(record.amount_cents) <= 0
+    ) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    const nationalities = record.nationalities.filter((code): code is string => typeof code === "string")
+    if (nationalities.length !== record.nationalities.length) {
+      throw new Error("reward campaign payout tiers are corrupt")
+    }
+    return { nationalities, amount_cents: Number(record.amount_cents) }
+  })
+}
+
 function campaignResource(row: CampaignRow): RewardCampaign {
   const funded = integer(rowValue(row, "funded_cents"))
   const reserved = integer(rowValue(row, "reserved_cents"))
@@ -122,10 +193,14 @@ function campaignResource(row: CampaignRow): RewardCampaign {
     post: requiredString(row, "post_id"),
     song_artifact_bundle: requiredString(row, "song_artifact_bundle_id"),
     song_owner: requiredString(row, "song_owner_user_id"),
+    reward_identity_provider: requiredString(row, "reward_identity_provider") as RewardCampaignIdentityProvider,
     status: requiredString(row, "status") as RewardCampaignStatus,
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
+    default_amount_cents: integer(rowValue(row, "default_amount_cents")),
+    max_claim_cents: integer(rowValue(row, "max_claim_cents")),
+    payout_tiers: payoutTiers(rowValue(row, "payout_tiers_json")),
     milestone_7_cents: integer(rowValue(row, "milestone_7_cents")),
     milestone_30_cents: integer(rowValue(row, "milestone_30_cents")),
     reward_period_cap_cents: integer(rowValue(row, "reward_period_cap_cents")),
@@ -142,12 +217,14 @@ function campaignResource(row: CampaignRow): RewardCampaign {
     exhausted_at: unixSeconds(rowValue(row, "exhausted_at")),
     ended_at: unixSeconds(rowValue(row, "ended_at")),
     canceled_at: unixSeconds(rowValue(row, "canceled_at")),
+    funding_tx_hash: stringOrNull(rowValue(row, "funding_tx_hash")),
     created: unixSeconds(rowValue(row, "created_at")) ?? 0,
   }
 }
 
 function publicRewardOffer(row: CampaignRow, settlementChainId: number): PublicRewardOffer {
   return {
+    campaign: requiredString(row, "reward_campaign_id"),
     eligible_activity: requiredString(row, "eligible_activity") as RewardCampaignEligibleActivity,
     min_score_bps: integer(rowValue(row, "min_score_bps")),
     daily_reward_cents: integer(rowValue(row, "daily_reward_cents")),
@@ -205,17 +282,99 @@ function basisPoints(value: unknown, field: string): number {
   return result
 }
 
+function normalizePayoutTiers(value: unknown): RewardCampaignPayoutTier[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length > 10) {
+    throw badRequestError("payout_tiers must contain at most 10 tiers")
+  }
+  const assignedNationalities = new Set<string>()
+  const normalized = value.map((tier, tierIndex) => {
+    if (!tier || typeof tier !== "object" || Array.isArray(tier)) {
+      throw badRequestError(`payout_tiers[${tierIndex}] is invalid`)
+    }
+    const record = tier as Record<string, unknown>
+    if (!Array.isArray(record.nationalities) || record.nationalities.length === 0) {
+      throw badRequestError(`payout_tiers[${tierIndex}].nationalities is invalid`)
+    }
+    const nationalities = record.nationalities.map((value) => {
+      const country = normalizeIdentityCountryCode(value)
+      if (!country) {
+        throw badRequestError(`payout_tiers[${tierIndex}].nationalities must contain valid country codes`)
+      }
+      if (assignedNationalities.has(country)) {
+        throw badRequestError(`Nationality ${country} is assigned to more than one payout tier`)
+      }
+      assignedNationalities.add(country)
+      return country
+    }).sort()
+    return {
+      nationalities,
+      amount_cents: cents(record.amount_cents, `payout_tiers[${tierIndex}].amount_cents`, false),
+    }
+  })
+  const nationalitiesByAmount = new Map<number, string[]>()
+  for (const tier of normalized) {
+    nationalitiesByAmount.set(
+      tier.amount_cents,
+      [...(nationalitiesByAmount.get(tier.amount_cents) ?? []), ...tier.nationalities].sort(),
+    )
+  }
+  return Array.from(nationalitiesByAmount, ([amount_cents, nationalities]) => ({
+    nationalities,
+    amount_cents,
+  })).sort((left, right) => {
+    const leftCountries = left.nationalities.join(",")
+    const rightCountries = right.nationalities.join(",")
+    const countries = leftCountries < rightCountries ? -1 : leftCountries > rightCountries ? 1 : 0
+    return countries !== 0 ? countries : left.amount_cents - right.amount_cents
+  })
+}
+
 function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCampaignConfig): RewardCampaignCreateInput {
   if (!(["study", "karaoke", "either"] as const).includes(input.eligible_activity)) {
     throw badRequestError("eligible_activity is invalid")
   }
+  const normalizedTiers = normalizePayoutTiers(input.payout_tiers)
+  const rewardIdentityProvider = input.reward_identity_provider
+  if (
+    rewardIdentityProvider !== "self"
+    && rewardIdentityProvider !== "zkpassport"
+    && rewardIdentityProvider !== "very"
+  ) {
+    throw badRequestError("reward_identity_provider is invalid")
+  }
+  const requiredProvider: RewardCampaignIdentityProvider = normalizedTiers.length > 0 ? "self" : "very"
+  if (rewardIdentityProvider !== requiredProvider) {
+    throw badRequestError(
+      normalizedTiers.length > 0
+        ? "Nationality bounties require Self passport verification"
+        : "Flat bounties require Very person verification",
+    )
+  }
+  const normalizedDailyReward = cents(input.daily_reward_cents, "daily_reward_cents", false)
+  const normalizedDefaultAmount = input.default_amount_cents === undefined
+    ? normalizedDailyReward
+    : cents(input.default_amount_cents, "default_amount_cents", false)
+  if (normalizedDefaultAmount !== normalizedDailyReward) {
+    throw badRequestError("default_amount_cents must equal daily_reward_cents")
+  }
+  const maxClaimCents = Math.max(
+    normalizedDefaultAmount,
+    ...normalizedTiers.map((tier) => tier.amount_cents),
+  )
   const normalized = {
     ...input,
-    community: nonEmpty(input.community, "community"),
-    post: nonEmpty(input.post, "post"),
+    // Web routes and API serializers expose public IDs (`com_cmt_…` and
+    // `post_pst_…`), while shard routing and campaign storage use raw IDs.
+    // Normalize at the write boundary so callers may use either safe form.
+    community: decodePublicCommunityId(nonEmpty(input.community, "community")),
+    post: decodePublicPostId(nonEmpty(input.post, "post")),
     idempotency_key: nonEmpty(input.idempotency_key, "idempotency_key"),
+    reward_identity_provider: rewardIdentityProvider,
     min_score_bps: basisPoints(input.min_score_bps, "min_score_bps"),
-    daily_reward_cents: cents(input.daily_reward_cents, "daily_reward_cents", false),
+    daily_reward_cents: normalizedDailyReward,
+    default_amount_cents: normalizedDefaultAmount,
+    payout_tiers: normalizedTiers,
     milestone_7_cents: cents(input.milestone_7_cents, "milestone_7_cents", true),
     milestone_30_cents: cents(input.milestone_30_cents, "milestone_30_cents", true),
     reward_period_cap_cents: cents(input.reward_period_cap_cents, "reward_period_cap_cents", false),
@@ -227,15 +386,15 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
     throw badRequestError("Campaign milestone rewards are not available yet")
   }
   if (
-    normalized.daily_reward_cents > config.maxRewardCents
+    maxClaimCents > config.maxRewardCents
     || normalized.milestone_7_cents > config.maxRewardCents
     || normalized.milestone_30_cents > config.maxRewardCents
   ) throw badRequestError("Campaign reward exceeds the platform maximum")
   if (normalized.budget_cents < config.minBudgetCents || normalized.budget_cents > config.maxBudgetCents) {
     throw badRequestError("Campaign budget is outside platform guardrails")
   }
-  if (normalized.budget_cents < normalized.daily_reward_cents) {
-    throw badRequestError("Campaign budget cannot cover one daily reward")
+  if (normalized.budget_cents < maxClaimCents) {
+    throw badRequestError("Campaign budget cannot cover one maximum claim")
   }
   if (normalized.ends_at <= Math.floor(Date.now() / 1000)) {
     throw badRequestError("Campaign must end in the future")
@@ -244,7 +403,7 @@ function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCam
   if (duration < config.minDurationSeconds || duration > config.maxDurationSeconds) {
     throw badRequestError("Campaign duration is outside platform guardrails")
   }
-  const largestMaturingCombination = normalized.daily_reward_cents
+  const largestMaturingCombination = maxClaimCents
     + Math.max(normalized.milestone_7_cents, normalized.milestone_30_cents)
   if (normalized.reward_period_cap_cents < largestMaturingCombination) {
     throw badRequestError("reward_period_cap_cents must cover every configured reward combination")
@@ -258,11 +417,12 @@ async function sha256(value: string): Promise<string> {
 }
 
 function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTarget): string {
-  return JSON.stringify({
+  const legacyTerms = {
     community: target.communityId,
     post: target.postId,
     song_artifact_bundle: target.songArtifactBundleId,
     song_owner: target.songOwnerUserId,
+    reward_identity_provider: input.reward_identity_provider,
     eligible_activity: input.eligible_activity,
     min_score_bps: input.min_score_bps,
     daily_reward_cents: input.daily_reward_cents,
@@ -272,6 +432,12 @@ function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTa
     budget_cents: input.budget_cents,
     starts_at: input.starts_at,
     ends_at: input.ends_at,
+  }
+  if (!input.payout_tiers?.length) return JSON.stringify(legacyTerms)
+  return JSON.stringify({
+    ...legacyTerms,
+    default_amount_cents: input.default_amount_cents,
+    payout_tiers: input.payout_tiers,
   })
 }
 
@@ -280,6 +446,94 @@ async function selectCampaign(exec: Pick<Client | Transaction, "execute">, campa
     sql: `SELECT ${CAMPAIGN_COLUMNS} FROM reward_campaigns WHERE reward_campaign_id = ?1${lock ? " FOR UPDATE" : ""}`,
     args: [campaignId],
   }))
+}
+
+async function requireCampaign(
+  exec: Pick<Client | Transaction, "execute">,
+  campaignId: string,
+  lock = false,
+): Promise<CampaignRow> {
+  const campaign = await selectCampaign(exec, campaignId, lock)
+  if (!campaign) throw notFoundError("Reward campaign not found")
+  return campaign
+}
+
+export async function cancelRewardCampaignDraft(input: {
+  env: Env
+  client: Client
+  userId: string
+  campaignId: string
+  now?: string
+}): Promise<RewardCampaign> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const campaignId = nonEmpty(input.campaignId, "campaign_id")
+  const now = input.now ?? nowIso()
+  if (!Number.isFinite(Date.parse(now))) throw badRequestError("now is invalid")
+  const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
+
+  return withTransaction(input.client, "write", async (tx) => {
+    const campaign = await requireCampaign(tx, campaignId, rowLocks)
+    if (requiredString(campaign, "rewarder_user_id") !== input.userId) {
+      throw notFoundError("Reward campaign not found")
+    }
+    const status = requiredString(campaign, "status") as RewardCampaignStatus
+    if (status === "canceled") return campaignResource(campaign)
+    if (status !== "draft") {
+      throw conflictError("Only an unfunded draft reward campaign can be canceled")
+    }
+
+    const funding = await executeFirst(tx, {
+      sql: `SELECT reward_campaign_funding_effect_id
+            FROM reward_campaign_funding_effects
+            WHERE reward_campaign_id = ?1
+              AND NOT (status IN ('failed', 'refunded') OR (status = 'quoted' AND expires_at <= ?2))
+            LIMIT 1`,
+      args: [campaignId, now],
+    })
+    if (
+      funding
+      || integer(rowValue(campaign, "funded_cents")) !== 0
+      || integer(rowValue(campaign, "reserved_cents")) !== 0
+      || integer(rowValue(campaign, "credited_cents")) !== 0
+      || integer(rowValue(campaign, "paid_cents")) !== 0
+      || integer(rowValue(campaign, "refunded_cents")) !== 0
+    ) {
+      throw conflictError("A funded or funding-in-progress reward campaign cannot be canceled")
+    }
+
+    const canceled = queryResultRow(await executeFirst(tx, {
+      sql: `
+        UPDATE reward_campaigns
+        SET status = 'canceled', canceled_at = ?2, updated_at = ?2
+        WHERE reward_campaign_id = ?1
+          AND status = 'draft'
+          AND funded_cents = 0
+          AND reserved_cents = 0
+          AND credited_cents = 0
+          AND paid_cents = 0
+          AND refunded_cents = 0
+          AND NOT EXISTS (
+            SELECT 1
+            FROM reward_campaign_funding_effects AS funding
+            WHERE funding.reward_campaign_id = reward_campaigns.reward_campaign_id
+              AND NOT (
+                funding.status IN ('failed', 'refunded')
+                OR (funding.status = 'quoted' AND funding.expires_at <= ?2)
+              )
+          )
+        RETURNING ${CAMPAIGN_COLUMNS}
+      `,
+      args: [campaignId, now],
+    }))
+    if (!canceled) {
+      throw conflictError("A funded or funding-in-progress reward campaign cannot be canceled")
+    }
+    await tx.execute({
+      sql: "DELETE FROM reward_song_pools WHERE reward_campaign_id = ?1",
+      args: [campaignId],
+    })
+    return campaignResource(canceled)
+  })
 }
 
 async function selectFunding(exec: Pick<Client | Transaction, "execute">, fundingId: string, lock = false): Promise<FundingRow | null> {
@@ -390,7 +644,12 @@ export async function createRewardCampaign(input: {
     throw eligibilityFailed("Reward campaigns are not enabled for this post")
   }
   const now = input.now ?? nowIso()
-  await advanceRewardCampaignLifecycle({ client: input.client, now })
+  await advanceRewardCampaignLifecycle({
+    client: input.client,
+    now,
+    postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+    activeSettlementAsset: config,
+  })
   const target = await input.resolveTarget(body.community, body.post)
   if (target.communityId !== body.community || target.postId !== body.post) {
     throw badRequestError("Campaign target resolution mismatch")
@@ -444,29 +703,51 @@ export async function createRewardCampaign(input: {
         INSERT INTO reward_campaigns (
           reward_campaign_id, campaign_kind, rewarder_user_id, creation_idempotency_key,
           community_id, post_id, song_artifact_bundle_id, song_owner_user_id,
-          status, eligible_activity, min_score_bps, daily_reward_cents, milestone_7_cents,
+          status, reward_identity_provider, eligible_activity, min_score_bps,
+          daily_reward_cents, milestone_7_cents,
           milestone_30_cents, reward_period_cap_cents, budget_cents,
-          terms_version, terms_hash, starts_at, ends_at, created_at, updated_at
+          default_amount_cents, max_claim_cents, payout_tiers_json,
+          terms_version, terms_hash, starts_at, ends_at,
+          requested_starts_at, requested_ends_at, created_at, updated_at
         ) VALUES (
-          ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9,
-          ?10, ?11, ?12, ?13, ?14, 2, ?15, ?16, ?17, ?18, ?18
+          ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9, ?10,
+          ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
+          ?19, ?20, ?21, ?22, ?21, ?22, ?23, ?23
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
         args: [
         campaignId, input.userId, body.idempotency_key, target.communityId, target.postId,
-        target.songArtifactBundleId, target.songOwnerUserId, body.eligible_activity,
-        body.min_score_bps, body.daily_reward_cents, body.milestone_7_cents, body.milestone_30_cents,
-        body.reward_period_cap_cents, body.budget_cents, termsHash,
+        target.songArtifactBundleId, target.songOwnerUserId, body.reward_identity_provider,
+        body.eligible_activity, body.min_score_bps, body.daily_reward_cents,
+        body.milestone_7_cents, body.milestone_30_cents,
+        body.reward_period_cap_cents, body.budget_cents, body.default_amount_cents,
+        Math.max(body.default_amount_cents ?? body.daily_reward_cents, ...body.payout_tiers!.map((tier) => tier.amount_cents)),
+        JSON.stringify(body.payout_tiers), 4, termsHash,
         new Date(body.starts_at * 1000).toISOString(), new Date(body.ends_at * 1000).toISOString(), now,
         ],
       })
+      const registered = queryResultRow(await executeFirst(tx, {
+        sql: rewardSongPoolRegisterSql(
+          isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+        ),
+        args: [target.communityId, target.postId, campaignId, now],
+      }))
+      if (!registered || requiredString(registered, "reward_campaign_id") !== campaignId) {
+        throw codedConflictError(
+          POOL_EXISTS,
+          "This song already has a reward pool; contribute to the existing pool",
+        )
+      }
     } catch (error) {
       if (
-        hasUniqueConstraintName(error, "reward_campaigns_one_open_per_rewarder_song")
-        || (error instanceof Error && error.message.includes("reward_campaigns.rewarder_user_id, reward_campaigns.community_id, reward_campaigns.post_id"))
+        hasUniqueConstraintName(error, "reward_song_pools_pkey")
+        || (error instanceof Error && error.message.includes("reward_song_pools.community_id, reward_song_pools.post_id"))
       ) {
-        throw conflictError("An unfinished campaign already exists for this rewarder and song")
+        throw codedConflictError(
+          POOL_EXISTS,
+          "This song already has a reward pool; contribute to the existing pool",
+        )
       }
       throw error
     }
@@ -511,12 +792,7 @@ export async function getPublicActiveRewardCampaign(input: {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
   const row = await selectCampaign(input.client, nonEmpty(input.campaignId, "campaign_id"))
   const now = Date.now()
-  if (
-    !row
-    || requiredString(row, "status") !== "active"
-    || Date.parse(requiredString(row, "starts_at")) > now
-    || Date.parse(requiredString(row, "ends_at")) <= now
-  ) {
+  if (!row || !isLearnerVisibleRewardCampaign(row, now)) {
     throw notFoundError("Active reward campaign not found")
   }
   assertRewardsCampaignAndSettlementChainsMatch(input.env)
@@ -534,8 +810,8 @@ export async function getPublicActiveRewardCampaignForSong(input: {
     sql: `
       SELECT ${CAMPAIGN_COLUMNS}
       FROM reward_campaigns
-      WHERE community_id = ?1 AND post_id = ?2 AND status = 'active'
-        AND starts_at <= ?3 AND ends_at > ?3
+      WHERE community_id = ?1 AND post_id = ?2
+        AND ${learnerVisibleRewardCampaignSql({ nowParameter: "?3" })}
       ORDER BY activated_at DESC, reward_campaign_id ASC
       LIMIT 1
     `,
@@ -581,14 +857,51 @@ export async function createRewardCampaignFundingQuote(input: {
   campaignId: string
   amountCents: number
   idempotencyKey: string
+  rewardIdentityProvider?: unknown
   now?: string
+  refundPolicyObserver?: RewardVaultRefundPolicyObserver
 }): Promise<RewardCampaignFundingQuote> {
   const config = resolveRewardCampaignConfig(input.env)
   requireCampaignsEnabled(config)
+  assertRewardCampaignSettlementReadiness(input.env)
+  await assertRewardSolvencyAdmission({ env: input.env, client: input.client, now: new Date(input.now ?? Date.now()) })
   const amountCents = cents(input.amountCents, "amount_cents", false)
   const idempotencyKey = nonEmpty(input.idempotencyKey, "idempotency_key")
+  const assertedProvider = input.rewardIdentityProvider === undefined
+    ? null
+    : input.rewardIdentityProvider
+  if (
+    assertedProvider !== null
+    && assertedProvider !== "self"
+    && assertedProvider !== "zkpassport"
+    && assertedProvider !== "very"
+  ) {
+    throw badRequestError("reward_identity_provider is invalid")
+  }
   const now = input.now ?? nowIso()
   const expiresAt = new Date(Date.parse(now) + config.quoteTtlSeconds * 1000).toISOString()
+  const existing = queryResultRow(await executeFirst(input.client, {
+    sql: `SELECT ${FUNDING_COLUMNS} FROM reward_campaign_funding_effects WHERE funder_user_id = ?1 AND idempotency_key = ?2 LIMIT 1`,
+    args: [input.userId, idempotencyKey],
+  }))
+  if (existing) {
+    const campaign = assertedProvider !== null ? await selectCampaign(input.client, input.campaignId) : null
+    if (assertedProvider !== null) {
+      if (!campaign) throw notFoundError("Reward campaign not found")
+      if (assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
+        throw conflictError("Funding provider assertion does not match the permanent song pool")
+      }
+    }
+    if (
+      requiredString(existing, "reward_campaign_id") !== input.campaignId
+      || integer(rowValue(existing, "expected_amount_cents")) !== amountCents
+    ) throw conflictError("Funding quote idempotency key was reused with different terms")
+    return fundingResource(existing)
+  }
+  const refundPolicy = await (
+    input.refundPolicyObserver ?? observeRewardVaultRefundPolicy
+  )(input.env, now)
+  assertContributionWithinRefundPolicy(amountCents, refundPolicy)
   const rowLocks = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? ""))
   const lockClause = rowLocks ? " FOR UPDATE" : ""
 
@@ -598,6 +911,13 @@ export async function createRewardCampaignFundingQuote(input: {
       args: [input.userId, idempotencyKey],
     }))
     if (replay) {
+      const campaign = assertedProvider !== null ? await selectCampaign(tx, input.campaignId, rowLocks) : null
+      if (assertedProvider !== null) {
+        if (!campaign) throw notFoundError("Reward campaign not found")
+        if (assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
+          throw conflictError("Funding provider assertion does not match the permanent song pool")
+        }
+      }
       if (
         requiredString(replay, "reward_campaign_id") !== input.campaignId
         || integer(rowValue(replay, "expected_amount_cents")) !== amountCents
@@ -605,30 +925,25 @@ export async function createRewardCampaignFundingQuote(input: {
       return fundingResource(replay)
     }
 
-    const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
-    if (!campaign) throw notFoundError("Reward campaign not found")
+    const campaign = await requireCampaign(tx, input.campaignId, rowLocks)
+    if (assertedProvider !== null && assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
+      throw conflictError("Funding provider assertion does not match the permanent song pool")
+    }
     await requireThirdPartyRewardsAllowed(
       tx,
       requiredString(campaign, "community_id"),
       requiredString(campaign, "post_id"),
     )
     const status = requiredString(campaign, "status") as RewardCampaignStatus
-    if (!["draft", "funding_quoted", "funding_confirming"].includes(status)) {
-      throw conflictError("Reward campaign no longer accepts initial funding")
-    }
-    const budget = integer(rowValue(campaign, "budget_cents"))
-    const funded = integer(rowValue(campaign, "funded_cents"))
-    const pendingResult = await tx.execute({
-      sql: `
-        SELECT COALESCE(SUM(expected_amount_cents), 0) AS pending_cents
-        FROM reward_campaign_funding_effects
-        WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
-      `,
-      args: [input.campaignId],
-    })
-    const pending = integer(rowValue(pendingResult.rows[0], "pending_cents"))
-    if (amountCents > budget - funded - pending) {
-      throw conflictError("Funding quote exceeds the campaign's unfunded budget")
+    if (![
+      "draft",
+      "funding_quoted",
+      "funding_confirming",
+      "scheduled",
+      "active",
+      "exhausted",
+    ].includes(status)) {
+      throw conflictError("Reward pool is not accepting contributions")
     }
     const sender = await resolveFundingSender(tx, input.userId)
     const fundingId = makeId("rcf")
@@ -638,20 +953,29 @@ export async function createRewardCampaignFundingQuote(input: {
           reward_campaign_funding_effect_id, reward_campaign_id, funder_user_id,
           idempotency_key, chain_id, token_address, expected_amount_cents,
           expected_amount_atomic, sender_address, treasury_address, status,
-          expires_at, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'quoted', ?11, ?12, ?12)
+          expires_at, admitted_refund_policy_version,
+          admitted_max_refund_atomic, created_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'quoted', ?11,
+          ?12, ?13, ?14, ?14
+        )
         ON CONFLICT (funder_user_id, idempotency_key) DO NOTHING
       `,
       args: [
         fundingId, input.campaignId, input.userId, idempotencyKey, config.chainId,
         config.tokenAddress, amountCents, String(BigInt(amountCents) * 10_000n),
-        sender, config.treasuryAddress, expiresAt, now,
+        sender, config.treasuryAddress, expiresAt,
+        refundPolicy?.policyVersion.toString() ?? null,
+        refundPolicy?.maxRefundAtomic.toString() ?? null,
+        now,
       ],
     })
-    await tx.execute({
-      sql: "UPDATE reward_campaigns SET status = 'funding_quoted', updated_at = ?2 WHERE reward_campaign_id = ?1",
-      args: [input.campaignId, now],
-    })
+    if (["draft", "funding_quoted", "funding_confirming"].includes(status)) {
+      await tx.execute({
+        sql: "UPDATE reward_campaigns SET status = 'funding_quoted', updated_at = ?2 WHERE reward_campaign_id = ?1",
+        args: [input.campaignId, now],
+      })
+    }
     const created = queryResultRow(await executeFirst(tx, {
       sql: `SELECT ${FUNDING_COLUMNS} FROM reward_campaign_funding_effects WHERE funder_user_id = ?1 AND idempotency_key = ?2 LIMIT 1`,
       args: [input.userId, idempotencyKey],
@@ -671,46 +995,118 @@ function normalizeTxHash(value: string): string {
   return txHash
 }
 
-/**
- * Marks a claimed funding effect failed and rolls the campaign back out of
- * `funding_confirming`, mirroring the rejected-verification path. Used when a transfer
- * verifies but was mined too late to honour: the money is real, so the effect must record
- * why it was refused rather than silently vanish.
- */
-async function failFundingEffect(
-  input: { client: Client; campaignId: string; fundingId: string },
-  reason: string,
-  now: string,
-  rowLocks: boolean,
-  txHash: string,
-): Promise<void> {
-  await withTransaction(input.client, "write", async (tx) => {
-    const effect = await selectFunding(tx, input.fundingId, rowLocks)
-    if (!effect) return
-    // Only fail the effect we actually claimed; never clobber a concurrently-settled one.
-    if (requiredString(effect, "status") !== "confirming") return
-    if (stringOrNull(rowValue(effect, "tx_hash")) !== txHash) return
-    await tx.execute({
-      sql: `UPDATE reward_campaign_funding_effects SET status = 'failed', failure_reason = ?2, failed_at = ?3, updated_at = ?3 WHERE reward_campaign_funding_effect_id = ?1`,
-      args: [input.fundingId, reason, now],
-    })
-    await tx.execute({
-      sql: `
-        UPDATE reward_campaigns
-        SET status = CASE
-              WHEN EXISTS (
-                SELECT 1 FROM reward_campaign_funding_effects
-                WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
-              ) THEN 'funding_quoted'
-              WHEN funded_cents > 0 THEN 'funding_quoted'
-              ELSE 'draft'
-            END,
-            updated_at = ?2
-        WHERE reward_campaign_id = ?1
-      `,
-      args: [input.campaignId, now],
-    })
+async function markFundingRefundPending(input: {
+  tx: Transaction
+  campaignId: string
+  fundingId: string
+  receivedAmountAtomic: string
+  senderAddress: string
+  blockNumber?: number
+  blockHash?: string
+  reason: string
+  now: string
+}): Promise<FundingRow> {
+  await input.tx.execute({
+    sql: `
+      UPDATE reward_campaign_funding_effects
+      SET status = 'refund_pending', received_amount_atomic = ?2,
+          sender_address = ?3, confirmed_at = ?4, confirmed_block_number = ?5,
+          confirmed_block_hash = ?6, failure_reason = ?7, updated_at = ?4
+      WHERE reward_campaign_funding_effect_id = ?1
+    `,
+    args: [
+      input.fundingId, input.receivedAmountAtomic, input.senderAddress, input.now,
+      input.blockNumber ?? null, input.blockHash ?? null, input.reason,
+    ],
   })
+  // Custody refunds never entered campaign inventory. Keep funded/refunded campaign counters
+  // untouched; campaign.refunded_cents is reserved for future refunds of funded inventory.
+  await input.tx.execute({
+    sql: `
+      UPDATE reward_campaigns
+      SET status = CASE
+            WHEN EXISTS (
+              SELECT 1 FROM reward_campaign_funding_effects
+              WHERE reward_campaign_id = ?1
+                AND (
+                  status = 'confirming'
+                  OR (status = 'quoted' AND expires_at > ?2)
+                )
+            ) THEN 'funding_quoted'
+            WHEN funded_cents > 0 THEN 'funding_quoted'
+            ELSE 'draft'
+          END,
+          updated_at = ?2
+      WHERE reward_campaign_id = ?1
+    `,
+    args: [input.campaignId, input.now],
+  })
+  const refundPending = await selectFunding(input.tx, input.fundingId)
+  if (!refundPending) throw new Error("refund-pending reward funding effect disappeared")
+  return refundPending
+}
+
+async function markFundingCustodyOperatorIncident(input: {
+  env: Env
+  tx: Transaction
+  campaignId: string
+  fundingId: string
+  txHash: string
+  transfers: Array<{
+    senderAddress: string
+    observedAmountAtomic: string
+    transferCount: number
+  }>
+  now: string
+}): Promise<FundingRow> {
+  const evidence = {
+    transfers: input.transfers.map((transfer) => ({
+      sender_address: transfer.senderAddress,
+      observed_amount_atomic: transfer.observedAmountAtomic,
+      transfer_count: transfer.transferCount,
+    })),
+  }
+  // Custody evidence must remain durable even when alert delivery is misconfigured.
+  // The incident reader can still surface this sentinel ownership for operator repair.
+  const ownership = rewardCampaignAlertOwnership(input.env) ?? {
+    owner: "reward-operator",
+    destination: "configuration-required",
+  }
+  await input.tx.execute({
+    sql: `
+      UPDATE reward_campaign_funding_effects
+      SET status = 'operator_incident',
+          custody_evidence_json = ?2::text::jsonb,
+          failure_reason = 'multiple_senders',
+          confirmed_at = ?3,
+          updated_at = ?3
+      WHERE reward_campaign_funding_effect_id = ?1
+    `,
+    args: [input.fundingId, JSON.stringify(evidence), input.now],
+  })
+  await input.tx.execute({
+    sql: `
+      INSERT INTO reward_campaign_incidents (
+        reward_campaign_incident_id, reward_campaign_id, incident_kind, reason,
+        details_json, opened_at, last_seen_at, alert_owner, alert_destination
+      ) VALUES (?1, ?2, 'funding_custody_ambiguous', 'multiple_senders', ?3::text::jsonb, ?4, ?4, ?5, ?6)
+      ON CONFLICT (reward_campaign_id, incident_kind) WHERE resolved_at IS NULL
+      DO UPDATE SET
+        last_seen_at = GREATEST(reward_campaign_incidents.last_seen_at, excluded.last_seen_at),
+        details_json = excluded.details_json
+    `,
+    args: [
+      makeId("rci"),
+      input.campaignId,
+      JSON.stringify({ funding_id: input.fundingId, tx_hash: input.txHash, ...evidence }),
+      input.now,
+      ownership.owner,
+      ownership.destination,
+    ],
+  })
+  const incident = await selectFunding(input.tx, input.fundingId)
+  if (!incident) throw new Error("operator-incident reward funding effect disappeared")
+  return incident
 }
 
 export async function confirmRewardCampaignFunding(input: {
@@ -743,6 +1139,8 @@ export async function confirmRewardCampaignFunding(input: {
     if (requiredString(effect, "funder_user_id") !== input.userId) {
       throw notFoundError("Reward campaign funding quote not found")
     }
+    const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
+    if (!campaign) throw notFoundError("Reward campaign not found")
     const status = requiredString(effect, "status")
     const existingTx = stringOrNull(rowValue(effect, "tx_hash"))
     if (status === "confirmed") {
@@ -763,8 +1161,40 @@ export async function confirmRewardCampaignFunding(input: {
       }
       return effect
     }
+    if (status === "refund_pending") {
+      if (existingTx !== txHash) {
+        throw codedConflictError(
+          FUNDING_TRANSACTION_MISMATCH,
+          "Funding quote awaiting refund already claimed a different transaction",
+        )
+      }
+      return effect
+    }
     if (status === "refunded") {
       throw codedConflictError(FUNDING_QUOTE_ALREADY_CLAIMED, "Funding quote was already refunded")
+    }
+    const campaignStatus = requiredString(campaign, "status") as RewardCampaignStatus
+    if (![
+      "draft",
+      "funding_quoted",
+      "funding_confirming",
+      "scheduled",
+      "active",
+      "exhausted",
+    ].includes(campaignStatus)) {
+      throw conflictError("Reward pool is not accepting contributions")
+    }
+    // A current-chain transfer may be verified after its quote expires: its
+    // receipt can prove that it reached the treasury before the deadline.
+    // Do not reopen a lapsed quote from a retired settlement chain, though.
+    // Those effects are deliberately isolated after a cutover and must not
+    // become either current-chain budget or a current-chain refund liability.
+    const effectChainId = integer(rowValue(effect, "chain_id"))
+    if (
+      effectChainId !== config.chainId
+      && Date.parse(requiredString(effect, "expires_at")) <= Date.parse(now)
+    ) {
+      throw conflictError("Expired funding quote belongs to a retired settlement chain")
     }
     if (existingTx && existingTx !== txHash) {
       throw codedConflictError(
@@ -813,7 +1243,9 @@ export async function confirmRewardCampaignFunding(input: {
     })
     return (await selectFunding(tx, input.fundingId)) ?? effect
   })
-  if (["confirmed", "failed"].includes(requiredString(claimed, "status"))) return fundingResource(claimed)
+  if (["confirmed", "failed", "refund_pending", "operator_incident"].includes(requiredString(claimed, "status"))) {
+    return fundingResource(claimed)
+  }
 
   const expected = {
     chainId: integer(rowValue(claimed, "chain_id")),
@@ -822,15 +1254,16 @@ export async function confirmRewardCampaignFunding(input: {
     amountAtomic: BigInt(requiredString(claimed, "expected_amount_atomic")),
     senderAddress: requiredString(claimed, "sender_address"),
   }
+  const fundingRpcUrl = resolveRewardsSettlementRpcUrlForChain(input.env, expected.chainId)
   const verification = input.verify
-    ? await input.verify(expected, txHash, config.rpcUrl)
+    ? await input.verify(expected, txHash, fundingRpcUrl)
     : await classifyBookingPaymentReceipt({
       env: input.env,
       fundingTxRef: txHash,
       expected,
-      rpcUrl: config.rpcUrl,
+      rpcUrl: fundingRpcUrl,
       finality: {
-        expectedChainId: config.chainId,
+        expectedChainId: expected.chainId,
         fallbackConfirmations: 30,
         preferSafeBlock: true,
       },
@@ -841,34 +1274,19 @@ export async function confirmRewardCampaignFunding(input: {
     return fundingResource(pending)
   }
 
-  // The transfer verified. Whether to honour it depends on WHEN it was mined, not on when the
-  // confirmation happened to arrive.
-  //
-  // While the quote is still live, a mined transfer is timely by construction (its block is in
-  // the past), so nothing needs checking. Once the quote has lapsed we honour it only on positive
-  // evidence that it was mined before expiry — which rescues the money-stranding case (wallet
-  // broadcasts, the confirm request is lost, the quote lapses, and the client resumes with the
-  // same hash) without letting a genuinely late transfer resurrect stale terms.
-  //
-  // Absent that evidence we fail closed: an unprovable transfer against a lapsed quote is
-  // refused rather than optimistically accepted.
-  if (verification.kind === "verified" && Date.parse(now) > Date.parse(requiredString(claimed, "expires_at"))) {
-    const expiresAtMs = Date.parse(requiredString(claimed, "expires_at"))
-    const minedAtMs = typeof verification.blockTimestamp === "number"
-      ? verification.blockTimestamp * 1000
-      : null
-    if (minedAtMs === null || minedAtMs > expiresAtMs) {
-      await failFundingEffect(input, "funding_confirmed_after_quote_expiry", now, rowLocks, txHash)
-      throw codedConflictError(
-        FUNDING_QUOTE_EXPIRED,
-        "The funding transfer was not proven to have been sent before this quote expired, so it was not applied to the campaign.",
-        {
-          mined_at: minedAtMs === null ? null : new Date(minedAtMs).toISOString(),
-          expires_at: requiredString(claimed, "expires_at"),
-        },
-      )
-    }
-  }
+  const expiresAtMs = Date.parse(requiredString(claimed, "expires_at"))
+  const confirmationAfterExpiry = Date.parse(now) > expiresAtMs
+  const minedAtMs = verification.kind === "verified" && typeof verification.blockTimestamp === "number"
+    ? verification.blockTimestamp * 1000
+    : null
+  const genuinelyLateDeposit = verification.kind === "verified"
+    && confirmationAfterExpiry
+    && (minedAtMs === null || minedAtMs > expiresAtMs)
+  const graceEndsAtMs = expiresAtMs + LATE_FUNDING_ACCEPTANCE_GRACE_SECONDS * 1000
+  const lateDepositInsideGrace = genuinelyLateDeposit
+    && minedAtMs !== null
+    && minedAtMs <= graceEndsAtMs
+    && Date.parse(now) <= graceEndsAtMs
 
   return await withTransaction(input.client, "write", async (tx) => {
     const effect = await selectFunding(tx, input.fundingId, rowLocks)
@@ -879,6 +1297,30 @@ export async function confirmRewardCampaignFunding(input: {
         FUNDING_TRANSACTION_MISMATCH,
         "Funding quote transaction changed during confirmation",
       )
+    }
+    if (verification.kind === "custody_mismatch") {
+      return fundingResource(await markFundingRefundPending({
+        tx,
+        campaignId: input.campaignId,
+        fundingId: input.fundingId,
+        receivedAmountAtomic: verification.observedAmountAtomic,
+        senderAddress: verification.senderAddress,
+        blockNumber: verification.blockNumber,
+        blockHash: verification.blockHash,
+        reason: verification.reason,
+        now,
+      }))
+    }
+    if (verification.kind === "custody_incident") {
+      return fundingResource(await markFundingCustodyOperatorIncident({
+        env: input.env,
+        tx,
+        campaignId: input.campaignId,
+        fundingId: input.fundingId,
+        txHash,
+        transfers: verification.transfers,
+        now,
+      }))
     }
     if (verification.kind === "rejected") {
       await tx.execute({
@@ -891,7 +1333,11 @@ export async function confirmRewardCampaignFunding(input: {
           SET status = CASE
                 WHEN EXISTS (
                   SELECT 1 FROM reward_campaign_funding_effects
-                  WHERE reward_campaign_id = ?1 AND status IN ('quoted', 'confirming')
+                  WHERE reward_campaign_id = ?1
+                    AND (
+                      status = 'confirming'
+                      OR (status = 'quoted' AND expires_at > ?2)
+                    )
                 ) THEN 'funding_quoted'
                 WHEN funded_cents > 0 THEN 'funding_quoted'
                 ELSE 'draft'
@@ -908,23 +1354,42 @@ export async function confirmRewardCampaignFunding(input: {
 
     const campaign = await selectCampaign(tx, input.campaignId, rowLocks)
     if (!campaign) throw notFoundError("Reward campaign not found")
+    if (genuinelyLateDeposit && !lateDepositInsideGrace) {
+      return fundingResource(await markFundingRefundPending({
+        tx,
+        campaignId: input.campaignId,
+        fundingId: input.fundingId,
+        receivedAmountAtomic: requiredString(effect, "expected_amount_atomic"),
+        senderAddress: verification.senderAddress,
+        blockNumber: verification.blockNumber,
+        blockHash: verification.blockHash,
+        reason: "funding_confirmed_after_quote_expiry",
+        now,
+      }))
+    }
     const amount = integer(rowValue(effect, "expected_amount_cents"))
     const nextFunded = integer(rowValue(campaign, "funded_cents")) + amount
-    const budget = integer(rowValue(campaign, "budget_cents"))
-    if (nextFunded > budget) throw conflictError("Confirmed funding would exceed campaign budget")
-    const startMillis = Date.parse(requiredString(campaign, "starts_at"))
-    const endMillis = Date.parse(requiredString(campaign, "ends_at"))
     const nowMillis = Date.parse(now)
+    const requestedStartMillis = Date.parse(requiredString(campaign, "starts_at"))
+    const requestedEndMillis = Date.parse(requiredString(campaign, "ends_at"))
+    const campaignDurationMillis = requestedEndMillis - requestedStartMillis
+    const firstActivation = integer(rowValue(campaign, "funded_cents")) === 0
+      && unixSeconds(rowValue(campaign, "activated_at")) === null
+    const shiftActivationWindow = genuinelyLateDeposit
+      || (firstActivation && nowMillis > requestedStartMillis)
+    const startMillis = shiftActivationWindow ? nowMillis : requestedStartMillis
+    const endMillis = shiftActivationWindow ? nowMillis + campaignDurationMillis : requestedEndMillis
     const ownerAllowsRewards = await thirdPartyRewardsAllowed(
       tx,
       requiredString(campaign, "community_id"),
       requiredString(campaign, "post_id"),
     )
+    const currentStatus = requiredString(campaign, "status") as RewardCampaignStatus
     const nextStatus: RewardCampaignStatus = !ownerAllowsRewards
       ? "paused"
-      : nextFunded < budget
-      ? "funding_quoted"
-      : nowMillis < startMillis
+      : currentStatus === "paused"
+        ? "paused"
+        : nowMillis < startMillis
         ? "scheduled"
         : nowMillis < endMillis
           ? "active"
@@ -942,24 +1407,25 @@ export async function confirmRewardCampaignFunding(input: {
         verification.blockNumber ?? null, verification.blockHash ?? null,
       ],
     })
-    try {
-      await tx.execute({
-        sql: `
+    await tx.execute({
+      sql: `
           UPDATE reward_campaigns
-          SET funded_cents = ?2, status = ?3,
+          SET funded_cents = ?2,
+              budget_cents = CASE WHEN budget_cents < ?2 THEN ?2 ELSE budget_cents END,
+              status = ?3,
+              starts_at = CASE WHEN ?5 THEN ?6 ELSE starts_at END,
+              ends_at = CASE WHEN ?5 THEN ?7 ELSE ends_at END,
               activated_at = CASE WHEN ?3 = 'active' AND activated_at IS NULL THEN ?4 ELSE activated_at END,
               ended_at = CASE WHEN ?3 = 'ended' AND ended_at IS NULL THEN ?4 ELSE ended_at END,
               updated_at = ?4
           WHERE reward_campaign_id = ?1
-        `,
-        args: [input.campaignId, nextFunded, nextStatus, now],
-      })
-    } catch (error) {
-      if (hasUniqueConstraintName(error, "reward_campaigns_one_live_per_song_post")) {
-        throw conflictError("Another funded campaign is already live for this song post")
-      }
-      throw error
-    }
+      `,
+      args: [
+        input.campaignId, nextFunded, nextStatus, now, shiftActivationWindow,
+        new Date(startMillis).toISOString(),
+        new Date(endMillis).toISOString(),
+      ],
+    })
     const confirmed = await selectFunding(tx, input.fundingId)
     if (!confirmed) throw new Error("confirmed reward funding effect disappeared")
     return fundingResource(confirmed)

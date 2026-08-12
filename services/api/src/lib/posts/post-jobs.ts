@@ -1,6 +1,8 @@
 import type { DbExecutor } from "../db-helpers"
-import { enqueueCommunityJob } from "../communities/jobs/store"
+import { enqueueCommunityJob, type CommunityJobRow } from "../communities/jobs/store"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../communities/jobs/runner-types"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
+import { computePostSourceHash } from "../localization/content-source-hash"
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"
 import type { PostWriteDraft } from "./community-post-create-store"
@@ -15,24 +17,27 @@ async function enqueuePostTranslationJob(input: {
   communityId: string
   postId: string
   locale: string
+  sourceHash: string
   createdAt: string
   // Pass false when enqueuing inside a transaction("write"): the dedup lookup is a
   // SELECT, which the routed D1 write client buffers into batchWrite() where the shard
   // write guard rejects it. Defaults to dedupe-on for the read-path caller.
   dedupe?: boolean
-}): Promise<void> {
-  await enqueueCommunityJob({
+}): Promise<CommunityJobRow> {
+  return await enqueueCommunityJob({
     client: input.client,
     communityId: input.communityId,
     jobType: "post_translation_materialize",
     subjectType: "post_translation",
-    subjectId: `${input.postId}:${input.locale}`,
+    subjectId: `${input.postId}:${input.locale}:${input.sourceHash}`,
     payloadJson: JSON.stringify({
       post_id: input.postId,
       locale: input.locale,
+      source_hash: input.sourceHash,
     }),
     createdAt: input.createdAt,
     dedupe: input.dedupe,
+    reuseTerminalFailure: true,
   })
 }
 
@@ -46,6 +51,7 @@ export async function enqueuePostTranslationPrewarmJobs(input: {
   if (translationPolicy !== "machine_allowed" && translationPolicy !== "hybrid") {
     return
   }
+  const sourceHash = await computePostSourceHash(input.post)
 
   for (const locale of CONTENT_TRANSLATION_PREWARM_LOCALES) {
     if (sameLanguageLocale(input.post.source_language, locale)) {
@@ -56,6 +62,7 @@ export async function enqueuePostTranslationPrewarmJobs(input: {
       communityId: input.communityId,
       postId: input.post.post_id,
       locale,
+      sourceHash,
       createdAt: input.createdAt,
       // Runs inside createPost's write tx — skip the dedup SELECT (buffered batchWrite).
       dedupe: false,
@@ -81,13 +88,17 @@ export async function enqueuePostTranslationOnReadIfNeeded(input: {
   if (!needsTranslationJob) {
     return
   }
-  await enqueuePostTranslationJob({
+  const job = await enqueuePostTranslationJob({
     client: input.client,
     communityId: input.communityId,
     postId: response.post.post_id,
     locale: response.resolved_locale,
+    sourceHash: response.source_hash,
     createdAt: nowIso(),
   })
+  if (job.status === "failed" && job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS) {
+    response.translation_state = "failed"
+  }
 }
 
 async function enqueuePostLabelJob(input: {

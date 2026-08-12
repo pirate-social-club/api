@@ -42,7 +42,7 @@ describe("notification routes", () => {
     expect(body.code).toBe("auth_error")
   })
 
-  test("rejects dismissing synthetic tasks", async () => {
+  test("returns not found for legacy synthetic unique-human task ids", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "notification-synthetic-dismiss-user")
@@ -60,10 +60,10 @@ describe("notification routes", () => {
       ctx.env,
     )
 
-    expect(response.status).toBe(400)
+    expect(response.status).toBe(404)
     const body = await json(response) as { code: string; message: string }
-    expect(body.code).toBe("bad_request")
-    expect(body.message).toBe("This task cannot be dismissed")
+    expect(body.code).toBe("not_found")
+    expect(body.message).toBe("Task not found")
   })
 
   test("returns not found for unknown dismissed tasks", async () => {
@@ -360,7 +360,7 @@ describe("notification routes", () => {
       has_unread: boolean
     }
     expect(summaryBody).toEqual({
-      open_task_count: 4,
+      open_task_count: 3,
       unread_activity_count: 1,
       has_unread: true,
     })
@@ -374,7 +374,7 @@ describe("notification routes", () => {
     const tasksBody = await json(tasks) as {
       items: Array<{ id: string; type: string; status: string; payload?: Record<string, unknown> | null }>
     }
-    expect(tasksBody.items).toHaveLength(4)
+    expect(tasksBody.items).toHaveLength(3)
     expect(tasksBody.items.some((item) => item.id === task.id && item.status === "open")).toBe(true)
     expect(tasksBody.items.find((item) => item.id === task.id)).toMatchObject({
       payload: {
@@ -438,7 +438,7 @@ describe("notification routes", () => {
       has_unread: boolean
     }
     expect(summaryAfterReadBody).toEqual({
-      open_task_count: 4,
+      open_task_count: 3,
       unread_activity_count: 0,
       has_unread: true,
     })

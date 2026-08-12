@@ -4,6 +4,14 @@ import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-alloc
 export type StoryRoyaltyMetadataAccessMode = "public" | "locked"
 export type StoryRoyaltyMetadataAssetKind = "song_audio" | "video_file"
 export type StoryRoyaltyMetadataRightsBasis = "none" | "original" | "derivative"
+export type StoryRoyaltyMetadataMedia = {
+  mediaUrl: string | null
+  verificationStorageRef?: string | null
+  mediaType: string | null
+  mediaHash: string | null
+  imageUrl?: string | null
+  imageHash?: string | null
+}
 
 function publicMetadataUri(value: unknown): string | null {
   const uri = typeof value === "string" ? value.trim() : ""
@@ -62,15 +70,17 @@ export function buildStoryRoyaltyMetadataPayloads(input: {
   creatorWalletAddress: string
   accessMode: StoryRoyaltyMetadataAccessMode
   bundle: SongArtifactBundle | null
+  media?: StoryRoyaltyMetadataMedia | null
   primaryContentHash: `0x${string}`
   mediaHashVerified: boolean
   derivativeParentIpIds: string[] | null
   royaltyShares: StoryRoyaltyShareRow[]
   createdAt: string
 }) {
-  const coverArtRef = input.bundle?.cover_art?.storage_ref?.trim() || null
-  const coverArtUri = publicMetadataUri(coverArtRef)
-  const coverArtHash = sha256MetadataHash(input.bundle?.cover_art?.content_hash)
+  const coverArtRef = input.bundle?.cover_art?.storage_ref?.trim() || input.media?.imageUrl?.trim() || null
+  const coverArtUri = publicMetadataUri(input.media?.imageUrl) ?? publicMetadataUri(coverArtRef)
+  const coverArtHash = sha256MetadataHash(input.media?.imageHash)
+    ?? sha256MetadataHash(input.bundle?.cover_art?.content_hash)
   const title = input.title?.trim() || input.bundle?.title?.trim() || `Pirate Asset ${input.assetId}`
   const assetLabel = input.assetKind === "song_audio" ? "music" : "video"
   const description = input.rightsBasis === "derivative"
@@ -80,13 +90,13 @@ export function buildStoryRoyaltyMetadataPayloads(input: {
     creatorWalletAddress: input.creatorWalletAddress,
     royaltyShares: input.royaltyShares,
   })
-  const mediaUri = input.assetKind === "song_audio" && input.accessMode === "public"
-    ? songMediaUri(input.bundle)
+  const mediaUri = input.accessMode === "public"
+    ? publicMetadataUri(input.media?.mediaUrl) ?? (input.assetKind === "song_audio" ? songMediaUri(input.bundle) : null)
     : null
   const mediaHash = input.mediaHashVerified
-    ? sha256MetadataHash(input.bundle?.primary_audio?.content_hash)
+    ? sha256MetadataHash(input.media?.mediaHash) ?? sha256MetadataHash(input.bundle?.primary_audio?.content_hash)
     : null
-  const mediaType = storyMediaType(input.bundle?.primary_audio?.mime_type)
+  const mediaType = storyMediaType(input.media?.mediaType ?? input.bundle?.primary_audio?.mime_type)
   const canonicalMedia = mediaUri && mediaHash && mediaType
     ? { mediaUrl: mediaUri, mediaHash, mediaType }
     : {}

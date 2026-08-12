@@ -11,11 +11,18 @@ import {
   getCommunityMembershipState,
 } from "../communities/membership/membership-state-store"
 import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
+import { listCommunityLabels } from "../communities/community-label-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale } from "../localization/content-locale"
+import { contentTranslationLookupKey, listContentTranslationsForContentIds } from "../localization/content-translation-store"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
+import {
+  hydrateDerivativeSourcesForResponses,
+  type DerivativeSourceHydrationTiming,
+} from "../posts/upstream-source-hydration"
 import { enqueueEmbedHydrateOnReadIfNeeded, enqueuePostTranslationOnReadIfNeeded } from "../posts/post-jobs"
 import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, hydrateSongStreakSummariesForResponses } from "../posts/post-read-response"
-import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
+import { getControlPlaneClient, withBackgroundControlPlaneClients } from "../runtime-deps"
 import { numberOrNull, requiredString, rowValue } from "../sql-row"
 import { serializeLocalizedPostResponse } from "../../serializers/post"
 import { publicCommunityId } from "../public-ids"
@@ -70,11 +77,22 @@ export type HomeFeedCommunityTiming = {
   total_ms: number
   open_ms: number
   identity_ms: number
+  viewer_gate_ms: number
   posts_ms: number
   snapshots_ms: number
   votes_ms: number
   localize_ms: number
+  crosspost_ms: number
+  author_handles_ms: number
+  streaks_ms: number
+  derivatives_ms: number
+  derivative_local_rows_ms: number
+  derivative_global_rows_ms: number
+  derivative_profiles_ms: number
+  derivative_profiles_degraded: boolean
+  serialize_ms: number
   enqueue_ms: number
+  unaccounted_ms: number
 }
 
 export type HomeFeedCommunityReadResult = {
@@ -85,6 +103,15 @@ export type HomeFeedCommunityReadResult = {
 
 function elapsedMs(startedAt: number): number {
   return Math.round(performance.now() - startedAt)
+}
+
+export function homeFeedVideoDerivativeResponses(
+  responses: LocalizedPostResponse[],
+): LocalizedPostResponse[] {
+  return responses.filter((response) =>
+    response.post.post_type === "video"
+    && (response.post.upstream_asset_refs?.length ?? 0) > 0
+  )
 }
 
 function placeholders(count: number): string {
@@ -210,7 +237,7 @@ function enqueuePostReadJobs(input: {
     })
   }
 
-  input.waitUntil(withRequestControlPlaneClients(async () => {
+  input.waitUntil(withBackgroundControlPlaneClients(async () => {
     const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
     try {
       await enqueuePostReadJobsForCommunity({
@@ -238,6 +265,9 @@ export function serializeHomeFeedCommunitySummary(summary: InternalHomeFeedCommu
     display_name: summary.display_name,
     route_slug: summary.route_slug,
     avatar_ref: summary.avatar_ref,
+    branding: summary.branding,
+    default_surface: summary.default_surface,
+    video_feed_enabled: summary.video_feed_enabled,
     member_count: summary.member_count,
     follower_count: summary.follower_count,
     view_count: summary.view_count,
@@ -340,6 +370,39 @@ export async function resolveTopCommunitiesIdentity(input: {
   }))
 }
 
+async function listHomeFeedAuthorCommunityRoles(input: {
+  executor: DbExecutor
+  communityId: string
+  userIds: string[]
+}): Promise<Map<string, LocalizedPostResponse["author_community_role"]>> {
+  const uniqueUserIds = [...new Set(input.userIds)]
+  const roles = new Map<string, LocalizedPostResponse["author_community_role"]>()
+  if (uniqueUserIds.length === 0) return roles
+  const placeholders = uniqueUserIds.map((_, index) => `?${index + 2}`).join(", ")
+  const result = await input.executor.execute({
+    sql: `
+      SELECT user_id, role
+      FROM community_roles
+      WHERE community_id = ?1
+        AND user_id IN (${placeholders})
+        AND status = 'active'
+        AND role IN ('owner', 'admin', 'moderator')
+      ORDER BY user_id, CASE role
+        WHEN 'owner' THEN 0
+        WHEN 'admin' THEN 1
+        ELSE 2
+      END
+    `,
+    args: [input.communityId, ...uniqueUserIds],
+  })
+  for (const row of result.rows) {
+    const userId = requiredString(row, "user_id")
+    if (roles.has(userId)) continue
+    roles.set(userId, requiredString(row, "role") === "owner" ? "owner" : "moderator")
+  }
+  return roles
+}
+
 export async function readHomeFeedCommunityItems(input: {
   env: Env
   communityId: string
@@ -349,7 +412,6 @@ export async function readHomeFeedCommunityItems(input: {
   communityRepository: HomeFeedCommunityRepository
   profileRepository?: ProfileRepository | null
   userId: string | null
-  studyTimezone?: string
   locale?: string | null
   ageGateState: AgeGateViewerState | null
   waitUntil?: HomeFeedWaitUntil
@@ -374,11 +436,22 @@ export async function readHomeFeedCommunityItems(input: {
         total_ms: elapsedMs(communityStartedAt),
         open_ms: openMs,
         identity_ms: 0,
+        viewer_gate_ms: 0,
         posts_ms: 0,
         snapshots_ms: 0,
         votes_ms: 0,
         localize_ms: 0,
+        crosspost_ms: 0,
+        author_handles_ms: 0,
+        streaks_ms: 0,
+        derivatives_ms: 0,
+        derivative_local_rows_ms: 0,
+        derivative_global_rows_ms: 0,
+        derivative_profiles_ms: 0,
+        derivative_profiles_degraded: false,
+        serialize_ms: 0,
         enqueue_ms: 0,
+        unaccounted_ms: 0,
       },
     }
   }
@@ -389,12 +462,14 @@ export async function readHomeFeedCommunityItems(input: {
     const communitySummary = input.baseCommunity
       ? withHomeFeedCommunityIdentity(input.baseCommunity, identity)
       : null
+    const viewerGateStartedAt = performance.now()
     const viewerGateState = await getHomeFeedViewerGateState({
       client: db.client,
       communityId: input.communityId,
       displayName: communitySummary?.display_name ?? identity?.displayName ?? input.communityId,
       userId: input.userId,
     })
+    const viewerGateMs = elapsedMs(viewerGateStartedAt)
     const communityItems: HomeFeedItem[] = []
     const postsStartedAt = performance.now()
     const postsById = await listPostsById(db.client, input.rows.map((row) => row.source_post_id))
@@ -416,8 +491,38 @@ export async function readHomeFeedCommunityItems(input: {
       userId: input.userId,
     })
     const votesMs = elapsedMs(votesStartedAt)
+    const publishedPosts = publishedPostIds
+      .map((postId) => postsById.get(postId))
+      .filter((post): post is Post => Boolean(post))
+    const resolvedLocale = normalizeContentLocale(input.locale) ?? DEFAULT_CONTENT_LOCALE
+    const [communityLabels, authorCommunityRoleByUserId, contentTranslations] = await Promise.all([
+      listCommunityLabels({
+        executor: db.client,
+        communityId: input.communityId,
+        includeArchived: true,
+      }),
+      listHomeFeedAuthorCommunityRoles({
+        executor: db.client,
+        communityId: input.communityId,
+        userIds: publishedPosts
+          .filter((post) => post.identity_mode === "public")
+          .map((post) => post.author_user_id)
+          .filter((userId): userId is string => Boolean(userId)),
+      }),
+      listContentTranslationsForContentIds({
+        executor: db.client,
+        contentType: "post",
+        contentIds: publishedPostIds,
+        locale: resolvedLocale,
+      }),
+    ])
+    const communityLabelById = new Map(communityLabels.map((label) => [label.label_id, label] as const))
+    const contentTranslationByKey = new Map(
+      contentTranslations.map((translation) => [contentTranslationLookupKey(translation), translation] as const),
+    )
     const postReadJobs: HomeFeedPostReadJob[] = []
     const studyEnabledCache = new Map<string, Promise<boolean>>()
+    const karaokeEnabledCache = new Map<string, Promise<boolean>>()
     const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
     let localizeMs = 0
     for (const row of input.rows) {
@@ -447,17 +552,24 @@ export async function readHomeFeedCommunityItems(input: {
         },
         ageGateViewerState: post.age_gate_policy === "18_plus" ? input.ageGateState ?? "proof_required" : null,
         studyElevenLabsCredentialResolver,
+        studyArtifactWriteClient: db.client,
         studyEnabledCache,
+        karaokeEnabledCache,
+        communityLabelById,
+        authorCommunityRoleByUserId,
+        contentTranslationByKey,
         viewerUserId: input.userId,
       })
       localizeMs += elapsedMs(localizeStartedAt)
       postReadJobs.push({ post, response })
     }
+    const crosspostStartedAt = performance.now()
     await hydrateCrosspostSourcesForResponses({
       responses: postReadJobs.map((job) => job.response),
       communityRepository: input.communityRepository,
       profileRepository: input.profileRepository,
     })
+    const crosspostMs = elapsedMs(crosspostStartedAt)
     // Stamp public-identity author handles onto the post payload so home-feed
     // cards render the byline on first paint instead of falling back to a
     // per-author profile fetch (the truncated-id -> handle flicker). One batched
@@ -465,17 +577,39 @@ export async function readHomeFeedCommunityItems(input: {
     // The live feed hits this directly; the cached materialized public feed
     // reuses it via listHomeFeed -> readHomeFeedCommunityItems before it stores
     // the serialized payload, so both paths get the handle.
+    const authorHandlesStartedAt = performance.now()
     await hydrateAuthorPublicHandlesForResponses({
       responses: postReadJobs.map((job) => job.response),
       profileRepository: input.profileRepository,
     })
+    const authorHandlesMs = elapsedMs(authorHandlesStartedAt)
+    const streaksStartedAt = performance.now()
     await hydrateSongStreakSummariesForResponses({
       client: db.client,
       responses: postReadJobs.map((job) => job.response),
       profileRepository: input.profileRepository,
-      studyTimezone: input.studyTimezone,
       viewerUserId: input.userId,
     })
+    const streaksMs = elapsedMs(streaksStartedAt)
+    const derivativeResponses = homeFeedVideoDerivativeResponses(postReadJobs.map((job) => job.response))
+    const derivativesStartedAt = performance.now()
+    let derivativeTiming: DerivativeSourceHydrationTiming = {
+      local_rows_ms: 0,
+      global_rows_ms: 0,
+      profiles_ms: 0,
+      profiles_degraded: false,
+    }
+    if (derivativeResponses.length > 0) {
+      derivativeTiming = await hydrateDerivativeSourcesForResponses({
+        client: db.client,
+        communityId: input.communityId,
+        env: input.env,
+        responses: derivativeResponses,
+        profileRepository: input.profileRepository,
+      })
+    }
+    const derivativesMs = elapsedMs(derivativesStartedAt)
+    const serializeStartedAt = performance.now()
     if (communitySummary) {
       const serializedCommunitySummary = serializeHomeFeedCommunitySummary(communitySummary)
       for (const job of postReadJobs) {
@@ -488,6 +622,7 @@ export async function readHomeFeedCommunityItems(input: {
         })
       }
     }
+    const serializeMs = elapsedMs(serializeStartedAt)
     const enqueueStartedAt = performance.now()
     await enqueuePostReadJobs({
       env: input.env,
@@ -498,6 +633,20 @@ export async function readHomeFeedCommunityItems(input: {
       fallbackClient: db.client,
     })
     const enqueueMs = elapsedMs(enqueueStartedAt)
+    const totalMs = elapsedMs(communityStartedAt)
+    const accountedMs = openMs
+      + identityMs
+      + viewerGateMs
+      + postsMs
+      + snapshotsMs
+      + votesMs
+      + localizeMs
+      + crosspostMs
+      + authorHandlesMs
+      + streaksMs
+      + derivativesMs
+      + serializeMs
+      + enqueueMs
     return {
       items: communityItems,
       identity,
@@ -505,14 +654,25 @@ export async function readHomeFeedCommunityItems(input: {
         community_id: input.communityId,
         rows: input.rows.length,
         returned_items: communityItems.length,
-        total_ms: elapsedMs(communityStartedAt),
+        total_ms: totalMs,
         open_ms: openMs,
         identity_ms: identityMs,
+        viewer_gate_ms: viewerGateMs,
         posts_ms: postsMs,
         snapshots_ms: snapshotsMs,
         votes_ms: votesMs,
         localize_ms: localizeMs,
+        crosspost_ms: crosspostMs,
+        author_handles_ms: authorHandlesMs,
+        streaks_ms: streaksMs,
+        derivatives_ms: derivativesMs,
+        derivative_local_rows_ms: derivativeTiming.local_rows_ms,
+        derivative_global_rows_ms: derivativeTiming.global_rows_ms,
+        derivative_profiles_ms: derivativeTiming.profiles_ms,
+        derivative_profiles_degraded: derivativeTiming.profiles_degraded,
+        serialize_ms: serializeMs,
         enqueue_ms: enqueueMs,
+        unaccounted_ms: Math.max(0, totalMs - accountedMs),
       },
     }
   } finally {

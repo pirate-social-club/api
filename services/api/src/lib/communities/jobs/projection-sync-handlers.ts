@@ -2,6 +2,7 @@ import { getCommentById } from "../../comments/community-comment-store"
 import { internalError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { getPostById } from "../../posts/community-post-query-store"
+import { rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
 import { parseJobPayload } from "./payload"
@@ -18,6 +19,11 @@ type CommentProjectionSyncPayload = {
 type PostProjectionSyncPayload = {
   post_id?: string
   source_created_at?: string
+}
+
+export function shouldProjectPostForAnchorRoomRow(anchorRoomRow: unknown): boolean {
+  if (!anchorRoomRow) return true
+  return stringOrNull(rowValue(anchorRoomRow, "visibility")) === "public"
 }
 
 export async function runCommentProjectionSync(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -77,6 +83,19 @@ export async function runPostProjectionSync(input: CommunityJobHandlerInput): Pr
     const post = await getPostById(db.client, postId)
     if (!post) {
       throw internalError("Post is missing for projection sync")
+    }
+
+    const anchorRoomResult = await db.client.execute({
+      sql: `
+        SELECT visibility
+        FROM live_rooms
+        WHERE anchor_post_id = ?1
+        LIMIT 1
+      `,
+      args: [postId],
+    })
+    if (!shouldProjectPostForAnchorRoomRow(anchorRoomResult.rows[0])) {
+      return postId
     }
 
     const community = await input.communityRepository.getCommunityById(input.job.community_id)

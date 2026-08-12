@@ -27,10 +27,13 @@ const signals: CommunityPublishAlertSignals[] = [
     stuck_royalty_allocation_projection_samples: [],
     stale_locked_delivery_assets: 0,
     stale_locked_delivery_asset_samples: [],
+    failed_story_delivery_assets: 0,
+    failed_story_delivery_asset_samples: [],
     retried_locked_delivery_jobs: 0,
     retried_locked_delivery_job_samples: [],
     story_registration_reconciliation_required: 0,
     story_registration_reconciliation_samples: [],
+    stale_ready_job_lanes: [],
   },
   {
     community_id: "c2",
@@ -52,6 +55,15 @@ const signals: CommunityPublishAlertSignals[] = [
       locked_delivery_status: "requested",
       updated_at: "2026-07-08T10:01:00.000Z",
     }],
+    failed_story_delivery_assets: 1,
+    failed_story_delivery_asset_samples: [{
+      asset_id: "ast_failed_wallet",
+      story_status: "failed",
+      locked_delivery_status: "failed",
+      story_error: "Primary wallet is required",
+      locked_delivery_error: "Primary wallet is required",
+      updated_at: "2026-07-08T10:04:00.000Z",
+    }],
     retried_locked_delivery_jobs: 1,
     retried_locked_delivery_job_samples: [{
       job_id: "job_retry",
@@ -68,6 +80,12 @@ const signals: CommunityPublishAlertSignals[] = [
       provider_tx_ref: `0x${"ab".repeat(32)}`,
       updated_at: "2026-07-08T10:03:00.000Z",
     }],
+    stale_ready_job_lanes: [{
+      job_type: "telegram_post_publish",
+      ready_jobs: 2,
+      oldest_ready_at: "2026-07-08T09:30:00.000Z",
+      oldest_ready_age_ms: 30 * 60_000,
+    }],
   },
 ]
 
@@ -83,8 +101,22 @@ describe("ops-alerts emit", () => {
     expect(alerts.find((alert) => alert.key === "terminal_failed_finalize_jobs")?.count).toBe(3)
     expect(alerts.find((alert) => alert.key === "stuck_royalty_allocation_projection_sync")?.severity).toBe("high")
     expect(alerts.find((alert) => alert.key === "stale_locked_delivery_requested_assets")?.count).toBe(1)
+    const failedDelivery = alerts.find((alert) => alert.key === "failed_story_or_locked_delivery_assets")
+    expect(failedDelivery).toMatchObject({ severity: "high", count: 1, community_ids: ["c2"] })
+    expect(JSON.stringify(failedDelivery?.details)).toContain("Primary wallet is required")
     expect(alerts.find((alert) => alert.key === "retried_locked_asset_delivery_jobs")?.severity).toBe("medium")
     expect(alerts.find((alert) => alert.key === "story_registration_reconciliation_required")?.severity).toBe("high")
+    expect(alerts.find((alert) => alert.key === "community_job_pickup_stale:telegram_post_publish"))
+      .toMatchObject({
+        severity: "high",
+        count: 2,
+        community_ids: ["c2"],
+        details: {
+          job_type: "telegram_post_publish",
+          ready_jobs: 2,
+          oldest_ready_age_ms: 30 * 60_000,
+        },
+      })
   })
 
   test("dedupe checks without marking, then suppresses only after sent alerts are marked", async () => {

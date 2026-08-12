@@ -2,6 +2,7 @@ import { getAddress } from "ethers"
 
 import type { Env } from "../../env"
 import { providerUnavailable } from "../errors"
+import { decodePublicPostId } from "../public-ids"
 
 export type RewardCampaignConfig = {
   enabled: boolean
@@ -18,6 +19,11 @@ export type RewardCampaignConfig = {
   postAllowlist: ReadonlySet<string> | null
 }
 
+export type RewardCampaignAssetConfig = Pick<
+  RewardCampaignConfig,
+  "chainId" | "tokenAddress" | "treasuryAddress" | "rpcUrl"
+>
+
 const CAMPAIGN_ENV_KEYS = [
   "REWARDS_CAMPAIGN_CHAIN_ID",
   "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS",
@@ -29,6 +35,13 @@ const CAMPAIGN_ENV_KEYS = [
   "REWARDS_CAMPAIGN_MAX_REWARD_CENTS",
   "REWARDS_CAMPAIGN_MIN_DURATION_SECONDS",
   "REWARDS_CAMPAIGN_MAX_DURATION_SECONDS",
+] as const
+
+const REWARD_CAMPAIGN_ASSET_ENV_KEYS = [
+  "REWARDS_CAMPAIGN_CHAIN_ID",
+  "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS",
+  "REWARDS_CAMPAIGN_TREASURY_ADDRESS",
+  "REWARDS_CAMPAIGN_RPC_URL",
 ] as const
 
 type CampaignEnvKey = typeof CAMPAIGN_ENV_KEYS[number]
@@ -53,6 +66,34 @@ function address(env: Env, key: Extract<CampaignEnvKey, "REWARDS_CAMPAIGN_USDC_T
   }
 }
 
+export function resolveRewardCampaignAssetConfig(env: Env): RewardCampaignAssetConfig {
+  const chainId = positiveInteger(env, "REWARDS_CAMPAIGN_CHAIN_ID")
+  if (![8453, 84532].includes(chainId)) {
+    throw providerUnavailable("Reward campaign chain is not supported", { chain_id: chainId }, false)
+  }
+
+  const configuredRpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
+  const fallbackRpcUrl = chainId === 8453
+    ? String(env.BASE_MAINNET_RPC_URL ?? "").trim()
+    : String(env.BASE_SEPOLIA_RPC_URL ?? "").trim()
+  const rpcUrl = configuredRpcUrl || fallbackRpcUrl
+  if (!/^https:\/\//i.test(rpcUrl)) {
+    throw providerUnavailable("Reward campaign RPC URL is invalid", { key: "REWARDS_CAMPAIGN_RPC_URL" }, false)
+  }
+  const config = {
+    chainId,
+    tokenAddress: address(env, "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS"),
+    treasuryAddress: address(env, "REWARDS_CAMPAIGN_TREASURY_ADDRESS"),
+    rpcUrl,
+  }
+  return config
+}
+
+export function resolveOptionalRewardCampaignAssetConfig(env: Env): RewardCampaignAssetConfig | null {
+  const configured = REWARD_CAMPAIGN_ASSET_ENV_KEYS.some((key) => String(env[key] ?? "").trim() !== "")
+  return configured ? resolveRewardCampaignAssetConfig(env) : null
+}
+
 export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
   if (!enabled(env.REWARDS_CAMPAIGNS_ENABLED)) {
     return {
@@ -71,17 +112,22 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
     }
   }
 
-  const rpcUrl = String(env.REWARDS_CAMPAIGN_RPC_URL ?? "").trim()
-  if (!/^https:\/\//i.test(rpcUrl)) {
-    throw providerUnavailable("Reward campaign RPC URL is invalid", { key: "REWARDS_CAMPAIGN_RPC_URL" }, false)
+  if (!enabled(env.REWARDS_ACCRUAL_ENABLED) || !enabled(env.REWARDS_PAYOUTS_ENABLED)) {
+    throw providerUnavailable(
+      "Reward campaigns require reward accrual and payouts to be enabled",
+      {
+        rewards_accrual_enabled: enabled(env.REWARDS_ACCRUAL_ENABLED),
+        rewards_payouts_enabled: enabled(env.REWARDS_PAYOUTS_ENABLED),
+      },
+      false,
+    )
   }
+
+  const asset = resolveRewardCampaignAssetConfig(env)
 
   const config: RewardCampaignConfig = {
     enabled: true,
-    chainId: positiveInteger(env, "REWARDS_CAMPAIGN_CHAIN_ID"),
-    tokenAddress: address(env, "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS"),
-    treasuryAddress: address(env, "REWARDS_CAMPAIGN_TREASURY_ADDRESS"),
-    rpcUrl,
+    ...asset,
     quoteTtlSeconds: positiveInteger(env, "REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS"),
     minBudgetCents: positiveInteger(env, "REWARDS_CAMPAIGN_MIN_BUDGET_CENTS"),
     maxBudgetCents: positiveInteger(env, "REWARDS_CAMPAIGN_MAX_BUDGET_CENTS"),
@@ -93,12 +139,15 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
         .split(",")
         .map((value) => value.trim())
         .filter(Boolean)
+        // Public post IDs are what operators see and copy from URLs. Store the
+        // canonical shard form so either public or internal configuration
+        // matches the normalized campaign target.
+        .map(decodePublicPostId)
       return values.length > 0 ? new Set(values) : null
     })(),
   }
   if (
-    ![8453, 84532].includes(config.chainId)
-    || config.minBudgetCents > config.maxBudgetCents
+    config.minBudgetCents > config.maxBudgetCents
     || config.minDurationSeconds > config.maxDurationSeconds
     || config.quoteTtlSeconds > 86_400
   ) {

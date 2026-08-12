@@ -37,21 +37,17 @@ export async function verifyJwtBasedAuth(params: {
     throw authError("jwt_based_auth is disabled")
   }
 
-  const sharedSecret = String(params.env.AUTH_UPSTREAM_JWT_SHARED_SECRET || params.env.JWT_BASED_AUTH_SHARED_SECRET || "").trim()
+  const sharedSecret = String(params.env.AUTH_UPSTREAM_JWT_SHARED_SECRET || "").trim()
   if (!sharedSecret) {
     throw authError("AUTH_UPSTREAM_JWT_SHARED_SECRET is not configured")
   }
 
-  const issuers = splitCsv(
-    params.env.AUTH_UPSTREAM_JWT_ISSUER
-      ? params.env.AUTH_UPSTREAM_JWT_ISSUER
-      : params.env.JWT_BASED_AUTH_ISSUERS,
-  )
+  const issuers = splitCsv(params.env.AUTH_UPSTREAM_JWT_ISSUER)
   if (issuers.length === 0) {
     throw authError("AUTH_UPSTREAM_JWT_ISSUER is not configured")
   }
 
-  const audience = String(params.env.AUTH_UPSTREAM_JWT_AUDIENCE || params.env.JWT_BASED_AUTH_AUDIENCE || "").trim() || undefined
+  const audience = String(params.env.AUTH_UPSTREAM_JWT_AUDIENCE || "").trim() || undefined
   const verification = await jwtVerify(params.jwt, encoder.encode(sharedSecret), {
     issuer: issuers,
     ...(audience ? { audience } : {}),

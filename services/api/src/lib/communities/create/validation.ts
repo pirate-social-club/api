@@ -70,6 +70,14 @@ export type CreateCommunityAuth = {
   createdAt: string
 }
 
+/** Keep target bootstrap seed arguments stable when a persisted community is retried. */
+export function withPersistedCommunityCreatedAt(
+  auth: CreateCommunityAuth,
+  persistedCreatedAt: string | null | undefined,
+): CreateCommunityAuth {
+  return persistedCreatedAt ? { ...auth, createdAt: persistedCreatedAt } : auth
+}
+
 export async function resolveCreateCommunityAuth(input: {
   userId: string
   body: CreateCommunityRequestBody

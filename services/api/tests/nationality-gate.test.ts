@@ -184,12 +184,12 @@ describe("evaluateMembershipGateRules", () => {
     expect(result.mismatchReasons).toContain("no_active_gate_rules")
   })
 
-  test("prefers Very for missing unique human when both human providers are accepted", async () => {
+  test("does not choose a provider when multiple unique-human providers are accepted", async () => {
     const user = makeUser({ uniqueHuman: { state: "unverified" } })
     const result = await evaluateMembershipGateRules({ env: {}, rules: [makeUniqueHumanRule(["self", "very"])], user, walletAttachments: [] })
     expect(result.satisfied).toBe(false)
     expect(result.missingCapabilities).toEqual(["unique_human"])
-    expect(result.suggestedVerificationProvider).toBe("very")
+    expect(result.suggestedVerificationProvider).toBeNull()
   })
 
   test("evaluates multiple rules: one missing, one satisfied", async () => {

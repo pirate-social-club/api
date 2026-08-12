@@ -3,6 +3,11 @@ import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { REQUIRED_COMMUNITY_DB_MIGRATION } from "../src/lib/community-db-schema-requirement"
+import {
+  isAttestedGuaranteedMigration,
+  loadCommunitySchemaGuarantees,
+  type CommunitySchemaGuarantees,
+} from "./_lib/community-schema-guarantees"
 
 type IntroducedColumn = {
   migrationName: string
@@ -379,11 +384,49 @@ function relative(file: string): string {
   return file.startsWith(repoRoot) ? file.slice(repoRoot.length + 1) : file
 }
 
+/**
+ * Drop columns whose migration the manifest declares unconditional. Those are
+ * proven present on every LIVE shard by the release schema gate before the pin
+ * ships, so runtime guards for them are redundant — the coverage moves from
+ * this lint to that gate, it does not disappear. Anything the manifest does not
+ * declare (including feature-gated migrations) still needs a guard here.
+ */
+function withoutAttestedGuarantees(
+  columns: IntroducedColumn[],
+  guarantees: CommunitySchemaGuarantees,
+): { remaining: IntroducedColumn[]; exempted: IntroducedColumn[] } {
+  const remaining: IntroducedColumn[] = []
+  const exempted: IntroducedColumn[] = []
+  for (const column of columns) {
+    if (isAttestedGuaranteedMigration(guarantees, column.migrationName)) {
+      exempted.push(column)
+    } else {
+      remaining.push(column)
+    }
+  }
+  return { remaining, exempted }
+}
+
 function main(): void {
   assertCommunityMigrationSetsDoNotContainApiOnlyMigrations()
 
+  const guarantees = loadCommunitySchemaGuarantees(
+    resolve(apiRoot, "community-schema-requirements.json"),
+  )
+
   const files = changedFiles()
-  const introducedColumns = introducedColumnsFromChangedMigrations(files)
+  const allIntroducedColumns = introducedColumnsFromChangedMigrations(files)
+  const { remaining: introducedColumns, exempted } = withoutAttestedGuarantees(
+    allIntroducedColumns,
+    guarantees,
+  )
+  for (const column of exempted) {
+    console.log(
+      `community schema guard check: ${column.table}.${column.column} exempt — `
+        + `${column.migrationName} is declared unconditional in community-schema-requirements.json `
+        + "(enforced against every live shard by the release schema gate)",
+    )
+  }
   if (introducedColumns.length === 0) {
     console.log("community schema guard check passed: no changed community migration columns")
     return

@@ -1,4 +1,4 @@
-import { badRequestError, providerUnavailable } from "../errors"
+import { badRequestError, providerUnavailable, verifierContractIncompatible } from "../errors"
 import { isProductionEnv } from "../helpers"
 import type { Env } from "../../env"
 
@@ -57,7 +57,79 @@ export type HnsEnsureZoneResult = {
   zone_name?: string
   zone_created?: boolean
   nameservers?: string[]
+  ds_records?: string[]
   observation_provider?: string | null
+}
+
+export type HnsRootAuthorityObservation = {
+  root_label: string
+  zone_name: string
+  provider: string
+  observed_at: string
+  authoritative_dnssec_valid: boolean
+  parent_ds_matches_live_dnskey: boolean
+  earliest_rrsig_expires_at: string | null
+  parent: {
+    // The deployed verifier only emits raw_records on observe-root-parent.
+    // Never build a publish bundle from this observation.
+    raw_records?: Array<Record<string, unknown>>
+    nameservers: string[]
+    ds_records: Array<{
+      key_tag: number
+      algorithm: number
+      digest_type: number
+      digest: string
+    }>
+  }
+  parent_ds_results: Array<{
+    key_tag: number
+    algorithm: number
+    digest_type: number
+    digest: string
+    supported: boolean
+    matches_live_dnskey: boolean | null
+    failure_code: string | null
+  }>
+  authority_redundancy_ok: boolean
+  authorities: Array<{
+    nameserver: string
+    reachable: boolean
+    soa_serial: string | null
+    failure_code: string | null
+    serial_in_sync: boolean | null
+  }>
+  required_rrsets: Array<{
+    name: string
+    type: string
+    validated: boolean
+    rrsig_expirations: string[]
+    failure_code: string | null
+  }>
+}
+
+export type HnsRootParentObservation = {
+  root_label: string
+  zone_name: string
+  provider: string
+  observed_at: string
+  chain_anchor: {
+    network: string
+    height: number
+    block_hash: string
+    median_time: number
+  }
+  parent: {
+    raw_records: Array<Record<string, unknown>>
+    nameservers: string[]
+    ds_records: Array<{
+      key_tag: number
+      algorithm: number
+      digest_type: number
+      digest: string
+    }>
+    glue4: Array<{ nameserver: string; address: string }>
+    glue6: Array<{ nameserver: string; address: string }>
+  }
 }
 
 export type HnsPublishChallengeResult = {
@@ -67,6 +139,7 @@ export type HnsPublishChallengeResult = {
   challenge_txt_value?: string
   zone_created?: boolean
   nameservers?: string[]
+  ds_records?: string[]
   observation_provider?: string | null
 }
 
@@ -239,6 +312,41 @@ export async function inspectHnsRoot(
   return request<HnsInspectResult>(env, `/inspect-public?${params.toString()}`, {
     signal: input.signal,
   })
+}
+
+export async function observeHnsRootAuthority(
+  env: Env,
+  input: { rootLabel: string },
+): Promise<HnsRootAuthorityObservation> {
+  assertHnsRootLabel(input.rootLabel)
+  const params = new URLSearchParams({ root_label: input.rootLabel })
+  return request<HnsRootAuthorityObservation>(
+    env,
+    `/observe-root-authority?${params.toString()}`,
+  )
+}
+
+export async function observeHnsRootParent(
+  env: Env,
+  input: { rootLabel: string },
+): Promise<HnsRootParentObservation> {
+  assertHnsRootLabel(input.rootLabel)
+  const params = new URLSearchParams({ root_label: input.rootLabel })
+  const observation = await request<HnsRootParentObservation>(
+    env,
+    `/observe-root-parent?${params.toString()}`,
+  )
+  // The publish plan replaces the complete on-chain resource, so it must be
+  // built from the verbatim record list. A verifier that omits it (pre-core#436)
+  // must fail loudly here instead of surfacing a TypeError downstream.
+  const rawRecords = observation?.parent?.raw_records
+  if (!Array.isArray(rawRecords) || rawRecords.some((record) => typeof record !== "object" || record == null)) {
+    throw verifierContractIncompatible(
+      "HNS verifier observe-root-parent response is missing parent.raw_records; the deployed verifier predates the raw-root-records contract and must be redeployed at the pinned Core commit",
+      { required_capability: "raw_root_records_v1" },
+    )
+  }
+  return observation
 }
 
 export async function verifyHnsTxtRecord(

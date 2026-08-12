@@ -2,6 +2,7 @@ import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test"
 import { beforeEach, describe, expect, it } from "vitest"
 
 import {
+  OperatorPreparationError,
   setOperatorChainPrimitivesForTests,
   type OperatorSettleRequest,
 } from "../../src/lib/communities/bookings/operator-signing-coordinator-do"
@@ -17,6 +18,19 @@ interface ChainConfig {
   latest: number
   liveness: Record<string, Liveness>
   broadcastError?: string
+  encodeAtomicAmountInHash?: boolean
+  signFailure?: {
+    stage: "lit_response"
+    cause: { status: number; transportCategory: string; litErrorToken: string }
+    latencyMs: number
+  }
+  settlementFailure?: {
+    selector: string
+    errorName: string
+    transactionHash: string
+    blockHash: string
+    classifiedAt: string
+  }
 }
 
 type Stub = ReturnType<typeof env.OPERATOR_SIGNING_COORDINATOR.getByName>
@@ -30,18 +44,39 @@ async function injectChain(stub: Stub, config: ChainConfig): Promise<void> {
       pendingNonce: async () => config.pending,
       latestNonce: async () => config.latest,
       gasParams: async () => ({ maxFeePerGas: 1n, maxPriorityFeePerGas: 1n, gasLimit: 1n }),
-      signVerifiedTransfer: async (_e, input) => ({ signedTx: `signed_${input.nonce}`, txHash: `0xhash_${input.nonce}` }),
+      signVerifiedTransfer: async (_e, input) => {
+        if (config.signFailure) {
+          throw new OperatorPreparationError(
+            config.signFailure.stage,
+            config.signFailure.cause,
+            config.signFailure.latencyMs,
+          )
+        }
+        return {
+          signedTx: `signed_${input.nonce}`,
+          txHash: config.encodeAtomicAmountInHash && input.amountAtomic != null
+            ? `0xhash_${input.nonce}_${input.amountAtomic}`
+            : `0xhash_${input.nonce}`,
+          operationId: input.operatorKind === "rewards" ? `0x${"ab".repeat(32)}` : null,
+        }
+      },
       broadcast: async () => {
         if (config.broadcastError) throw new Error(config.broadcastError)
       },
       txLiveness: async (_e, hash) => config.liveness[hash] ?? "absent",
+      rewardVaultFailureEvidence: async () => ({
+        disposition: "reconciliation_required",
+        reason: "bounded rehearsal revert",
+        retryAfterMs: null,
+        compactEvidence: config.settlementFailure ?? null,
+      }),
     })
   })
 }
 
 async function effects(stub: Stub): Promise<Array<Record<string, unknown>>> {
   return runInDurableObject(stub, (_instance, state) =>
-    state.storage.sql.exec("SELECT idempotency_key, nonce, tx_hash, state, version, attempt_count, next_attempt_at FROM effects ORDER BY nonce").toArray(),
+    state.storage.sql.exec("SELECT idempotency_key, amount_cents, amount_atomic, signed_tx, nonce, tx_hash, state, version, attempt_count, next_attempt_at, preparation_stage, preparation_transport_category, preparation_http_status, preparation_lit_error_token, preparation_latency_ms, preparation_classified_at, rehearsal_scenario, settlement_revert_selector, settlement_revert_name, settlement_transaction_hash, settlement_block_hash, settlement_classified_at FROM effects ORDER BY nonce").toArray(),
   )
 }
 
@@ -57,6 +92,18 @@ function rewardsReq(over: Partial<OperatorSettleRequest> = {}): OperatorSettleRe
     idempotencyKey: "reward-cashout:test",
     effectKind: "reward_cashout",
     amountCents: 100,
+    recipientAddress: "0x0000000000000000000000000000000000000222",
+    ...over,
+  }
+}
+
+function rewardRefundReq(over: Partial<OperatorSettleRequest> = {}): OperatorSettleRequest {
+  return {
+    operatorKind: "rewards",
+    fundingEffectId: "rcfe_refund",
+    idempotencyKey: "rcfe_refund",
+    effectKind: "reward_funding_refund",
+    amountAtomic: "12345678",
     recipientAddress: "0x0000000000000000000000000000000000000222",
     ...over,
   }
@@ -120,6 +167,48 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     await expect(stub.settle(rewardsReq({ amountCents: 101 }))).rejects.toThrow()
   })
 
+  it("refunds the exact atomic custody amount through the rewards nonce domain", async () => {
+    const stub = freshStub()
+    await injectChain(stub, { pending: 31, latest: 31, liveness: {} })
+    const first = await stub.settle(rewardRefundReq())
+    expect(first.idempotencyKey).toBe(JSON.stringify(["reward_funding_refund", "rcfe_refund"]))
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row).toMatchObject({
+      amount_cents: 0,
+      amount_atomic: "12345678",
+      nonce: 31,
+      state: "broadcast",
+    })
+    await expect(stub.settle(rewardRefundReq({ amountAtomic: "12345679" }))).rejects.toThrow()
+    await expect(stub.settle(rewardRefundReq({ amountCents: 123, amountAtomic: undefined }))).rejects.toThrow()
+  })
+
+  it("reconstructs a persisted atomic booking refund when the alarm signs it", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 32,
+      latest: 32,
+      liveness: {},
+      encodeAtomicAmountInHash: true,
+    })
+    const atomicRefund = req({ amountCents: undefined, amountAtomic: "12345678" })
+
+    expect((await stub.settle(atomicRefund)).state).toBe("reserving")
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row).toMatchObject({
+      amount_cents: 0,
+      amount_atomic: "12345678",
+      nonce: 32,
+      tx_hash: "0xhash_32_12345678",
+      state: "broadcast",
+      attempt_count: 0,
+    })
+  })
+
   it("does not let polling bypass alarm retry backoff", async () => {
     const stub = freshStub()
     await injectChain(stub, { pending: 1, latest: 1, liveness: {} })
@@ -149,7 +238,283 @@ describe("OperatorSigningCoordinatorDO (real workerd isolate)", () => {
     expect(row.nonce).toBe(9)
     expect(row.tx_hash).toBe("0xhash_9")
     expect(row.attempt_count).toBe(1)
+    expect(row.preparation_stage).toBe("broadcast")
     expect(Number(row.next_attempt_at)).toBeGreaterThan(Date.now())
+    expect(await stub.lookup(req())).toMatchObject({
+      state: "prepared",
+      attemptCount: 1,
+      preparationFailure: {
+        stage: "broadcast",
+      },
+    })
+  })
+
+  it("parks EOA reward broadcasts after three ambiguous failures and requires mined nonce invalidation", async () => {
+    const stub = freshStub()
+    const request = rewardsReq({ payoutEffectId: "rpe_ambiguous", idempotencyKey: "reward:ambiguous" })
+    await injectChain(stub, {
+      pending: 2,
+      latest: 2,
+      liveness: { "0xhash_2": "absent" },
+      broadcastError: "request timeout after send",
+    })
+    await stub.settle(request)
+
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      if (attempt > 1) await stub.reconcile(request)
+      await runDurableObjectAlarm(stub)
+    }
+
+    expect((await effects(stub))[0]).toMatchObject({
+      state: "preparation_parked",
+      signed_tx: "signed_2",
+      tx_hash: "0xhash_2",
+      nonce: 2,
+      attempt_count: 3,
+      next_attempt_at: null,
+      preparation_stage: "broadcast",
+    })
+
+    await expect(stub.resolveRewardInvalidatedBroadcast({
+      idempotencyKey: JSON.stringify(["reward_payout", "reward:ambiguous"]),
+      expectedTxHash: "0xhash_2",
+      expectedNonce: 2,
+      reason: "Replacement transaction has not mined yet.",
+      operatorActorId: "reward-operator",
+    })).rejects.toThrow("nonce is mined by a replacement")
+
+    await injectChain(stub, {
+      pending: 3,
+      latest: 3,
+      liveness: { "0xhash_2": "absent" },
+    })
+    const resolved = await stub.resolveRewardInvalidatedBroadcast({
+      idempotencyKey: JSON.stringify(["reward_payout", "reward:ambiguous"]),
+      expectedTxHash: "0xhash_2",
+      expectedNonce: 2,
+      reason: "Replacement transaction mined at nonce two.",
+      operatorActorId: "reward-operator",
+    })
+
+    expect(resolved).toMatchObject({
+      state: "preparation_parked",
+      txHash: "0xhash_2",
+      nonce: 2,
+      manualResolution: { resolution: "failed_nonce_invalidated" },
+    })
+    expect((await effects(stub))[0].signed_tx).toBeNull()
+  })
+
+  it("reclaims the tail nonce after an evidenced no-broadcast resolution", async () => {
+    const stub = freshStub()
+    const first = rewardsReq({ payoutEffectId: "rpe_no_broadcast", idempotencyKey: "reward:no-broadcast" })
+    const second = rewardsReq({ payoutEffectId: "rpe_after_repair", idempotencyKey: "reward:after-repair" })
+    await injectChain(stub, {
+      pending: 6,
+      latest: 6,
+      liveness: { "0xhash_6": "absent" },
+      broadcastError: "provider rejected transaction before submission",
+    })
+    await stub.settle(first)
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(first)).toMatchObject({ state: "prepared", nonce: 6 })
+
+    const resolved = await stub.resolveRewardNoBroadcast({
+      idempotencyKey: JSON.stringify(["reward_payout", "reward:no-broadcast"]),
+      expectedTxHash: "0xhash_6",
+      expectedNonce: 6,
+      reason: "Provider rejected the request before transaction submission.",
+      operatorActorId: "reward-operator",
+    })
+    expect(resolved).toMatchObject({
+      state: "preparation_parked",
+      nonce: null,
+      manualResolution: { resolution: "failed_prebroadcast" },
+    })
+
+    await injectChain(stub, { pending: 6, latest: 6, liveness: {} })
+    await stub.settle(second)
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(second)).toMatchObject({ state: "broadcast", nonce: 6 })
+  })
+
+  it("atomically persists bounded preparation diagnostics with the retry increment", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 12,
+      latest: 12,
+      liveness: {},
+      signFailure: {
+        stage: "lit_response",
+        cause: {
+          status: 403,
+          transportCategory: "dns",
+          litErrorToken: "unauthorized_action",
+        },
+        latencyMs: 4_321,
+      },
+    })
+    await stub.settle(rewardsReq())
+
+    await runDurableObjectAlarm(stub)
+
+    const [row] = await effects(stub)
+    expect(row).toMatchObject({
+      state: "preparation_parked",
+      attempt_count: 1,
+      preparation_stage: "lit_response",
+      preparation_transport_category: "dns",
+      preparation_http_status: 403,
+      preparation_lit_error_token: "unauthorized_action",
+      preparation_latency_ms: 4_321,
+    })
+    expect(Number(row.preparation_classified_at)).toBeGreaterThan(0)
+    expect((await stub.lookup(rewardsReq())).preparationFailure).toEqual({
+      stage: "lit_response",
+      transportCategory: "dns",
+      httpStatus: 403,
+      litErrorToken: "unauthorized_action",
+      latencyMs: 4_321,
+      classifiedAt: Number(row.preparation_classified_at),
+    })
+  })
+
+  it("reuses an unsent nonce after preparation fails before signing", async () => {
+    const stub = freshStub()
+    const first = rewardsReq({ payoutEffectId: "rpe_failed", idempotencyKey: "reward:failed" })
+    const second = rewardsReq({ payoutEffectId: "rpe_next", idempotencyKey: "reward:next" })
+    await injectChain(stub, {
+      pending: 7,
+      latest: 7,
+      liveness: {},
+      signFailure: {
+        stage: "lit_response",
+        cause: { status: 500, transportCategory: "unclassified", litErrorToken: "invalid_params" },
+        latencyMs: 100,
+      },
+    })
+    await stub.settle(first)
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(first)).toMatchObject({ state: "preparation_parked", nonce: null })
+
+    await injectChain(stub, { pending: 7, latest: 7, liveness: {} })
+    await stub.settle(second)
+    await runDurableObjectAlarm(stub)
+
+    expect(await stub.lookup(second)).toMatchObject({ state: "broadcast", nonce: 7 })
+  })
+
+  it("bounds transient unsent preparation retries and requires explicit recovery", async () => {
+    const stub = freshStub()
+    const request = rewardsReq({ payoutEffectId: "rpe_retry_cap", idempotencyKey: "reward:retry-cap" })
+    await injectChain(stub, {
+      pending: 18,
+      latest: 18,
+      liveness: {},
+      signFailure: {
+        stage: "lit_response",
+        cause: { status: 500, transportCategory: "timeout", litErrorToken: "timeout" },
+        latencyMs: 20_000,
+      },
+    })
+    await stub.settle(request)
+
+    for (let attempt = 1; attempt <= 6; attempt += 1) {
+      if (attempt > 1) await stub.reconcile(request)
+      await runDurableObjectAlarm(stub)
+      expect((await effects(stub))[0].attempt_count).toBe(attempt)
+    }
+
+    expect(await stub.lookup(request)).toMatchObject({
+      state: "preparation_parked",
+      nonce: null,
+    })
+    await stub.settle(request)
+    await stub.reconcile(request)
+    expect((await effects(stub))[0]).toMatchObject({
+      state: "preparation_parked",
+      attempt_count: 6,
+      next_attempt_at: null,
+    })
+
+    await injectChain(stub, { pending: 18, latest: 18, liveness: {} })
+    expect(await stub.retryParkedPreparation(request)).toMatchObject({
+      state: "reserving",
+    })
+    await runDurableObjectAlarm(stub)
+    expect(await stub.lookup(request)).toMatchObject({
+      state: "broadcast",
+      nonce: 18,
+    })
+  })
+
+  it("persists and returns bounded settlement revert evidence", async () => {
+    const stub = freshStub()
+    const failure = {
+      selector: "0x01828959",
+      errorName: "OperationAlreadyUsed",
+      transactionHash: `0x${"11".repeat(32)}`,
+      blockHash: `0x${"22".repeat(32)}`,
+      classifiedAt: "2026-07-29T07:00:00.000Z",
+    }
+    await injectChain(stub, {
+      pending: 14,
+      latest: 14,
+      liveness: { "0xhash_14": "failed" },
+      settlementFailure: failure,
+    })
+    await stub.settle(rewardsReq())
+    await runDurableObjectAlarm(stub)
+    await stub.reconcile(rewardsReq())
+    await runDurableObjectAlarm(stub)
+
+    const result = await stub.lookup(rewardsReq())
+    expect(result.state).toBe("reconciliation_required")
+    expect(result.settlementFailure).toEqual(failure)
+    expect((await effects(stub))[0]).toMatchObject({
+      settlement_revert_selector: failure.selector,
+      settlement_revert_name: failure.errorName,
+      settlement_transaction_hash: failure.transactionHash,
+      settlement_block_hash: failure.blockHash,
+      settlement_classified_at: failure.classifiedAt,
+    })
+  })
+
+  it("does not let a delayed reconciliation row starve a newer runnable effect", async () => {
+    const stub = freshStub()
+    await injectChain(stub, {
+      pending: 14,
+      latest: 14,
+      liveness: { "0xhash_14": "failed" },
+      settlementFailure: {
+        selector: "0x01828959",
+        errorName: "OperationAlreadyUsed",
+        transactionHash: `0x${"11".repeat(32)}`,
+        blockHash: `0x${"22".repeat(32)}`,
+        classifiedAt: "2026-07-29T07:00:00.000Z",
+      },
+    })
+    const first = rewardsReq({ payoutEffectId: "rpe_first", idempotencyKey: "reward:first" })
+    const second = rewardsReq({ payoutEffectId: "rpe_second", idempotencyKey: "reward:second" })
+
+    await stub.settle(first)
+    await runDurableObjectAlarm(stub) // first broadcasts
+    await stub.settle(second)
+    await stub.reconcile(first)
+    await runDurableObjectAlarm(stub) // first becomes delayed reconciliation_required
+    await runDurableObjectAlarm(stub) // second must run instead of waiting behind first
+
+    expect((await stub.lookup(first)).state).toBe("reconciliation_required")
+    expect((await stub.lookup(second)).state).toBe("broadcast")
+  })
+
+  it("rejects rehearsal mutations outside the staging runtime", async () => {
+    const stub = freshStub()
+    await injectChain(stub, { pending: 15, latest: 15, liveness: {} })
+    await expect(stub.settle(rewardsReq({ rehearsalScenario: "over_limit" }))).rejects.toThrow(
+      "staging-only",
+    )
+    expect(await effects(stub)).toHaveLength(0)
   })
 
   it("reconciles an ambiguous broadcast timeout without signing a replacement", async () => {

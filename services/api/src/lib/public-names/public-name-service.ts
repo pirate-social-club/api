@@ -475,7 +475,7 @@ export async function claimPublicPirateName(input: {
   const fundingReceipt = await verifyPirateCheckoutUsdcFunding({
     env: input.env,
     quoteId,
-    amountUsd: requiredNumber(quote, "price_cents") / 100,
+    amountCents: requiredNumber(quote, "price_cents"),
     buyerAddress: buyerWalletAddress,
     fundingTxRef,
     fundingDestinationAddress: resolvePirateCheckoutOperatorAddress(input.env),

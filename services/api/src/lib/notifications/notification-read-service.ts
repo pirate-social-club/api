@@ -1,5 +1,4 @@
 import { nowIso } from "../helpers"
-import { badRequestError } from "../errors"
 import { decodePublicId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
@@ -13,9 +12,6 @@ import {
   markNotificationsRead,
 } from "./notification-read-store"
 import {
-  buildUniqueHumanTask,
-  isSyntheticUniqueHumanTaskId,
-  needsUniqueHumanTask,
   syncUserNotificationTasks,
   UNIQUE_HUMAN_TASK_TYPE,
 } from "./notification-user-task-sync"
@@ -35,16 +31,7 @@ export async function getNotificationsSummary(input: {
   const client = getControlPlaneClient(input.env)
   try {
     await syncUserNotificationTasks(client, input.userId)
-    const summary = await getNotificationSummary({ executor: client, userId: input.userId })
-    if (!(await needsUniqueHumanTask(client, input.userId))) {
-      return summary
-    }
-    const openTaskCount = summary.open_task_count + 1
-    return {
-      ...summary,
-      open_task_count: openTaskCount,
-      has_unread: openTaskCount > 0 || summary.unread_activity_count > 0,
-    }
+    return await getNotificationSummary({ executor: client, userId: input.userId })
   } finally {
     client.close?.()
   }
@@ -60,20 +47,9 @@ export async function getNotificationsTasks(input: {
     await syncUserNotificationTasks(client, input.userId)
 
     const tasks = await listOpenUserTasks({ executor: client, userId: input.userId })
-    const syntheticTasks: UserTask[] = []
-
-    if (await needsUniqueHumanTask(client, input.userId)) {
-      syntheticTasks.push(buildUniqueHumanTask(input.userId))
-    }
-
-    const existingTypes = new Set(tasks.items.map((task) => task.type))
-    const filteredSynthetic = syntheticTasks.filter((task) => !existingTypes.has(task.type))
 
     return {
-      items: [
-        ...filteredSynthetic,
-        ...tasks.items.filter((task) => task.type !== UNIQUE_HUMAN_TASK_TYPE),
-      ],
+      items: tasks.items.filter((task) => task.type !== UNIQUE_HUMAN_TASK_TYPE),
       next_cursor: tasks.next_cursor ?? null,
     }
   } finally {
@@ -131,9 +107,6 @@ export async function dismissTask(input: {
   taskId: string
 }): Promise<{ task: UserTask; wasDismissed: boolean } | null> {
   const taskId = decodePublicId(input.taskId, "task")
-  if (isSyntheticUniqueHumanTaskId(taskId)) {
-    throw badRequestError("This task cannot be dismissed")
-  }
   const client = getControlPlaneClient(input.env)
   try {
     return await dismissUserTask({ executor: client, taskId, userId: input.userId, dismissedAt: nowIso() })

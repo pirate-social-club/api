@@ -4,6 +4,21 @@ import { hydrateDerivativeSourcesForResponses } from "./upstream-source-hydratio
 import type { Client } from "../sql-client"
 import type { LocalizedPostResponse } from "../../types"
 
+function storyProjectionRow() {
+  return {
+    asset_id: "ast_original",
+    community_id: "cmt_songs",
+    source_post_id: "pst_original",
+    display_title: "Travel Guide",
+    creator_user_id: "usr_artist",
+    asset_kind: "song_audio" as const,
+    license_preset: "commercial-remix" as const,
+    commercial_rev_share_pct: 10,
+    story_ip_id: "0x01C0D038e1BA42959b83A56e5A1c459594719297",
+    story_license_terms_id: "1894",
+  }
+}
+
 function createResponse(): LocalizedPostResponse {
   return {
     post: {
@@ -57,9 +72,10 @@ describe("hydrateDerivativeSourcesForResponses", () => {
       }),
     } as Pick<Client, "execute"> as Client
 
-    await hydrateDerivativeSourcesForResponses({
+    const timing = await hydrateDerivativeSourcesForResponses({
       client,
       communityId: "cmt_songs",
+      env: {} as never,
       responses: [response],
       profileRepository: null,
     })
@@ -82,5 +98,134 @@ describe("hydrateDerivativeSourcesForResponses", () => {
         creator_display_name: null,
       },
     ])
+    expect(timing).toEqual({
+      local_rows_ms: expect.any(Number),
+      global_rows_ms: expect.any(Number),
+      profiles_ms: expect.any(Number),
+      profiles_degraded: false,
+    })
+  })
+
+  test("hydrates a cross-community Story song and creator from the global projection", async () => {
+    const response = createResponse()
+    response.post.community_id = "cmt_videos"
+    response.post.post_type = "video"
+    const client = { execute: async () => ({ rows: [] }) } as Pick<Client, "execute"> as Client
+
+    const timing = await hydrateDerivativeSourcesForResponses({
+      client,
+      communityId: "cmt_videos",
+      env: {} as never,
+      responses: [response],
+      profileRepository: {
+        getProfileByUserId: async () => ({
+          global_handle: { label: "artist.pirate" },
+          primary_public_handle: null,
+          display_name: "Artist",
+        }),
+      } as never,
+    }, {
+      findStoryRegisteredAssetProjectionSources: async () => [{
+        asset_id: "ast_original",
+        community_id: "cmt_songs",
+        source_post_id: "pst_original",
+        display_title: "Travel Guide",
+        creator_user_id: "usr_artist",
+        asset_kind: "song_audio",
+        license_preset: "commercial-remix",
+        commercial_rev_share_pct: 10,
+        story_ip_id: "0x01C0D038e1BA42959b83A56e5A1c459594719297",
+        story_license_terms_id: "1894",
+      }],
+    })
+
+    expect(response.derivative_sources?.[0]).toMatchObject({
+      title: "Travel Guide",
+      relationship_type: "references_song",
+      community: "com_cmt_songs",
+      source_post: "post_pst_original",
+      creator_handle: "artist.pirate",
+      creator_display_name: "Artist",
+    })
+    expect(timing).toEqual({
+      local_rows_ms: expect.any(Number),
+      global_rows_ms: expect.any(Number),
+      profiles_ms: expect.any(Number),
+      profiles_degraded: false,
+    })
+  })
+
+  test("reads creator profiles in one batch instead of one lookup per creator", async () => {
+    const response = createResponse()
+    const client = { execute: async () => ({ rows: [] }) } as Pick<Client, "execute"> as Client
+    const batchedCalls: string[][] = []
+    let perCreatorCalls = 0
+
+    const timing = await hydrateDerivativeSourcesForResponses({
+      client,
+      communityId: "cmt_videos",
+      env: {} as never,
+      responses: [response],
+      profileRepository: {
+        getProfileByUserId: async () => {
+          perCreatorCalls += 1
+          return null
+        },
+        listProfilesByUserIds: async (userIds: string[]) => {
+          batchedCalls.push(userIds)
+          return new Map([["usr_artist", {
+            global_handle: { label: "artist.pirate" },
+            primary_public_handle: null,
+            display_name: "Artist",
+          }]])
+        },
+      } as never,
+    }, {
+      findStoryRegisteredAssetProjectionSources: async () => [storyProjectionRow()],
+    })
+
+    expect(batchedCalls).toEqual([["usr_artist"]])
+    expect(perCreatorCalls).toBe(0)
+    expect(timing.profiles_degraded).toBe(false)
+    expect(response.derivative_sources?.[0]).toMatchObject({
+      creator_handle: "artist.pirate",
+      creator_display_name: "Artist",
+    })
+  })
+
+  test("degrades creator enrichment when the batch fails rather than falling back per creator", async () => {
+    const response = createResponse()
+    const client = { execute: async () => ({ rows: [] }) } as Pick<Client, "execute"> as Client
+    let perCreatorCalls = 0
+
+    const timing = await hydrateDerivativeSourcesForResponses({
+      client,
+      communityId: "cmt_videos",
+      env: {} as never,
+      responses: [response],
+      profileRepository: {
+        getProfileByUserId: async () => {
+          perCreatorCalls += 1
+          return null
+        },
+        listProfilesByUserIds: async () => {
+          throw new Error("profile store unavailable")
+        },
+      } as never,
+    }, {
+      findStoryRegisteredAssetProjectionSources: async () => [storyProjectionRow()],
+    })
+
+    // The derivative itself still resolves; only the creator naming degrades. Falling back
+    // to per-creator reads here would restore the fan-out this batch exists to remove.
+    // The flag keeps a failed batch from reading as a profiles_ms speedup in timing reports.
+    expect(perCreatorCalls).toBe(0)
+    expect(timing.profiles_degraded).toBe(true)
+    expect(response.derivative_sources?.[0]).toMatchObject({
+      title: "Travel Guide",
+      creator_user: "usr_usr_artist",
+      creator_handle: null,
+      creator_display_name: null,
+    })
   })
 })

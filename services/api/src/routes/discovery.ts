@@ -280,6 +280,9 @@ discovery.get("/robots.txt", (c) => {
   const origin = configuredApiOrigin(c.env, c.req.url)
   return textResponse([
     "User-agent: *",
+    // Artifact bytes are delivered from this public namespace, but are not
+    // discovery content. Keep community and post metadata crawlable.
+    "Disallow: /public-communities/*/song-artifact-uploads/*/content",
     "Allow: /public-communities",
     "Allow: /public-posts",
     "Allow: /.well-known",

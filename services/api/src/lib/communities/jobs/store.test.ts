@@ -43,6 +43,91 @@ describe("enqueueCommunityJob", () => {
     expect(statements[0]?.sql).toContain("INSERT OR IGNORE INTO community_jobs")
     expect(statements[0]?.sql.toUpperCase()).not.toContain("SELECT")
   })
+
+  test("reuses an exhausted failure when the caller requests terminal dedupe", async () => {
+    const statements: Statement[] = []
+    const failedJob = {
+      job_id: "cjb_failed",
+      community_id: "cmt_1",
+      job_type: "post_translation_materialize",
+      subject_type: "post_translation",
+      subject_id: "pst_1:es:0xsource",
+      status: "failed",
+      payload_json: null,
+      result_ref: null,
+      error_code: "provider_failed",
+      attempt_count: 8,
+      available_at: null,
+      created_at: "2026-07-05T00:00:00.000Z",
+      updated_at: "2026-07-05T01:00:00.000Z",
+    }
+    const executor = {
+      async execute(statement: Statement | string) {
+        const normalized = typeof statement === "string" ? { sql: statement, args: [] } : statement
+        statements.push(normalized)
+        return normalized.sql.includes("SELECT")
+          ? { rows: [failedJob], rowsAffected: 0 }
+          : { rows: [], rowsAffected: 1 }
+      },
+    }
+
+    const job = await enqueueCommunityJob({
+      client: executor,
+      communityId: "cmt_1",
+      jobType: "post_translation_materialize",
+      subjectType: "post_translation",
+      subjectId: "pst_1:es:0xsource",
+      createdAt: "2026-07-05T02:00:00.000Z",
+      reuseTerminalFailure: true,
+    })
+
+    expect(job.job_id).toBe("cjb_failed")
+    expect(statements).toHaveLength(1)
+    expect(statements[0]?.sql).toContain("SELECT")
+  })
+
+  test("enqueues again when terminal dedupe is not requested", async () => {
+    const statements: Statement[] = []
+    const executor = {
+      async execute(statement: Statement | string) {
+        const normalized = typeof statement === "string" ? { sql: statement, args: [] } : statement
+        statements.push(normalized)
+        return normalized.sql.includes("SELECT")
+          ? {
+              rows: [{
+                job_id: "cjb_failed",
+                community_id: "cmt_1",
+                job_type: "post_translation_materialize",
+                subject_type: "post_translation",
+                subject_id: "pst_1:es:0xsource",
+                status: "failed",
+                payload_json: null,
+                result_ref: null,
+                error_code: "provider_failed",
+                attempt_count: 8,
+                available_at: null,
+                created_at: "2026-07-05T00:00:00.000Z",
+                updated_at: "2026-07-05T01:00:00.000Z",
+              }],
+              rowsAffected: 0,
+            }
+          : { rows: [], rowsAffected: 1 }
+      },
+    }
+
+    const job = await enqueueCommunityJob({
+      client: executor,
+      communityId: "cmt_1",
+      jobType: "post_translation_materialize",
+      subjectType: "post_translation",
+      subjectId: "pst_1:es:0xsource",
+      createdAt: "2026-07-05T02:00:00.000Z",
+    })
+
+    expect(job.status).toBe("queued")
+    expect(statements).toHaveLength(2)
+    expect(statements[1]?.sql).toContain("INSERT OR IGNORE")
+  })
 })
 
 describe("resetStaleRunningCommunityJobById", () => {

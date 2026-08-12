@@ -1,16 +1,21 @@
 import { beforeEach, describe, expect, test } from "bun:test"
 import {
   assertCommunityBinding,
+  orderTablesForDrop,
   QUARANTINE_WINDOW_MS,
   POOL_CACHE_TTL_MS,
   POOL_CACHE_SHORT_TTL_MS,
   resetPoolCacheForTests,
   resolveD1,
   runShardBatch,
+  runShardBulkRead,
+  runShardBulkWrite,
   runShardBind,
+  runShardDecommission,
   runShardGetPoolRow,
   runShardListStaleUnloadedPoolRows,
   runShardLoadSnapshot,
+  runShardLookupBinding,
   runShardPoolStats,
   runShardRead,
   runShardRelease,
@@ -23,10 +28,16 @@ type FakeCall = { sql: string; args: unknown[] }
 
 function fakeD1(
   rows: Record<string, unknown>[] = [{ x: 1 }],
-  options?: { perStatementChanges?: number[] },
+  options?: {
+    perStatementChanges?: number[]
+    bootstrapMarkerCommunityId?: string
+    bootstrapMarkerSnapshotDigest?: string
+  },
 ) {
   const calls: FakeCall[] = []
   const changes = options?.perStatementChanges ?? [1]
+  let bootstrapMarkerCommunityId = options?.bootstrapMarkerCommunityId
+  let bootstrapMarkerSnapshotDigest = options?.bootstrapMarkerSnapshotDigest
   function stmt(sql: string) {
     const s: any = {
       _args: [] as unknown[],
@@ -39,11 +50,26 @@ function fakeD1(
         calls.push({ sql, args: s._args })
         return Promise.resolve({ results: rows, success: true, meta: { changes: 0, last_row_id: 0 } })
       },
+      first() {
+        calls.push({ sql, args: s._args })
+        if (/FROM sqlite_master/.test(sql)) {
+          return Promise.resolve(bootstrapMarkerCommunityId ? { name: "_pirate_bootstrap_state" } : null)
+        }
+        if (/FROM "_pirate_bootstrap_state"/.test(sql)) {
+          return Promise.resolve(bootstrapMarkerCommunityId
+            ? { community_id: bootstrapMarkerCommunityId, snapshot_digest: bootstrapMarkerSnapshotDigest }
+            : null)
+        }
+        return Promise.resolve(rows[0] ?? null)
+      },
     }
     return s
   }
   return {
     calls,
+    get bootstrapMarkerCommunityId() {
+      return bootstrapMarkerCommunityId
+    },
     prepare(sql: string) {
       return stmt(sql)
     },
@@ -57,6 +83,10 @@ function fakeD1(
       return Promise.all(
         stmts.map(async (st, i) => {
           const a = await st.all()
+          if (/INSERT INTO "_pirate_bootstrap_state"/.test(st._sql)) {
+            bootstrapMarkerCommunityId = String(st._args[0])
+            bootstrapMarkerSnapshotDigest = String(st._args[1])
+          }
           return {
             results: a.results,
             success: true,
@@ -76,6 +106,8 @@ type FakePoolRow = {
   last_error: string | null
   released_at: string | null
   version: number
+  allocation_source?: string | null
+  allocation_run_id?: string | null
 }
 
 /**
@@ -92,7 +124,15 @@ type FakePoolRow = {
  */
 function fakePoolD1(
   initialRows: FakePoolRow[] = [],
-  options?: { simulateUniqueCommunityIdViolation?: boolean },
+  options?: {
+    simulateUniqueCommunityIdViolation?: boolean
+    /** Simulate a pool D1 that predates migration 0002 (no attribution columns). */
+    simulateMissingAttributionColumns?: boolean
+    /** Simulate a genuine write failure that must NOT be swallowed by the fallback. */
+    simulateClaimFailure?: Error
+    /** Runs immediately before loadSnapshot's final pool CAS. */
+    beforeMarkLoaded?: (rows: FakePoolRow[]) => void
+  },
 ) {
   const calls: FakeCall[] = []
   const rows: FakePoolRow[] = [...initialRows]
@@ -124,6 +164,7 @@ function fakePoolD1(
             .filter(
               (r) =>
                 r.community_id === null &&
+                (!/binding_name != 'DB_CMTY_FIXTURE'/.test(sql) || r.binding_name !== "DB_CMTY_FIXTURE") &&
                 (r.released_at === null || r.released_at < quarantineThreshold),
             )
             .sort((a, b) => a.binding_name.localeCompare(b.binding_name))[0]
@@ -134,7 +175,7 @@ function fakePoolD1(
           const bindingName = s._args[0] as string
           const row = rows.find((r) => r.binding_name === bindingName)
           if (!row) return null
-          return { community_id: row.community_id, last_loaded_at: row.last_loaded_at }
+          return { community_id: row.community_id, last_loaded_at: row.last_loaded_at, version: row.version }
         }
         return null
       },
@@ -158,12 +199,15 @@ function fakePoolD1(
           return { success: true, meta: { changes: 1, last_row_id: rows.length } }
         }
         if (/UPDATE d1_pool SET\s+community_id = \?2/.test(sql)) {
-          const [binding_name, community_id, allocated_at, version] = s._args as [
-            string,
-            string,
-            string,
-            number,
-          ]
+          const [binding_name, community_id, allocated_at, version, allocation_source, allocation_run_id] =
+            s._args as [string, string, string, number, string | null, string | null]
+          const attributed = /allocation_source/.test(sql)
+          if (opts.simulateClaimFailure) {
+            throw opts.simulateClaimFailure
+          }
+          if (attributed && opts.simulateMissingAttributionColumns) {
+            throw new Error("D1_ERROR: no such column: allocation_source at offset 42")
+          }
           if (opts.simulateUniqueCommunityIdViolation) {
             opts.simulateUniqueCommunityIdViolation = false
             const winnerRow = rows.find((r) => r.binding_name === binding_name)
@@ -188,6 +232,10 @@ function fakePoolD1(
           }
           row.community_id = community_id
           row.allocated_at = allocated_at
+          if (attributed) {
+            row.allocation_source = allocation_source ?? null
+            row.allocation_run_id = allocation_run_id ?? null
+          }
           row.released_at = null
           row.last_loaded_at = null
           row.last_error = null
@@ -197,9 +245,11 @@ function fakePoolD1(
         if (/UPDATE d1_pool SET\s+last_loaded_at/.test(sql)) {
           // loadSnapshot marks the binding loaded. Note: in production this
           // also bumps version, which the fake mirrors.
-          const [binding_name, last_loaded_at] = s._args as [string, string]
+          opts.beforeMarkLoaded?.(rows)
+          opts.beforeMarkLoaded = undefined
+          const [binding_name, last_loaded_at, community_id, version] = s._args as [string, string, string, number]
           const row = rows.find((r) => r.binding_name === binding_name)
-          if (row) {
+          if (row && row.community_id === community_id && row.version === version && row.last_loaded_at == null) {
             if (row.last_loaded_at == null) {
               row.last_loaded_at = last_loaded_at
             }
@@ -226,6 +276,9 @@ function fakePoolD1(
   }
   return {
     calls,
+    get bootstrapMarkerCommunityId() {
+      return bootstrapMarkerCommunityId
+    },
     rows,
     prepare(sql: string) {
       return stmt(sql)
@@ -353,6 +406,33 @@ describe("runShardBatch (returns ShardResult — step 2.5)", () => {
     })
     expect(r).toMatchObject({ ok: false, code: "shard_read_only_violation" })
     expect(db.calls).toHaveLength(0)
+  })
+})
+
+describe("bulk shard RPCs", () => {
+  test("authorizes and executes independent read batches in one bulk request", async () => {
+    const db = fakeD1([{ n: 1 }])
+    const response = await runShardBulkRead(envWith(db), {
+      operations: [{
+        communityId: "cmt_1",
+        bindingName: "DB_CMTY_PILOT",
+        statements: [{ sql: "SELECT 1 AS n" }],
+      }],
+    })
+    expect(response.operations).toHaveLength(1)
+    expect(response.operations[0]?.result).toMatchObject({ ok: true, value: [{ rows: [{ n: 1 }] }] })
+  })
+
+  test("keeps each bulk write operation atomic and independently authorized", async () => {
+    const db = fakeD1()
+    const response = await runShardBulkWrite(envWith(db), {
+      operations: [{
+        communityId: "cmt_1",
+        bindingName: "DB_CMTY_PILOT",
+        statements: [{ sql: "UPDATE t SET n = 1" }],
+      }],
+    })
+    expect(response.operations[0]?.result).toMatchObject({ ok: true })
   })
 })
 
@@ -556,6 +636,20 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
     return { ...envWith(fakeD1(), { pool }), ...extraBindings } as ShardEnv
   }
 
+  test("looks up an existing community allocation without claiming capacity", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_EXISTING", community_id: "cmt_existing", allocated_at: NOW, last_error: null, released_at: null, last_loaded_at: null, version: 3 },
+    ])
+    expect(await runShardLookupBinding(envForAllocator(pool), { communityId: "cmt_existing" })).toEqual({
+      ok: true,
+      value: { bindingName: "DB_CMTY_EXISTING", shardWorkerId: SHARD_ID },
+    })
+    expect(await runShardLookupBinding(envForAllocator(pool), { communityId: "cmt_missing" })).toEqual({
+      ok: true,
+      value: { bindingName: null, shardWorkerId: SHARD_ID },
+    })
+  })
+
   test("§8.3 — allocates a free binding for an unknown community", async () => {
     const pool = fakePoolD1([
       { binding_name: "DB_CMTY_PILOT", community_id: "cmt_pilot", allocated_at: "t0", last_error: null, released_at: null, last_loaded_at: null, version: 0 },
@@ -568,6 +662,187 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
     const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
     expect(claimed?.community_id).toBe("cmt_new")
     expect(claimed?.allocated_at).toBe(NOW)
+  })
+
+  test("records allocation attribution on the claimed row", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, {
+      communityId: "cmt_new",
+      now: NOW,
+      source: "web-e2e:gate-builder",
+      runId: "run-12345",
+    })
+    expect(r.ok).toBe(true)
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.allocation_source).toBe("web-e2e:gate-builder")
+    expect(claimed?.allocation_run_id).toBe("run-12345")
+  })
+
+  // Attribution is diagnostic; an allocation must never fail or change shape
+  // because a caller omitted it. Untagged callers simply produce NULL.
+  test("allocates normally with attribution absent, blank, or non-string", async () => {
+    for (const attribution of [
+      {},
+      { source: "   ", runId: "" },
+      { source: null, runId: undefined },
+      { source: 42 as unknown as string },
+    ]) {
+      const pool = fakePoolD1([
+        { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+      ])
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, ...attribution })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+      const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+      expect(claimed?.allocation_source ?? null).toBeNull()
+      expect(claimed?.allocation_run_id ?? null).toBeNull()
+    }
+  })
+
+  // The source string is caller-supplied (a request header) on a hot provisioning
+  // path, so it is capped rather than trusted.
+  test("truncates an oversized attribution value instead of rejecting the allocation", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "x".repeat(5_000) })
+    expect(r.ok).toBe(true)
+    const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+    expect(claimed?.allocation_source?.length).toBe(200)
+  })
+
+  // SCHEMA SKEW. The pool D1 has no automated migration runner, so a shard
+  // deployed ahead of migration 0002 is a real operational state. Attribution is
+  // diagnostic, so it must degrade to unattributed allocation -- NOT take
+  // provisioning down.
+  describe("attribution column skew (migration 0002 not applied)", () => {
+    test("still allocates, without attribution, when the columns are missing", async () => {
+      const pool = fakePoolD1(
+        [
+          { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+        ],
+        { simulateMissingAttributionColumns: true },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, {
+        communityId: "cmt_new",
+        now: NOW,
+        source: "web-e2e:gate-builder",
+        runId: "run-123",
+      })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+      const claimed = pool.rows.find((row) => row.binding_name === "DB_CMTY_NEW")
+      expect(claimed?.community_id).toBe("cmt_new")
+      expect(claimed?.allocated_at).toBe(NOW)
+      expect(claimed?.allocation_source ?? null).toBeNull()
+    })
+
+    // The fallback must not weaken the claim. It drops ONLY the diagnostic
+    // columns: same optimistic-lock predicate, same binding, same version, so
+    // concurrency behaviour is identical to the attributed path.
+    test("fallback preserves the claim predicate, binding and version", async () => {
+      const pool = fakePoolD1(
+        [
+          { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 7 },
+        ],
+        { simulateMissingAttributionColumns: true },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "s", runId: "r" })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: true } })
+
+      const updates = pool.calls.filter((c) => /UPDATE d1_pool SET/.test(c.sql))
+      expect(updates).toHaveLength(2) // attributed attempt, then legacy fallback
+      const [attributed, fallback] = updates as [{ sql: string; args: unknown[] }, { sql: string; args: unknown[] }]
+
+      // Identical claim predicate...
+      expect(attributed.sql).toContain("WHERE binding_name = ?1 AND version = ?4")
+      expect(fallback.sql).toContain("WHERE binding_name = ?1 AND version = ?4")
+      // ...and the fallback still increments the version (optimistic lock intact).
+      expect(fallback.sql).toContain("version = version + 1")
+      // ...binding, communityId, now and version are byte-identical; only the
+      // two diagnostic args are dropped.
+      expect(fallback.args).toEqual(attributed.args.slice(0, 4))
+      expect(fallback.args[3]).toBe(7)
+      expect(fallback.sql).not.toContain("allocation_source")
+    })
+
+    // Narrowness check: a REAL database failure must still fail loudly rather
+    // than being downgraded into an unattributed allocation.
+    test("does NOT swallow a genuine write failure", async () => {
+      const boom = new Error("D1_ERROR: database is locked")
+      const pool = fakePoolD1(
+        [
+          { binding_name: "DB_CMTY_NEW", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+        ],
+        { simulateClaimFailure: boom },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      await expect(
+        runShardBind(env, { communityId: "cmt_new", now: NOW, source: "s" }),
+      ).rejects.toThrow("database is locked")
+      const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+      expect(row?.community_id).toBeNull()
+    })
+
+    // Skew must not create a rewrite path either.
+    test("idempotent retry still cannot rewrite attribution under skew", async () => {
+      const pool = fakePoolD1(
+        [
+          {
+            binding_name: "DB_CMTY_NEW",
+            community_id: "cmt_new",
+            allocated_at: NOW,
+            last_error: null,
+            released_at: null,
+            last_loaded_at: null,
+            version: 1,
+            allocation_source: "original-consumer",
+            allocation_run_id: "run-original",
+          },
+        ],
+        { simulateMissingAttributionColumns: true },
+      )
+      const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+      const r = await runShardBind(env, { communityId: "cmt_new", now: NOW, source: "different-consumer" })
+      expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false } })
+      const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+      expect(row?.allocation_source).toBe("original-consumer")
+    })
+  })
+
+  // The idempotent path must not rewrite attribution: the ORIGINAL allocator is
+  // the consumer that spent the capacity, and a later retry by someone else must
+  // not steal the credit -- that would corrupt the very ranking this exists for.
+  test("does not overwrite attribution on the idempotent (already-allocated) path", async () => {
+    const pool = fakePoolD1([
+      {
+        binding_name: "DB_CMTY_NEW",
+        community_id: "cmt_new",
+        allocated_at: NOW,
+        last_error: null,
+        released_at: null,
+        last_loaded_at: null,
+        version: 1,
+        allocation_source: "original-consumer",
+        allocation_run_id: "run-original",
+      },
+    ])
+    const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() as unknown as D1Database })
+    const r = await runShardBind(env, {
+      communityId: "cmt_new",
+      now: NOW,
+      source: "different-consumer",
+      runId: "run-different",
+    })
+    expect(r).toEqual({ ok: true, value: { bindingName: "DB_CMTY_NEW", shardWorkerId: SHARD_ID, allocated: false } })
+    const row = pool.rows.find((r2) => r2.binding_name === "DB_CMTY_NEW")
+    expect(row?.allocation_source).toBe("original-consumer")
+    expect(row?.allocation_run_id).toBe("run-original")
   })
 
   test("§8.3 — idempotency: second call returns the same binding with allocated: false", async () => {
@@ -621,6 +896,20 @@ describe("runShardBind (step 2 — returns ShardResult — step 2.5)", () => {
     const env = envForAllocator(pool, { DB_CMTY_NEW: fakeD1() })
     const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
     expect(r).toMatchObject({ ok: true, value: { allocated: true, bindingName: "DB_CMTY_NEW" } })
+  })
+
+  test("never allocates the reserved fixture binding even when its pool row is free", async () => {
+    const pool = fakePoolD1([
+      { binding_name: "DB_CMTY_FIXTURE", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+      { binding_name: "DB_CMTY_0001", community_id: null, allocated_at: null, last_error: null, released_at: null, last_loaded_at: null, version: 0 },
+    ])
+    const env = envForAllocator(pool, {
+      DB_CMTY_FIXTURE: fakeD1(),
+      DB_CMTY_0001: fakeD1(),
+    })
+    const r = await runShardBind(env, { communityId: "cmt_new", now: NOW })
+    expect(r).toMatchObject({ ok: true, value: { allocated: true, bindingName: "DB_CMTY_0001" } })
+    expect(pool.rows.find((row) => row.binding_name === "DB_CMTY_FIXTURE")?.community_id).toBeNull()
   })
 
   test("returns shard_binding_not_initialized when the pool row's binding isn't bound on this Worker", async () => {
@@ -692,6 +981,109 @@ describe("runShardLoadSnapshot (step 3 — returns ShardResult)", () => {
     expect(r).toEqual({ ok: true, value: { rowsAffected: 3, loaded: true } })
     const row = pool.rows.find((r) => r.binding_name === "DB_CMTY_NEW")
     expect(row?.last_loaded_at).not.toBeNull()
+  })
+
+  test("fails the final load CAS if the binding is released and reallocated during the target batch", async () => {
+    const pool = fakePoolD1([{ ...POOL_ROW }], {
+      beforeMarkLoaded(rows) {
+        const row = rows[0]!
+        row.community_id = "cmt_other"
+        row.version += 2
+      },
+    })
+    const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1([], { perStatementChanges: [0] }) })
+    const r = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [{ sql: "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)", args: [] }],
+    })
+    expect(r).toMatchObject({ ok: false, code: "shard_pool_write_conflict" })
+    expect(pool.rows[0]).toMatchObject({ community_id: "cmt_other", last_loaded_at: null })
+  })
+
+  test("repairs last_loaded_at from the target marker without replaying a committed snapshot", async () => {
+    const pool = fakePoolD1([{ ...POOL_ROW }], {
+      beforeMarkLoaded(rows) {
+        rows[0]!.version += 1
+      },
+    })
+    const db = fakeD1([], { perStatementChanges: [0] })
+    const env = envForLoad(pool, { DB_CMTY_NEW: db })
+    const input = {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [{ sql: "CREATE TABLE assets (asset_id TEXT PRIMARY KEY)", args: [] }],
+    }
+
+    const first = await runShardLoadSnapshot(env, input)
+    expect(first).toMatchObject({ ok: false, code: "shard_pool_write_conflict" })
+    expect(db.bootstrapMarkerCommunityId).toBe("cmt_new")
+
+    const retry = await runShardLoadSnapshot(env, input)
+    expect(retry).toEqual({ ok: true, value: { rowsAffected: 0, loaded: false } })
+    expect(pool.rows[0]?.last_loaded_at).not.toBeNull()
+    expect(db.calls.filter((call) => call.sql === input.statements[0]!.sql)).toHaveLength(1)
+  })
+
+  test("does not accept a committed marker from a different snapshot revision", async () => {
+    const pool = fakePoolD1([{ ...POOL_ROW }], {
+      beforeMarkLoaded(rows) {
+        rows[0]!.version += 1
+      },
+    })
+    const db = fakeD1([], { perStatementChanges: [0] })
+    const env = envForLoad(pool, { DB_CMTY_NEW: db })
+    const first = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [{ sql: "CREATE TABLE assets (asset_id TEXT PRIMARY KEY)", args: [] }],
+    })
+    expect(first).toMatchObject({ ok: false, code: "shard_pool_write_conflict" })
+
+    const retry = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [{ sql: "CREATE TABLE assets (asset_id TEXT PRIMARY KEY, title TEXT)", args: [] }],
+    })
+    expect(retry).toMatchObject({ ok: false, code: "shard_snapshot_mismatch" })
+    expect(pool.rows[0]?.last_loaded_at).toBeNull()
+  })
+
+  test("loads CREATE TRIGGER schema statements (migration 1147 regression: body semicolons inside BEGIN ... END)", async () => {
+    // The generated snapshot includes integrity triggers; their `;`-terminated
+    // body statements tripped the bootstrap guard's batching rule and failed
+    // every d1_native provision in production. This is the exact RPC shape the
+    // provisioning backend sends.
+    const pool = fakePoolD1([{ ...POOL_ROW }])
+    const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1([], { perStatementChanges: [0, 0] }) })
+    const r = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [
+        { sql: "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)", args: [] },
+        {
+          sql: "CREATE TRIGGER t_id_required BEFORE INSERT ON t WHEN NEW.id IS NULL BEGIN SELECT RAISE(ABORT, 'id required'); END;",
+          args: [],
+        },
+      ],
+    })
+    expect(r).toEqual({ ok: true, value: { rowsAffected: 0, loaded: true } })
+  })
+
+  test("rejects a statement smuggled after a CREATE TRIGGER body", async () => {
+    const pool = fakePoolD1([{ ...POOL_ROW }])
+    const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1() })
+    const r = await runShardLoadSnapshot(env, {
+      communityId: "cmt_new",
+      bindingName: "DB_CMTY_NEW",
+      statements: [
+        {
+          sql: "CREATE TRIGGER t_id_required BEFORE INSERT ON t BEGIN SELECT RAISE(ABORT, 'x'); END; DELETE FROM t",
+          args: [],
+        },
+      ],
+    })
+    expect(r).toMatchObject({ ok: false, code: "shard_write_not_allowed" })
   })
 
   test("§8.4 — idempotency: re-running on an already-loaded binding returns loaded: false, leaves last_loaded_at unchanged", async () => {
@@ -817,7 +1209,8 @@ describe("runShardLoadSnapshot (step 3 — returns ShardResult)", () => {
 
   test("empty statements list still marks the binding as loaded (idempotent bootstrap)", async () => {
     const pool = fakePoolD1([{ ...POOL_ROW }])
-    const env = envForLoad(pool, { DB_CMTY_NEW: fakeD1() })
+    const db = fakeD1()
+    const env = envForLoad(pool, { DB_CMTY_NEW: db })
     const r = await runShardLoadSnapshot(env, {
       communityId: "cmt_new",
       bindingName: "DB_CMTY_NEW",
@@ -826,6 +1219,7 @@ describe("runShardLoadSnapshot (step 3 — returns ShardResult)", () => {
     expect(r).toEqual({ ok: true, value: { rowsAffected: 0, loaded: true } })
     const row = pool.rows.find((r) => r.binding_name === "DB_CMTY_NEW")
     expect(row?.last_loaded_at).not.toBeNull()
+    expect(db.calls).toHaveLength(0)
   })
 })
 
@@ -845,19 +1239,39 @@ function adminPoolFake(rows: FakePoolRow[]) {
       async first() {
         if (/COUNT\(\*\)\s+AS\s+total/i.test(sql)) {
           const threshold = s._args[0] as string | undefined
+          const allocated24HoursThreshold = s._args[1] as string | undefined
+          const allocated7DaysThreshold = s._args[2] as string | undefined
           let allocated = 0
           let free = 0
           let quarantined = 0
-          for (const row of rows) {
+          let allocatedLast24Hours = 0
+          let allocatedLast7Days = 0
+          const countedRows = /binding_name != 'DB_CMTY_FIXTURE'/.test(sql)
+            ? rows.filter((row) => row.binding_name !== "DB_CMTY_FIXTURE")
+            : rows
+          for (const row of countedRows) {
             if (row.community_id !== null) {
               allocated += 1
+              if (row.allocated_at && allocated24HoursThreshold && row.allocated_at >= allocated24HoursThreshold) {
+                allocatedLast24Hours += 1
+              }
+              if (row.allocated_at && allocated7DaysThreshold && row.allocated_at >= allocated7DaysThreshold) {
+                allocatedLast7Days += 1
+              }
             } else if (row.released_at !== null && threshold && row.released_at >= threshold) {
               quarantined += 1
             } else {
               free += 1
             }
           }
-          return { total: rows.length, allocated, free, quarantined }
+          return {
+            total: countedRows.length,
+            allocated,
+            free,
+            quarantined,
+            allocated_last_24_hours: allocatedLast24Hours,
+            allocated_last_7_days: allocatedLast7Days,
+          }
         }
         const binding = s._args[0] as string
         return rows.find((r) => r.binding_name === binding) ?? null
@@ -872,6 +1286,7 @@ function adminPoolFake(rows: FakePoolRow[]) {
                 && row.allocated_at !== null
                 && row.allocated_at < allocatedBefore
                 && row.last_loaded_at === null
+                && row.last_error !== "decommissioning"
               )
               .sort((a, b) =>
                 a.allocated_at! < b.allocated_at!
@@ -887,10 +1302,24 @@ function adminPoolFake(rows: FakePoolRow[]) {
         return { results: [], success: true }
       },
       async run() {
-        // release: free the row + stamp released_at, only if currently allocated
-        const [binding, now] = s._args as [string, string]
+        if (/SET last_error = \?4, version = version \+ 1/.test(sql)) {
+          const [binding, communityId, expectedVersion, marker] = s._args as [string, string, number, string]
+          const row = rows.find((r) => r.binding_name === binding)
+          if (row?.community_id === communityId && row.version === expectedVersion) {
+            row.last_error = marker
+            row.version += 1
+            return { success: true, meta: { changes: 1 } }
+          }
+          return { success: true, meta: { changes: 0 } }
+        }
+        // release/decommission: free only the exact allocation generation.
+        const [binding, second, third, fourth] = s._args as [string, string, string, number]
+        const decommission = /community_id = \?2/.test(sql)
+        const expectedCommunity = decommission ? second : third
+        const now = decommission ? third : second
+        const expectedVersion = fourth
         const row = rows.find((r) => r.binding_name === binding)
-        if (row && row.community_id !== null) {
+        if (row && row.community_id === expectedCommunity && row.version === expectedVersion) {
           row.community_id = null
           row.allocated_at = null
           row.last_loaded_at = null
@@ -917,7 +1346,7 @@ function resetCommunityFake(tableNames: string[]) {
       const s: any = {
         async all() {
           if (/sqlite_master/.test(sql)) {
-            return { results: tableNames.map((name) => ({ name })), success: true }
+            return { results: tableNames.map((name) => ({ name, sql: `CREATE TABLE ${name} (id TEXT)` })), success: true }
           }
           return { results: [], success: true }
         },
@@ -946,9 +1375,50 @@ describe("admin RPC auth (step 5)", () => {
 
   test("fails closed when the shard has no admin token configured", async () => {
     const env = { D1_POOL: adminPoolFake([]) as unknown as D1Database } as ShardEnv
-    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_X", now: "t" })
+    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_X", expectedCommunityId: "cmt_x", expectedPoolVersion: 1, now: "t" })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.code).toBe("shard_admin_unauthorized")
+  })
+})
+
+describe("reserved fixture binding", () => {
+  const reservedEnv = () => adminEnv({
+    DB_CMTY_FIXTURE: resetCommunityFake([]) as unknown as D1Database,
+    D1_POOL: adminPoolFake([{
+      binding_name: "DB_CMTY_FIXTURE",
+      community_id: "cmt_fixture",
+      allocated_at: "t0",
+      last_loaded_at: "t1",
+      last_error: null,
+      released_at: null,
+      version: 1,
+    }]) as unknown as D1Database,
+    STAGING_RECLAIM_ENABLED: "true",
+  })
+
+  test("refuses reset, release, and decommission before touching fixture state", async () => {
+    const env = reservedEnv()
+    const reset = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_FIXTURE" })
+    const release = await runShardRelease(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_FIXTURE",
+      expectedCommunityId: "cmt_fixture",
+      expectedPoolVersion: 1,
+      now: "t2",
+    })
+    const decommission = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_FIXTURE",
+      communityId: "cmt_fixture",
+      expectedPoolVersion: 1,
+      now: "t2",
+    })
+
+    for (const result of [reset, release, decommission]) {
+      expect(result).toMatchObject({ ok: false, code: "shard_binding_not_allowed" })
+    }
+    const pool = env.D1_POOL as unknown as ReturnType<typeof adminPoolFake>
+    expect(pool.rows[0]).toMatchObject({ community_id: "cmt_fixture", last_loaded_at: "t1" })
   })
 })
 
@@ -989,7 +1459,8 @@ describe("communityD1ListStaleUnloadedPoolRows", () => {
       { binding_name: "DB_CMTY_STALE", community_id: "cmt_stale", allocated_at: "2026-01-01T00:00:00Z", last_loaded_at: null, last_error: null, released_at: null, version: 3 },
       { binding_name: "DB_CMTY_LOADED", community_id: "cmt_loaded", allocated_at: "2026-01-01T00:00:00Z", last_loaded_at: "2026-01-01T00:01:00Z", last_error: null, released_at: null, version: 4 },
       { binding_name: "DB_CMTY_FRESH", community_id: "cmt_fresh", allocated_at: "2026-01-03T00:00:00Z", last_loaded_at: null, last_error: null, released_at: null, version: 5 },
-      { binding_name: "DB_CMTY_FREE", community_id: null, allocated_at: null, last_loaded_at: null, last_error: null, released_at: null, version: 6 },
+      { binding_name: "DB_CMTY_DECOMMISSIONING", community_id: "cmt_decommissioning", allocated_at: "2026-01-01T00:00:00Z", last_loaded_at: null, last_error: "decommissioning", released_at: null, version: 6 },
+      { binding_name: "DB_CMTY_FREE", community_id: null, allocated_at: null, last_loaded_at: null, last_error: null, released_at: null, version: 7 },
     ]
     const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
 
@@ -1043,14 +1514,22 @@ describe("communityD1Reset (step 5)", () => {
     expect((community as any).dropped).toHaveLength(0)
   })
 
-  test("drops schema_migrations on an internal-table-only never-loaded community D1", async () => {
+  test("drops bootstrap metadata on an internal-table-only never-loaded community D1", async () => {
     const env = adminEnv({
-      DB_CMTY_1: resetCommunityFake(["_cf_KV", "schema_migrations", "sqlite_schema"]) as unknown as D1Database,
+      DB_CMTY_1: resetCommunityFake([
+        "_cf_KV",
+        "schema_migrations",
+        "_pirate_bootstrap_state",
+        "sqlite_schema",
+      ]) as unknown as D1Database,
       D1_POOL: unloadedPool(),
     })
     const r = await runShardReset(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1" })
-    expect(r).toEqual({ ok: true, value: { tablesDropped: 1 } })
-    expect((env.DB_CMTY_1 as any).dropped).toEqual(['DROP TABLE IF EXISTS "schema_migrations"'])
+    expect(r).toEqual({ ok: true, value: { tablesDropped: 2 } })
+    expect((env.DB_CMTY_1 as any).dropped).toEqual([
+      'DROP TABLE IF EXISTS "schema_migrations"',
+      'DROP TABLE IF EXISTS "_pirate_bootstrap_state"',
+    ])
   })
 
   test("is a no-op (tablesDropped: 0) on an empty never-loaded community D1", async () => {
@@ -1091,6 +1570,158 @@ describe("communityD1Reset (step 5)", () => {
   })
 })
 
+describe("communityD1Decommission", () => {
+  test("orders foreign-key children before their parents", () => {
+    expect(orderTablesForDrop([
+      { name: "community_jobs", sql: "CREATE TABLE community_jobs (id TEXT PRIMARY KEY)" },
+      { name: "post_publish_requests", sql: "CREATE TABLE post_publish_requests (job_id TEXT REFERENCES community_jobs(id))" },
+      { name: "post_publish_attempts", sql: "CREATE TABLE post_publish_attempts (request_id TEXT REFERENCES post_publish_requests(id))" },
+    ])).toEqual(["post_publish_attempts", "post_publish_requests", "community_jobs"])
+  })
+
+  test("keeps self references and mutual cycles deterministic", () => {
+    expect(orderTablesForDrop([
+      { name: "tree", sql: "CREATE TABLE tree (parent_id TEXT REFERENCES tree(id))" },
+      { name: "a", sql: "CREATE TABLE a (b_id TEXT REFERENCES b(id))" },
+      { name: "b", sql: "CREATE TABLE b (a_id TEXT REFERENCES a(id))" },
+    ])).toEqual(["tree", "a", "b"])
+  })
+
+  function loadedRows(): FakePoolRow[] {
+    return [{
+      binding_name: "DB_CMTY_1",
+      community_id: "cmt_1",
+      allocated_at: "t0",
+      last_loaded_at: "t1",
+      last_error: null,
+      released_at: null,
+      version: 2,
+    }]
+  }
+
+  test("is disabled unless the staging reclaim kill switch is explicit", async () => {
+    const community = resetCommunityFake(["posts"])
+    const env = adminEnv({
+      D1_POOL: adminPoolFake(loadedRows()) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      expectedPoolVersion: 2,
+      now: "t2",
+    })
+    expect(result.ok).toBe(false)
+    expect((community as any).dropped).toHaveLength(0)
+  })
+
+  test("refuses a mismatched community without touching the database", async () => {
+    const community = resetCommunityFake(["posts"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(loadedRows()) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_other",
+      expectedPoolVersion: 2,
+      now: "t2",
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe("shard_binding_not_allowed")
+    expect((community as any).dropped).toHaveLength(0)
+  })
+
+  test("refuses a stale allocation generation before touching the database", async () => {
+    const community = resetCommunityFake(["posts"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(loadedRows()) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      expectedPoolVersion: 1,
+      now: "t2",
+    })
+    expect(result).toMatchObject({ ok: false, code: "shard_pool_write_conflict" })
+    expect((community as any).dropped).toHaveLength(0)
+  })
+
+  test("finalizes an already released retry only when the target is empty", async () => {
+    const rows = loadedRows()
+    rows[0]!.community_id = null
+    rows[0]!.released_at = "t2"
+    rows[0]!.version = 3
+    const community = resetCommunityFake(["_cf_KV"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(rows) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      expectedPoolVersion: 1,
+      now: "t3",
+    })
+    expect(result).toEqual({ ok: true, value: { tablesDropped: 0, released: false } })
+  })
+
+  test("refuses an already released retry when the target is not empty", async () => {
+    const rows = loadedRows()
+    rows[0]!.community_id = null
+    rows[0]!.released_at = "t2"
+    rows[0]!.version = 3
+    const community = resetCommunityFake(["posts"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(rows) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      expectedPoolVersion: 1,
+      now: "t3",
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe("shard_binding_not_empty")
+  })
+
+  test("drops a loaded staging database and quarantines its exact pool row", async () => {
+    const rows = loadedRows()
+    const community = resetCommunityFake(["_cf_KV", "schema_migrations", "posts", "comments"])
+    const env = adminEnv({
+      STAGING_RECLAIM_ENABLED: "true",
+      D1_POOL: adminPoolFake(rows) as unknown as D1Database,
+      DB_CMTY_1: community as unknown as D1Database,
+    })
+    const result = await runShardDecommission(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      communityId: "cmt_1",
+      expectedPoolVersion: 2,
+      now: "t2",
+    })
+    expect(result).toEqual({ ok: true, value: { tablesDropped: 3, released: true } })
+    expect((community as any).dropped).toEqual([
+      'DROP TABLE IF EXISTS "comments"',
+      'DROP TABLE IF EXISTS "posts"',
+      'DROP TABLE IF EXISTS "schema_migrations"',
+    ])
+    expect(rows[0]?.community_id).toBeNull()
+    expect(rows[0]?.released_at).toBe("t2")
+  })
+})
+
 describe("communityD1Release (step 5)", () => {
   test("frees an allocated binding and stamps released_at (quarantine)", async () => {
     const rows: FakePoolRow[] = [
@@ -1105,14 +1736,14 @@ describe("communityD1Release (step 5)", () => {
       },
     ]
     const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
-    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", now: "t9" })
+    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", expectedCommunityId: "cmt_1", expectedPoolVersion: 1, now: "t9" })
     expect(r).toEqual({ ok: true, value: { released: true } })
     expect(rows[0].community_id).toBeNull()
     expect(rows[0].released_at).toBe("t9")
     expect(rows[0].version).toBe(2)
   })
 
-  test("returns released: false when the binding is already free", async () => {
+  test("fails closed when the binding is already free", async () => {
     const rows: FakePoolRow[] = [
       {
         binding_name: "DB_CMTY_1",
@@ -1125,8 +1756,30 @@ describe("communityD1Release (step 5)", () => {
       },
     ]
     const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
-    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", now: "t9" })
-    expect(r).toEqual({ ok: true, value: { released: false } })
+    const r = await runShardRelease(env, { adminToken: ADMIN_TOKEN, bindingName: "DB_CMTY_1", expectedCommunityId: "cmt_1", expectedPoolVersion: 2, now: "t9" })
+    expect(r).toMatchObject({ ok: false, code: "shard_pool_write_conflict" })
+  })
+
+  test("does not release a reallocated binding from a stale request", async () => {
+    const rows: FakePoolRow[] = [{
+      binding_name: "DB_CMTY_1",
+      community_id: "cmt_new_owner",
+      allocated_at: "t8",
+      last_loaded_at: null,
+      last_error: null,
+      released_at: null,
+      version: 4,
+    }]
+    const env = adminEnv({ D1_POOL: adminPoolFake(rows) as unknown as D1Database })
+    const r = await runShardRelease(env, {
+      adminToken: ADMIN_TOKEN,
+      bindingName: "DB_CMTY_1",
+      expectedCommunityId: "cmt_old_owner",
+      expectedPoolVersion: 2,
+      now: "t9",
+    })
+    expect(r).toMatchObject({ ok: false, code: "shard_pool_write_conflict" })
+    expect(rows[0]).toMatchObject({ community_id: "cmt_new_owner", version: 4 })
   })
 })
 
@@ -1137,7 +1790,7 @@ describe("communityD1PoolStats", () => {
       {
         binding_name: "DB_CMTY_ALLOCATED",
         community_id: "cmt_1",
-        allocated_at: "t0",
+        allocated_at: new Date(now - 60 * 60 * 1_000).toISOString(),
         last_loaded_at: "t1",
         last_error: null,
         released_at: null,
@@ -1180,6 +1833,8 @@ describe("communityD1PoolStats", () => {
         allocated: 1,
         free: 2,
         quarantined: 1,
+        allocatedLast24Hours: 1,
+        allocatedLast7Days: 1,
       },
     })
   })

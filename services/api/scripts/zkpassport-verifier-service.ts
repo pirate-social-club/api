@@ -1,7 +1,7 @@
 import { timingSafeEqual } from "node:crypto"
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
-import { installGracefulHttpShutdown } from "./_lib/graceful-http-shutdown"
 import { ZKPassport, type ProofResult, type Query, type QueryResult } from "@zkpassport/sdk"
+import { installGracefulHttpShutdown } from "./_lib/graceful-http-shutdown"
 
 const DEFAULT_PORT = 8794
 const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024

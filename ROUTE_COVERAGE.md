@@ -15,6 +15,9 @@ Mounted in `services/api/src/index.ts`:
 - `/oauth`
 - `/analytics`
 - `/bookings`
+- `/dance-choreographies`
+- `/dance-attempts`
+- `/dance-sessions`
 - `/__version`
 - non-production `/__debug/sentry-error`
 - `/` for discovery routes
@@ -22,6 +25,9 @@ Mounted in `services/api/src/index.ts`:
 - `/admin/bot-users`
 - `/admin/debug`
 - `/admin/ops`
+- `/admin/ops/hns-wallet-origins`
+- `/admin/ops/telegram`
+- `/internal/hns-edge-alerts`
 - `/operator/story-settlement`
 - `/community-media`
 - `/comments`
@@ -46,6 +52,7 @@ Mounted in `services/api/src/index.ts`:
 - `/users`
 - `/onboarding`
 - `/profiles`
+- `/api/privy-relay`
 - `/telegram`
 - `/wallet-identities`
 - `/` for verification routes
@@ -60,6 +67,9 @@ Mounted in `services/api/src/index.ts`:
 | `/admin/bot-users` | `src/routes/bot-users.ts` | `tests/routes/bot-users-routes.test.ts` | direct | Bot-user management endpoints. |
 | `/admin/debug/post-pipeline` | `src/routes/debug-pipeline.ts` | `tests/routes/debug-pipeline-routes.test.ts` | direct | Admin-only diagnostic endpoint for post translation/summary pipeline state. |
 | `/admin/ops/wallets` | `src/routes/ops-wallets.ts` | `tests/routes/ops-wallets-routes.test.ts` | direct | Admin-only operator-wallet balance report (Story runtime signers + runtime funding watchdog wallets). |
+| `/admin/ops/hns-wallet-origins/*` | `src/routes/hns-wallet-origin-ops.ts` | `tests/routes/hns-wallet-origin-ops-routes.test.ts` | direct | Admin-only durable registration, revocation, and fail-closed hard-deny projection for activated HNS wallet origins. |
+| `/admin/ops/telegram/uncertain-deliveries` | `src/routes/ops-telegram-deliveries.ts` | `tests/routes/ops-telegram-deliveries-routes.test.ts` | direct | Admin-only surface for Telegram channel deliveries stranded in `uncertain`; covers the admin-token boundary on read and resolve, the empty roll-up, and action validation. Resolution semantics (CAS idempotency, evidence requirements, retry rollback) are covered in `src/lib/telegram/uncertain-delivery-ops-service.test.ts`. |
+| `/internal/hns-edge-alerts` | `src/routes/hns-edge-alerts.ts` | `tests/routes/hns-edge-alerts.test.ts` | direct | Dedicated bearer-authenticated VPS alert ingress; covers authorization, payload validation, sink forwarding, and fail-closed delivery. |
 | `/operator/story-settlement/*` | `src/routes/story-settlement-ops.ts` | `src/routes/story-settlement-ops.test.ts` | direct | Scoped operator-credential routes for journaled abandoned-nonce repair and staging-only alert-sink probing. |
 | discovery routes under `/` | `src/routes/discovery.ts` | `tests/routes/discovery-routes.test.ts` | direct | Covers well-known discovery responses. |
 | `/auth/session/exchange` | `src/routes/auth.ts` | `tests/routes/auth/auth-routes.test.ts` | direct | Also exercised by many other route suites for setup. |
@@ -95,7 +105,12 @@ Mounted in `services/api/src/index.ts`:
 | `/public-names/*` | `src/routes/public-names.ts` | `tests/routes/public-names/public-names-routes.test.ts` | direct | Covers public Pirate-name resolution and status responses. |
 | `/public-namespaces/*` | `src/routes/public-namespaces.ts` | `tests/routes/public-namespaces-routes.test.ts` | direct | Resolves verified, unexpired, Pirate-routed HNS namespaces for gateway and Freedom clients. |
 | `/profiles/*` | `src/routes/profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts` | direct | Includes patch, read, rename, upgrade quote, linked handles, primary handle. |
+| `/api/privy-relay` | `src/routes/privy-relay.ts` | `src/lib/efp-indexer/follow-sponsorship-relay.test.ts` | service | Authenticated route is thin validation over the exact-transaction relay; bootstrap reservation and forwarded Privy payload are covered at the service boundary. |
 | `/bookings/*` | `src/routes/bookings.ts` | `tests/routes/bookings-routes.test.ts`, `src/lib/bookings/*\.pg.test.ts`, `src/lib/bookings/host-config-repository.production-path.pg.test.ts` | direct/service/PG | Global booking API surface. Route suite covers auth, parameter/body normalization, aliases, status mapping, and service wiring; real-Postgres service tests cover durable behavior. |
+| `/dance-choreographies/*` | `src/routes/dance-choreographies.ts` | `src/routes/dance-choreographies.test.ts`, `src/lib/dance/grader-callback-auth.test.ts` | direct | Dark pilot operator seed, authenticated read, and Modal reference callback boundary. Covers read authentication, public identifier serialization, dedicated operator scope, bounded seed parsing, exact raw-body HMAC verification, revision subject binding, and callback finalization wiring. |
+| `/posts/:postId/dance-choreography` | `src/routes/post-dance-choreographies.ts` | `src/routes/dance-choreographies.test.ts`, `src/lib/dance/choreography-reference-repository.test.ts`, `src/lib/dance/choreography-reference-storage.test.ts` | direct/service | Authenticated post alias for active, ready choreography references. Route authentication, repository selection, public identifier serialization, and short-lived playback signing have direct coverage. |
+| `/dance-attempts/*` | `src/routes/dance-attempts.ts` | `src/routes/dance-attempts.test.ts`, `src/lib/dance/attempt-finalize-service.test.ts`, `src/lib/dance/attempt-cleanup.test.ts` | direct | Dark authenticated attempt read and Modal callback boundary. Covers read authentication, exact-byte HMAC verification, session subject binding, terminal fact parsing, provisional-calibration rank refusal, shard evidence persistence, and terminal-only raw-media cleanup. |
+| `/dance-sessions/*` | `src/routes/dance-sessions.ts` | `src/routes/dance-sessions.test.ts`, `src/lib/dance/attempt-session-repository.test.ts`, `src/lib/dance/attempt-storage.test.ts`, `src/lib/dance/attempt-contract.test.ts` | direct/service | Dark authenticated create/read/cancel, MP4-only hash-bound upload-intent, and verified submit surface. Route authentication, durable state transitions, private storage signing/HEAD verification, and callback parsing have direct coverage. |
 | `/host-bookings/me/*` | `src/routes/host-bookings.ts` | `tests/routes/host-bookings-routes.test.ts` | direct | Covers host profile upsert, publish/unpublish, availability rules / exceptions / price rules CRUD, hard bounds, FK precondition, and envelope shape. |
 | `/public-profiles/:handleLabel` | `src/routes/public-profiles.ts` | `tests/routes/profiles/profiles-routes.test.ts`, `tests/routes/profiles/public-profiles-routes.test.ts` | direct | Covered alongside profile/global-handle tests. |
 | `/wallet-identities/:chainRef/:walletAddress` | `src/routes/wallet-identities.ts` | `tests/routes/wallet-identities-routes.test.ts` | direct | Covers wallet-owned Pirate-name identity projection, profile redirect for attached wallets, 404 for unknown wallets, and chain/address validation errors. |

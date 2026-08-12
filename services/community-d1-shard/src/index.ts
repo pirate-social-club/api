@@ -1,6 +1,8 @@
 import { WorkerEntrypoint } from "cloudflare:workers"
 import type {
   ShardAdminGetPoolRowRequest,
+  ShardAdminDecommissionRequest,
+  ShardAdminDecommissionResponse,
   ShardAdminGetPoolRowResponse,
   ShardAdminListStaleUnloadedPoolRowsRequest,
   ShardAdminListStaleUnloadedPoolRowsResponse,
@@ -11,21 +13,32 @@ import type {
   ShardAdminResetRequest,
   ShardAdminResetResponse,
   ShardBatchReadRequest,
+  ShardBulkReadRequest,
+  ShardBulkReadResponse,
+  ShardBulkWriteRequest,
+  ShardBulkWriteResponse,
   ShardBindRequest,
   ShardBindResponse,
   ShardLoadSnapshotRequest,
   ShardLoadSnapshotResponse,
+  ShardLookupBindingRequest,
+  ShardLookupBindingResponse,
   ShardQueryResult,
   ShardReadRequest,
   ShardResult,
+  ShardVersionInfo,
   ShardWriteRequest,
 } from "@pirate/api-shared"
 import type { Env } from "./env"
 import {
   runShardBatch,
+  runShardBulkRead,
+  runShardBulkWrite,
   runShardBind,
   runShardGetPoolRow,
+  runShardDecommission,
   runShardListStaleUnloadedPoolRows,
+  runShardLookupBinding,
   runShardLoadSnapshot,
   runShardPoolStats,
   runShardRead,
@@ -33,6 +46,8 @@ import {
   runShardReset,
   runShardWrite,
 } from "./shard-read"
+import { publishProvisioningSchemaAttestation } from "./schema-attestation"
+import { shardVersionInfo } from "./version"
 
 /**
  * Community D1 shard. Hosts per-community D1 bindings and exposes a
@@ -75,9 +90,19 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     return runShardBatch(this.env, input)
   }
 
+  /** One service invocation containing independently authorized reads. */
+  bulkRead(input: ShardBulkReadRequest): Promise<ShardBulkReadResponse> {
+    return runShardBulkRead(this.env, input)
+  }
+
   /** Atomic write batch (one buffered community write transaction). */
   batchWrite(input: ShardWriteRequest): Promise<ShardResult<ShardQueryResult[]>> {
     return runShardWrite(this.env, input)
+  }
+
+  /** One service invocation containing independently atomic community writes. */
+  bulkWrite(input: ShardBulkWriteRequest): Promise<ShardBulkWriteResponse> {
+    return runShardBulkWrite(this.env, input)
   }
 
   /**
@@ -89,15 +114,58 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     return runShardBind(this.env, input)
   }
 
+  communityD1LookupBinding(
+    input: ShardLookupBindingRequest,
+  ): Promise<ShardResult<ShardLookupBindingResponse>> {
+    return runShardLookupBinding(this.env, input)
+  }
+
   /**
    * Step 3 of the D1-native workstream: load the community schema + snapshot
    * rows into the allocated D1 binding. Idempotent — re-running on an
    * already-loaded binding is a no-op (`loaded: false`).
    */
-  communityD1LoadSnapshot(
+  async communityD1LoadSnapshot(
     input: ShardLoadSnapshotRequest,
   ): Promise<ShardResult<ShardLoadSnapshotResponse>> {
-    return runShardLoadSnapshot(this.env, input)
+    const result = await runShardLoadSnapshot(this.env, input)
+    if (result.ok && input.attestation) {
+      try {
+        this.ctx.waitUntil(
+          publishProvisioningSchemaAttestation(this.env, input)
+            .then((outcome) => {
+              const detail = {
+                event: "community_schema_provisioning_attestation",
+                binding_name: input.bindingName,
+                community_id: input.communityId,
+                ...outcome,
+              }
+              if (outcome.status === "published") console.info(JSON.stringify(detail))
+              else console.warn(JSON.stringify(detail))
+            })
+            .catch((error: unknown) => {
+              console.error(JSON.stringify({
+                event: "community_schema_provisioning_attestation",
+                binding_name: input.bindingName,
+                community_id: input.communityId,
+                status: "error",
+                detail: error instanceof Error ? error.message : String(error),
+              }))
+            }),
+        )
+      } catch (error: unknown) {
+        // Attestation is only a release optimization. Even a synchronous
+        // scheduling failure must not turn a successful load into a failed creation.
+        console.error(JSON.stringify({
+          event: "community_schema_provisioning_attestation_schedule",
+          binding_name: input.bindingName,
+          community_id: input.communityId,
+          status: "error",
+          detail: error instanceof Error ? error.message : String(error),
+        }))
+      }
+    }
+    return result
   }
 
   /**
@@ -123,6 +191,12 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     return runShardReset(this.env, input)
   }
 
+  communityD1Decommission(
+    input: ShardAdminDecommissionRequest,
+  ): Promise<ShardResult<ShardAdminDecommissionResponse>> {
+    return runShardDecommission(this.env, input)
+  }
+
   communityD1Release(
     input: ShardAdminReleaseRequest,
   ): Promise<ShardResult<ShardAdminReleaseResponse>> {
@@ -135,8 +209,16 @@ export class CommunityD1Shard extends WorkerEntrypoint<Env> {
     return runShardPoolStats(this.env, input)
   }
 
+  async communityD1Version(): Promise<ShardVersionInfo> {
+    return shardVersionInfo(this.env)
+  }
+
   async fetch(): Promise<Response> {
-    return new Response(JSON.stringify({ ok: true, service: "community-d1-shard" }), {
+    return new Response(JSON.stringify({
+      ok: true,
+      service: "community-d1-shard",
+      version: shardVersionInfo(this.env),
+    }), {
       headers: { "content-type": "application/json" },
     })
   }

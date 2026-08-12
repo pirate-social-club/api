@@ -6,9 +6,14 @@ import type { Client } from "../../sql-client"
 import { evaluateMembershipGatePolicy } from "../membership/gate-policy-evaluation"
 import { getMembershipGatePolicy } from "../membership/gate-policy-store"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
-import { validateGatePolicy } from "../membership/gate-policy-validation"
-import type { GatePolicyEvaluation } from "../membership/gate-types"
+import { normalizeStoredGatePolicy } from "../membership/gate-policy-validation"
+import type { GatePolicy, GatePolicyEvaluation } from "../membership/gate-types"
 import type { NamespacePolicyRow } from "./handle-policy-service"
+import {
+  findMatchingLabelClaimRule,
+  listNamespaceLabelClaimRules,
+  resolveLabelClaimGatePolicy,
+} from "./handle-label-claim-rules"
 
 export async function requireHandleClaimAccess(input: {
   client: DbExecutor
@@ -27,6 +32,11 @@ export type HandleClaimEligibility = {
   satisfied: boolean
   reason: string | null
   evaluation: GatePolicyEvaluation | null
+  gate: {
+    source: "namespace" | "label_rule"
+    ruleId: string | null
+    policy: GatePolicy
+  } | null
 }
 
 export async function evaluateNamespaceHandleClaimEligibility(input: {
@@ -36,14 +46,29 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
   userId: string
   userRepository: UserRepository
   policy: NamespacePolicyRow
+  labelNormalized?: string | null
   mode?: "preview" | "enforce"
 }): Promise<HandleClaimEligibility> {
-  if (input.policy.claim_gate_mode === "none") {
-    return { satisfied: true, reason: null, evaluation: null }
+  let gateSource: "namespace" | "label_rule" = "namespace"
+  let matchedRuleId: string | null = null
+  let gatePolicy: GatePolicy | null = null
+  if (input.labelNormalized != null) {
+    const rules = await listNamespaceLabelClaimRules(input.client, input.policy.namespace_handle_policy_id)
+    const rule = findMatchingLabelClaimRule(rules, input.labelNormalized)
+    if (rule) {
+      gateSource = "label_rule"
+      matchedRuleId = rule.label_claim_rule_id
+      gatePolicy = resolveLabelClaimGatePolicy(rule, input.labelNormalized)
+    }
   }
-  const gatePolicy = input.policy.claim_gate_mode === "inherit_community"
-    ? await getMembershipGatePolicy(input.client as Client, input.communityId)
-    : parseExplicitClaimGatePolicy(input.policy)
+  if (!gatePolicy) {
+    if (input.policy.claim_gate_mode === "none") {
+      return { satisfied: true, reason: null, evaluation: null, gate: null }
+    }
+    gatePolicy = input.policy.claim_gate_mode === "inherit_community"
+      ? await getMembershipGatePolicy(input.client as Client, input.communityId)
+      : parseExplicitClaimGatePolicy(input.policy)
+  }
   if (!gatePolicy) {
     return {
       satisfied: false,
@@ -51,6 +76,7 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
         ? "The community membership gate is not configured"
         : "The namespace claim gate is not configured",
       evaluation: null,
+      gate: null,
     }
   }
   const user = await input.userRepository.getUserById(input.userId)
@@ -68,8 +94,11 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
       ? null
       : evaluation.outcome === "provider_unavailable"
         ? "A namespace eligibility provider is temporarily unavailable"
-        : "Namespace eligibility requirements are not satisfied",
+        : gateSource === "label_rule"
+          ? "This name has additional eligibility requirements that are not satisfied"
+          : "Namespace eligibility requirements are not satisfied",
     evaluation,
+    gate: { source: gateSource, ruleId: matchedRuleId, policy: gatePolicy },
   }
 }
 
@@ -80,6 +109,7 @@ export async function requireNamespaceHandleClaimEligibility(
   if (!eligibility.satisfied) {
     throw eligibilityFailed(eligibility.reason ?? "Namespace eligibility requirements are not satisfied", {
       claim_gate_mode: input.policy.claim_gate_mode,
+      claim_gate_source: eligibility.gate?.source ?? null,
       gate_evaluation: eligibility.evaluation,
     })
   }
@@ -88,7 +118,7 @@ export async function requireNamespaceHandleClaimEligibility(
 function parseExplicitClaimGatePolicy(policy: NamespacePolicyRow) {
   if (!policy.claim_gate_expression_json?.trim()) return null
   try {
-    return validateGatePolicy(JSON.parse(policy.claim_gate_expression_json))
+    return normalizeStoredGatePolicy(JSON.parse(policy.claim_gate_expression_json))
   } catch {
     throw internalError("Community handle claim gate expression is malformed")
   }

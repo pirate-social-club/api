@@ -18,6 +18,11 @@ import type {
 } from "../create/validation"
 import type { Env } from "../../../env"
 import { shouldUseLocalCommunityDb } from "../community-local-mode"
+import {
+  listConfiguredCommunityShards,
+  resolveCommunityAllocationShard,
+} from "../community-shard-registry"
+import { provisioningSchemaAttestation } from "./schema-attestation"
 
 type BindingInput = {
   env: Env
@@ -33,6 +38,8 @@ type ProvisionInput = {
   namespaceVerificationId: string | null
   routeSlug: string | null
   communityRepository: CommunityProvisioningRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }
 
 type ProvisionedCommunityCredential = {
@@ -160,15 +167,46 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       communityId,
       databaseRegion: input.body.database_region,
     })
-    const shard = input.env.COMMUNITY_D1_SHARD
-    if (!shard) {
-      throw internalError(
-        "d1_native provisioning: COMMUNITY_D1_SHARD service binding is not configured on this Worker",
-      )
+    const allocationShard = resolveCommunityAllocationShard(input.env)
+    const configuredShards = listConfiguredCommunityShards(input.env)
+    const existingAllocations = configuredShards.length > 1
+      ? (await Promise.all(configuredShards.map(async (candidate) => {
+        const result = await candidate.shard.communityD1LookupBinding({ communityId })
+        if (!result.ok) {
+          throw internalError(
+            `d1_native provisioning: binding lookup on ${candidate.shardWorkerId} returned ${result.code}: ${result.message}`,
+          )
+        }
+        if (result.value.shardWorkerId !== candidate.shardWorkerId) {
+          throw internalError(
+            `d1_native provisioning: binding lookup on ${candidate.shardWorkerId} returned mismatched worker id ${result.value.shardWorkerId}`,
+          )
+        }
+        return result.value.bindingName ? { candidate, bindingName: result.value.bindingName } : null
+      }))).filter((entry) => entry !== null)
+      : []
+    if (existingAllocations.length > 1) {
+      throw internalError(`d1_native provisioning: community ${communityId} is allocated in multiple shard pools`)
     }
+    const existingAllocation = existingAllocations[0]
+    const shard = existingAllocation?.candidate.shard ?? allocationShard.shard
 
     // 1. Allocate a binding from the shard pool.
-    const bindResult = await shard.communityD1Bind({ communityId, now })
+    const bindResult = existingAllocation
+      ? {
+        ok: true as const,
+        value: {
+          bindingName: existingAllocation.bindingName,
+          shardWorkerId: existingAllocation.candidate.shardWorkerId,
+          allocated: false,
+        },
+      }
+      : await shard.communityD1Bind({
+        communityId,
+        now,
+        source: input.allocationAttribution?.source ?? null,
+        runId: input.allocationAttribution?.runId ?? null,
+      })
     if (!bindResult.ok) {
       if (bindResult.code === "shard_pool_exhausted") {
         throw new HttpError(
@@ -195,14 +233,19 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
       )
     }
     const { bindingName, shardWorkerId, allocated } = bindResult.value
-    if (!allocated) {
-      // createNamespacelessCommunity always uses a fresh communityId, so
-      // the idempotency check on the shard always finds no row. If the shard
-      // ever returns allocated: false here, the create flow is being called
-      // twice for the same communityId without an intermediate
-      // markCommunityProvisioningSucceeded — that's an orchestrator bug.
+    if (!existingAllocation && !allocated) {
+      // A cross-pool retry synthesizes allocated=false only after proving the
+      // community already belongs to exactly one configured pool. A direct
+      // bind returning false has no such proof and means the create
+      // orchestrator was invoked twice without recording success.
       throw internalError(
         `d1_native provisioning: shard bind returned allocated=false for fresh communityId ${communityId}`,
+      )
+    }
+    const expectedShardWorkerId = existingAllocation?.candidate.shardWorkerId ?? allocationShard.shardWorkerId
+    if (expectedShardWorkerId && shardWorkerId !== expectedShardWorkerId) {
+      throw internalError(
+        `d1_native provisioning: allocation shard ${expectedShardWorkerId} returned mismatched worker id ${shardWorkerId}`,
       )
     }
 
@@ -215,6 +258,7 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
     const loadResult = await shard.communityD1LoadSnapshot({
       communityId,
       bindingName,
+      attestation: provisioningSchemaAttestation(input.env),
       statements: localCommunityShardStatements({
         env: input.env,
         body: input.body,
@@ -243,6 +287,14 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
         // the final-schema dump didn't reduce to CREATE).
         throw internalError(
           `d1_native provisioning failed: bootstrap guard rejected load (${loadResult.message})`,
+        )
+      }
+      if (loadResult.code === "shard_snapshot_mismatch") {
+        throw new HttpError(
+          409,
+          "d1_snapshot_mismatch",
+          `d1_native provisioning found a committed bootstrap from a different snapshot revision (${loadResult.message})`,
+          false,
         )
       }
       throw internalError(
@@ -284,7 +336,7 @@ const d1NativeProvisioningBackend: CommunityProvisioningBackend = {
 
 /** True when D1-native provisioning has the required shard binding. */
 export function isD1NativeProvisioningSelected(env: Env): boolean {
-  return Boolean(env.COMMUNITY_D1_SHARD)
+  return Boolean(env.COMMUNITY_D1_SHARD_ROUTES || env.COMMUNITY_D1_SHARD)
 }
 
 export type ProvisioningRequestShape = {

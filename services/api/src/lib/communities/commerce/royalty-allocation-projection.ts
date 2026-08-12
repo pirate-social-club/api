@@ -24,6 +24,11 @@ export type StoryRoyaltyAllocationProjectionRow = {
   createdAt: string
 }
 
+export type VerifiedUnsyncedStoryRoyaltyAllocationAsset = {
+  communityId: string
+  assetId: string
+}
+
 export async function listPendingStoryRoyaltyAllocationProjectionCommunities(input: {
   env: Env
   limit: number
@@ -42,6 +47,30 @@ export async function listPendingStoryRoyaltyAllocationProjectionCommunities(inp
     args: [Math.max(1, Math.trunc(input.limit))],
   })
   return result.rows.map((row) => requiredString(row, "community_id"))
+}
+
+export async function listVerifiedUnsyncedStoryRoyaltyAllocationAssets(input: {
+  client: Pick<Client, "execute">
+  limit: number
+}): Promise<VerifiedUnsyncedStoryRoyaltyAllocationAsset[]> {
+  const limit = Number.isInteger(input.limit) && input.limit > 0 ? Math.min(input.limit, 100) : 25
+  const result = await input.client.execute({
+    sql: `
+      SELECT community_id, asset_id
+      FROM assets
+      WHERE royalty_allocation_status = 'verified'
+        AND royalty_allocation_projection_synced = 0
+        AND story_ip_id IS NOT NULL
+        AND story_ip_id != ''
+      ORDER BY updated_at ASC, asset_id ASC
+      LIMIT ?1
+    `,
+    args: [limit],
+  })
+  return result.rows.map((row) => ({
+    communityId: requiredString(row, "community_id"),
+    assetId: requiredString(row, "asset_id"),
+  }))
 }
 
 function isProjectableAssetRow(row: unknown): boolean {

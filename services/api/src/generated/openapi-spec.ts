@@ -75,6 +75,9 @@ const spec = {
       "name": "Song Study"
     },
     {
+      "name": "Dance"
+    },
+    {
       "name": "Moderation"
     },
     {
@@ -179,6 +182,452 @@ const spec = {
           }
         },
         "operationId": "post_auth_session_exchange"
+      }
+    },
+    "/dance-sessions": {
+      "post": {
+        "operationId": "dance_session_create",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Create an expiring dance upload session",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DanceSessionCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionMutationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionMutationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        }
+      }
+    },
+    "/dance-sessions/{dance_session_id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "dance_session_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get an owned dance session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-sessions/{dance_session_id}/cancel": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "dance_session_cancel",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Cancel an owned unsubmitted dance session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionMutationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-sessions/{dance_session_id}/upload-intent": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "dance_session_upload_intent_create",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Bind a private upload intent to an owned dance session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DanceSessionUploadIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionUploadIntent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-sessions/{dance_session_id}/submit": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_session_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "dance_session_submit",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Submit an uploaded dance attempt for grading",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DanceSessionSubmitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceSessionSubmission"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-attempts/{dance_attempt_id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_attempt_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "dance_attempt_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get an owned dance attempt",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceAttempt"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_attempt_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/dance-choreographies/{dance_choreography_id}": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "dance_choreography_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "dance_choreography_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get a ready dance choreography",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceChoreography"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "dance_choreography_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/posts/{post_id}/dance-choreography": {
+      "parameters": [
+        {
+          "in": "path",
+          "name": "post_id",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "post_dance_choreography_retrieve",
+        "tags": [
+          "Dance"
+        ],
+        "summary": "Get the ready dance choreography hosted by a post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DanceChoreography"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "503": {
+            "$ref": "#/components/responses/ServiceUnavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "post_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/oauth/device_authorize": {
@@ -1501,6 +1950,84 @@ const spec = {
         "operationId": "put_users_me_identity_wallet"
       }
     },
+    "/users/me/telegram-account-link-intents": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Start linking a Telegram Mini App identity to an existing Pirate account",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTelegramAccountLinkIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountLinkIntentResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_users_me_telegram_account_link_intents"
+      }
+    },
+    "/users/me/telegram-account-link-intents/consume": {
+      "post": {
+        "tags": [
+          "Users"
+        ],
+        "summary": "Consume a Telegram account link from an authenticated Pirate browser",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsumeTelegramAccountLinkIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramAccountLinkResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_users_me_telegram_account_link_intents_consume"
+      }
+    },
     "/profiles/me": {
       "get": {
         "tags": [
@@ -1553,6 +2080,13 @@ const spec = {
                   "preferred_locale": {
                     "type": "string",
                     "nullable": true
+                  },
+                  "explicit_content_preference": {
+                    "type": "string",
+                    "enum": [
+                      "show",
+                      "hide"
+                    ]
                   }
                 }
               }
@@ -2178,6 +2712,56 @@ const spec = {
         "operationId": "get_communities_by_community_id"
       }
     },
+    "/communities/{community_id}/namespace": {
+      "post": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "Attach a verified namespace to a community",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityNamespaceAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Community"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_communities_by_community_id_namespace"
+      }
+    },
     "/communities/{community_id}/money-policy": {
       "get": {
         "tags": [
@@ -2334,6 +2918,56 @@ const spec = {
           }
         },
         "operationId": "post_communities_by_community_id_pricing_policy"
+      }
+    },
+    "/communities/{community_id}/presentation": {
+      "post": {
+        "tags": [
+          "Communities"
+        ],
+        "summary": "Update community presentation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommunityPresentationPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommunityPresentation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/EligibilityFailed"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "post_communities_by_community_id_presentation"
       }
     },
     "/communities/{community_id}/listings": {
@@ -3728,6 +4362,22 @@ const spec = {
             }
           }
         ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "timezone": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "headers": {
@@ -3925,9 +4575,77 @@ const spec = {
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SongStudyRevisionConflict"
+                }
+              }
+            }
           }
         },
         "operationId": "post_communities_by_community_id_posts_by_post_id_study_attempts"
+      }
+    },
+    "/communities/{community_id}/posts/{post_id}/study/telegram_voice_intents": {
+      "post": {
+        "tags": [
+          "Song Study"
+        ],
+        "summary": "Continue a say-it-back exercise as a native Telegram voice message",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/PostId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TelegramStudyVoiceIntentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TelegramStudyVoiceIntent"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "502": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "operationId": "post_communities_by_community_id_posts_by_post_id_study_telegram_voice_intents"
       }
     },
     "/communities/{community_id}/posts/{post_id}/study/transcriptions": {
@@ -4652,6 +5370,40 @@ const spec = {
           "Bookings"
         ],
         "summary": "List authenticated user's bookings",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "role",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "booker",
+                "host"
+              ],
+              "default": "booker"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "source_community_id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/Limit"
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -4661,7 +5413,8 @@ const spec = {
                   "required": [
                     "object",
                     "data",
-                    "has_more"
+                    "has_more",
+                    "next_cursor"
                   ],
                   "properties": {
                     "object": {
@@ -4678,6 +5431,12 @@ const spec = {
                     },
                     "has_more": {
                       "type": "boolean"
+                    },
+                    "next_cursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
                     }
                   }
                 }
@@ -4710,40 +5469,6 @@ const spec = {
           }
         },
         "operationId": "get_bookings_hosts_by_host_user_id_slots",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-hosts/{host_user_id}/slots": {
-      "get": {
-        "tags": [
-          "Bookings"
-        ],
-        "security": [],
-        "summary": "Resolve public bookable slots for a host",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BookingSlotsResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          }
-        },
-        "operationId": "get_bookings_booking_hosts_by_host_user_id_slots",
         "parameters": [
           {
             "name": "host_user_id",
@@ -4807,57 +5532,6 @@ const spec = {
         ]
       }
     },
-    "/bookings/booking-hosts/{host_user_id}/holds": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Create a booking hold for a host slot",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateBookingHoldRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "hold"
-                  ],
-                  "properties": {
-                    "hold": {
-                      "$ref": "#/components/schemas/BookingHold"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_hosts_by_host_user_id_holds",
-        "parameters": [
-          {
-            "name": "host_user_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
     "/bookings/holds/{hold_id}/quote": {
       "post": {
         "tags": [
@@ -4890,50 +5564,6 @@ const spec = {
           }
         },
         "operationId": "post_bookings_holds_by_hold_id_quote",
-        "parameters": [
-          {
-            "name": "hold_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ]
-      }
-    },
-    "/bookings/booking-holds/{hold_id}/quote": {
-      "post": {
-        "tags": [
-          "Bookings"
-        ],
-        "summary": "Quote a booking hold",
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "quote"
-                  ],
-                  "properties": {
-                    "quote": {
-                      "$ref": "#/components/schemas/BookingQuote"
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          }
-        },
-        "operationId": "post_bookings_booking_holds_by_hold_id_quote",
         "parameters": [
           {
             "name": "hold_id",
@@ -5019,18 +5649,18 @@ const spec = {
         ]
       }
     },
-    "/bookings/booking-holds/{hold_id}/confirm": {
+    "/bookings/holds/{hold_id}/payment-submitted": {
       "post": {
         "tags": [
           "Bookings"
         ],
-        "summary": "Confirm a paid booking hold",
+        "summary": "Durably record a submitted booking payment for later confirmation",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ConfirmBookingHoldRequest"
+                "$ref": "#/components/schemas/SubmitBookingPaymentRequest"
               }
             }
           }
@@ -5042,44 +5672,36 @@ const spec = {
                 "schema": {
                   "type": "object",
                   "required": [
-                    "booking",
-                    "already_confirmed"
+                    "payment_intent_id",
+                    "status",
+                    "claimed_tx_ref"
                   ],
                   "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
+                    "payment_intent_id": {
+                      "type": "string"
                     },
-                    "already_confirmed": {
-                      "type": "boolean"
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "recorded"
+                      ]
+                    },
+                    "claimed_tx_ref": {
+                      "type": "string"
                     }
                   }
                 }
               }
             }
           },
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "required": [
-                    "booking",
-                    "already_confirmed"
-                  ],
-                  "properties": {
-                    "booking": {
-                      "$ref": "#/components/schemas/Booking"
-                    },
-                    "already_confirmed": {
-                      "type": "boolean"
-                    }
-                  }
-                }
-              }
-            }
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           }
         },
-        "operationId": "post_bookings_booking_holds_by_hold_id_confirm",
+        "operationId": "post_bookings_holds_by_hold_id_payment_submitted",
         "parameters": [
           {
             "name": "hold_id",
@@ -5090,6 +5712,115 @@ const spec = {
             }
           }
         ]
+      }
+    },
+    "/bookings/payment-intents/pending": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List the authenticated booker's recent resumable booking payments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/PendingBookingPaymentIntent"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "operationId": "get_bookings_payment_intents_pending"
+      }
+    },
+    "/bookings/payment-intents/unresolved": {
+      "get": {
+        "tags": [
+          "Bookings"
+        ],
+        "summary": "List claimed booking payments awaiting chain resolution",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "object",
+                    "data",
+                    "has_more"
+                  ],
+                  "properties": {
+                    "object": {
+                      "type": "string",
+                      "enum": [
+                        "list"
+                      ]
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/UnresolvedBookingPaymentIntent"
+                      }
+                    },
+                    "has_more": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        },
+        "operationId": "get_bookings_payment_intents_unresolved"
       }
     },
     "/bookings/settlement-review/pending": {
@@ -5299,7 +6030,7 @@ const spec = {
         "tags": [
           "Bookings"
         ],
-        "summary": "Cancel a booking, checking previously confirmed financial terms when supplied",
+        "summary": "Cancel a booking only if the previously previewed financial terms still match",
         "requestBody": {
           "required": true,
           "content": {
@@ -6722,6 +7453,55 @@ const spec = {
         }
       }
     },
+    "/me/rewards/identity-binding": {
+      "get": {
+        "operationId": "me_rewards_identity_binding_retrieve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Get explicit reward-document selection state",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardIdentityBindingResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "me_rewards_identity_binding_create",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Select an eligible Self document for future reward evaluation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RewardIdentityBindingSelectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardIdentityBindingResponse"
+                }
+              }
+            }
+          },
+          "409": {}
+        }
+      }
+    },
     "/me/rewards/cashouts": {
       "post": {
         "operationId": "me_rewards_cashouts",
@@ -6800,6 +7580,17 @@ const spec = {
           "Rewards"
         ],
         "summary": "Get live campaign-creation guardrails",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "post_id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -6988,6 +7779,48 @@ const spec = {
         ]
       }
     },
+    "/reward_campaigns/{campaign_id}/cancel": {
+      "parameters": [
+        {
+          "name": "campaign_id",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "reward_campaigns_cancel",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Cancel an unfunded draft reward campaign",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {},
+          "409": {}
+        },
+        "parameters": [
+          {
+            "name": "campaign_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
     "/public/reward_campaigns/{campaign_id}": {
       "parameters": [
         {
@@ -7140,6 +7973,99 @@ const spec = {
             }
           }
         ]
+      }
+    },
+    "/operator/reward_pools/refund_policy_readiness": {
+      "get": {
+        "operationId": "operator_reward_pool_refund_policy_readiness",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Check whether a proposed vault refund limit preserves outstanding contribution lots",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "proposed_max_refund_atomic",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardPoolRefundPolicyReadiness"
+                }
+              }
+            }
+          },
+          "400": {},
+          "401": {},
+          "403": {}
+        }
+      }
+    },
+    "/operator/reward_settlements/backend_flip_readiness": {
+      "get": {
+        "operationId": "operator_reward_settlement_backend_flip_readiness",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Check whether rewards custody can switch without stranding in-flight effects",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardBackendFlipReadiness"
+                }
+              }
+            }
+          },
+          "401": {},
+          "403": {}
+        }
+      }
+    },
+    "/operator/reward_settlements/solvency_readiness": {
+      "get": {
+        "operationId": "operator_reward_settlement_solvency_readiness",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Read the freshness-gated rewards solvency admission decision",
+        "security": [
+          {
+            "operatorCredentialAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardSolvencyReadiness"
+                }
+              }
+            }
+          },
+          "401": {},
+          "403": {}
+        }
       }
     },
     "/reward_campaigns/{campaign_id}/funding_quotes": {
@@ -7671,6 +8597,90 @@ const spec = {
         "operationId": "get_public_communities_by_community_id_posts"
       }
     },
+    "/public-communities/{community_id}/feed/videos": {
+      "get": {
+        "tags": [
+          "Communities",
+          "Feed"
+        ],
+        "x-implemented": true,
+        "security": [],
+        "summary": "List a public community video feed",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "best",
+                "top",
+                "new"
+              ],
+              "default": "best"
+            }
+          },
+          {
+            "name": "time_range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "hour",
+                "day",
+                "week",
+                "month",
+                "year",
+                "all"
+              ],
+              "default": "all"
+            }
+          },
+          {
+            "name": "locale",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeFeedResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "operationId": "get_public_communities_by_community_id_feed_videos"
+      }
+    },
     "/public-posts/{post_id}": {
       "get": {
         "tags": [
@@ -8024,7 +9034,7 @@ const spec = {
           }
         }
       },
-      "BadRequest": {
+      "Conflict": {
         "content": {
           "application/json": {
             "schema": {
@@ -8042,6 +9052,15 @@ const spec = {
           }
         }
       },
+      "ServiceUnavailable": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
       "NotFound": {
         "content": {
           "application/json": {
@@ -8051,7 +9070,7 @@ const spec = {
           }
         }
       },
-      "Conflict": {
+      "BadRequest": {
         "content": {
           "application/json": {
             "schema": {
@@ -8177,6 +9196,386 @@ const spec = {
             "items": {
               "$ref": "#/components/schemas/WalletAttachmentSummary"
             }
+          }
+        }
+      },
+      "DanceSessionCreateRequest": {
+        "type": "object",
+        "required": [
+          "post",
+          "consent"
+        ],
+        "properties": {
+          "post": {
+            "type": "string"
+          },
+          "consent": {
+            "$ref": "#/components/schemas/DanceConsentAcceptance"
+          }
+        }
+      },
+      "DanceSessionMutationResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DanceSession"
+          },
+          {
+            "type": "object",
+            "required": [
+              "idempotent"
+            ],
+            "properties": {
+              "idempotent": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "DanceSession": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "attempt",
+          "post",
+          "choreography",
+          "choreography_revision",
+          "status",
+          "max_bytes",
+          "expires_at",
+          "created",
+          "consent_policy_version",
+          "consented_at",
+          "start_cue"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_session"
+            ]
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "choreography": {
+            "type": "string"
+          },
+          "choreography_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DanceSessionStatus"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "maximum": 19000000
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "consent_policy_version": {
+            "type": "string",
+            "nullable": true
+          },
+          "consented_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "start_cue": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DanceStartCue"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "DanceSessionUploadIntentRequest": {
+        "type": "object",
+        "required": [
+          "mime_type",
+          "content_sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "mime_type": {
+            "type": "string",
+            "enum": [
+              "video/mp4"
+            ]
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 19000000
+          }
+        }
+      },
+      "DanceSessionUploadIntent": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "method",
+          "url",
+          "headers",
+          "expires_at",
+          "idempotent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_session_upload_intent"
+            ]
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "PUT"
+            ]
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "idempotent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DanceSessionSubmitRequest": {
+        "type": "object",
+        "required": [
+          "capture_mode",
+          "content_sha256",
+          "size_bytes"
+        ],
+        "properties": {
+          "capture_mode": {
+            "type": "string",
+            "enum": [
+              "in_app_camera"
+            ]
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 19000000
+          }
+        }
+      },
+      "DanceSessionSubmission": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "attempt",
+          "status",
+          "idempotent"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_session_submission"
+            ]
+          },
+          "attempt": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DanceSessionStatus"
+          },
+          "idempotent": {
+            "type": "boolean"
+          }
+        }
+      },
+      "DanceAttempt": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "session",
+          "post",
+          "choreography_revision",
+          "status",
+          "score_bps",
+          "rank_eligible",
+          "reason",
+          "completed_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_attempt"
+            ]
+          },
+          "session": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "choreography_revision": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/DanceAttemptStatus"
+          },
+          "score_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "rank_eligible": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DanceAttemptReason"
+          },
+          "coverage_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "pose_detection_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "duration_ratio_bps": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 20000
+          },
+          "start_cue_outcome": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "passed",
+              "failed"
+            ]
+          },
+          "scored_window_start_ms": {
+            "type": "integer",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 5000
+          },
+          "completed_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
+      "DanceChoreography": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "community",
+          "post",
+          "song_post",
+          "song_artifact_bundle",
+          "creator",
+          "official",
+          "revision",
+          "mirror_policy",
+          "reference"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "dance_choreography"
+            ]
+          },
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_post": {
+            "type": "string"
+          },
+          "song_artifact_bundle": {
+            "type": "string"
+          },
+          "creator": {
+            "type": "string"
+          },
+          "official": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "mirror_policy": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "allowed"
+            ]
+          },
+          "reference": {
+            "$ref": "#/components/schemas/DanceChoreographyReference"
           }
         }
       },
@@ -9344,6 +10743,7 @@ const spec = {
             "type": "string",
             "enum": [
               "dns_txt",
+              "hns_import",
               "fabric_txt_publish"
             ],
             "nullable": true
@@ -9446,8 +10846,13 @@ const spec = {
       },
       "CompleteNamespaceVerificationSessionRequest": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "restart_challenge": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "acknowledged_resource_replacement": {
             "type": "boolean",
             "nullable": true
           }
@@ -9856,6 +11261,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very"
             ],
             "nullable": true
@@ -9884,6 +11290,64 @@ const spec = {
             "type": "string"
           }
         }
+      },
+      "CreateTelegramAccountLinkIntentRequest": {
+        "type": "object",
+        "required": [
+          "community_id"
+        ],
+        "properties": {
+          "community_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramAccountLinkIntentResponse": {
+        "type": "object",
+        "required": [
+          "expires_at",
+          "link_url"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "link_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConsumeTelegramAccountLinkIntentRequest": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramAccountLinkResult": {
+        "type": "object",
+        "required": [
+          "linked"
+        ],
+        "properties": {
+          "linked": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "Profile": {
         "type": "object",
@@ -9951,6 +11415,13 @@ const spec = {
           "preferred_locale": {
             "type": "string",
             "nullable": true
+          },
+          "explicit_content_preference": {
+            "type": "string",
+            "enum": [
+              "show",
+              "hide"
+            ]
           },
           "display_verified_nationality_badge": {
             "type": "boolean",
@@ -10530,6 +12001,19 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
+          },
           "namespace_verification": {
             "type": "string",
             "nullable": true
@@ -10606,10 +12090,21 @@ const spec = {
             "nullable": true
           },
           "human_verification_lane": {
-            "$ref": "#/components/schemas/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane",
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
+            ],
+            "nullable": true
           },
           "human_verification_lane_origin": {
-            "$ref": "#/components/schemas/CommunityAgentResolutionOrigin"
+            "$ref": "#/components/schemas/CommunityAgentResolutionOrigin",
+            "deprecated": true
           },
           "allowed_disclosed_qualifiers": {
             "type": "array",
@@ -10892,6 +12387,25 @@ const spec = {
           }
         }
       },
+      "CommunityNamespaceAttachRequest": {
+        "type": "object",
+        "required": [
+          "namespace_verification"
+        ],
+        "properties": {
+          "namespace_verification": {
+            "type": "string"
+          },
+          "namespace_role": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "mirror"
+            ],
+            "default": "primary"
+          }
+        }
+      },
       "CommunityMoneyPolicy": {
         "type": "object",
         "required": [
@@ -11129,6 +12643,67 @@ const spec = {
           "source_template_version": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "CommunityPresentationPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBrandingPatch"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CommunityPresentation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "object",
+          "community",
+          "branding",
+          "default_surface",
+          "video_feed_enabled"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "readOnly": true
+          },
+          "object": {
+            "type": "string",
+            "readOnly": true,
+            "enum": [
+              "community_presentation"
+            ]
+          },
+          "community": {
+            "type": "string",
+            "readOnly": true
+          },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           }
         }
       },
@@ -12244,6 +13819,19 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
+          },
           "store_url": {
             "type": "string",
             "nullable": true
@@ -12328,7 +13916,17 @@ const spec = {
             }
           },
           "human_verification_lane": {
-            "$ref": "#/components/schemas/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane",
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
+            ],
+            "nullable": true
           },
           "member_count": {
             "type": "integer",
@@ -12442,7 +14040,17 @@ const spec = {
             ]
           },
           "human_verification_lane": {
-            "$ref": "#/components/schemas/HumanVerificationLane"
+            "$ref": "#/components/schemas/HumanVerificationLane",
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
+            ],
+            "nullable": true
           },
           "joinable_now": {
             "type": "boolean"
@@ -13548,6 +15156,39 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "lyrics_language": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "lyrics_language_confidence": {
+            "type": "number",
+            "format": "double",
+            "nullable": true,
+            "readOnly": true,
+            "minimum": 0,
+            "maximum": 1
+          },
+          "lyrics_language_reliable": {
+            "type": "boolean",
+            "readOnly": true
+          },
+          "lyrics_language_detector": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "lyrics_language_detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true
+          },
+          "lyrics_language_source_hash": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
           "translation_policy": {
             "type": "string",
             "enum": [
@@ -14269,6 +15910,9 @@ const spec = {
           "session": {
             "$ref": "#/components/schemas/SongStudySessionSummary"
           },
+          "lesson": {
+            "$ref": "#/components/schemas/SongStudyLessonState"
+          },
           "study_pack_version": {
             "type": "integer"
           },
@@ -14289,12 +15933,16 @@ const spec = {
         "type": "object",
         "required": [
           "idempotency_key",
+          "session_id",
           "exercise_id",
           "type",
           "attempt_number"
         ],
         "properties": {
           "idempotency_key": {
+            "type": "string"
+          },
+          "session_id": {
             "type": "string"
           },
           "exercise_id": {
@@ -14310,13 +15958,25 @@ const spec = {
           "attempt_number": {
             "type": "integer"
           },
+          "session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
           "selected_option_id": {
             "type": "string"
           },
-          "target_language": {
+          "transcript": {
             "type": "string"
           },
-          "transcript": {
+          "transcription_language_code": {
+            "type": "string"
+          },
+          "transcription_language_probability": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "timezone": {
             "type": "string"
           }
         },
@@ -14345,7 +16005,8 @@ const spec = {
             "enum": [
               "correct",
               "incorrect",
-              "revealed"
+              "revealed",
+              "ungradable"
             ]
           },
           "attempts_remaining": {
@@ -14387,6 +16048,12 @@ const spec = {
               "easy"
             ]
           },
+          "session": {
+            "$ref": "#/components/schemas/SongStudySessionSummary"
+          },
+          "lesson": {
+            "$ref": "#/components/schemas/SongStudyLessonState"
+          },
           "study_progress": {
             "type": "object",
             "properties": {
@@ -14417,6 +16084,98 @@ const spec = {
               "current_streak"
             ],
             "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyRevisionConflict": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "retryable",
+          "details"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "study_session_revision_conflict"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "details": {
+            "type": "object",
+            "required": [
+              "lesson"
+            ],
+            "properties": {
+              "lesson": {
+                "$ref": "#/components/schemas/SongStudyLessonState"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramStudyVoiceIntentRequest": {
+        "type": "object",
+        "required": [
+          "exercise_id"
+        ],
+        "properties": {
+          "exercise_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "target_language": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "TelegramStudyVoiceIntent": {
+        "type": "object",
+        "required": [
+          "created",
+          "expires_at",
+          "id",
+          "object",
+          "status"
+        ],
+        "properties": {
+          "created": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string",
+            "enum": [
+              "telegram_study_voice_intent"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending"
+            ]
           }
         },
         "additionalProperties": false
@@ -14586,6 +16345,18 @@ const spec = {
             "$ref": "#/components/schemas/ModerationActionType"
           },
           "note": {
+            "type": "string",
+            "nullable": true
+          },
+          "content_safety_state": {
+            "type": "string",
+            "enum": [
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "evidence_ref": {
             "type": "string",
             "nullable": true
           }
@@ -15317,6 +17088,184 @@ const spec = {
           }
         }
       },
+      "SubmitBookingPaymentRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tx_ref",
+          "wallet_attachment_id"
+        ],
+        "properties": {
+          "tx_ref": {
+            "type": "string"
+          },
+          "wallet_attachment_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PendingBookingPaymentIntent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "hold_id",
+          "payment_intent_id",
+          "intent_status",
+          "resume_state",
+          "claimed_tx_ref",
+          "wallet_attachment_id",
+          "payment",
+          "quote_expires_at",
+          "hold_expires_at",
+          "host_user_id",
+          "slot_start_utc",
+          "slot_end_utc",
+          "booking_id"
+        ],
+        "properties": {
+          "hold_id": {
+            "type": "string"
+          },
+          "payment_intent_id": {
+            "type": "string"
+          },
+          "intent_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "verifying",
+              "verified",
+              "verification_failed",
+              "custody_refund_pending",
+              "consumed"
+            ]
+          },
+          "resume_state": {
+            "$ref": "#/BookingPaymentResumeState"
+          },
+          "claimed_tx_ref": {
+            "type": "string",
+            "nullable": true
+          },
+          "wallet_attachment_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "payment": {
+            "$ref": "#/BookingPaymentInstructions"
+          },
+          "quote_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "hold_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "host_user_id": {
+            "type": "string"
+          },
+          "slot_start_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "slot_end_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "booking_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "custody_refund": {
+            "allOf": [
+              {
+                "$ref": "#/BookingCustodyRefund"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
+      "UnresolvedBookingPaymentIntent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "payment_intent_id",
+          "hold_id",
+          "host_user_id",
+          "booker_user_id",
+          "intent_status",
+          "hold_status",
+          "claimed_tx_ref",
+          "hold_expires_at",
+          "updated_at",
+          "unresolved_age_seconds"
+        ],
+        "properties": {
+          "payment_intent_id": {
+            "type": "string"
+          },
+          "hold_id": {
+            "type": "string"
+          },
+          "host_user_id": {
+            "type": "string"
+          },
+          "booker_user_id": {
+            "type": "string"
+          },
+          "intent_status": {
+            "type": "string",
+            "enum": [
+              "verifying",
+              "verified",
+              "verification_failed",
+              "custody_refund_pending",
+              "custody_operator_incident"
+            ]
+          },
+          "hold_status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "consumed",
+              "expired"
+            ]
+          },
+          "claimed_tx_ref": {
+            "type": "string"
+          },
+          "hold_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "unresolved_age_seconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "custody_refund": {
+            "allOf": [
+              {
+                "$ref": "#/BookingCustodyRefund"
+              }
+            ],
+            "nullable": true
+          },
+          "custody_incident": {
+            "allOf": [
+              {
+                "$ref": "#/BookingCustodyIncident"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
       "BookingCancellationPreview": {
         "type": "object",
         "additionalProperties": false,
@@ -15429,6 +17378,9 @@ const spec = {
       "CancelBookingRequest": {
         "type": "object",
         "additionalProperties": false,
+        "required": [
+          "expected_refund_cents"
+        ],
         "properties": {
           "expected_refund_cents": {
             "type": "integer",
@@ -16069,6 +18021,7 @@ const spec = {
             "enum": [
               "ready",
               "pending",
+              "failed",
               "same_language",
               "policy_blocked"
             ]
@@ -16327,6 +18280,8 @@ const spec = {
           "balance_cents",
           "today_earned_cents",
           "recent_events",
+          "recent_qualifications",
+          "pending_verification",
           "cashout",
           "latest_in_flight_cashout"
         ],
@@ -16347,12 +18302,72 @@ const spec = {
               "$ref": "#/components/schemas/RewardEventSummary"
             }
           },
+          "recent_qualifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardQualificationSummary"
+            }
+          },
+          "pending_verification": {
+            "$ref": "#/components/schemas/RewardPendingVerificationSummary"
+          },
           "cashout": {
             "$ref": "#/components/schemas/RewardsCashoutSummary"
           },
           "latest_in_flight_cashout": {
             "nullable": true,
             "$ref": "#/components/schemas/RewardPayoutSummary"
+          }
+        }
+      },
+      "RewardIdentityBindingResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "capability",
+          "provider",
+          "active_binding",
+          "selectable_documents"
+        ],
+        "properties": {
+          "capability": {
+            "$ref": "#/components/schemas/RewardIdentityBindingCapability"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ],
+            "nullable": true
+          },
+          "active_binding": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RewardIdentityBinding"
+              }
+            ],
+            "nullable": true
+          },
+          "selectable_documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RewardIdentityBindingDocument"
+            }
+          }
+        }
+      },
+      "RewardIdentityBindingSelectRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "identity_nullifier_id"
+        ],
+        "properties": {
+          "identity_nullifier_id": {
+            "type": "string",
+            "minLength": 1
           }
         }
       },
@@ -16400,6 +18415,7 @@ const spec = {
         "additionalProperties": false,
         "required": [
           "enabled",
+          "post_eligible",
           "min_budget_cents",
           "max_budget_cents",
           "max_reward_cents",
@@ -16407,11 +18423,15 @@ const spec = {
           "max_duration_seconds",
           "default_duration_seconds",
           "eligible_activities",
+          "nationality_payout_tiers",
           "chain_id",
           "token_address"
         ],
         "properties": {
           "enabled": {
+            "type": "boolean"
+          },
+          "post_eligible": {
             "type": "boolean"
           },
           "min_budget_cents": {
@@ -16444,6 +18464,15 @@ const spec = {
               "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
             }
           },
+          "nationality_payout_tiers": {
+            "type": "string",
+            "enum": [
+              "unavailable",
+              "draft_only",
+              "binding_preview",
+              "enabled"
+            ]
+          },
           "chain_id": {
             "type": "integer",
             "minimum": 1
@@ -16458,6 +18487,7 @@ const spec = {
         "required": [
           "community",
           "post",
+          "reward_identity_provider",
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
@@ -16476,6 +18506,14 @@ const spec = {
           "post": {
             "type": "string"
           },
+          "reward_identity_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ]
+          },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
           },
@@ -16487,6 +18525,17 @@ const spec = {
           "daily_reward_cents": {
             "type": "integer",
             "minimum": 1
+          },
+          "default_amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payout_tiers": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignPayoutTier"
+            }
           },
           "milestone_7_cents": {
             "type": "integer",
@@ -16523,6 +18572,7 @@ const spec = {
         "type": "object",
         "additionalProperties": false,
         "required": [
+          "campaign",
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
@@ -16530,6 +18580,9 @@ const spec = {
           "ends_at"
         ],
         "properties": {
+          "campaign": {
+            "type": "string"
+          },
           "eligible_activity": {
             "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
           },
@@ -16604,10 +18657,15 @@ const spec = {
           "post",
           "song_artifact_bundle",
           "song_owner",
+          "reward_identity_provider",
           "status",
+          "funding_tx_hash",
           "eligible_activity",
           "min_score_bps",
           "daily_reward_cents",
+          "default_amount_cents",
+          "max_claim_cents",
+          "payout_tiers",
           "milestone_7_cents",
           "milestone_30_cents",
           "reward_period_cap_cents",
@@ -16647,6 +18705,14 @@ const spec = {
           "song_owner": {
             "type": "string"
           },
+          "reward_identity_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/RewardCampaignStatus"
           },
@@ -16661,6 +18727,21 @@ const spec = {
           "daily_reward_cents": {
             "type": "integer",
             "minimum": 1
+          },
+          "default_amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "max_claim_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payout_tiers": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignPayoutTier"
+            }
           },
           "milestone_7_cents": {
             "type": "integer",
@@ -16730,6 +18811,10 @@ const spec = {
             "format": "int64",
             "nullable": true
           },
+          "funding_tx_hash": {
+            "type": "string",
+            "nullable": true
+          },
           "created": {
             "type": "integer",
             "format": "int64"
@@ -16771,6 +18856,113 @@ const spec = {
           }
         }
       },
+      "RewardPoolRefundPolicyReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "largest_outstanding_lot_remainder_cents",
+          "largest_outstanding_lot_remainder_atomic",
+          "proposed_max_refund_atomic",
+          "proposal_safe"
+        ],
+        "properties": {
+          "largest_outstanding_lot_remainder_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "largest_outstanding_lot_remainder_atomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$"
+          },
+          "proposed_max_refund_atomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "nullable": true
+          },
+          "proposal_safe": {
+            "type": "boolean",
+            "nullable": true
+          }
+        }
+      },
+      "RewardBackendFlipReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ready",
+          "non_terminal_cashouts",
+          "non_terminal_refunds",
+          "reconciliation_required"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "non_terminal_cashouts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "non_terminal_refunds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reconciliation_required": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RewardSolvencyReadiness": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "admitting",
+          "reason",
+          "observedAt",
+          "ageSeconds",
+          "balanceAtomic",
+          "liabilityAtomic"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "admitting": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "healthy",
+              "unknown_observation",
+              "stale_observation",
+              "insufficient_float"
+            ]
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "ageSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "balanceAtomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "nullable": true
+          },
+          "liabilityAtomic": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "nullable": true
+          }
+        }
+      },
       "RewardCampaignFundingQuoteRequest": {
         "type": "object",
         "required": [
@@ -16784,6 +18976,14 @@ const spec = {
           },
           "idempotency_key": {
             "type": "string"
+          },
+          "reward_identity_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ]
           }
         }
       },
@@ -17161,6 +19361,149 @@ const spec = {
           },
           "is_primary": {
             "type": "boolean"
+          }
+        }
+      },
+      "DanceConsentAcceptance": {
+        "type": "object",
+        "required": [
+          "policy_version",
+          "accepted"
+        ],
+        "properties": {
+          "policy_version": {
+            "type": "string",
+            "enum": [
+              "dance_recording_v1"
+            ]
+          },
+          "accepted": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          }
+        }
+      },
+      "DanceSessionStatus": {
+        "type": "string",
+        "enum": [
+          "initialized",
+          "uploading",
+          "submitted",
+          "grading",
+          "finalized",
+          "rejected",
+          "failed",
+          "expired",
+          "cancelled"
+        ]
+      },
+      "DanceStartCue": {
+        "type": "object",
+        "required": [
+          "policy_version",
+          "kind",
+          "minimum_hold_ms",
+          "observation_window_ms"
+        ],
+        "properties": {
+          "policy_version": {
+            "type": "string",
+            "enum": [
+              "dance_start_cue_gross_body_v1"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "hands_on_head",
+              "arms_t",
+              "hands_on_hips"
+            ]
+          },
+          "minimum_hold_ms": {
+            "type": "integer",
+            "minimum": 250,
+            "maximum": 2000
+          },
+          "observation_window_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 5000
+          }
+        }
+      },
+      "DanceAttemptStatus": {
+        "type": "string",
+        "enum": [
+          "initialized",
+          "uploading",
+          "submitted",
+          "grading",
+          "passed",
+          "rejected",
+          "failed",
+          "expired",
+          "cancelled"
+        ]
+      },
+      "DanceAttemptReason": {
+        "type": "string",
+        "nullable": true,
+        "enum": [
+          "video_invalid",
+          "upload_invalid",
+          "duration_out_of_range",
+          "insufficient_coverage",
+          "insufficient_pose_presence",
+          "multiple_people",
+          "reference_replay",
+          "duplicate_attempt",
+          "scoring_unavailable",
+          "below_platform_floor",
+          "version_mismatch",
+          "insufficient_motion",
+          "insufficient_alignment",
+          "start_cue_mismatch",
+          "session_expired",
+          "cancelled"
+        ]
+      },
+      "DanceChoreographyReference": {
+        "type": "object",
+        "required": [
+          "url",
+          "mime_type",
+          "duration_ms",
+          "width",
+          "height"
+        ],
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "mime_type": {
+            "type": "string",
+            "enum": [
+              "video/mp4",
+              "video/webm",
+              "video/quicktime"
+            ]
+          },
+          "duration_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 30000
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 1
           }
         }
       },
@@ -17851,11 +20194,58 @@ const spec = {
           }
         ]
       },
+      "CommunityBranding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "accent_color",
+          "theme",
+          "header_style",
+          "tagline"
+        ],
+        "properties": {
+          "accent_color": {
+            "type": "string",
+            "pattern": "^#[0-9A-F]{6}$",
+            "nullable": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "header_style": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "compact",
+              "immersive"
+            ]
+          },
+          "tagline": {
+            "type": "string",
+            "maxLength": 120,
+            "nullable": true
+          }
+        }
+      },
       "HumanVerificationLane": {
         "type": "string",
         "enum": [
           "very",
           "self"
+        ],
+        "deprecated": true
+      },
+      "CommunityHumanVerificationProvider": {
+        "type": "string",
+        "enum": [
+          "self",
+          "zkpassport",
+          "very"
         ]
       },
       "CommunityAgentResolutionOrigin": {
@@ -18903,6 +21293,38 @@ const spec = {
           }
         }
       },
+      "CommunityBrandingPatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "accent_color": {
+            "type": "string",
+            "pattern": "^#[0-9A-Fa-f]{6}$",
+            "nullable": true
+          },
+          "theme": {
+            "type": "string",
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "header_style": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "compact",
+              "immersive"
+            ]
+          },
+          "tagline": {
+            "type": "string",
+            "maxLength": 120,
+            "nullable": true
+          }
+        }
+      },
       "CommunityPurchaseSettlementMode": {
         "type": "string",
         "enum": [
@@ -19049,6 +21471,11 @@ const spec = {
           "gate_type"
         ],
         "properties": {
+          "gate_id": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
           "gate_type": {
             "type": "string",
             "enum": [
@@ -19815,6 +22242,24 @@ const spec = {
           "thumbnail_ref": {
             "type": "string",
             "nullable": true
+          },
+          "content_safety_state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "safe",
+              "sensitive",
+              "adult"
+            ],
+            "nullable": true
+          },
+          "age_gate_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "18_plus"
+            ],
+            "nullable": true
           }
         }
       },
@@ -19830,6 +22275,9 @@ const spec = {
           },
           "post": {
             "$ref": "#/components/schemas/LocalizedPostResponse"
+          },
+          "booking": {
+            "$ref": "#/components/schemas/FeedBooking"
           }
         }
       },
@@ -19863,6 +22311,19 @@ const spec = {
           "avatar_ref": {
             "type": "string",
             "nullable": true
+          },
+          "branding": {
+            "$ref": "#/components/schemas/CommunityBranding"
+          },
+          "default_surface": {
+            "type": "string",
+            "enum": [
+              "threads",
+              "videos"
+            ]
+          },
+          "video_feed_enabled": {
+            "type": "boolean"
           },
           "member_count": {
             "type": "integer",
@@ -19925,6 +22386,7 @@ const spec = {
             "enum": [
               "ready",
               "pending",
+              "failed",
               "same_language",
               "policy_blocked"
             ]
@@ -20106,7 +22568,10 @@ const spec = {
               "line_index",
               "prompt_text",
               "reference_text",
-              "max_attempts"
+              "max_attempts",
+              "presentation_count",
+              "mastered",
+              "first_outcome"
             ],
             "properties": {
               "id": {
@@ -20136,6 +22601,21 @@ const spec = {
               },
               "max_attempts": {
                 "type": "integer"
+              },
+              "presentation_count": {
+                "type": "integer"
+              },
+              "mastered": {
+                "type": "boolean"
+              },
+              "first_outcome": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "correct",
+                  "incorrect",
+                  "revealed"
+                ]
               }
             },
             "additionalProperties": false
@@ -20151,7 +22631,10 @@ const spec = {
               "prompt_text",
               "question",
               "options",
-              "max_attempts"
+              "max_attempts",
+              "presentation_count",
+              "mastered",
+              "first_outcome"
             ],
             "properties": {
               "id": {
@@ -20196,6 +22679,21 @@ const spec = {
               },
               "max_attempts": {
                 "type": "integer"
+              },
+              "presentation_count": {
+                "type": "integer"
+              },
+              "mastered": {
+                "type": "boolean"
+              },
+              "first_outcome": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "correct",
+                  "incorrect",
+                  "revealed"
+                ]
               }
             },
             "additionalProperties": false
@@ -20205,11 +22703,36 @@ const spec = {
       "SongStudySessionSummary": {
         "type": "object",
         "required": [
+          "id",
+          "status",
           "due_count",
           "served_count",
-          "total_units"
+          "total_units",
+          "required_correct_count",
+          "max_presentations",
+          "presentation_count",
+          "completed_exercise_count",
+          "resolved_exercise_count",
+          "completion_reason",
+          "first_pass_correct_count",
+          "mastered_exercise_count",
+          "qualified",
+          "session_revision"
         ],
         "properties": {
+          "id": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "completed",
+              "caught_up",
+              "expired"
+            ]
+          },
           "due_count": {
             "type": "integer"
           },
@@ -20219,9 +22742,94 @@ const spec = {
           "total_units": {
             "type": "integer"
           },
+          "required_correct_count": {
+            "type": "integer"
+          },
+          "max_presentations": {
+            "type": "integer"
+          },
+          "presentation_count": {
+            "type": "integer"
+          },
+          "completed_exercise_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resolved_exercise_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "first_pass_correct_count": {
+            "type": "integer"
+          },
+          "mastered_exercise_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completion_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "all_resolved",
+              "presentation_budget"
+            ]
+          },
+          "qualified": {
+            "type": "boolean"
+          },
           "next_due_at": {
             "type": "integer",
             "format": "int64"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyLessonState": {
+        "type": "object",
+        "required": [
+          "session_revision",
+          "resolved_count",
+          "total_count",
+          "completion_reason",
+          "serving_index",
+          "next"
+        ],
+        "properties": {
+          "session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "resolved_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "completion_reason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "all_resolved",
+              "presentation_budget"
+            ]
+          },
+          "serving_index": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "next": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SongStudyLessonNext"
+              }
+            ]
           }
         },
         "additionalProperties": false
@@ -20254,6 +22862,7 @@ const spec = {
           "total_qualified_days",
           "streak_started_date",
           "last_qualified_date",
+          "active_until_at",
           "is_viewer"
         ],
         "properties": {
@@ -20276,6 +22885,9 @@ const spec = {
             "type": "string"
           },
           "last_qualified_date": {
+            "type": "string"
+          },
+          "active_until_at": {
             "type": "string"
           },
           "is_viewer": {
@@ -20320,6 +22932,14 @@ const spec = {
           },
           "karaoke_passed_today": {
             "type": "boolean"
+          },
+          "rank": {
+            "type": "integer",
+            "nullable": true
+          },
+          "active_until_at": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
@@ -20524,6 +23144,45 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "previous_content_safety_state": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "pending",
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "next_content_safety_state": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "safe",
+              "sensitive",
+              "adult"
+            ]
+          },
+          "previous_age_gate_policy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "none",
+              "18_plus"
+            ]
+          },
+          "next_age_gate_policy": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "none",
+              "18_plus"
+            ]
+          },
+          "evidence_ref": {
+            "type": "string",
+            "nullable": true
+          },
           "created": {
             "type": "integer",
             "format": "int64"
@@ -20537,7 +23196,8 @@ const spec = {
           "hide",
           "remove",
           "restore",
-          "age_gate"
+          "age_gate",
+          "set_content_rating"
         ]
       },
       "RightsReviewCaseListItem": {
@@ -20549,10 +23209,21 @@ const spec = {
             "type": "object",
             "additionalProperties": false,
             "required": [
+              "story_royalty_registration_status",
               "analysis",
               "post"
             ],
             "properties": {
+              "story_royalty_registration_status": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "pending",
+                  "registered",
+                  "failed"
+                ],
+                "nullable": true
+              },
               "analysis": {
                 "$ref": "#/components/schemas/MediaAnalysisResult",
                 "nullable": true
@@ -20781,6 +23452,12 @@ const spec = {
         "properties": {
           "song_artifact_upload": {
             "type": "string"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "nullable": true
           }
         }
       },
@@ -21402,12 +24079,110 @@ const spec = {
           }
         }
       },
+      "RewardQualificationSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "reward_qualification_event_id",
+          "reward_campaign_id",
+          "community_id",
+          "post_id",
+          "reward_period_key",
+          "qualification_basis",
+          "amount_cents",
+          "status",
+          "outcome_reason",
+          "expires_at",
+          "credited_reward_event_id",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "reward_qualification_event_id": {
+            "type": "string"
+          },
+          "reward_campaign_id": {
+            "type": "string"
+          },
+          "community_id": {
+            "type": "string"
+          },
+          "post_id": {
+            "type": "string"
+          },
+          "reward_period_key": {
+            "type": "string"
+          },
+          "qualification_basis": {
+            "type": "string",
+            "enum": [
+              "study",
+              "karaoke",
+              "both"
+            ]
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "$ref": "#/components/schemas/RewardQualificationStatus"
+          },
+          "outcome_reason": {
+            "nullable": true,
+            "$ref": "#/components/schemas/RewardQualificationOutcomeReason"
+          },
+          "expires_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "credited_reward_event_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardPendingVerificationSummary": {
+        "type": "object",
+        "required": [
+          "count",
+          "conditional_cents",
+          "earliest_expires_at"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "conditional_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "earliest_expires_at": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          }
+        }
+      },
       "RewardsCashoutSummary": {
         "type": "object",
         "required": [
           "eligible",
           "min_cents",
-          "verification_state"
+          "verification_state",
+          "verification_provider"
         ],
         "properties": {
           "eligible": {
@@ -21418,6 +24193,15 @@ const spec = {
           },
           "verification_state": {
             "$ref": "#/components/schemas/RewardVerificationState"
+          },
+          "verification_provider": {
+            "type": "string",
+            "enum": [
+              "self",
+              "zkpassport",
+              "very"
+            ],
+            "nullable": true
           }
         }
       },
@@ -21429,6 +24213,7 @@ const spec = {
           "amount_cents",
           "recipient_address",
           "status",
+          "settlement_stage",
           "settlement_ref",
           "failure_reason"
         ],
@@ -21449,6 +24234,9 @@ const spec = {
           "status": {
             "$ref": "#/components/schemas/RewardPayoutStatus"
           },
+          "settlement_stage": {
+            "$ref": "#/components/schemas/RewardSettlementStage"
+          },
           "settlement_ref": {
             "type": "string",
             "nullable": true
@@ -21456,6 +24244,85 @@ const spec = {
           "failure_reason": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "RewardIdentityBindingCapability": {
+        "type": "string",
+        "enum": [
+          "unavailable",
+          "selection_required",
+          "selected"
+        ]
+      },
+      "RewardIdentityBinding": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "identity_nullifier_id",
+          "provider",
+          "nationality",
+          "status",
+          "selected_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "identity_nullifier_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self"
+            ]
+          },
+          "nationality": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active"
+            ]
+          },
+          "selected_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardIdentityBindingDocument": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "identity_nullifier_id",
+          "provider",
+          "nationality",
+          "verified_at"
+        ],
+        "properties": {
+          "identity_nullifier_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "self"
+            ]
+          },
+          "nationality": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 3
+          },
+          "verified_at": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -21489,6 +24356,28 @@ const spec = {
           "either"
         ]
       },
+      "RewardCampaignPayoutTier": {
+        "type": "object",
+        "required": [
+          "nationalities",
+          "amount_cents"
+        ],
+        "properties": {
+          "nationalities": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Z]{3}$"
+            }
+          },
+          "amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
       "RewardCampaignStatus": {
         "type": "string",
         "enum": [
@@ -21511,6 +24400,8 @@ const spec = {
           "confirming",
           "confirmed",
           "failed",
+          "refund_pending",
+          "operator_incident",
           "refunded"
         ]
       },
@@ -22029,6 +24920,7 @@ const spec = {
             "type": "string",
             "enum": [
               "self",
+              "zkpassport",
               "very"
             ],
             "nullable": true
@@ -22351,6 +25243,15 @@ const spec = {
             "enum": [
               "very",
               "self"
+            ],
+            "nullable": true,
+            "deprecated": true
+          },
+          "preferred_verification_provider": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/CommunityHumanVerificationProvider"
+              }
             ],
             "nullable": true
           },
@@ -23165,6 +26066,7 @@ const spec = {
         "x-valid-providers-by-proof-type": {
           "unique_human": [
             "self",
+            "zkpassport",
             "very"
           ],
           "age_over_18": [
@@ -23286,6 +26188,7 @@ const spec = {
             "enum": [
               "ready",
               "pending",
+              "failed",
               "same_language",
               "policy_blocked"
             ]
@@ -23369,6 +26272,21 @@ const spec = {
           },
           "gate_type": {
             "type": "string"
+          },
+          "gate_id": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
+          "outcome": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "passed",
+              "action_required",
+              "terminal_mismatch",
+              "provider_unavailable"
+            ]
           },
           "provider": {
             "type": "string"
@@ -23841,6 +26759,40 @@ const spec = {
           "unavailable"
         ]
       },
+      "FeedBooking": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "host_user_id",
+          "base_price_cents",
+          "has_available_slot",
+          "starting_price_cents",
+          "currency"
+        ],
+        "properties": {
+          "host_user_id": {
+            "type": "string"
+          },
+          "base_price_cents": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "has_available_slot": {
+            "type": "boolean"
+          },
+          "starting_price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "USDC"
+            ]
+          }
+        }
+      },
       "KaraokeLeaderboardIdentity": {
         "type": "object",
         "required": [
@@ -23868,6 +26820,48 @@ const spec = {
           "avatar_ref": {
             "type": "string",
             "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "SongStudyLessonNext": {
+        "type": "object",
+        "required": [
+          "exercise_id",
+          "type",
+          "is_reappearance",
+          "presentation_number",
+          "attempts_this_appearance",
+          "retry_in_place",
+          "prompt"
+        ],
+        "properties": {
+          "exercise_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "say_it_back",
+              "translation_choice"
+            ]
+          },
+          "is_reappearance": {
+            "type": "boolean"
+          },
+          "presentation_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "attempts_this_appearance": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retry_in_place": {
+            "type": "boolean"
+          },
+          "prompt": {
+            "$ref": "#/components/schemas/SongStudyRenderSafeExercise"
           }
         },
         "additionalProperties": false
@@ -24162,6 +27156,27 @@ const spec = {
           "campaign_milestone_30"
         ]
       },
+      "RewardQualificationStatus": {
+        "type": "string",
+        "enum": [
+          "checking",
+          "pending_verification",
+          "credited",
+          "expired",
+          "unavailable"
+        ]
+      },
+      "RewardQualificationOutcomeReason": {
+        "type": "string",
+        "enum": [
+          "campaign_ended",
+          "budget_unavailable",
+          "identity_duplicate",
+          "owner_blocked",
+          "score",
+          "verification_window_expired"
+        ]
+      },
       "RewardVerificationState": {
         "type": "string",
         "enum": [
@@ -24174,6 +27189,17 @@ const spec = {
         "type": "string",
         "enum": [
           "submitted",
+          "confirmed",
+          "failed"
+        ]
+      },
+      "RewardSettlementStage": {
+        "type": "string",
+        "enum": [
+          "reserved",
+          "signed",
+          "broadcast",
+          "needs_review",
           "confirmed",
           "failed"
         ]
@@ -24932,6 +27958,10 @@ const spec = {
           "type"
         ],
         "properties": {
+          "gate_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
           "type": {
             "type": "string",
             "enum": [
@@ -25145,6 +28175,11 @@ const spec = {
         ],
         "additionalProperties": true,
         "properties": {
+          "gate_id": {
+            "type": "string",
+            "nullable": true,
+            "pattern": "^[A-Za-z0-9_-]{1,64}$"
+          },
           "kind": {
             "type": "string",
             "enum": [
@@ -25421,6 +28456,13 @@ const spec = {
             }
           }
         }
+      },
+      "SongStudyRenderSafeExercise": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/SongStudyExercise"
+          }
+        ]
       },
       "NotificationEventType": {
         "type": "string",

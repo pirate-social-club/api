@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import { resolveCommunityIdentifier } from "../lib/communities/community-identifier"
@@ -33,6 +33,10 @@ import {
 import type { CommunityRow } from "../lib/auth/auth-db-rows"
 import { buildCommunityActionMatrix } from "../lib/communities/community-capabilities"
 import { listPublicCommunityPosts } from "../lib/posts/post-service"
+import {
+  HOME_FEED_SERVER_TIMING,
+  listPublicCommunityVideoFeed,
+} from "../lib/feed/home-feed-service"
 import { fetchPublishedPublicSongArtifactContent } from "../lib/song-artifacts/song-artifact-upload-service"
 import {
   decodePublicAssetId,
@@ -66,6 +70,8 @@ import { serializeLocalizedPostResponse } from "../serializers/post"
 import type { Env } from "../env"
 import type { CommunityPreview, CommunityPurchaseQuoteRequest } from "../types"
 import { setPublicReadCacheHeaders } from "./cache-headers"
+import { getWaitUntil } from "./execution-context"
+import { communityPresentationFromRow } from "../lib/communities/community-presentation"
 
 const publicCommunities = new Hono<{ Bindings: Env }>()
 const PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS = 3000
@@ -110,7 +116,18 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
   }
 }
 
+export function communityPreviewUnavailableResponse(c: Context): Response {
+  c.header("Cache-Control", "no-store")
+  c.header("CDN-Cache-Control", "no-store")
+  return c.json({
+    error: "community_preview_unavailable",
+    message: "Community preview is temporarily unavailable",
+    retryable: true,
+  }, 503)
+}
+
 function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
+  const presentation = communityPresentationFromRow(community)
   return {
     community_id: community.community_id,
     namespace_verification_id: community.namespace_verification_id,
@@ -120,6 +137,9 @@ function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
     localized_text: null,
     avatar_ref: community.avatar_ref,
     banner_ref: community.banner_ref,
+    branding: presentation.branding,
+    default_surface: presentation.default_surface,
+    video_feed_enabled: presentation.video_feed_enabled,
     membership_mode: "gated",
     // NOTE: karaoke_enabled is not carried on the control-plane CommunityRow — it
     // lives only in the per-community DB. This fallback is used ONLY when the full
@@ -140,7 +160,8 @@ function fallbackCommunityPreview(community: CommunityRow): CommunityPreview {
     accepted_agent_ownership_providers: [],
     allowed_disclosed_qualifiers: null,
     allow_qualifiers_on_anonymous_posts: null,
-    human_verification_lane: "very",
+    human_verification_lane: null,
+    preferred_verification_provider: null,
     member_count: null,
     follower_count: community.follower_count,
     donation_policy_mode: "none",
@@ -571,6 +592,12 @@ publicCommunities.get("/:communityId", async (c) => {
     }), PUBLIC_COMMUNITY_PREVIEW_TIMEOUT_MS),
   ])
   const isDegradedPreview = policy === null || result === null
+  if (isDegradedPreview) {
+    return communityPreviewUnavailableResponse(c)
+  }
+  // A missing or unavailable owner authority summary is still a compatible
+  // public response, but it must not become a durable negative cache entry.
+  const hasIncompleteOwnerSummary = result.owner === null
   const effectivePolicy = policy ?? defaultCommunityMachineAccessPolicy({
     communityId,
     updatedAt: community.updated_at,
@@ -585,7 +612,7 @@ publicCommunities.get("/:communityId", async (c) => {
     links,
   }
   if (wantsMarkdown(c.req.raw, c.req.query("format"))) {
-    if (isDegradedPreview) {
+    if (hasIncompleteOwnerSummary) {
       c.header("Cache-Control", "no-store")
       c.header("CDN-Cache-Control", "no-store")
     } else {
@@ -600,7 +627,7 @@ publicCommunities.get("/:communityId", async (c) => {
       omittedSurfaces,
     }), links)
   }
-  if (isDegradedPreview) {
+  if (hasIncompleteOwnerSummary) {
     c.header("Cache-Control", "no-store")
     c.header("CDN-Cache-Control", "no-store")
   } else {
@@ -650,7 +677,7 @@ publicCommunities.get("/", async (c) => {
         communityId: community.community_id,
         locale: null,
         communityRepository: repository,
-      }).catch(() => null)
+      })
       return {
         community: publicCommunityId(community.community_id),
         display_name: community.display_name,
@@ -784,6 +811,49 @@ publicCommunities.get("/:communityId/posts", async (c) => {
   })
   c.header("Link", serializeLinkHeader(links))
   return c.json(responseBody, 200)
+})
+
+publicCommunities.get("/:communityId/feed/videos", async (c) => {
+  const communityRepository = getCommunityRepository(c.env)
+  const community = await resolveCommunityRow(communityRepository, c.req.param("communityId"))
+  if (!community.video_feed_enabled) {
+    throw structuredSurfaceDisabled("The video feed is not available for structured access", {
+      community: publicCommunityId(community.community_id),
+      surface: "video_feed",
+      reason: "community_opt_out",
+    })
+  }
+
+  const result = await listPublicCommunityVideoFeed({
+    communityId: community.community_id,
+    communityRepository,
+    cursor: c.req.query("cursor"),
+    env: c.env,
+    locale: c.req.query("locale"),
+    profileRepository: getProfileRepository(c.env),
+    sort: c.req.query("sort"),
+    timeRange: c.req.query("time_range"),
+    waitUntil: getWaitUntil(c),
+  })
+  const serverTiming = result[HOME_FEED_SERVER_TIMING]
+  if (serverTiming) {
+    c.header("Server-Timing", serverTiming)
+  }
+  if (result.items.length === 0) {
+    c.header("Cache-Control", "no-store")
+    c.header("CDN-Cache-Control", "no-store")
+  } else {
+    setPublicReadCacheHeaders(c, {
+      cacheTags: [
+        `community:${publicCommunityId(community.community_id)}`,
+        ...result.items.flatMap((item) => [
+          `community:${item.post.post.community}`,
+          `post:${item.post.post.id}`,
+        ]),
+      ],
+    })
+  }
+  return c.json(result, 200)
 })
 
 publicCommunities.get("/:communityId/song-artifact-uploads/:songArtifactUploadId/content", async (c) => {

@@ -49,8 +49,32 @@ import {
   requireJsonBody,
 } from "./communities-route-helpers"
 import { serializeCommunity } from "../serializers/community"
+import {
+  updateCommunityPresentation,
+  type CommunityPresentationPatch,
+} from "../lib/communities/community-presentation-service"
+import { schedulePublicCommunityCachePurge } from "../lib/public-read-cache-invalidation"
+import { getWaitUntil } from "./execution-context"
 
 export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedEnv>): void {
+  communities.post("/:communityId/presentation", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<CommunityPresentationPatch>(c, "Invalid community presentation payload")
+    const result = await updateCommunityPresentation({
+      actor,
+      body,
+      communityId,
+      communityRepository,
+      env: c.env,
+    })
+    await schedulePublicCommunityCachePurge({
+      communityId,
+      env: c.env,
+      waitUntil: getWaitUntil(c),
+    })
+    return c.json(result, 200)
+  })
+
   communities.get("/:communityId/machine-access-policy", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const result = await getCommunityMachineAccessPolicy({
@@ -71,6 +95,11 @@ export function registerCommunitySettingsRoutes(communities: Hono<AuthenticatedE
       communityId,
       userId: actor.userId,
       body,
+    })
+    await schedulePublicCommunityCachePurge({
+      communityId,
+      env: c.env,
+      waitUntil: getWaitUntil(c),
     })
     return c.json(result, 200)
   })

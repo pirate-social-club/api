@@ -1,17 +1,31 @@
 import type { Env } from "../../env"
+import { makeId } from "../helpers"
 import { sanitizeLogText } from "../observability/pipeline-log"
+import { getControlPlaneClient } from "../runtime-deps"
 import { KvAlertDeduper } from "./dedupe"
+import {
+  createOpsAlertDeliveryEvidenceStore,
+  type OpsAlertDeliveryEvidenceStore,
+} from "./delivery-evidence"
 import { bucketStartMs } from "./emit"
+import { opsAlertBucketMs, opsAlertDedupeTtlSeconds } from "./policy"
 import { sendOpsAlerts } from "./sink"
 import type { OpsAlert, OpsAlertSeverity } from "./types"
 
-const DEFAULT_BUCKET_MS = 60 * 60 * 1000
-const DEFAULT_LOW_SEVERITY_BUCKET_MS = 24 * 60 * 60 * 1000
-const MIN_DEDUPE_TTL_SECONDS = 3 * 60 * 60
+export type ScheduledAlertDeliveryResult = {
+  delivered: boolean
+  deduplicated: boolean
+  evidenceRecorded: boolean
+  deliveryAttemptId: string | null
+  sink: "none" | "log" | "email" | "webhook"
+}
 
-function intFromEnv(value: string | undefined, fallback: number): number {
-  const parsed = Number.parseInt(value ?? "", 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
+let testEvidenceStore: OpsAlertDeliveryEvidenceStore | null | undefined
+
+export function setScheduledAlertEvidenceStoreForTests(
+  store: OpsAlertDeliveryEvidenceStore | null | undefined,
+): void {
+  testEvidenceStore = store
 }
 
 function errorMessage(error: unknown): string {
@@ -64,31 +78,73 @@ function communityIdsFromExtra(extra: Record<string, unknown> | undefined): stri
   return [...ids].sort()
 }
 
-function bucketMsForScheduledAlert(env: Env, alert: OpsAlert): number {
-  if (alert.severity === "low") {
-    return intFromEnv(env.OPS_ALERT_LOW_BUCKET_MS, DEFAULT_LOW_SEVERITY_BUCKET_MS)
-  }
-  return intFromEnv(env.OPS_ALERT_BUCKET_MS, DEFAULT_BUCKET_MS)
+function evidenceStore(env: Env): OpsAlertDeliveryEvidenceStore | null {
+  if (testEvidenceStore !== undefined) return testEvidenceStore
+  const databaseUrl = String(env.CONTROL_PLANE_DATABASE_URL || "").trim()
+  const hasPostgresUrl = databaseUrl.startsWith("postgres://") || databaseUrl.startsWith("postgresql://")
+  if (!env.CONTROL_PLANE_HYPERDRIVE && !hasPostgresUrl) return null
+  return createOpsAlertDeliveryEvidenceStore(getControlPlaneClient(env))
 }
 
-function ttlSecondsForBucket(bucketMs: number): number {
-  return Math.max(MIN_DEDUPE_TTL_SECONDS, Math.ceil((bucketMs * 2) / 1000))
-}
-
-async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<boolean> {
+async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<ScheduledAlertDeliveryResult> {
   const kv = env.OPS_ALERT_DEDUPE
-  if (!kv) {
-    return (await sendOpsAlerts(env, [alert])).delivered
+  const bucketMs = opsAlertBucketMs(env, alert.severity)
+  const bucket = bucketStartMs(Date.now(), bucketMs)
+  const deduper = kv ? new KvAlertDeduper(kv, opsAlertDedupeTtlSeconds(bucketMs)) : null
+  if (deduper && await deduper.hasSent(alert.key, bucket)) {
+    return {
+      delivered: true,
+      deduplicated: true,
+      evidenceRecorded: false,
+      deliveryAttemptId: null,
+      sink: "none",
+    }
   }
 
-  const bucketMs = bucketMsForScheduledAlert(env, alert)
-  const bucket = bucketStartMs(Date.now(), bucketMs)
-  const deduper = new KvAlertDeduper(kv, ttlSecondsForBucket(bucketMs))
-  if (await deduper.hasSent(alert.key, bucket)) return true
+  const store = evidenceStore(env)
+  const deliveryAttemptId = makeId("oad")
+  let evidenceBegan = false
+  if (store) {
+    try {
+      await store.begin({
+        attemptId: deliveryAttemptId,
+        alertKey: alert.key,
+        environment: env.ENVIRONMENT || "development",
+        severity: alert.severity,
+        alertCount: alert.count,
+        bucketStartMs: bucket,
+      })
+      evidenceBegan = true
+    } catch (error) {
+      console.error("[ops-alerts] durable evidence begin failed", {
+        alert_key: alert.key,
+        error: errorMessage(error),
+      })
+    }
+  }
 
   const delivery = await sendOpsAlerts(env, [alert])
-  if (delivery.delivered) await deduper.markSent(alert.key, bucket)
-  return delivery.delivered
+  let evidenceRecorded = false
+  if (store && evidenceBegan) {
+    try {
+      await store.finish({ attemptId: deliveryAttemptId, delivery })
+      evidenceRecorded = true
+    } catch (error) {
+      console.error("[ops-alerts] durable evidence finish failed", {
+        alert_key: alert.key,
+        delivery_attempt_id: deliveryAttemptId,
+        error: errorMessage(error),
+      })
+    }
+  }
+  if (delivery.delivered && deduper) await deduper.markSent(alert.key, bucket)
+  return {
+    delivered: delivery.delivered,
+    deduplicated: false,
+    evidenceRecorded,
+    deliveryAttemptId: evidenceBegan ? deliveryAttemptId : null,
+    sink: delivery.sink,
+  }
 }
 
 export async function captureScheduledError(
@@ -96,14 +152,14 @@ export async function captureScheduledError(
   error: unknown,
   task: string,
 ): Promise<boolean> {
-  return deliverScheduledAlert(env, {
+  return (await deliverScheduledAlert(env, {
     key: `scheduled_error:${task}`,
     severity: "high",
     title: `Scheduled task failed: ${task}`,
     count: 1,
     community_ids: [],
     details: detailsFromError(error),
-  })
+  })).delivered
 }
 
 export async function captureScheduledWarning(
@@ -113,6 +169,16 @@ export async function captureScheduledWarning(
   extra?: Record<string, unknown>,
   tags?: Record<string, string>,
 ): Promise<boolean> {
+  return (await captureScheduledWarningWithEvidence(env, message, task, extra, tags)).delivered
+}
+
+export async function captureScheduledWarningWithEvidence(
+  env: Env,
+  message: string,
+  task: string,
+  extra?: Record<string, unknown>,
+  tags?: Record<string, string>,
+): Promise<ScheduledAlertDeliveryResult> {
   const severity: OpsAlertSeverity = tags?.urgency === "high"
     ? "high"
     : tags?.urgency === "low"

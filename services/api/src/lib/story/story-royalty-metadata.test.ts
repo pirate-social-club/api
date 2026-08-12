@@ -140,4 +140,71 @@ describe("buildStoryRoyaltyMetadataPayloads", () => {
     expect(ipPayload).not.toHaveProperty("mediaType")
     expect(nftPayload.animation_url).toBe(mediaUrl)
   })
+
+  test("publishes poster and playable metadata for a public video", () => {
+    const videoUrl = "https://pirate.sc/api/communities/cmt_metadata/song-artifacts/sau_video/content"
+    const posterUrl = "https://dweb.link/ipfs/video-poster"
+    const { ipPayload, nftPayload } = buildStoryRoyaltyMetadataPayloads({
+      communityId: "cmt_metadata",
+      assetId: "ast_video",
+      title: "Video Test",
+      rightsBasis: "original",
+      assetKind: "video_file",
+      creatorWalletAddress: creatorWallet,
+      accessMode: "public",
+      bundle: null,
+      media: {
+        mediaUrl: videoUrl,
+        mediaType: "video/mp4",
+        mediaHash,
+        imageUrl: posterUrl,
+      },
+      primaryContentHash,
+      mediaHashVerified: true,
+      derivativeParentIpIds: null,
+      royaltyShares: [],
+      createdAt,
+    })
+
+    expect(ipPayload).toMatchObject({
+      image: posterUrl,
+      mediaUrl: videoUrl,
+      mediaHash,
+      mediaType: "video/mp4",
+      cover_art_ref: posterUrl,
+    })
+    expect(nftPayload).toMatchObject({
+      image: posterUrl,
+      animation_url: videoUrl,
+    })
+  })
+
+  test("does not publish internal video or poster storage references", () => {
+    const { ipPayload, nftPayload } = buildStoryRoyaltyMetadataPayloads({
+      communityId: "cmt_metadata",
+      assetId: "ast_video",
+      title: "Locked Video",
+      rightsBasis: "original",
+      assetKind: "video_file",
+      creatorWalletAddress: creatorWallet,
+      accessMode: "locked",
+      bundle: null,
+      media: {
+        mediaUrl: "r2://private/video.mp4",
+        mediaType: "video/mp4",
+        mediaHash,
+        imageUrl: "r2://private/poster.jpg",
+      },
+      primaryContentHash,
+      mediaHashVerified: true,
+      derivativeParentIpIds: null,
+      royaltyShares: [],
+      createdAt,
+    })
+
+    expect(ipPayload).not.toHaveProperty("image")
+    expect(ipPayload).not.toHaveProperty("mediaUrl")
+    expect(nftPayload).not.toHaveProperty("image")
+    expect(nftPayload).not.toHaveProperty("animation_url")
+  })
 })

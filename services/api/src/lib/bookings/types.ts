@@ -171,11 +171,13 @@ export type BookingSettlementEffectStatus = "submitted" | "confirmed" | "failed"
 
 export interface BookingSettlementEffect {
   bookingSettlementEffectId: string;
-  bookingId: string;
+  bookingId: string | null;
+  paymentIntentId: string | null;
   effectKind: BookingSettlementEffectKind;
   idempotencyKey: string;
   status: BookingSettlementEffectStatus;
-  amountCents: number;
+  amountCents: number | null;
+  amountAtomic: string | null;
   recipientAddress: string;
   settlementRef: string | null;
   failureReason: string | null;
@@ -197,9 +199,11 @@ export type PaymentIntentStatus =
   | "verified"
   | "verification_failed"
   | "verification_rejected"
+  | "custody_refund_pending"
+  | "custody_operator_incident"
   | "consumed"
   | "expired"
-  | "superseded";
+  | "refunded";
 
 export interface PaymentIntent {
   paymentIntentId: string;
@@ -226,6 +230,22 @@ export interface PaymentIntent {
   verifiedAt: string | null;
   consumedWalletAttachmentId: string | null;
   consumedAt: string | null;
+  custodyObservedAmountAtomic: string | null;
+  custodySenderAddress: string | null;
+  custodyReason: "wrong_transfer_amount" | "unexpected_sender" | "multiple_senders" | null;
+  custodyEvidence?: {
+    transfers: Array<{
+      senderAddress: string;
+      observedAmountAtomic: string;
+      transferCount: number;
+    }>;
+  } | null;
+  custodyDetectedAt: string | null;
+  refundTxRef: string | null;
+  refundAttemptCount: number;
+  refundLastAttemptAt: string | null;
+  refundLastErrorCode: string | null;
+  refundedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

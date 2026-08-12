@@ -11,7 +11,7 @@ type FakeAccessState = {
   members?: Set<string>
   roles?: Map<string, "owner" | "admin" | "moderator">
   entitlements?: Set<string>
-  listingPriceUsd?: unknown
+  listingPriceCents?: unknown
   listingStatus?: "active" | "paused"
 }
 
@@ -143,7 +143,7 @@ function fakeClient(state: FakeAccessState = {}) {
             replay_asset_id: null,
             listing_mode: "fixed_price",
             status: state.listingStatus ?? "active",
-            price_usd: state.listingPriceUsd ?? 7.5,
+            price_cents: state.listingPriceCents ?? 750,
             regional_pricing_policy_json: "{}",
             vinyl_release_provider: null,
             vinyl_release_url: null,

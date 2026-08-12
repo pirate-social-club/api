@@ -74,6 +74,16 @@ export function conflictError(message: string, details: Record<string, unknown> 
   return new HttpError(409, "conflict", message, false, details)
 }
 
+export function telegramStudyUnavailable(
+  message = "This community has not enabled Telegram study",
+): HttpError {
+  return new HttpError(409, "telegram_study_unavailable", message, false)
+}
+
+export function retryableConflictError(message: string, details: Record<string, unknown> | null = null): HttpError {
+  return new HttpError(409, "conflict", message, true, details)
+}
+
 /**
  * A 409 that a client can act on programmatically. A money-moving flow must be able to
  * tell "this quote expired, start over" apart from "this transaction was already
@@ -101,6 +111,12 @@ export function notFoundError(message: string): HttpError {
 
 export function structuredSurfaceDisabled(message: string, details: Record<string, unknown> | null = null): HttpError {
   return new HttpError(403, "structured_surface_disabled", message, false, details)
+}
+
+export function verifierContractIncompatible(message: string, details: Record<string, unknown> | null = null): HttpError {
+  // Not retryable: the deployed verifier predates a response field this API
+  // requires, which only a verifier redeploy can fix.
+  return new HttpError(503, "verifier_contract_incompatible", message, false, details)
 }
 
 export function providerUnavailable(

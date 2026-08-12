@@ -1,8 +1,9 @@
-import type { Server } from "node:http"
-
 const DEFAULT_FORCE_EXIT_AFTER_MS = 5_000
 
-type ShutdownServer = Pick<Server, "close" | "closeIdleConnections">
+type ShutdownServer = {
+  close(callback?: (error?: Error) => void): unknown
+  closeIdleConnections(): void
+}
 
 type GracefulHttpShutdownOptions = {
   service: string

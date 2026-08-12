@@ -129,7 +129,10 @@ export async function enforceAltchaChallengeRateLimit(input: {
   actorUserId: string
   now?: Date
 }): Promise<void> {
-  const maxRequests = parseIntegerEnv(input.env.ALTCHA_CHALLENGE_RATE_LIMIT, 10)
+  // Proofs are single-use and every gated interaction (vote/comment/post)
+  // consumes a fresh challenge, so the ceiling must accommodate a burst of
+  // ordinary voting, not just the one-off join flow.
+  const maxRequests = parseIntegerEnv(input.env.ALTCHA_CHALLENGE_RATE_LIMIT, 30)
   const windowSeconds = parseIntegerEnv(input.env.ALTCHA_CHALLENGE_RATE_LIMIT_WINDOW_SECONDS, 60)
   const now = input.now ?? new Date()
   const windowStartSeconds = Math.floor(Math.floor(now.getTime() / 1000) / windowSeconds) * windowSeconds

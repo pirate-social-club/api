@@ -3,6 +3,7 @@
 // through the service seam so the durable state machine is tested without RPC.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import type { Env } from "../../env";
 import type { UserRepository } from "../auth/repositories";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
@@ -12,10 +13,19 @@ import {
   setGlobalBookingPaymentVerifierForTests,
   type BookingConfirmSqlExecutor,
 } from "./booking-confirm-service";
+import { sweepClaimedBookingPaymentIntents } from "./booking-payment-reverification-cron";
 import { bookingIdForHold } from "./booking-finalization-repository";
-import { createPaymentIntentRepository, paymentIntentIdForHold } from "./payment-intent-repository";
+import { recordBookingPaymentSubmitted } from "./booking-payment-resume-service";
+import {
+  createPaymentIntentRepository,
+  createPaymentIntentWriteRepository,
+  paymentIntentIdForHold,
+} from "./payment-intent-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking confirm service PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_confirm_service_test";
 const BUYER = "0x7000000000000000000000000000000000000007";
@@ -34,6 +44,7 @@ const env = {
   PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS: BOOKING_OPERATOR,
   PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS: BOOKING_TOKEN,
   PIRATE_BOOKING_SETTLEMENT_RPC_URL: BOOKING_RPC_URL,
+  BOOKINGS_PAYMENT_REVERIFICATION_CRON_ENABLED: "true",
 } as Env;
 
 function urlFor(db?: string): string {
@@ -140,6 +151,10 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-confirm-service-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("quotes an active global hold with a durable payment intent and fee snapshot", async () => {
@@ -229,6 +244,246 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     })).toEqual({ ok: false, reason: "replay_mismatch" });
   });
 
+  test("records a broadcast durably, rejects hash replacement, and confirms from a later session", async () => {
+    await seedHold({ holdId: "hold_confirm_resume" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_resume");
+    const quoted = await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_resume",
+      nowUtc: "2026-07-01T09:50:00Z",
+    });
+    expect(quoted.ok).toBe(true);
+
+    const submitted = await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      txRef: " 0xRESUME ",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:51:00Z",
+    });
+    expect(submitted).toEqual({
+      ok: true,
+      paymentIntentId: paymentIntentIdForHold("hold_confirm_resume"),
+      normalizedTxRef: "0xresume",
+    });
+    expect(await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      txRef: "0xRESUME",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:51:01Z",
+    })).toEqual(submitted);
+    expect(await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      txRef: "0xdifferent",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:51:02Z",
+    })).toEqual({ ok: false, reason: "payment_claim_conflict" });
+
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+    const confirmed = await confirmGlobalBookingHold({
+      env,
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_resume",
+      bookerUserId: "booker_hold_confirm_resume",
+      fundingTxRef: "0xresume",
+      walletAttachmentId: "wal_confirm_resume",
+      nowUtc: "2026-07-01T09:52:00Z",
+    });
+    expect(confirmed.ok).toBe(true);
+    if (!confirmed.ok) throw new Error("expected resumed confirmation");
+    expect(confirmed.booking.funding_tx_ref).toBe("0xresume");
+  });
+
+  test("sweeper recovers a submitted payment after the client disappears without another confirm", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status IN ('active', 'verifying', 'verified', 'verification_failed')`);
+    await seedHold({ holdId: "hold_confirm_submitted_crash" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_submitted_crash");
+    expect((await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_submitted_crash",
+      nowUtc: "2026-07-01T09:50:00Z",
+    })).ok).toBe(true);
+    expect((await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_submitted_crash",
+      bookerUserId: "booker_hold_confirm_submitted_crash",
+      txRef: "0xSUBMITTED_CRASH",
+      walletAttachmentId: "wal_confirm_submitted_crash",
+      nowUtc: "2026-07-01T09:51:00Z",
+    })).ok).toBe(true);
+
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+    expect(await sweepClaimedBookingPaymentIntents({
+      env,
+      client: executor,
+      userRepository: wallets,
+      now: () => Date.parse("2026-07-01T09:52:00Z"),
+    })).toMatchObject({ checked: 1, booked: 1, errors: 0 });
+    expect((await createPaymentIntentRepository(executor)
+      .getPaymentIntentByHold("hold_confirm_submitted_crash"))?.status).toBe("consumed");
+  });
+
+  test("sweeper finalizes a verified unconsumed payment without re-verifying it", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status IN ('active', 'verifying', 'verified', 'verification_failed')`);
+    await seedHold({ holdId: "hold_confirm_verified_crash" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_verified_crash");
+    expect((await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_verified_crash",
+      nowUtc: "2026-07-01T09:50:00Z",
+    })).ok).toBe(true);
+    expect((await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_verified_crash",
+      bookerUserId: "booker_hold_confirm_verified_crash",
+      txRef: "0xVERIFIED_CRASH",
+      walletAttachmentId: "wal_confirm_verified_crash",
+      nowUtc: "2026-07-01T09:51:00Z",
+    })).ok).toBe(true);
+    const writeRepository = createPaymentIntentWriteRepository(executor);
+    const submitted = await writeRepository.getPaymentIntentByHold("hold_confirm_verified_crash");
+    if (!submitted?.verificationClaimToken) throw new Error("expected submitted claim");
+    expect((await writeRepository.markPaymentIntentVerified({
+      paymentIntentId: submitted.paymentIntentId,
+      claimToken: submitted.verificationClaimToken,
+      verifiedSenderAddress: BUYER,
+      nowUtc: "2026-07-01T09:51:30Z",
+    }))?.status).toBe("verified");
+
+    let verifierCalls = 0;
+    setGlobalBookingPaymentVerifierForTests(async () => {
+      verifierCalls += 1;
+      throw new Error("verified intent must bypass RPC verification");
+    });
+    expect(await sweepClaimedBookingPaymentIntents({
+      env,
+      client: executor,
+      userRepository: wallets,
+      now: () => Date.parse("2026-07-01T09:52:00Z"),
+    })).toMatchObject({ checked: 1, booked: 1, errors: 0 });
+    expect(verifierCalls).toBe(0);
+    expect((await writeRepository.getPaymentIntentByHold("hold_confirm_verified_crash"))?.status)
+      .toBe("consumed");
+  });
+
+  test("sweeper keeps a verified unconsumed payment as a refund obligation when salvage loses", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status IN ('active', 'verifying', 'verified', 'verification_failed')`);
+    await seedHold({ holdId: "hold_confirm_verified_orphan" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_verified_orphan");
+    expect((await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_verified_orphan",
+      nowUtc: "2026-07-01T09:50:00Z",
+    })).ok).toBe(true);
+    expect((await recordBookingPaymentSubmitted({
+      executor,
+      userRepository: wallets,
+      holdId: "hold_confirm_verified_orphan",
+      bookerUserId: "booker_hold_confirm_verified_orphan",
+      txRef: "0xVERIFIED_ORPHAN",
+      walletAttachmentId: "wal_confirm_verified_orphan",
+      nowUtc: "2026-07-01T09:51:00Z",
+    })).ok).toBe(true);
+    const writeRepository = createPaymentIntentWriteRepository(executor);
+    const submitted = await writeRepository.getPaymentIntentByHold("hold_confirm_verified_orphan");
+    if (!submitted?.verificationClaimToken) throw new Error("expected submitted claim");
+    await writeRepository.markPaymentIntentVerified({
+      paymentIntentId: submitted.paymentIntentId,
+      claimToken: submitted.verificationClaimToken,
+      verifiedSenderAddress: BUYER,
+      nowUtc: "2026-07-01T09:51:30Z",
+    });
+    await repoDb.unsafe(
+      `UPDATE bookings.host_slot_locks SET status = 'released' WHERE hold_id = $1`,
+      ["hold_confirm_verified_orphan"],
+    );
+
+    expect(await sweepClaimedBookingPaymentIntents({
+      env,
+      client: executor,
+      userRepository: wallets,
+      now: () => Date.parse("2026-07-01T10:05:00Z"),
+    })).toMatchObject({ checked: 1, booked: 0, refundPending: 1, errors: 0 });
+    expect((await writeRepository.getPaymentIntentByHold("hold_confirm_verified_orphan"))?.status)
+      .toBe("verified");
+    const orphans = await writeRepository
+      .listOrphanedVerifiedPaymentIntents("2026-07-01T10:05:00Z", 50);
+    expect(orphans.map((intent) => intent.holdId)).toContain("hold_confirm_verified_orphan");
+  });
+
+  test("concurrent broadcast reporting and confirmation converge on one booking", async () => {
+    await seedHold({ holdId: "hold_confirm_submit_race" });
+    const executor = makeExecutor(repoDb);
+    const wallets = userRepository("wal_confirm_submit_race");
+    expect((await quoteGlobalBookingHold({
+      env,
+      executor,
+      holdId: "hold_confirm_submit_race",
+      nowUtc: "2026-07-01T09:50:00Z",
+    })).ok).toBe(true);
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+
+    const [submitted, confirmed] = await Promise.all([
+      recordBookingPaymentSubmitted({
+        executor,
+        userRepository: wallets,
+        holdId: "hold_confirm_submit_race",
+        bookerUserId: "booker_hold_confirm_submit_race",
+        txRef: "0xSUBMIT_RACE",
+        walletAttachmentId: "wal_confirm_submit_race",
+        nowUtc: "2026-07-01T09:51:00Z",
+      }),
+      confirmGlobalBookingHold({
+        env,
+        executor,
+        userRepository: wallets,
+        holdId: "hold_confirm_submit_race",
+        bookerUserId: "booker_hold_confirm_submit_race",
+        fundingTxRef: "0xSUBMIT_RACE",
+        walletAttachmentId: "wal_confirm_submit_race",
+        nowUtc: "2026-07-01T09:51:00Z",
+      }),
+    ]);
+
+    expect(submitted.ok).toBe(true);
+    expect(confirmed.ok).toBe(true);
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_confirm_submit_race"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
+  });
+
   test("pending verification records a retryable failed intent and can later resume with the same tx", async () => {
     await seedHold({ holdId: "hold_confirm_pending" });
     setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
@@ -302,6 +557,140 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect((await repoDb.unsafe(`SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`, ["hold_confirm_no_payout"]) as Record<string, unknown>[])[0].n).toBe(0);
   });
 
+  test("custody mismatch persists one refund obligation and releases inventory", async () => {
+    await seedHold({ holdId: "hold_confirm_custody" });
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "custody_mismatch",
+      reason: "wrong_transfer_amount",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+      observedAmountAtomic: "36000000",
+    }));
+
+    const input = {
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_custody"),
+      holdId: "hold_confirm_custody",
+      bookerUserId: "booker_hold_confirm_custody",
+      fundingTxRef: "0xTX_CUSTODY",
+      walletAttachmentId: "wal_confirm_custody",
+      nowUtc: "2026-07-01T09:51:00Z",
+    };
+    expect(await confirmGlobalBookingHold(input)).toEqual({
+      ok: false,
+      reason: "payment_refund_pending",
+    });
+    expect(await confirmGlobalBookingHold(input)).toEqual({
+      ok: false,
+      reason: "payment_refund_pending",
+    });
+
+    const intents = await repoDb.unsafe(`SELECT status, claimed_tx_ref,
+        custody_observed_amount_atomic::text AS custody_observed_amount_atomic,
+        custody_sender_address, custody_reason, custody_detected_at
+      FROM bookings.payment_intents WHERE payment_intent_id = $1`, [
+      paymentIntentIdForHold("hold_confirm_custody"),
+    ]) as Record<string, unknown>[];
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toMatchObject({
+      status: "custody_refund_pending",
+      claimed_tx_ref: "0xtx_custody",
+      custody_observed_amount_atomic: "36000000",
+      custody_sender_address: BUYER,
+      custody_reason: "wrong_transfer_amount",
+    });
+    expect(intents[0].custody_detected_at).not.toBeNull();
+
+    const holds = await repoDb.unsafe(`SELECT status FROM bookings.holds WHERE hold_id = $1`, [
+      "hold_confirm_custody",
+    ]) as Record<string, unknown>[];
+    expect(holds[0].status).toBe("expired");
+    const locks = await repoDb.unsafe(`SELECT status FROM bookings.host_slot_locks WHERE hold_id = $1`, [
+      "hold_confirm_custody",
+    ]) as Record<string, unknown>[];
+    expect(locks[0].status).toBe("released");
+
+    const repo = createPaymentIntentRepository(makeExecutor(repoDb));
+    expect((await repo.listRecentPaymentIntentsForBooker(
+      "booker_hold_confirm_custody",
+      "2026-06-30T00:00:00Z",
+      50,
+    )).map((row) => row.intent.status)).toContain("custody_refund_pending");
+    expect((await repo.listClaimedUnresolvedPaymentIntents(
+      "2026-07-01T09:52:00Z",
+      50,
+    )).map((row) => row.intent.paymentIntentId)).not.toContain(
+      paymentIntentIdForHold("hold_confirm_custody"),
+    );
+    expect((await repo.listOperatorUnresolvedPaymentIntents(
+      "2026-07-01T09:52:00Z",
+      50,
+    )).map((row) => row.intent.paymentIntentId)).toContain(
+      paymentIntentIdForHold("hold_confirm_custody"),
+    );
+    expect((await repo.listCustodyRefundPendingPaymentIntents(50)).map(
+      (intent) => intent.paymentIntentId,
+    )).toContain(paymentIntentIdForHold("hold_confirm_custody"));
+  });
+
+  test("multi-sender custody becomes one operator-owned incident and never enters a refund worklist", async () => {
+    await seedHold({ holdId: "hold_confirm_custody_incident" });
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "custody_incident",
+      reason: "multiple_senders",
+      txRef: fundingTxRef,
+      transfers: [
+        { senderAddress: BUYER, observedAmountAtomic: "35000000", transferCount: 1 },
+        { senderAddress: "0x8000000000000000000000000000000000000008", observedAmountAtomic: "1", transferCount: 1 },
+      ],
+    }));
+
+    const result = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_custody_incident"),
+      holdId: "hold_confirm_custody_incident",
+      bookerUserId: "booker_hold_confirm_custody_incident",
+      fundingTxRef: "0xTX_CUSTODY_INCIDENT",
+      walletAttachmentId: "wal_confirm_custody_incident",
+      nowUtc: "2026-07-01T09:51:00Z",
+    });
+    expect(result).toEqual({ ok: false, reason: "payment_review_required" });
+
+    const repo = createPaymentIntentRepository(makeExecutor(repoDb));
+    const intent = await repo.getPaymentIntent(paymentIntentIdForHold("hold_confirm_custody_incident"));
+    expect(intent).toMatchObject({
+      status: "custody_operator_incident",
+      claimedTxRef: "0xtx_custody_incident",
+      custodyReason: "multiple_senders",
+      custodyEvidence: {
+        transfers: [
+          { senderAddress: BUYER, observedAmountAtomic: "35000000", transferCount: 1 },
+          { senderAddress: "0x8000000000000000000000000000000000000008", observedAmountAtomic: "1", transferCount: 1 },
+        ],
+      },
+    });
+    expect((await repo.listOperatorUnresolvedPaymentIntents(
+      "2026-07-01T09:52:00Z",
+      50,
+    )).map((row) => row.intent.paymentIntentId)).toContain(
+      paymentIntentIdForHold("hold_confirm_custody_incident"),
+    );
+    expect((await repo.listCustodyRefundPendingPaymentIntents(50)).map(
+      (candidate) => candidate.paymentIntentId,
+    )).not.toContain(paymentIntentIdForHold("hold_confirm_custody_incident"));
+
+    const [hold] = await repoDb.unsafe(`SELECT status FROM bookings.holds WHERE hold_id = $1`, [
+      "hold_confirm_custody_incident",
+    ]) as Record<string, unknown>[];
+    expect(hold.status).toBe("expired");
+    const [lock] = await repoDb.unsafe(`SELECT status FROM bookings.host_slot_locks WHERE hold_id = $1`, [
+      "hold_confirm_custody_incident",
+    ]) as Record<string, unknown>[];
+    expect(lock.status).toBe("released");
+  });
+
   // H2: verify-before-expire. A real payment that lands after the hold TTL must be salvaged into a
   // booking when the slot is still held — never discarded as hold_expired.
   test("salvages a verified payment on an expired hold when the slot lock is still active", async () => {
@@ -350,10 +739,28 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
     expect(intentRows[0].status).toBe("verified");
     const orphans = await createPaymentIntentRepository(makeExecutor(repoDb)).listOrphanedVerifiedPaymentIntents("2026-07-01T10:05:00Z", 50);
     expect(orphans.some((o) => o.holdId === "hold_confirm_orphan")).toBe(true);
+    const orphanIntent = orphans.find((o) => o.holdId === "hold_confirm_orphan");
+    if (!orphanIntent) throw new Error("expected orphan intent");
+    const refunded = await createPaymentIntentWriteRepository(makeExecutor(repoDb))
+      .markOrphanedVerifiedPaymentIntentRefunded(
+        orphanIntent.paymentIntentId,
+        "0xORPHAN_REFUND",
+        "2026-07-01T10:06:00Z",
+      );
+    expect(refunded).toMatchObject({
+      status: "refunded",
+      refundTxRef: "0xorphan_refund",
+      refundedAt: "2026-07-01T10:06:00.000Z",
+    });
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .listOrphanedVerifiedPaymentIntents("2026-07-01T10:07:00Z", 50))
+      .some((o) => o.holdId === "hold_confirm_orphan")).toBe(false);
   });
 
-  // H2: an UNCONFIRMED payment on an expired hold has no funds at risk, so it retires as hold_expired.
-  test("retires an expired hold as hold_expired when the payment is still pending", async () => {
+  // H2: a claimed hash can mine after the hold expires. It must remain discoverable and
+  // server re-verification must salvage it without relying on another client confirm.
+  test("re-verifies a pending claimed payment after hold expiry and salvages the booking", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status IN ('active', 'verifying', 'verified', 'verification_failed')`);
     await seedHold({ holdId: "hold_confirm_pending_expired" });
     setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
 
@@ -366,6 +773,156 @@ describe.skipIf(!RUN)("global booking confirm service (real Postgres)", () => {
       fundingTxRef: "0xTX_PENDING_EXPIRED",
       walletAttachmentId: "wal_confirm_pending_expired",
       nowUtc: "2026-07-01T10:05:00Z",
-    })).toEqual({ ok: false, reason: "hold_expired" });
+    })).toEqual({ ok: false, reason: "payment_pending" });
+
+    const unresolved = await createPaymentIntentRepository(makeExecutor(repoDb))
+      .listClaimedUnresolvedPaymentIntents("2026-07-01T10:05:00Z", 50);
+    expect(unresolved.map((record) => record.intent.holdId)).toContain("hold_confirm_pending_expired");
+    expect(unresolved.find((record) => record.intent.holdId === "hold_confirm_pending_expired")?.intent)
+      .toMatchObject({
+        status: "verification_failed",
+        claimedTxRef: "0xtx_pending_expired",
+        consumedWalletAttachmentId: "wal_confirm_pending_expired",
+      });
+
+    const stillPending = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_pending_expired"),
+      now: () => Date.parse("2026-07-01T10:05:30Z"),
+    });
+    expect(stillPending).toMatchObject({ checked: 1, unresolved: 1, booked: 0, errors: 0 });
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .getPaymentIntentByHold("hold_confirm_pending_expired"))).toMatchObject({
+      status: "verification_failed",
+      claimedTxRef: "0xtx_pending_expired",
+    });
+
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+    const summary = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: userRepository("wal_confirm_pending_expired"),
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    expect(summary).toMatchObject({
+      checked: 1,
+      booked: 1,
+      refundPending: 0,
+      unresolved: 0,
+      errors: 0,
+    });
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_confirm_pending_expired"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .getPaymentIntentByHold("hold_confirm_pending_expired"))?.status).toBe("consumed");
+  });
+
+  test("re-verifies an expired claimed payment with no reclaimable slot into a refund obligation", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status IN ('active', 'verifying', 'verified', 'verification_failed')`);
+    await seedHold({ holdId: "hold_reverify_orphan" });
+    setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
+    expect(await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: userRepository("wal_reverify_orphan"),
+      holdId: "hold_reverify_orphan",
+      bookerUserId: "booker_hold_reverify_orphan",
+      fundingTxRef: "0xTX_REVERIFY_ORPHAN",
+      walletAttachmentId: "wal_reverify_orphan",
+      nowUtc: "2026-07-01T10:05:00Z",
+    })).toEqual({ ok: false, reason: "payment_pending" });
+    await repoDb.unsafe(
+      `UPDATE bookings.host_slot_locks SET status = 'released' WHERE hold_id = $1`,
+      ["hold_reverify_orphan"],
+    );
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => ({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: fundingTxRef,
+    }));
+
+    const summary = await sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: userRepository("wal_reverify_orphan"),
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    expect(summary).toMatchObject({
+      checked: 1,
+      booked: 0,
+      refundPending: 1,
+      errors: 0,
+    });
+    expect((await createPaymentIntentRepository(makeExecutor(repoDb))
+      .getPaymentIntentByHold("hold_reverify_orphan"))?.status).toBe("verified");
+    const orphans = await createPaymentIntentRepository(makeExecutor(repoDb))
+      .listOrphanedVerifiedPaymentIntents("2026-07-01T10:06:00Z", 50);
+    expect(orphans.map((intent) => intent.holdId)).toContain("hold_reverify_orphan");
+  });
+
+  test("fences client-confirm and sweeper races to one verification and one booking", async () => {
+    await repoDb.unsafe(`DELETE FROM bookings.payment_intents WHERE status IN ('active', 'verifying', 'verified', 'verification_failed')`);
+    await seedHold({ holdId: "hold_reverify_race" });
+    const wallets = userRepository("wal_reverify_race");
+    setGlobalBookingPaymentVerifierForTests(async () => ({ kind: "pending" }));
+    expect(await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: wallets,
+      holdId: "hold_reverify_race",
+      bookerUserId: "booker_hold_reverify_race",
+      fundingTxRef: "0xTX_REVERIFY_RACE",
+      walletAttachmentId: "wal_reverify_race",
+      nowUtc: "2026-07-01T10:05:00Z",
+    })).toEqual({ ok: false, reason: "payment_pending" });
+
+    let releaseVerification: (() => void) | undefined;
+    let reportVerifierEntered: (() => void) | undefined;
+    const verifierEntered = new Promise<void>((resolve) => {
+      reportVerifierEntered = resolve;
+    });
+    const verifierRelease = new Promise<void>((resolve) => {
+      releaseVerification = resolve;
+    });
+    let verifierCalls = 0;
+    setGlobalBookingPaymentVerifierForTests(async ({ fundingTxRef }) => {
+      verifierCalls += 1;
+      reportVerifierEntered?.();
+      await verifierRelease;
+      return { kind: "verified", senderAddress: BUYER, txRef: fundingTxRef };
+    });
+
+    const sweepPromise = sweepClaimedBookingPaymentIntents({
+      env,
+      client: makeExecutor(repoDb),
+      userRepository: wallets,
+      now: () => Date.parse("2026-07-01T10:06:00Z"),
+    });
+    await verifierEntered;
+    const losingClient = await confirmGlobalBookingHold({
+      env,
+      executor: makeExecutor(repoDb),
+      userRepository: wallets,
+      holdId: "hold_reverify_race",
+      bookerUserId: "booker_hold_reverify_race",
+      fundingTxRef: "0xTX_REVERIFY_RACE",
+      walletAttachmentId: "wal_reverify_race",
+      nowUtc: "2026-07-01T10:06:00Z",
+    });
+    expect(losingClient).toEqual({ ok: false, reason: "verification_in_progress" });
+    releaseVerification?.();
+    expect(await sweepPromise).toMatchObject({ checked: 1, booked: 1, errors: 0 });
+    expect(verifierCalls).toBe(1);
+    expect((await repoDb.unsafe(
+      `SELECT count(*)::int AS n FROM bookings.bookings WHERE hold_id = $1`,
+      ["hold_reverify_race"],
+    ) as Record<string, unknown>[])[0].n).toBe(1);
   });
 });

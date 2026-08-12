@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   KARAOKE_TRANSPORT_PROTOCOL_VERSION,
   encodeKaraokeBinaryFrame,
@@ -819,6 +819,75 @@ describe("KaraokeSessionRuntimeDO", () => {
     expect(sent.at(-1)?.sequence).toBe(3);
   });
 
+  test("resumes STT scoring after a fresh DO restores the session", async () => {
+    const sent: KaraokeServerEvent[] = [];
+    const broadcast = async (event: KaraokeServerEvent) => {
+      sent.push(event);
+    };
+    const { ctx, storage } = makeContext();
+    const outbox = new InMemoryOutboxStore();
+    const adapterA = new FakeKaraokeStreamingSttAdapter();
+    const doA = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+      broadcast,
+      outboxStore: outbox,
+      sttAdapter: adapterA,
+    });
+    expect((await doA.fetch(initDoRequest())).status).toBe(200);
+    await startAndScore(doA, adapterA);
+
+    // Build a REALISTIC pre-eviction high-water mark. A watermark of 1 is not a
+    // valid guard: the fake's own increment clears it by luck, so the test passes
+    // even with the seeding reverted. Drive four more committed acks so the
+    // persisted counter reaches 5 and a reset to 0 is unambiguously fatal.
+    let clientSeq = 3;
+    for (const audioEndMs of [1300, 1500, 1700, 1900]) {
+      clientSeq += 1;
+      await doA.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq, audioEndMs));
+      clientSeq += 1;
+      await doA.fetch(clientEventRequest(clientSeq, "playback_sync", { audioTimeMs: audioEndMs, playing: true }));
+      await doA.drainCommitChainForTests();
+      await adapterA.ackCommit(HOLD_ON_WORDS);
+      await doA.drainCommitChainForTests();
+    }
+    expect(storedSnapshot(storage).lastSttSequence).toBe(5);
+
+    // A fresh DO instance (eviction / runtime restart) with a BRAND-NEW adapter,
+    // whose sequence counter therefore starts from whatever the host seeds it with.
+    const adapterB = new FakeKaraokeStreamingSttAdapter();
+    const doB = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+      broadcast,
+      outboxStore: outbox,
+      sttAdapter: adapterB,
+    });
+
+    // Drive real post-restore scoring: audio → playback → committed final.
+    // Client sequences continue past the restored lastClientSequence.
+    const relayedBefore = sent.filter((event) => event.type === "stt_final").length;
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq + 1, 2400));
+    await doB.fetch(clientEventRequest(clientSeq + 2, "playback_sync", { audioTimeMs: 2400, playing: true }));
+    await doB.drainCommitChainForTests();
+    await adapterB.ackCommit(HOLD_ON_WORDS);
+    await doB.drainCommitChainForTests();
+
+    // The restored stream resumed at 6, one past the persisted watermark of 5, so
+    // the final was accepted rather than refused. With the counter reset to 0 the
+    // fresh adapter emits 1, which the host rejects WITHOUT advancing
+    // lastSttSequence — silently killing transcript and scoring for the rest of
+    // the attempt.
+    const codes = sent.map((event) => (event as { code?: string }).code);
+    expect(codes).not.toContain("non_monotonic_sequence");
+    expect(sent.filter((event) => event.type === "stt_final").length).toBe(relayedBefore + 1);
+    expect(storedSnapshot(storage).lastSttSequence).toBe(6);
+
+    // And it keeps flowing: the defect suppressed the whole tail, not one event.
+    await doB.webSocketMessage(DUMMY_SOCKET, audioFrameBytes(clientSeq + 3, 2600));
+    await doB.fetch(clientEventRequest(clientSeq + 4, "playback_sync", { audioTimeMs: 2600, playing: true }));
+    await doB.drainCommitChainForTests();
+    await adapterB.ackCommit(HOLD_ON_WORDS);
+    await doB.drainCommitChainForTests();
+    expect(storedSnapshot(storage).lastSttSequence).toBe(7);
+  });
+
   test("persists snapshot and pending output before a failed broadcast, then replays it", async () => {
     const { ctx, storage } = makeContext();
     const adapter = new FakeKaraokeStreamingSttAdapter();
@@ -1010,6 +1079,165 @@ describe("KaraokeSessionRuntimeDO", () => {
     expect(sttAdapter.frames).toHaveLength(0);
     expect(sent.at(-1)).toMatchObject({ code: "non_monotonic_sequence", type: "session_error" });
   });
+
+  test("stays silent on a healthy session (no new log volume)", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const errorRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    const errorSpy = spyOn(console, "error").mockImplementation((record) => {
+      errorRecords.push(record);
+    });
+    try {
+      const { ctx } = makeContext();
+      const adapter = new FakeKaraokeStreamingSttAdapter();
+      const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: adapter,
+      });
+      expect((await do_.fetch(initDoRequest())).status).toBe(200);
+
+      // A full, well-ordered scoring cycle: start -> audio -> playback -> ack.
+      await startAndScore(do_, adapter);
+
+      // Guard against a vacuous pass: prove real traffic actually flowed through
+      // the guarded paths, so "no logs" means "silent", not "did nothing".
+      expect(adapter.frames.length).toBeGreaterThan(0);
+      expect(adapter.startCount).toBe(1);
+
+      // Diagnostics are a rejection-path concern only. A clean session must not
+      // add a single line to Workers Logs, or the signal drowns in volume.
+      expect(warnRecords).toEqual([]);
+      expect(
+        errorRecords.filter((record) => JSON.stringify(record).includes("transport_guard_rejected")),
+      ).toEqual([]);
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  test("logs a client guard rejection with restored-host and hashed-socket context", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    try {
+      const { ctx } = makeContext();
+      const initialized = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: new FakeKaraokeStreamingSttAdapter(),
+      });
+      expect((await initialized.fetch(initDoRequest())).status).toBe(200);
+      expect((await startSession(initialized)).status).toBe(200);
+
+      const restored = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: new FakeKaraokeStreamingSttAdapter(),
+      });
+      const socket = {
+        deserializeAttachment() {
+          return {
+            attemptId: "attempt-1",
+            connectedAtMs: 1,
+            nonce: "private-socket-nonce",
+            requestId: "request-1",
+            sessionId: "session-1",
+            subjectUserId: "user-1",
+            version: 1,
+          };
+        },
+        send() {},
+      } as unknown as WebSocket;
+
+      await restored.webSocketMessage(socket, JSON.stringify({
+        attemptId: "attempt-1",
+        protocolVersion: KARAOKE_TRANSPORT_PROTOCOL_VERSION,
+        sequence: 1,
+        sessionId: "session-1",
+        startedAtAudioMs: 0,
+        type: "start",
+        postId: "post-1",
+      }));
+
+      expect(warnRecords).toEqual([expect.objectContaining({
+        attemptId: "attempt-1",
+        channel: "client",
+        code: "non_monotonic_sequence",
+        event: "karaoke.transport_guard_rejected",
+        hostLifecycle: "restored",
+        incomingSequence: 1,
+        previousSequence: 1,
+        sessionId: "session-1",
+        socketIdentityHash: expect.stringMatching(/^[a-f0-9]{16}$/),
+      })]);
+      expect(JSON.stringify(warnRecords)).not.toContain("private-socket-nonce");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("logs an STT guard rejection without a socket and retains its stream generation", async () => {
+    resetEnvelopeSequence();
+    const warnRecords: unknown[] = [];
+    const warnSpy = spyOn(console, "warn").mockImplementation((record) => {
+      warnRecords.push(record);
+    });
+    try {
+      const adapter = new FakeKaraokeStreamingSttAdapter();
+      const { ctx } = makeContext();
+      const do_ = new KaraokeSessionRuntimeDO(ctx, ENV_STUB, {
+        broadcast: async () => {},
+        outboxStore: new InMemoryOutboxStore(),
+        sttAdapter: adapter,
+      });
+      expect((await do_.fetch(initDoRequest())).status).toBe(200);
+      expect((await startSession(do_)).status).toBe(200);
+
+      await adapter.emit({
+        attemptId: "attempt-1",
+        deliveredAtAudioMs: 400,
+        protocolVersion: KARAOKE_TRANSPORT_PROTOCOL_VERSION,
+        sequence: 4,
+        sessionId: "session-1",
+        text: "hold",
+        type: "stt_partial",
+        words: [],
+      } as Parameters<FakeKaraokeStreamingSttAdapter["emit"]>[0]);
+      await adapter.emit({
+        attemptId: "attempt-1",
+        deliveredAtAudioMs: 100,
+        protocolVersion: KARAOKE_TRANSPORT_PROTOCOL_VERSION,
+        sequence: 1,
+        sessionId: "session-1",
+        text: "hold",
+        type: "stt_partial",
+        words: [],
+      } as Parameters<FakeKaraokeStreamingSttAdapter["emit"]>[0]);
+      await do_.drainCommitChainForTests();
+
+      expect(warnRecords).toEqual([expect.objectContaining({
+        attemptId: "attempt-1",
+        channel: "stt",
+        code: "non_monotonic_sequence",
+        event: "karaoke.transport_guard_rejected",
+        hostLifecycle: "resident",
+        incomingSequence: 1,
+        previousSequence: 4,
+        sessionId: "session-1",
+        socketIdentityHash: null,
+        sttStreamGeneration: expect.any(String),
+      })]);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe("CloudflareKaraokeEffectRunner", () => {
@@ -1156,6 +1384,15 @@ describe("CloudflareKaraokeEffectRunner", () => {
         phoneticUnavailableLineCount: 0,
         scoredLineCount: 1,
         strongestLines: [],
+        timingCalibration: {
+          matchedWordCount: 0,
+          measuredLineCount: 0,
+          offsetMs: 0,
+          rawOffsetMs: 0,
+          reason: "insufficient_evidence" as const,
+          residualSpreadMs: 0,
+          state: "uncalibrated" as const,
+        },
         timingScore: null,
         timingTrend: "on_time" as const,
         uncertainLineCount: 0,
@@ -1209,6 +1446,15 @@ describe("CloudflareKaraokeEffectRunner", () => {
         phoneticUnavailableLineCount: 0,
         scoredLineCount: 0,
         strongestLines: [],
+        timingCalibration: {
+          matchedWordCount: 0,
+          measuredLineCount: 0,
+          offsetMs: 0,
+          rawOffsetMs: 0,
+          reason: "insufficient_evidence" as const,
+          residualSpreadMs: 0,
+          state: "uncalibrated" as const,
+        },
         timingScore: null,
         timingTrend: "on_time" as const,
         uncertainLineCount: 0,
@@ -1232,6 +1478,7 @@ describe("FakeKaraokeStreamingSttAdapter", () => {
     const received: string[] = [];
     await adapter.start({
       attemptId: "attempt-1",
+      initialSequence: 0,
       onMessage: async (message) => {
         received.push(message.event.text);
       },

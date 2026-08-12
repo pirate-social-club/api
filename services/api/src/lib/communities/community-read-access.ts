@@ -1,16 +1,24 @@
-import { mapShardErrorToHttp, type ShardReadRpc, type ShardResult, type ShardSqlStatement } from "@pirate/api-shared"
+import {
+  mapShardErrorToHttp,
+  type ShardBulkReadOperation,
+  type ShardBulkWriteOperation,
+  type ShardReadRpc,
+  type ShardResult,
+  type ShardSqlStatement,
+} from "@pirate/api-shared"
 import type { Env } from "../../env"
 import type { DbExecutor } from "../db-helpers"
 import { globalSingleton } from "../db-helpers"
 import { HttpError } from "../errors"
 import { getControlPlaneClient } from "../runtime-deps"
-import type { Client, InStatement, ReadClient } from "../sql-client"
+import type { Client, InStatement, QueryResult, ReadClient } from "../sql-client"
 import type { Transaction } from "../sql-client"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { CommunityBindingResolver } from "./community-binding-resolver"
 import { openCommunityDb } from "./community-db-factory"
 import { makeCommunityD1Client } from "./community-d1-client"
 import { shouldUseLocalCommunityDb } from "./community-local-mode"
+import { resolveCommunityShardRpc } from "./community-shard-registry"
 import {
   routeCommunityRead,
   invalidateOnStaleBindingError,
@@ -102,14 +110,9 @@ export function makeShardReadClient(shard: ShardReadRpc, binding: ResolvedCommun
   }
 }
 
-/** Build the shard invoker for this Worker: real client if the shard binding is
- * present, else the fail-loud not-provisioned stub. */
+/** Build an invoker that dispatches through the routing row's shard Worker id. */
 function shardReadInvokerFor(env: Env): CommunityReadInvoker {
-  const shard = env.COMMUNITY_D1_SHARD
-  if (!shard) {
-    return openShardReadClientNotProvisioned
-  }
-  return async (binding) => makeShardReadClient(shard, binding)
+  return async (binding) => makeShardReadClient(resolveCommunityShardRpc(env, binding.shardWorkerId), binding)
 }
 
 async function openLocalCommunityDb(
@@ -218,18 +221,142 @@ export async function openCommunityWriteClient(
       resolver: getResolver(),
       controlPlane: getControlPlaneClient(env),
       openD1: (binding) => {
-        const shard = env.COMMUNITY_D1_SHARD
-        if (!shard) {
-          throw new HttpError(
-            503,
-            "d1_backend_not_provisioned",
-            `Community ${communityId} routes to d1 but the shard backend is not provisioned`,
-            true,
-          )
-        }
+        const shard = resolveCommunityShardRpc(env, binding.shardWorkerId)
         return makeCommunityD1Client(shard, binding)
       },
     },
     communityId,
   )
+}
+
+export type CommunityBulkOperation = {
+  communityId: string
+  statements: InStatement[]
+  allowMissingTables?: string[]
+}
+
+type RoutedBulkOperation = ShardBulkReadOperation
+
+function bulkGroupKey(shardWorkerId: string | null): string {
+  return shardWorkerId ?? "__legacy_single_shard__"
+}
+
+/**
+ * Run one read batch per routed community while spending one Service Binding
+ * invocation per shard Worker, not one per community.  The fallback exists for
+ * older shard deployments during a rolling release; once both sides are
+ * current, the bulk RPC is always selected.
+ */
+export async function bulkCommunityRead(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  operations: CommunityBulkOperation[],
+): Promise<Map<string, QueryResult[]>> {
+  if (operations.length === 0) return new Map()
+  if (shouldUseLocalCommunityDb(env)) {
+    const values = await Promise.all(operations.map(async (operation) => {
+      const db = await openLocalCommunityDb(env, repo, operation.communityId)
+      try {
+        return [operation.communityId, await db.client.batch(operation.statements, "read")] as const
+      } finally {
+        await db.close()
+      }
+    }))
+    return new Map(values)
+  }
+
+  const resolver = getResolver()
+  const controlPlane = getControlPlaneClient(env)
+  const groups = new Map<string, { shard: ReturnType<typeof resolveCommunityShardRpc>; operations: RoutedBulkOperation[] }>()
+  for (const operation of operations) {
+    const binding = await resolver.resolve(controlPlane, operation.communityId)
+    if (!binding.bindingName) {
+      throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)
+    }
+    const shard = resolveCommunityShardRpc(env, binding.shardWorkerId)
+    const key = bulkGroupKey(binding.shardWorkerId)
+    const group = groups.get(key) ?? { shard, operations: [] }
+    group.operations.push({
+      communityId: binding.communityId,
+      bindingName: binding.bindingName,
+      statements: operation.statements.map((statement) => toShardStatement(statement) as ShardSqlStatement),
+      allowMissingTables: operation.allowMissingTables,
+    })
+    groups.set(key, group)
+  }
+
+  const values = new Map<string, QueryResult[]>()
+  for (const group of groups.values()) {
+    if (group.shard.bulkRead) {
+      const response = await group.shard.bulkRead({ operations: group.operations })
+      for (const item of response.operations) {
+        values.set(item.communityId, unwrap(item.result))
+      }
+      continue
+    }
+    for (const operation of group.operations) {
+      const result = await group.shard.batch(operation)
+      values.set(operation.communityId, unwrap(result))
+    }
+  }
+  return values
+}
+
+/** As `bulkCommunityRead`, but each operation is one atomic community write batch. */
+export async function bulkCommunityWrite(
+  env: Env,
+  repo: CommunityDatabaseBindingRepository,
+  operations: CommunityBulkOperation[],
+): Promise<Map<string, QueryResult[]>> {
+  if (operations.length === 0) return new Map()
+  if (shouldUseLocalCommunityDb(env)) {
+    const values = await Promise.all(operations.map(async (operation) => {
+      const db = await openLocalCommunityDb(env, repo, operation.communityId)
+      const tx = await db.client.transaction("write")
+      try {
+        for (const statement of operation.statements) await tx.execute(statement)
+        await tx.commit()
+        return [operation.communityId, [] as QueryResult[]] as const
+      } catch (error) {
+        await tx.rollback().catch(() => undefined)
+        throw error
+      } finally {
+        await db.close()
+      }
+    }))
+    return new Map(values)
+  }
+
+  const resolver = getResolver()
+  const controlPlane = getControlPlaneClient(env)
+  const groups = new Map<string, { shard: ReturnType<typeof resolveCommunityShardRpc>; operations: ShardBulkWriteOperation[] }>()
+  for (const operation of operations) {
+    const binding = await resolver.resolve(controlPlane, operation.communityId)
+    if (!binding.bindingName) {
+      throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)
+    }
+    const shard = resolveCommunityShardRpc(env, binding.shardWorkerId)
+    const key = bulkGroupKey(binding.shardWorkerId)
+    const group = groups.get(key) ?? { shard, operations: [] }
+    group.operations.push({
+      communityId: binding.communityId,
+      bindingName: binding.bindingName,
+      statements: operation.statements.map((statement) => ({ sql: statement.sql, args: statement.args })),
+    })
+    groups.set(key, group)
+  }
+
+  const values = new Map<string, QueryResult[]>()
+  for (const group of groups.values()) {
+    if (group.shard.bulkWrite) {
+      const response = await group.shard.bulkWrite({ operations: group.operations })
+      for (const item of response.operations) values.set(item.communityId, unwrap(item.result))
+      continue
+    }
+    for (const operation of group.operations) {
+      const result = await group.shard.batchWrite(operation)
+      values.set(operation.communityId, unwrap(result))
+    }
+  }
+  return values
 }

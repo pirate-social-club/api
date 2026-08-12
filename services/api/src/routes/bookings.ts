@@ -12,6 +12,11 @@ import {
   quoteGlobalBookingHold as realQuoteGlobalBookingHold,
 } from "../lib/bookings/booking-confirm-service"
 import {
+  listPendingBookingPaymentIntents as realListPendingBookingPaymentIntents,
+  listUnresolvedBookingPaymentIntentsForOperator as realListUnresolvedBookingPaymentIntentsForOperator,
+  recordBookingPaymentSubmitted as realRecordBookingPaymentSubmitted,
+} from "../lib/bookings/booking-payment-resume-service"
+import {
   createGlobalBookingHold as realCreateGlobalBookingHold,
   resolveGlobalBookingAvailability as realResolveGlobalBookingAvailability,
 } from "../lib/bookings/booking-hold-service"
@@ -30,6 +35,7 @@ import {
   getGlobalBookingSettlementReview as realGetGlobalBookingSettlementReview,
   getGlobalBookingForParty as realGetGlobalBookingForParty,
   enrichGlobalBookingCounterparties as realEnrichGlobalBookingCounterparties,
+  InvalidBookingListCursorError,
   InvalidBookingSettlementReviewCursorError,
   listPendingGlobalBookingSettlementReviews as realListPendingGlobalBookingSettlementReviews,
   listGlobalBookingsForUser as realListGlobalBookingsForUser,
@@ -38,26 +44,26 @@ import {
 import { getControlPlaneClient as getRealControlPlaneClient } from "../lib/runtime-deps"
 import { decodePublicUserId } from "../lib/public-ids"
 import { requireJsonBody } from "./communities-route-helpers"
-import { logBodylessBookingCancellation, parseOptionalExpectedRefundCents } from "./booking-cancellation-compat"
 
 const DEFAULT_WINDOW_DAYS = 14
 const SETTLEMENT_REVIEW_RESOLUTIONS = new Set(["completed", "no_show_host", "no_show_booker"])
 
 const bookings = new Hono<AuthenticatedEnv>()
 
-function isSettlementReviewOperatorPath(pathname: string): boolean {
+function isBookingOperatorPath(pathname: string): boolean {
   return pathname.endsWith("/bookings/settlement-review/pending")
+    || pathname.endsWith("/bookings/payment-intents/unresolved")
     || /\/bookings\/[^/]+\/settlement-review(?:\/resolve)?$/u.test(pathname)
 }
 
 function isPublicSlotsRead(method: string, pathname: string): boolean {
   return method.toUpperCase() === "GET"
-    && /\/bookings\/(?:booking-)?hosts\/[^/]+\/slots$/u.test(pathname)
+    && /\/bookings\/hosts\/[^/]+\/slots$/u.test(pathname)
 }
 
 bookings.use("*", async (c, next) => {
   const pathname = new URL(c.req.url).pathname
-  if (isSettlementReviewOperatorPath(pathname) || isPublicSlotsRead(c.req.method, pathname)) return next()
+  if (isBookingOperatorPath(pathname) || isPublicSlotsRead(c.req.method, pathname)) return next()
   return authenticateAdminOrUser(c, next)
 })
 
@@ -72,6 +78,9 @@ export type GlobalBookingRouteServices = {
   createGlobalBookingHold: typeof realCreateGlobalBookingHold
   quoteGlobalBookingHold: typeof realQuoteGlobalBookingHold
   confirmGlobalBookingHold: typeof realConfirmGlobalBookingHold
+  recordBookingPaymentSubmitted: typeof realRecordBookingPaymentSubmitted
+  listPendingBookingPaymentIntents: typeof realListPendingBookingPaymentIntents
+  listUnresolvedBookingPaymentIntentsForOperator: typeof realListUnresolvedBookingPaymentIntentsForOperator
   getGlobalBookingForParty: typeof realGetGlobalBookingForParty
   listGlobalBookingsForUser: typeof realListGlobalBookingsForUser
   getGlobalBookingSettlementReview: typeof realGetGlobalBookingSettlementReview
@@ -96,6 +105,9 @@ const realServices: GlobalBookingRouteServices = {
   createGlobalBookingHold: realCreateGlobalBookingHold,
   quoteGlobalBookingHold: realQuoteGlobalBookingHold,
   confirmGlobalBookingHold: realConfirmGlobalBookingHold,
+  recordBookingPaymentSubmitted: realRecordBookingPaymentSubmitted,
+  listPendingBookingPaymentIntents: realListPendingBookingPaymentIntents,
+  listUnresolvedBookingPaymentIntentsForOperator: realListUnresolvedBookingPaymentIntentsForOperator,
   getGlobalBookingForParty: realGetGlobalBookingForParty,
   listGlobalBookingsForUser: realListGlobalBookingsForUser,
   getGlobalBookingSettlementReview: realGetGlobalBookingSettlementReview,
@@ -243,6 +255,39 @@ async function confirmHoldHandler(c: BookingContext) {
   return c.json({ booking: result.booking, already_confirmed: result.already }, result.already ? 200 : 201)
 }
 
+async function paymentSubmittedHandler(c: BookingContext) {
+  const actor = c.get("actor")
+  const body = await requireJsonBody<{ tx_ref?: string; wallet_attachment_id?: string }>(
+    c,
+    "tx_ref and wallet_attachment_id are required",
+  )
+  if (!body.tx_ref?.trim() || !body.wallet_attachment_id?.trim()) {
+    return c.json({ error: "tx_ref and wallet_attachment_id are required" }, 400)
+  }
+  const result = await routeServices().recordBookingPaymentSubmitted({
+    executor: executor(c),
+    userRepository: routeServices().getUserRepository(c.env),
+    holdId: routeParam(c, "holdId"),
+    bookerUserId: actor.userId,
+    txRef: body.tx_ref,
+    walletAttachmentId: body.wallet_attachment_id,
+    nowUtc: new Date().toISOString(),
+  })
+  if (!result.ok) {
+    const status = result.reason === "hold_not_found"
+      ? 404
+      : result.reason === "invalid_tx_ref" || result.reason === "wallet_attachment_invalid"
+        ? 400
+        : 409
+    return c.json({ error: result.reason }, status)
+  }
+  return c.json({
+    payment_intent_id: result.paymentIntentId,
+    status: "recorded",
+    claimed_tx_ref: result.normalizedTxRef,
+  }, 200)
+}
+
 bookings.get("/", async (c) => {
   const actor = c.get("actor")
   const url = new URL(c.req.url)
@@ -250,28 +295,67 @@ bookings.get("/", async (c) => {
   const statusParam = url.searchParams.get("status")
   const statuses = statusParam ? statusParam.split(",").map((status) => status.trim()).filter(Boolean) : undefined
   const sourceCommunityId = optionalSourceCommunityId(url.searchParams.get("source_community_id"))
-  const data = await routeServices().listGlobalBookingsForUser({
-    executor: executor(c),
-    actorUserId: actor.userId,
-    role,
-    sourceCommunityId,
-    statuses,
-  })
-  const enriched = await routeServices().enrichGlobalBookingCounterparties({
-    bookings: data,
-    profileRepository: routeServices().getProfileRepository(c.env),
-  })
-  return c.json({ object: "list", data: enriched, has_more: false }, 200)
+  const limitParam = url.searchParams.get("limit")
+  const limit = limitParam == null ? undefined : Number(limitParam)
+  if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    return c.json({ error: "invalid_limit" }, 400)
+  }
+  try {
+    const page = await routeServices().listGlobalBookingsForUser({
+      executor: executor(c),
+      actorUserId: actor.userId,
+      role,
+      sourceCommunityId,
+      statuses,
+      limit,
+      cursor: url.searchParams.get("cursor"),
+    })
+    const enriched = await routeServices().enrichGlobalBookingCounterparties({
+      bookings: page.data,
+      profileRepository: routeServices().getProfileRepository(c.env),
+    })
+    return c.json({ ...page, data: enriched }, 200)
+  } catch (error) {
+    if (error instanceof InvalidBookingListCursorError) {
+      return c.json({ error: "invalid_cursor" }, 400)
+    }
+    throw error
+  }
 })
 
 bookings.get("/hosts/:hostUserId/slots", slotsHandler)
-bookings.get("/booking-hosts/:hostUserId/slots", slotsHandler)
 bookings.post("/hosts/:hostUserId/holds", createHoldHandler)
-bookings.post("/booking-hosts/:hostUserId/holds", createHoldHandler)
 bookings.post("/holds/:holdId/quote", quoteHoldHandler)
-bookings.post("/booking-holds/:holdId/quote", quoteHoldHandler)
 bookings.post("/holds/:holdId/confirm", confirmHoldHandler)
-bookings.post("/booking-holds/:holdId/confirm", confirmHoldHandler)
+bookings.post("/holds/:holdId/payment-submitted", paymentSubmittedHandler)
+bookings.get("/payment-intents/pending", async (c) => {
+  const data = await routeServices().listPendingBookingPaymentIntents({
+    executor: executor(c),
+    bookerUserId: c.get("actor").userId,
+    nowUtc: new Date().toISOString(),
+  })
+  return c.json({ object: "list", data, has_more: false }, 200)
+})
+
+bookings.get("/payment-intents/unresolved", async (c) => {
+  const operatorActor = await authenticateOperatorCredential({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(operatorActor, BOOKING_SETTLEMENT_RESOLVE_SCOPE)
+
+  const limitParam = new URL(c.req.url).searchParams.get("limit")
+  const limit = limitParam == null ? undefined : Number(limitParam)
+  if (limit != null && (!Number.isInteger(limit) || limit < 1 || limit > 100)) {
+    return c.json({ error: "invalid_limit" }, 400)
+  }
+  const page = await routeServices().listUnresolvedBookingPaymentIntentsForOperator({
+    executor: executor(c),
+    nowUtc: new Date().toISOString(),
+    limit,
+  })
+  return c.json({ object: "list", data: page.data, has_more: page.hasMore }, 200)
+})
 
 bookings.get("/settlement-review/pending", async (c) => {
   const operatorActor = await authenticateOperatorCredential({
@@ -393,8 +477,11 @@ bookings.post("/:bookingId/settlement-review/resolve", async (c) => {
 })
 
 bookings.post("/:bookingId/cancel", async (c) => {
-  const terms = await parseOptionalExpectedRefundCents(() => c.req.text())
-  if (!terms.ok) {
+  const body = await requireJsonBody<{ expected_refund_cents?: unknown }>(
+    c,
+    "expected_refund_cents is required",
+  )
+  if (!Number.isSafeInteger(body.expected_refund_cents) || Number(body.expected_refund_cents) < 0) {
     return c.json({ error: "invalid_expected_refund_cents" }, 400)
   }
   const bookingId = routeParam(c, "bookingId")
@@ -404,7 +491,7 @@ bookings.post("/:bookingId/cancel", async (c) => {
     bookingId,
     actorUserId: c.get("actor").userId,
     nowUtc: new Date().toISOString(),
-    expectedRefundCents: terms.provided ? terms.expectedRefundCents : undefined,
+    expectedRefundCents: Number(body.expected_refund_cents),
   })
   if (!result.ok) {
     if (result.reason === "cancellation_terms_changed") {
@@ -412,7 +499,6 @@ bookings.post("/:bookingId/cancel", async (c) => {
     }
     return c.json({ error: result.reason }, conflictOrNotFound(result.reason))
   }
-  if (!terms.provided) logBodylessBookingCancellation({ bookingId, actorRole: result.cancelledBy })
   return c.json({ booking: result.booking, cancelled_by: result.cancelledBy, already_cancelled: result.already }, 200)
 })
 

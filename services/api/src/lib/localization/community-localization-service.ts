@@ -6,6 +6,7 @@ import type {
   Env,
 } from "../../types"
 import { enqueueCommunityJob } from "../communities/jobs/store"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../communities/jobs/runner-types"
 import type { DbExecutor } from "../db-helpers"
 import { nowIso } from "../helpers"
 import {
@@ -16,7 +17,7 @@ import {
 import { DEFAULT_CONTENT_LOCALE, detectSourceLanguageFromText, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
 import { computeTextSourceHash } from "./content-source-hash"
-import { getContentTranslation, upsertContentTranslation, type ContentTranslationRecord } from "./content-translation-store"
+import { getContentTranslation, isUsableContentTranslation, upsertContentTranslation } from "./content-translation-store"
 
 type CommunityTextField = {
   field_key: string
@@ -25,13 +26,7 @@ type CommunityTextField = {
 
 type CommunityTextMaterializePayload = {
   locale?: string | null
-}
-
-function hasTranslatedBody(record: ContentTranslationRecord | null): boolean {
-  if (!record || record.outcome !== "translated") {
-    return false
-  }
-  return Boolean(String(record.translated_body ?? "").trim())
+  source_hash?: string | null
 }
 
 function collectCommunityFields(community: Community): CommunityTextField[] {
@@ -132,6 +127,26 @@ function collectPreviewFields(preview: CommunityPreview): CommunityTextField[] {
   return fields
 }
 
+async function computeCommunityFieldSetSourceHash(fields: CommunityTextField[]): Promise<string> {
+  const fieldHashes = await Promise.all(fields.map(async (field) => ({
+    field_key: field.field_key,
+    source_hash: await computeTextSourceHash(field.source_text),
+  })))
+  fieldHashes.sort((left, right) => left.field_key.localeCompare(right.field_key))
+  return computeTextSourceHash(JSON.stringify(fieldHashes))
+}
+
+export async function computeCommunityTextSourceHash(community: Community): Promise<string> {
+  return computeCommunityFieldSetSourceHash(collectCommunityFields(community))
+}
+
+async function computeLocalizationSourceHash(localization: CommunityTextLocalization): Promise<string> {
+  const fieldHashes = localization.items
+    .map((item) => ({ field_key: item.field_key, source_hash: item.source_hash }))
+    .sort((left, right) => left.field_key.localeCompare(right.field_key))
+  return computeTextSourceHash(JSON.stringify(fieldHashes))
+}
+
 async function ensureCommunityLocalizationMeta(input: {
   executor: DbExecutor
   communityId: string
@@ -228,7 +243,7 @@ async function buildCommunityTextLocalizationInternal(input: {
       sourceHash: meta.source_hash,
     })
 
-    if (!cached) {
+    if (!isUsableContentTranslation(cached, { body: field.source_text })) {
       items.push({
         ...item,
         translation_state: "pending",
@@ -301,17 +316,28 @@ export async function enqueueCommunityTextTranslationOnReadIfNeeded(input: {
     return
   }
 
-  await enqueueCommunityJob({
+  const sourceHash = await computeLocalizationSourceHash(localization)
+
+  const job = await enqueueCommunityJob({
     client: input.executor,
     communityId: input.communityId,
     jobType: "community_text_translation_materialize",
     subjectType: "community_text_translation",
-    subjectId: `${input.communityId}:${localization.resolved_locale}`,
+    subjectId: `${input.communityId}:${localization.resolved_locale}:${sourceHash}`,
     payloadJson: JSON.stringify({
       locale: localization.resolved_locale,
+      source_hash: sourceHash,
     } satisfies CommunityTextMaterializePayload),
     createdAt: nowIso(),
+    reuseTerminalFailure: true,
   })
+  if (job.status === "failed" && job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS) {
+    for (const item of localization.items) {
+      if (item.translation_state === "pending") {
+        item.translation_state = "failed"
+      }
+    }
+  }
 }
 
 export function parseCommunityTextMaterializePayload(raw: string | null): CommunityTextMaterializePayload | null {
@@ -378,7 +404,7 @@ export async function materializeCommunityTextTranslations(input: {
       locale: resolvedLocale,
       sourceHash: meta.source_hash,
     })
-    if (existing && (existing.outcome === "same_language" || hasTranslatedBody(existing))) {
+    if (isUsableContentTranslation(existing, { body: field.source_text })) {
       translatedCount += existing.outcome === "translated" ? 1 : 0
       continue
     }

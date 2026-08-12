@@ -29,6 +29,10 @@ function fakeShard() {
         value: { bindingName: "DB_CMTY_NEW", shardWorkerId: "shard-1", allocated: true },
       }
     },
+    communityD1LookupBinding: async (input: any) => {
+      calls.push({ m: "communityD1LookupBinding", input })
+      return { ok: true as const, value: { bindingName: null, shardWorkerId: "shard-1" } }
+    },
     communityD1LoadSnapshot: async (input: any) => {
       calls.push({ m: "communityD1LoadSnapshot", input })
       return { ok: true as const, value: { rowsAffected: input.statements.length, loaded: true } }
@@ -45,6 +49,10 @@ function fakeShard() {
       calls.push({ m: "communityD1Reset", input })
       return { ok: true as const, value: { tablesDropped: 0 } }
     },
+    communityD1Decommission: async (input: any) => {
+      calls.push({ m: "communityD1Decommission", input })
+      return { ok: true as const, value: { tablesDropped: 0, released: true } }
+    },
     communityD1Release: async (input: any) => {
       calls.push({ m: "communityD1Release", input })
       return { ok: true as const, value: { released: true } }
@@ -53,6 +61,19 @@ function fakeShard() {
       calls.push({ m: "communityD1PoolStats", input })
       return { ok: true as const, value: { total: 1, allocated: 0, free: 1, quarantined: 0 } }
     },
+    communityD1Version: async () => ({
+      build: {
+        gitRef: "main",
+        gitSha: "shard-commit",
+        timestamp: "2026-07-23T10:00:00.000Z",
+        sourceVersion: "shard-tree.shared-tree",
+      },
+      workerVersion: {
+        id: "worker-version-id",
+        tag: "shard-commit",
+        timestamp: "2026-07-23T10:00:01.000Z",
+      },
+    }),
   }
 }
 

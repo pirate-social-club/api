@@ -1,11 +1,15 @@
 import type { Env } from "../../env"
 import { trimEnv } from "../env-strings"
+import { providerUnavailable } from "../errors"
+import { DEFAULT_OPENROUTER_MODEL } from "../openrouter-client"
+import { SONG_LYRICS_CONTENT_CLASSIFICATION_PROMPT } from "./song-lyrics-content-policy"
 import type { Post, SongArtifactUpload } from "../../types"
 import {
   decryptActiveCommunityElevenLabsKey,
   hasActiveCommunityElevenLabsCredential,
 } from "../communities/assistant-policy/credential-service"
 import { fetchSongArtifactBytes } from "./song-artifact-storage"
+import { extractAudioSampleForObject } from "./video-audio-sample"
 
 type SongAlignmentReason =
   | "lyrics_missing"
@@ -45,6 +49,15 @@ const SONG_ANALYSIS_SLOW_STEP_MS = 10_000
 const SONG_ANALYSIS_STALLED_STEP_MS = 45_000
 const DEFAULT_OPENROUTER_TIMEOUT_MS = 20_000
 const DEFAULT_ACRCLOUD_TIMEOUT_MS = 30_000
+// ACRCloud identifies from 10-20 seconds of audio and rejects large uploads
+// outright (status 3016), so the song path sends a short extracted window and
+// only falls back to the raw file when no extractor is available.
+const SONG_ACR_SAMPLE_WINDOW = { start_ms: 10_000, duration_ms: 20_000 }
+const ACRCLOUD_IDENTIFY_ATTEMPTS = 2
+// Definitive ACR answers: 0 = match, 1001 = no result, 2004 = audio that
+// cannot be fingerprinted. Every other status is a provider-side failure and
+// must not silently count as "no match".
+const ACRCLOUD_DEFINITIVE_STATUS_CODES = new Set([0, 1001, 2004])
 const DEFAULT_ELEVENLABS_TIMEOUT_MS = 120_000
 
 export type SongBundleAnalysisResult = {
@@ -122,15 +135,10 @@ function resolveProviderLyricsOutcome(result: Record<string, unknown>): {
     ? result.age_gate_rating
     : null
 
-  if (rating === "adult") {
-    return {
-      analysisState: "allow",
-      contentSafetyState: "adult",
-      ageGatePolicy: "18_plus",
-    }
-  }
-
-  if (rating === "sensitive") {
+  // Policy (2026-08-02): lyrics alone never hard-gate. Explicit lyrics land in
+  // the sensitive tier (explicit-content notice), like a record-label E sticker;
+  // 18_plus is reserved for adult visual media (posts/openai-moderation.ts).
+  if (rating === "adult" || rating === "sensitive") {
     return {
       analysisState: "allow",
       contentSafetyState: "sensitive",
@@ -166,7 +174,7 @@ async function classifyLyricsAgeGate(input: {
   }
 
   const baseUrl = trimEnv(input.env.OPENROUTER_BASE_URL) || "https://openrouter.ai/api/v1"
-  const model = trimEnv(input.env.OPENROUTER_MODEL) || "google/gemini-3.1-flash-lite-preview"
+  const model = trimEnv(input.env.OPENROUTER_MODEL) || DEFAULT_OPENROUTER_MODEL
   const timeoutMs = providerTimeoutMs(input.env.OPENROUTER_TIMEOUT_MS, DEFAULT_OPENROUTER_TIMEOUT_MS)
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
@@ -186,7 +194,9 @@ async function classifyLyricsAgeGate(input: {
       body: JSON.stringify({
         model,
         temperature: 0,
-        max_completion_tokens: 120,
+        // Leave enough room for reasoning-capable providers to emit the strict
+        // JSON object. A 120-token cap can truncate an otherwise valid answer.
+        max_completion_tokens: 500,
         response_format: {
           type: "json_schema",
           json_schema: {
@@ -211,11 +221,7 @@ async function classifyLyricsAgeGate(input: {
         messages: [
           {
             role: "system",
-            content:
-              "Classify song lyrics for age-gating only. Never recommend blocking or review. " +
-              "Return adult only for explicit sexual content suitable for 18+ gating. " +
-              "Return sensitive for profanity or mature themes that do not require 18+ gating. " +
-              "Return safe otherwise.",
+            content: SONG_LYRICS_CONTENT_CLASSIFICATION_PROMPT,
           },
           {
             role: "user",
@@ -302,21 +308,29 @@ export async function evaluateLyricsModeration(input: {
   }
 
   const providerResult = await classifyLyricsAgeGate(input)
-  const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
-  const providerOutcome = providerFailed
-    ? {
-        analysisState: "allow" as const,
-        contentSafetyState: "pending" as const,
-        ageGatePolicy: "none" as const,
-      }
-    : resolveProviderLyricsOutcome(providerResult as Record<string, unknown>)
+  const providerError = providerResult && typeof providerResult.error === "string"
+    ? providerResult.error
+    : providerResult
+      ? null
+      : "empty_response"
+  if (providerError) {
+    // A missing, truncated, or invalid classifier response is not a "safe"
+    // verdict. Reuse the retryable provider-failure path so publication cannot
+    // silently continue without an age-gate decision.
+    throw providerUnavailable("Song lyrics classification is temporarily unavailable", {
+      provider: "openrouter",
+      provider_error: providerError,
+      reason: "song_lyrics_classification_failed",
+    })
+  }
+  const providerOutcome = resolveProviderLyricsOutcome(providerResult!)
 
   return {
     analysisState: providerOutcome.analysisState,
     contentSafetyState: providerOutcome.contentSafetyState,
     ageGatePolicy: providerOutcome.ageGatePolicy,
-    moderationStatus: providerFailed ? "failed" : "completed",
-    moderationError: providerFailed ? String(providerResult?.error || "OpenRouter song lyrics classification failed") : null,
+    moderationStatus: "completed",
+    moderationError: null,
     moderationResult: {
       provider: "openrouter",
       provider_result: providerResult,
@@ -370,6 +384,40 @@ async function identifyAudioWithAcrCloud(input: {
   }
   const storageObjectKey = input.upload.storage_object_key
 
+  try {
+    const extracted = await withSongAnalysisStep("acrcloud extract audio sample", {
+      provider: "acrcloud",
+      size_bytes: input.upload.size_bytes,
+      upload: input.upload.id,
+      window: SONG_ACR_SAMPLE_WINDOW,
+    }, () => extractAudioSampleForObject({
+      env: input.env,
+      objectKey: storageObjectKey,
+      window: SONG_ACR_SAMPLE_WINDOW,
+    }))
+    if (extracted.kind === "sample") {
+      return identifyAudioSampleWithAcrCloud({
+        env: input.env,
+        sampleBytes: extracted.bytes,
+        filename: `${input.upload.id}-acr-sample.wav`,
+        mimeType: extracted.mimeType,
+        logContext: { upload: input.upload.id, sample_source: "extracted_window" },
+      })
+    }
+    console.info("[song-artifacts] ACR sample extraction unavailable, using full file", {
+      kind: extracted.kind,
+      provider: "acrcloud",
+      reason: extracted.kind === "skipped" ? extracted.reason : null,
+      upload: input.upload.id,
+    })
+  } catch (error) {
+    console.warn("[song-artifacts] ACR sample extraction failed, using full file", {
+      message: errorMessage(error),
+      provider: "acrcloud",
+      upload: input.upload.id,
+    })
+  }
+
   const contentResponse = await withSongAnalysisStep("acrcloud load audio sample", {
     content_hash_present: Boolean(input.upload.content_hash),
     filename: input.upload.filename,
@@ -390,7 +438,7 @@ async function identifyAudioWithAcrCloud(input: {
     sampleBytes: content,
     filename: input.upload.filename || "audio.bin",
     mimeType: input.upload.mime_type || "application/octet-stream",
-    logContext: { upload: input.upload.id },
+    logContext: { upload: input.upload.id, sample_source: "full_file" },
   })
 }
 
@@ -467,6 +515,17 @@ export async function identifyAudioSampleWithAcrCloud(input: {
         error: "invalid_response",
       }
     }
+    const status = (parsed as { status?: { code?: unknown; msg?: unknown } }).status
+    const statusCode = status && typeof status === "object" && typeof status.code === "number"
+      ? status.code
+      : null
+    if (statusCode !== null && !ACRCLOUD_DEFINITIVE_STATUS_CODES.has(statusCode)) {
+      return {
+        provider: "acrcloud",
+        error: `acr_status_${statusCode}`,
+        provider_status: status,
+      }
+    }
     return parsed as Record<string, unknown>
   } catch (error) {
     return {
@@ -478,6 +537,20 @@ export async function identifyAudioSampleWithAcrCloud(input: {
       clearTimeout(timer)
     }
   }
+}
+
+// Custom-bucket entries tagged content_type "video_audio" are platform video
+// audio enrolled as a repost-identity signal; they must not count as a catalog
+// song match. user_defined may come back nested or flattened onto the item.
+function isVideoAudioCustomFile(item: unknown): boolean {
+  if (!item || typeof item !== "object") {
+    return false
+  }
+  const record = item as Record<string, unknown>
+  const userDefined = record.user_defined != null && typeof record.user_defined === "object"
+    ? record.user_defined as Record<string, unknown>
+    : record
+  return userDefined.content_type === "video_audio"
 }
 
 async function evaluateAudioIdentification(input: {
@@ -498,33 +571,55 @@ async function evaluateAudioIdentification(input: {
     }
   }
 
-  const providerResult = await identifyAudioWithAcrCloud({
-    env: input.env,
-    upload: input.primaryAudioUpload,
-  })
-  const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
+  let providerResult: Record<string, unknown> | null = null
+  for (let attempt = 1; attempt <= ACRCLOUD_IDENTIFY_ATTEMPTS; attempt += 1) {
+    providerResult = await identifyAudioWithAcrCloud({
+      env: input.env,
+      upload: input.primaryAudioUpload,
+    })
+    const providerError = providerResult && typeof providerResult.error === "string"
+      ? providerResult.error
+      : null
+    if (!providerError || providerError === "missing_configuration") {
+      break
+    }
+    console.warn("[song-artifacts] ACRCloud identification attempt failed", {
+      attempt,
+      max_attempts: ACRCLOUD_IDENTIFY_ATTEMPTS,
+      error: providerError,
+      provider: "acrcloud",
+      upload: input.primaryAudioUpload.id,
+    })
+  }
   const missingConfiguration = providerResult?.error === "missing_configuration"
+  const providerFailed = Boolean(providerResult && typeof providerResult.error === "string")
+  if (providerFailed && !missingConfiguration) {
+    // A provider outage or transport failure is not a rights verdict: surface
+    // it as retryable provider unavailability instead of stranding the post in
+    // a terminal "review required" state no reviewer will ever see.
+    throw providerUnavailable("Song audio identification is temporarily unavailable", {
+      provider: "acrcloud",
+      provider_error: String(providerResult?.error),
+      reason: "song_audio_identification_failed",
+    })
+  }
   const metadata = (providerResult as {
     metadata?: {
       music?: unknown[]
       custom_files?: unknown[]
     }
   } | null)?.metadata
+  const catalogCustomMatches = (Array.isArray(metadata?.custom_files) ? metadata.custom_files : [])
+    .filter((item) => !isVideoAudioCustomFile(item))
   const matchFound = Boolean(
     (Array.isArray(metadata?.music) && metadata.music.length)
-    || (Array.isArray(metadata?.custom_files) && metadata.custom_files.length),
+    || catalogCustomMatches.length,
   )
 
   return {
-    analysisState: providerFailed
-      ? missingConfiguration
-        ? "allow"
-        : "review_required"
-      : matchFound
-        ? "allow_with_required_reference"
-        : "allow",
-    moderationStatus: providerFailed ? "failed" : "completed",
-    moderationError: providerFailed ? String(providerResult?.error || "ACRCloud identification failed") : null,
+    analysisState: matchFound ? "allow_with_required_reference" : "allow",
+    moderationStatus: missingConfiguration ? "failed" : "completed",
+    moderationError: missingConfiguration ? "missing_configuration" : null,
     moderationResult: {
       provider: "acrcloud",
       provider_result: providerResult,
@@ -663,33 +758,94 @@ async function alignLyricsWithElevenLabs(input: {
   }
 }
 
-function normalizeTimedLyrics(result: Record<string, unknown>): Record<string, unknown> {
+const LATIN_LOOKALIKE_FOLD: Record<string, string> = {
+  "\u0430": "a",
+  "\u0435": "e",
+  "\u043E": "o",
+  "\u0440": "p",
+  "\u0441": "c",
+  "\u0445": "x",
+  "\u0443": "y",
+  "\u0410": "A",
+  "\u0412": "B",
+  "\u0415": "E",
+  "\u041A": "K",
+  "\u041C": "M",
+  "\u041D": "H",
+  "\u041E": "O",
+  "\u0420": "P",
+  "\u0421": "C",
+  "\u0422": "T",
+  "\u0425": "X",
+}
+
+function foldLatinLookalikes(value: string): string {
+  return Array.from(value, (character) => LATIN_LOOKALIKE_FOLD[character] ?? character).join("")
+}
+
+export function canonicalizeTimedLyricSegments(
+  segments: unknown[],
+  canonicalLyrics: string,
+): unknown[] {
+  const texts = segments.map((segment) => {
+    if (!segment || typeof segment !== "object" || !("text" in segment) || typeof segment.text !== "string") {
+      return null
+    }
+    return segment.text
+  })
+  if (texts.some((text) => text === null)) {
+    return segments
+  }
+
+  const providerLyrics = texts.join("")
+  if (
+    providerLyrics.length !== canonicalLyrics.length
+    || foldLatinLookalikes(providerLyrics) !== foldLatinLookalikes(canonicalLyrics)
+  ) {
+    return segments
+  }
+
+  let cursor = 0
+  return segments.map((segment, index) => {
+    const text = texts[index] ?? ""
+    const canonicalText = canonicalLyrics.slice(cursor, cursor + text.length)
+    cursor += text.length
+    return { ...(segment as Record<string, unknown>), text: canonicalText }
+  })
+}
+
+function normalizeTimedLyrics(result: Record<string, unknown>, canonicalLyrics: string): Record<string, unknown> {
   if (Array.isArray(result.segments)) {
-    return result
+    return {
+      ...result,
+      segments: canonicalizeTimedLyricSegments(result.segments, canonicalLyrics),
+    }
   }
 
   const words = Array.isArray(result.words) ? result.words : []
+  const segments = words
+    .map((word) => {
+      if (!word || typeof word !== "object") {
+        return null
+      }
+      const text = "text" in word && typeof word.text === "string" ? word.text : null
+      const start = "start" in word && typeof word.start === "number" ? word.start : null
+      const end = "end" in word && typeof word.end === "number" ? word.end : null
+      if (!text || start === null || end === null) {
+        return null
+      }
+      return {
+        start_ms: Math.round(start * 1000),
+        end_ms: Math.round(end * 1000),
+        text,
+        loss: "loss" in word && typeof word.loss === "number" ? word.loss : null,
+      }
+    })
+    .filter((segment): segment is { start_ms: number; end_ms: number; text: string; loss: number | null } => Boolean(segment))
+
   return {
     provider: "elevenlabs",
-    segments: words
-      .map((word) => {
-        if (!word || typeof word !== "object") {
-          return null
-        }
-        const text = "text" in word && typeof word.text === "string" ? word.text : null
-        const start = "start" in word && typeof word.start === "number" ? word.start : null
-        const end = "end" in word && typeof word.end === "number" ? word.end : null
-        if (!text || start === null || end === null) {
-          return null
-        }
-        return {
-          start_ms: Math.round(start * 1000),
-          end_ms: Math.round(end * 1000),
-          text,
-          loss: "loss" in word && typeof word.loss === "number" ? word.loss : null,
-        }
-      })
-      .filter((segment): segment is { start_ms: number; end_ms: number; text: string; loss: number | null } => Boolean(segment)),
+    segments: canonicalizeTimedLyricSegments(segments, canonicalLyrics),
     provider_result: result,
   }
 }
@@ -723,7 +879,7 @@ async function evaluateAlignment(input: {
     alignmentStatus: "completed",
     alignmentError: null,
     alignmentReason: null,
-    timedLyrics: normalizeTimedLyrics(providerResult ?? {}),
+    timedLyrics: normalizeTimedLyrics(providerResult ?? {}, input.lyrics),
   }
 }
 

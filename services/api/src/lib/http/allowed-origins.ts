@@ -1,7 +1,6 @@
 import type { Env } from "../../env"
 
 const DEFAULT_ANDROID_KARAOKE_ORIGIN = "https://android.pirate.sc"
-
 function commaSeparatedValues(value: string | undefined): string[] {
   return String(value || "")
     .split(",")
@@ -40,7 +39,36 @@ function normalizeExactOrigin(value: string): string | null {
   }
 }
 
-function isTrustedHnsWebOrigin(origin: string): boolean {
+export function importedHnsAppRoot(origin: string): string | null {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null
+  const labels = url.hostname.toLowerCase().split(".")
+  if (labels.length !== 2 || labels[0] !== "app") return null
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(labels[1] ?? "")
+    ? labels[1]!
+    : null
+}
+
+export function importedHnsRootLabel(origin: string): string | null {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
+    return null
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port) return null
+  const hostname = url.hostname.toLowerCase()
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(hostname)
+    ? hostname
+    : null
+}
+
+function isTrustedHnsWebOrigin(origin: string, importedOriginAllowed: boolean): boolean {
   let url: URL
   try {
     url = new URL(origin)
@@ -58,18 +86,29 @@ function isTrustedHnsWebOrigin(origin: string): boolean {
   }
 
   if (!hostname.includes(".")) {
+    return importedOriginAllowed && importedHnsRootLabel(origin) !== null
+  }
+
+  if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) {
     return true
   }
 
-  return hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")
+  // Imported HNS roots use the dashboard-compatible app.<root> origin. The
+  // API remains the canonical HNS service, so these origins need the same
+  // CORS treatment as app.pirate without requiring one config entry per root.
+  return importedOriginAllowed && importedHnsAppRoot(origin) !== null
 }
 
-export function configuredCorsOrigin(origin: string, env: Pick<Env, "CORS_ALLOWED_ORIGINS">): string | null {
-  if (isTrustedHnsWebOrigin(origin)) {
+export function configuredCorsOrigin(
+  origin: string,
+  env: Pick<Env, "CORS_ALLOWED_ORIGINS"> | undefined,
+  importedHnsOriginAllowed = false,
+): string | null {
+  if (isTrustedHnsWebOrigin(origin, importedHnsOriginAllowed)) {
     return origin
   }
 
-  const allowedOrigins = String(env.CORS_ALLOWED_ORIGINS || "")
+  const allowedOrigins = String(env?.CORS_ALLOWED_ORIGINS || "")
     .split(",")
     .map((allowedOrigin) => allowedOrigin.trim())
     .filter(Boolean)

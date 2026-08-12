@@ -5,6 +5,21 @@ import type { UserRow } from "../src/lib/auth/auth-db-rows"
 import { INTERACTIVE_VERIFICATION_TTL_MS } from "../src/lib/verification/verification-capabilities"
 
 describe("verification capability lifecycle", () => {
+  test("lazily expires ZKPassport unique-human capabilities", () => {
+    const oldVerifiedAt = new Date(Date.now() - INTERACTIVE_VERIFICATION_TTL_MS - 60_000).toISOString()
+    const capabilities = parseVerificationCapabilities(JSON.stringify({
+      unique_human: {
+        state: "verified",
+        provider: "zkpassport",
+        proof_type: "unique_human",
+        mechanism: "zkpassport-unique-identifier",
+        verified_at: oldVerifiedAt,
+      },
+    }))
+
+    expect(capabilities.unique_human.state).toBe("expired")
+  })
+
   test("lazily expires old interactive capabilities", () => {
     const oldVerifiedAt = new Date(Date.now() - INTERACTIVE_VERIFICATION_TTL_MS - 60_000).toISOString()
     const capabilities = parseVerificationCapabilities(JSON.stringify({

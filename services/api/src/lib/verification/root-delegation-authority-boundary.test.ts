@@ -1,0 +1,28 @@
+import { Glob, file } from "bun"
+import { describe, expect, test } from "bun:test"
+
+describe("root-delegation authority boundary", () => {
+  test("verification modules cannot read or write root-delegation tables", async () => {
+    const modules: string[] = []
+    for await (const fileName of new Glob("*.ts").scan({
+      cwd: import.meta.dir,
+      onlyFiles: true,
+    })) {
+      if (!fileName.endsWith(".test.ts")) {
+        modules.push(fileName)
+      }
+    }
+    expect(modules.length).toBeGreaterThan(0)
+
+    for (const fileName of modules) {
+      const source = await file(new URL(fileName, import.meta.url)).text()
+
+      // These modules own session-scoped ownership, attachment, and expiry
+      // evidence. Root-delegation freshness has a separate authority. Matching
+      // the namespace prefix makes this a ratchet for future root tables too.
+      // A future canonical observer placed here must earn an explicit,
+      // narrowly named exclusion with its root-authority rationale in review.
+      expect(source, fileName).not.toMatch(/\bhns_root_[a-z0-9_]+\b/u)
+    }
+  })
+})

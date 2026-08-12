@@ -4,7 +4,7 @@
 // and booking finalization policy stay outside this module.
 import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
 import {
-  atomicFromRow, atomicToArg, boolFromRow, intFromRow, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg,
+  atomicFromRow, atomicFromRowNullable, atomicToArg, boolFromRow, intFromRow, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg,
   textFromRow, textFromRowNullable,
 } from "./codecs";
 import type { PaymentIntent, PaymentIntentStatus } from "./types";
@@ -33,7 +33,7 @@ export interface CreatePaymentIntentInput {
   updatedAt?: string;
 }
 
-interface ReservePaymentIntentInput {
+export interface ReservePaymentIntentInput {
   paymentIntentId: string;
   claimToken: string;
   claimExpiresAt: string;
@@ -52,13 +52,44 @@ interface VerifyPaymentIntentInput extends ClaimPaymentIntentInput {
   verifiedSenderAddress: string;
 }
 
+export interface MarkCustodyRefundPendingInput extends ClaimPaymentIntentInput {
+  observedAmountAtomic: string;
+  senderAddress: string;
+  reason: "wrong_transfer_amount" | "unexpected_sender";
+}
+
+export interface MarkCustodyOperatorIncidentInput extends ClaimPaymentIntentInput {
+  transfers: Array<{
+    senderAddress: string;
+    observedAmountAtomic: string;
+    transferCount: number;
+  }>;
+}
+
 type CreateOrGetPaymentIntentResult =
   | { ok: true; intent: PaymentIntent }
   | { ok: false; reason: "replay-conflict" };
 
-type ReservePaymentIntentResult =
+export type ReservePaymentIntentResult =
   | { ok: true; intent: PaymentIntent }
   | { ok: false; reason: "not-reservable" | "reused-tx" };
+
+export interface PendingPaymentIntentRecord {
+  intent: PaymentIntent;
+  hostUserId: string;
+  bookerUserId: string;
+  slotStartUtc: string;
+  slotEndUtc: string;
+  holdStatus: "active" | "consumed" | "expired";
+  bookingId: string | null;
+}
+
+export interface ClaimedUnresolvedPaymentIntentRecord {
+  intent: PaymentIntent;
+  hostUserId: string;
+  bookerUserId: string;
+  holdStatus: "active" | "consumed" | "expired";
+}
 
 export function paymentIntentIdForHold(holdId: string): string {
   return `bpi_${holdId}`;
@@ -106,9 +137,11 @@ function decodeStatus(value: unknown): PaymentIntentStatus {
     status !== "verified" &&
     status !== "verification_failed" &&
     status !== "verification_rejected" &&
+    status !== "custody_refund_pending" &&
+    status !== "custody_operator_incident" &&
     status !== "consumed" &&
     status !== "expired" &&
-    status !== "superseded"
+    status !== "refunded"
   ) {
     throw new TypeError(`decodeStatus: bad status ${status}`);
   }
@@ -141,6 +174,51 @@ function decodePaymentIntent(row: QueryResultRow): PaymentIntent {
     verifiedAt: isoUtcFromRowNullable(row.verified_at),
     consumedWalletAttachmentId: textFromRowNullable(row.consumed_wallet_attachment_id),
     consumedAt: isoUtcFromRowNullable(row.consumed_at),
+    custodyObservedAmountAtomic: atomicFromRowNullable(row.custody_observed_amount_atomic),
+    custodySenderAddress: textFromRowNullable(row.custody_sender_address),
+    custodyReason: (() => {
+      const reason = textFromRowNullable(row.custody_reason);
+      if (
+        reason !== null
+        && reason !== "wrong_transfer_amount"
+        && reason !== "unexpected_sender"
+        && reason !== "multiple_senders"
+      ) {
+        throw new TypeError(`decodePaymentIntent: bad custody reason ${reason}`);
+      }
+      return reason;
+    })(),
+    custodyEvidence: (() => {
+      const value = row.custody_evidence_json;
+      if (value == null) return null;
+      const parsed = typeof value === "string" ? JSON.parse(value) as unknown : value;
+      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { transfers?: unknown }).transfers)) {
+        throw new TypeError("decodePaymentIntent: bad custody evidence");
+      }
+      const transfers = (parsed as { transfers: unknown[] }).transfers.map((entry) => {
+        if (!entry || typeof entry !== "object") throw new TypeError("decodePaymentIntent: bad custody transfer");
+        const transfer = entry as Record<string, unknown>;
+        if (
+          typeof transfer.sender_address !== "string"
+          || typeof transfer.observed_amount_atomic !== "string"
+          || !Number.isSafeInteger(transfer.transfer_count)
+        ) {
+          throw new TypeError("decodePaymentIntent: bad custody transfer");
+        }
+        return {
+          senderAddress: transfer.sender_address,
+          observedAmountAtomic: transfer.observed_amount_atomic,
+          transferCount: transfer.transfer_count as number,
+        };
+      });
+      return { transfers };
+    })(),
+    custodyDetectedAt: isoUtcFromRowNullable(row.custody_detected_at),
+    refundTxRef: textFromRowNullable(row.refund_tx_ref),
+    refundAttemptCount: intFromRow(row.refund_attempt_count),
+    refundLastAttemptAt: isoUtcFromRowNullable(row.refund_last_attempt_at),
+    refundLastErrorCode: textFromRowNullable(row.refund_last_error_code),
+    refundedAt: isoUtcFromRowNullable(row.refunded_at),
     createdAt: isoUtcFromRow(row.created_at),
     updatedAt: isoUtcFromRow(row.updated_at),
   };
@@ -151,7 +229,9 @@ const COLUMNS =
   "recipient_address, amount_atomic, gross_cents, quote_expires_at, hold_expires_at, wallet_attachment_required, " +
   "platform_fee_bps, platform_fee_cents, host_payout_cents, status, verification_claim_token, " +
   "verification_claim_expires_at, claimed_tx_ref, verified_sender_address, verified_at, " +
-  "consumed_wallet_attachment_id, consumed_at, created_at, updated_at";
+  "consumed_wallet_attachment_id, consumed_at, custody_observed_amount_atomic, custody_sender_address, " +
+  "custody_reason, custody_evidence_json, custody_detected_at, refund_tx_ref, refund_attempt_count, " +
+  "refund_last_attempt_at, refund_last_error_code, refunded_at, created_at, updated_at";
 
 function matchesReplay(input: Required<CreatePaymentIntentInput>, row: PaymentIntent): boolean {
   return (
@@ -217,21 +297,212 @@ async function listOrphanedVerifiedPaymentIntents(
   return res.rows.map(decodePaymentIntent);
 }
 
+async function listRecentPaymentIntentsForBooker(
+  exec: PaymentIntentSqlExecutor,
+  bookerUserId: string,
+  createdSinceUtc: string,
+  limit: number,
+): Promise<PendingPaymentIntentRecord[]> {
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS.split(", ").map((column) => `pi.${column}`).join(", ")},
+                 h.host_user_id, h.booker_user_id, h.slot_start_utc, h.slot_end_utc,
+                 h.status AS hold_status, b.booking_id
+          FROM bookings.payment_intents pi
+          JOIN bookings.holds h ON h.hold_id = pi.hold_id
+          LEFT JOIN bookings.bookings b ON b.hold_id = h.hold_id
+          WHERE h.booker_user_id = ?1
+            AND pi.created_at >= ?2::timestamptz
+            AND pi.status IN ('active', 'verifying', 'verified', 'verification_failed', 'custody_refund_pending', 'consumed')
+          ORDER BY pi.updated_at DESC, pi.payment_intent_id DESC
+          LIMIT ?3`,
+    args: [
+      textToArg("bookerUserId", bookerUserId),
+      isoUtcToArg(createdSinceUtc),
+      intToArg("limit", limit),
+    ],
+  });
+  return res.rows.map((row) => {
+    const holdStatus = textFromRow(row.hold_status);
+    if (holdStatus !== "active" && holdStatus !== "consumed" && holdStatus !== "expired") {
+      throw new TypeError(`listRecentPaymentIntentsForBooker: bad hold status ${holdStatus}`);
+    }
+    return {
+      intent: decodePaymentIntent(row),
+      hostUserId: textFromRow(row.host_user_id),
+      bookerUserId: textFromRow(row.booker_user_id),
+      slotStartUtc: isoUtcFromRow(row.slot_start_utc),
+      slotEndUtc: isoUtcFromRow(row.slot_end_utc),
+      holdStatus,
+      bookingId: textFromRowNullable(row.booking_id),
+    };
+  });
+}
+
+export function paymentIntentReclaimablePredicate(
+  tableAlias: string,
+  nowPlaceholder: string,
+): string {
+  const prefix = tableAlias ? `${tableAlias}.` : "";
+  return `(${prefix}status = 'verification_failed' OR (${prefix}status = 'verifying' AND ${prefix}verification_claim_expires_at <= ${nowPlaceholder}::timestamptz))`;
+}
+
+async function listClaimedUnresolvedPaymentIntents(
+  exec: PaymentIntentSqlExecutor,
+  nowUtc: string,
+  limit: number,
+): Promise<ClaimedUnresolvedPaymentIntentRecord[]> {
+  const reclaimable = paymentIntentReclaimablePredicate("pi", "?1");
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS.split(", ").map((column) => `pi.${column}`).join(", ")},
+                 h.host_user_id, h.booker_user_id, h.status AS hold_status
+          FROM bookings.payment_intents pi
+          JOIN bookings.holds h ON h.hold_id = pi.hold_id
+          WHERE (${reclaimable} OR (pi.status = 'verified' AND pi.consumed_at IS NULL))
+            AND pi.claimed_tx_ref IS NOT NULL
+            AND pi.consumed_wallet_attachment_id IS NOT NULL
+          ORDER BY pi.updated_at ASC, pi.payment_intent_id ASC
+          LIMIT ?2`,
+    args: [isoUtcToArg(nowUtc), intToArg("limit", limit)],
+  });
+  return res.rows.map((row) => {
+    const holdStatus = textFromRow(row.hold_status);
+    if (holdStatus !== "active" && holdStatus !== "consumed" && holdStatus !== "expired") {
+      throw new TypeError(`listClaimedUnresolvedPaymentIntents: bad hold status ${holdStatus}`);
+    }
+    return {
+      intent: decodePaymentIntent(row),
+      hostUserId: textFromRow(row.host_user_id),
+      bookerUserId: textFromRow(row.booker_user_id),
+      holdStatus,
+    };
+  });
+}
+
+async function listOperatorUnresolvedPaymentIntents(
+  exec: PaymentIntentSqlExecutor,
+  nowUtc: string,
+  limit: number,
+): Promise<ClaimedUnresolvedPaymentIntentRecord[]> {
+  const reclaimable = paymentIntentReclaimablePredicate("pi", "?1");
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS.split(", ").map((column) => `pi.${column}`).join(", ")},
+                 h.host_user_id, h.booker_user_id, h.status AS hold_status
+          FROM bookings.payment_intents pi
+          JOIN bookings.holds h ON h.hold_id = pi.hold_id
+          WHERE (${reclaimable}
+                 OR (pi.status = 'verified' AND pi.consumed_at IS NULL)
+                 OR pi.status IN ('custody_refund_pending', 'custody_operator_incident'))
+            AND pi.claimed_tx_ref IS NOT NULL
+            AND pi.consumed_wallet_attachment_id IS NOT NULL
+          ORDER BY pi.updated_at ASC, pi.payment_intent_id ASC
+          LIMIT ?2`,
+    args: [isoUtcToArg(nowUtc), intToArg("limit", limit)],
+  });
+  return res.rows.map((row) => {
+    const holdStatus = textFromRow(row.hold_status);
+    if (holdStatus !== "active" && holdStatus !== "consumed" && holdStatus !== "expired") {
+      throw new TypeError(`listOperatorUnresolvedPaymentIntents: bad hold status ${holdStatus}`);
+    }
+    return {
+      intent: decodePaymentIntent(row),
+      hostUserId: textFromRow(row.host_user_id),
+      bookerUserId: textFromRow(row.booker_user_id),
+      holdStatus,
+    };
+  });
+}
+
+async function listCustodyRefundPendingPaymentIntents(
+  exec: PaymentIntentSqlExecutor,
+  limit: number,
+): Promise<PaymentIntent[]> {
+  const res = await exec.execute({
+    sql: `SELECT ${COLUMNS} FROM bookings.payment_intents
+          WHERE status = 'custody_refund_pending'
+          ORDER BY COALESCE(refund_last_attempt_at, custody_detected_at) ASC,
+                   custody_detected_at ASC,
+                   payment_intent_id ASC
+          LIMIT ?1`,
+    args: [intToArg("limit", limit)],
+  });
+  return res.rows.map(decodePaymentIntent);
+}
+
 async function markOrphanedVerifiedPaymentIntentRefunded(
   exec: PaymentIntentSqlExecutor,
   paymentIntentId: string,
+  refundTxRef: string,
   nowUtc: string,
 ): Promise<PaymentIntent | null> {
   const res = await exec.execute({
     sql: `UPDATE bookings.payment_intents
-          SET status = 'expired',
+          SET status = 'refunded',
+              refund_tx_ref = ?2,
+              refunded_at = ?3::timestamptz,
               version = version + 1,
-              updated_at = ?2::timestamptz
+              updated_at = ?3::timestamptz
           WHERE payment_intent_id = ?1
             AND status = 'verified'
             AND consumed_at IS NULL
           RETURNING ${COLUMNS}`,
-    args: [textToArg("paymentIntentId", paymentIntentId), isoUtcToArg(nowUtc)],
+    args: [
+      textToArg("paymentIntentId", paymentIntentId),
+      textToArg("refundTxRef", normalizeTxRef(refundTxRef)),
+      isoUtcToArg(nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
+}
+
+async function markCustodyRefundPaymentIntentRefunded(
+  exec: PaymentIntentSqlExecutor,
+  paymentIntentId: string,
+  refundTxRef: string,
+  nowUtc: string,
+): Promise<PaymentIntent | null> {
+  const normalizedRefundTxRef = normalizeTxRef(refundTxRef);
+  const res = await exec.execute({
+    sql: `UPDATE bookings.payment_intents
+          SET status = 'refunded',
+              refund_tx_ref = ?2,
+              refunded_at = ?3::timestamptz,
+              refund_last_attempt_at = ?3::timestamptz,
+              refund_last_error_code = NULL,
+              version = version + 1,
+              updated_at = ?3::timestamptz
+          WHERE payment_intent_id = ?1
+            AND status = 'custody_refund_pending'
+            AND (refund_tx_ref IS NULL OR refund_tx_ref = ?2)
+          RETURNING ${COLUMNS}`,
+    args: [
+      textToArg("paymentIntentId", paymentIntentId),
+      textToArg("refundTxRef", normalizedRefundTxRef),
+      isoUtcToArg(nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
+}
+
+async function recordCustodyRefundAttemptFailure(
+  exec: PaymentIntentSqlExecutor,
+  paymentIntentId: string,
+  errorCode: string,
+  nowUtc: string,
+): Promise<PaymentIntent | null> {
+  const res = await exec.execute({
+    sql: `UPDATE bookings.payment_intents
+          SET refund_attempt_count = refund_attempt_count + 1,
+              refund_last_attempt_at = ?3::timestamptz,
+              refund_last_error_code = ?2,
+              version = version + 1,
+              updated_at = ?3::timestamptz
+          WHERE payment_intent_id = ?1 AND status = 'custody_refund_pending'
+          RETURNING ${COLUMNS}`,
+    args: [
+      textToArg("paymentIntentId", paymentIntentId),
+      textToArg("errorCode", errorCode.slice(0, 200)),
+      isoUtcToArg(nowUtc),
+    ],
   });
   return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
 }
@@ -287,6 +558,7 @@ async function reservePaymentIntentForVerification(
   exec: PaymentIntentSqlExecutor,
   input: ReservePaymentIntentInput,
 ): Promise<ReservePaymentIntentResult> {
+  const reclaimable = paymentIntentReclaimablePredicate("", "?6");
   try {
     const res = await exec.execute({
       sql: `UPDATE bookings.payment_intents
@@ -298,7 +570,7 @@ async function reservePaymentIntentForVerification(
                 version = version + 1,
                 updated_at = ?6::timestamptz
             WHERE payment_intent_id = ?1
-              AND (status IN ('active', 'verification_failed') OR (status = 'verifying' AND verification_claim_expires_at <= ?6::timestamptz))
+              AND (status = 'active' OR ${reclaimable})
               AND (claimed_tx_ref IS NULL OR claimed_tx_ref = ?4)
               AND (consumed_wallet_attachment_id IS NULL OR consumed_wallet_attachment_id = ?5)
             RETURNING ${COLUMNS}`,
@@ -365,6 +637,99 @@ async function markPaymentIntentVerificationFailed(
   return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
 }
 
+async function markPaymentIntentCustodyRefundPending(
+  exec: PaymentIntentSqlExecutor,
+  input: MarkCustodyRefundPendingInput,
+): Promise<PaymentIntent | null> {
+  const res = await exec.execute({
+    sql: `WITH transitioned AS (
+            UPDATE bookings.payment_intents
+            SET status = 'custody_refund_pending',
+                verified_sender_address = ?4,
+                custody_observed_amount_atomic = ?3::numeric,
+                custody_sender_address = ?4,
+                custody_reason = ?5,
+                custody_detected_at = ?6::timestamptz,
+                verification_claim_token = NULL,
+                verification_claim_expires_at = NULL,
+                version = version + 1,
+                updated_at = ?6::timestamptz
+            WHERE payment_intent_id = ?1
+              AND status = 'verifying'
+              AND verification_claim_token = ?2
+            RETURNING *
+          ), expired_hold AS (
+            UPDATE bookings.holds
+            SET status = 'expired', updated_at = ?6::timestamptz
+            WHERE hold_id = (SELECT hold_id FROM transitioned)
+              AND status = 'active'
+          ), released_lock AS (
+            UPDATE bookings.host_slot_locks
+            SET status = 'released', updated_at = ?6::timestamptz
+            WHERE hold_id = (SELECT hold_id FROM transitioned)
+              AND status = 'active'
+          )
+          SELECT ${COLUMNS} FROM transitioned`,
+    args: [
+      textToArg("paymentIntentId", input.paymentIntentId),
+      textToArg("claimToken", input.claimToken),
+      atomicToArg(input.observedAmountAtomic),
+      textToArg("senderAddress", input.senderAddress),
+      textToArg("reason", input.reason),
+      isoUtcToArg(input.nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
+}
+
+async function markPaymentIntentCustodyOperatorIncident(
+  exec: PaymentIntentSqlExecutor,
+  input: MarkCustodyOperatorIncidentInput,
+): Promise<PaymentIntent | null> {
+  const evidence = {
+    transfers: input.transfers.map((transfer) => ({
+      sender_address: transfer.senderAddress,
+      observed_amount_atomic: transfer.observedAmountAtomic,
+      transfer_count: transfer.transferCount,
+    })),
+  };
+  const res = await exec.execute({
+    sql: `WITH transitioned AS (
+            UPDATE bookings.payment_intents
+            SET status = 'custody_operator_incident',
+                custody_reason = 'multiple_senders',
+                custody_evidence_json = ?3::text::jsonb,
+                custody_detected_at = ?4::timestamptz,
+                verification_claim_token = NULL,
+                verification_claim_expires_at = NULL,
+                version = version + 1,
+                updated_at = ?4::timestamptz
+            WHERE payment_intent_id = ?1
+              AND status = 'verifying'
+              AND verification_claim_token = ?2
+            RETURNING *
+          ), expired_hold AS (
+            UPDATE bookings.holds
+            SET status = 'expired', updated_at = ?4::timestamptz
+            WHERE hold_id = (SELECT hold_id FROM transitioned)
+              AND status = 'active'
+          ), released_lock AS (
+            UPDATE bookings.host_slot_locks
+            SET status = 'released', updated_at = ?4::timestamptz
+            WHERE hold_id = (SELECT hold_id FROM transitioned)
+              AND status = 'active'
+          )
+          SELECT ${COLUMNS} FROM transitioned`,
+    args: [
+      textToArg("paymentIntentId", input.paymentIntentId),
+      textToArg("claimToken", input.claimToken),
+      JSON.stringify(evidence),
+      isoUtcToArg(input.nowUtc),
+    ],
+  });
+  return res.rows[0] ? decodePaymentIntent(res.rows[0]) : null;
+}
+
 async function markPaymentIntentRejected(
   exec: PaymentIntentSqlExecutor,
   input: ClaimPaymentIntentInput,
@@ -397,6 +762,7 @@ async function expirePaymentIntentIfDue(
           SET status = 'expired', version = version + 1, updated_at = ?2::timestamptz
           WHERE payment_intent_id = ?1
             AND status IN ('active', 'verifying', 'verification_failed')
+            AND claimed_tx_ref IS NULL
             AND hold_expires_at <= ?2::timestamptz
           RETURNING ${COLUMNS}`,
     args: [textToArg("paymentIntentId", paymentIntentId), isoUtcToArg(nowUtc)],
@@ -427,6 +793,17 @@ export interface PaymentIntentRepository {
   getPaymentIntent(paymentIntentId: string): Promise<PaymentIntent | null>;
   getPaymentIntentByHold(holdId: string): Promise<PaymentIntent | null>;
   listOrphanedVerifiedPaymentIntents(olderThanUtc: string, limit: number): Promise<PaymentIntent[]>;
+  listRecentPaymentIntentsForBooker(
+    bookerUserId: string,
+    createdSinceUtc: string,
+    limit: number,
+  ): Promise<PendingPaymentIntentRecord[]>;
+  listClaimedUnresolvedPaymentIntents(
+    nowUtc: string,
+    limit: number,
+  ): Promise<ClaimedUnresolvedPaymentIntentRecord[]>;
+  listOperatorUnresolvedPaymentIntents(nowUtc: string, limit: number): Promise<ClaimedUnresolvedPaymentIntentRecord[]>;
+  listCustodyRefundPendingPaymentIntents(limit: number): Promise<PaymentIntent[]>;
 }
 
 export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
@@ -434,10 +811,14 @@ export interface PaymentIntentWriteRepository extends PaymentIntentRepository {
   reservePaymentIntentForVerification(input: ReservePaymentIntentInput): Promise<ReservePaymentIntentResult>;
   markPaymentIntentVerified(input: VerifyPaymentIntentInput): Promise<PaymentIntent | null>;
   markPaymentIntentVerificationFailed(input: ClaimPaymentIntentInput): Promise<PaymentIntent | null>;
+  markPaymentIntentCustodyRefundPending(input: MarkCustodyRefundPendingInput): Promise<PaymentIntent | null>;
+  markPaymentIntentCustodyOperatorIncident(input: MarkCustodyOperatorIncidentInput): Promise<PaymentIntent | null>;
   markPaymentIntentRejected(input: ClaimPaymentIntentInput): Promise<PaymentIntent | null>;
   expirePaymentIntentIfDue(paymentIntentId: string, nowUtc: string): Promise<PaymentIntent | null>;
   consumePaymentIntent(paymentIntentId: string, holdId: string, nowUtc: string): Promise<PaymentIntent | null>;
-  markOrphanedVerifiedPaymentIntentRefunded(paymentIntentId: string, nowUtc: string): Promise<PaymentIntent | null>;
+  markOrphanedVerifiedPaymentIntentRefunded(paymentIntentId: string, refundTxRef: string, nowUtc: string): Promise<PaymentIntent | null>;
+  markCustodyRefundPaymentIntentRefunded(paymentIntentId: string, refundTxRef: string, nowUtc: string): Promise<PaymentIntent | null>;
+  recordCustodyRefundAttemptFailure(paymentIntentId: string, errorCode: string, nowUtc: string): Promise<PaymentIntent | null>;
 }
 
 function buildRepository(executor: PaymentIntentSqlExecutor): PaymentIntentRepository {
@@ -445,6 +826,14 @@ function buildRepository(executor: PaymentIntentSqlExecutor): PaymentIntentRepos
     getPaymentIntent: (paymentIntentId) => getPaymentIntent(executor, paymentIntentId),
     getPaymentIntentByHold: (holdId) => getPaymentIntentByHold(executor, holdId),
     listOrphanedVerifiedPaymentIntents: (olderThanUtc, limit) => listOrphanedVerifiedPaymentIntents(executor, olderThanUtc, limit),
+    listRecentPaymentIntentsForBooker: (bookerUserId, createdSinceUtc, limit) =>
+      listRecentPaymentIntentsForBooker(executor, bookerUserId, createdSinceUtc, limit),
+    listClaimedUnresolvedPaymentIntents: (nowUtc, limit) =>
+      listClaimedUnresolvedPaymentIntents(executor, nowUtc, limit),
+    listOperatorUnresolvedPaymentIntents: (nowUtc, limit) =>
+      listOperatorUnresolvedPaymentIntents(executor, nowUtc, limit),
+    listCustodyRefundPendingPaymentIntents: (limit) =>
+      listCustodyRefundPendingPaymentIntents(executor, limit),
   };
 }
 
@@ -455,10 +844,17 @@ function buildWriteRepository(executor: PaymentIntentSqlExecutor): PaymentIntent
     reservePaymentIntentForVerification: (input) => reservePaymentIntentForVerification(executor, input),
     markPaymentIntentVerified: (input) => markPaymentIntentVerified(executor, input),
     markPaymentIntentVerificationFailed: (input) => markPaymentIntentVerificationFailed(executor, input),
+    markPaymentIntentCustodyRefundPending: (input) => markPaymentIntentCustodyRefundPending(executor, input),
+    markPaymentIntentCustodyOperatorIncident: (input) => markPaymentIntentCustodyOperatorIncident(executor, input),
     markPaymentIntentRejected: (input) => markPaymentIntentRejected(executor, input),
     expirePaymentIntentIfDue: (paymentIntentId, nowUtc) => expirePaymentIntentIfDue(executor, paymentIntentId, nowUtc),
     consumePaymentIntent: (paymentIntentId, holdId, nowUtc) => consumePaymentIntent(executor, paymentIntentId, holdId, nowUtc),
-    markOrphanedVerifiedPaymentIntentRefunded: (paymentIntentId, nowUtc) => markOrphanedVerifiedPaymentIntentRefunded(executor, paymentIntentId, nowUtc),
+    markOrphanedVerifiedPaymentIntentRefunded: (paymentIntentId, refundTxRef, nowUtc) =>
+      markOrphanedVerifiedPaymentIntentRefunded(executor, paymentIntentId, refundTxRef, nowUtc),
+    markCustodyRefundPaymentIntentRefunded: (paymentIntentId, refundTxRef, nowUtc) =>
+      markCustodyRefundPaymentIntentRefunded(executor, paymentIntentId, refundTxRef, nowUtc),
+    recordCustodyRefundAttemptFailure: (paymentIntentId, errorCode, nowUtc) =>
+      recordCustodyRefundAttemptFailure(executor, paymentIntentId, errorCode, nowUtc),
   };
 }
 

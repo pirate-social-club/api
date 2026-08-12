@@ -6,6 +6,7 @@ import { Interface, JsonRpcProvider, Wallet, getAddress } from "ethers"
 import { Database } from "bun:sqlite"
 import { readFile } from "node:fs/promises"
 import { basename, join } from "node:path"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 
 // Live e2e for: source song IP -> locked paid video IP -> Story royalty payment
@@ -268,6 +269,7 @@ async function api<T>(input: {
   body?: unknown
   bytes?: Uint8Array
   contentType?: string
+  headers?: Record<string, string>
   ok?: number[]
 }): Promise<T> {
   const requestBody = input.body == null
@@ -281,6 +283,7 @@ async function api<T>(input: {
       ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
       ...(input.body == null ? {} : { "content-type": "application/json" }),
       ...(input.bytes == null ? {} : { "content-type": input.contentType ?? "application/octet-stream" }),
+      ...input.headers,
     },
     body: requestBody,
   })
@@ -297,12 +300,12 @@ async function mintUpstreamJwt(input: {
   subject: string
   walletAddress: string
 }): Promise<string> {
-  const issuer = (input.env.AUTH_UPSTREAM_JWT_ISSUER || input.env.JWT_BASED_AUTH_ISSUERS || "pirate-dev")
+  const issuer = (input.env.AUTH_UPSTREAM_JWT_ISSUER || "pirate-dev")
     .split(",")[0]!
     .trim()
-  const audience = input.env.AUTH_UPSTREAM_JWT_AUDIENCE || input.env.JWT_BASED_AUTH_AUDIENCE || "pirate-api"
-  const secret = input.env.AUTH_UPSTREAM_JWT_SHARED_SECRET || input.env.JWT_BASED_AUTH_SHARED_SECRET
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+  const audience = input.env.AUTH_UPSTREAM_JWT_AUDIENCE || "pirate-api"
+  const secret = input.env.AUTH_UPSTREAM_JWT_SHARED_SECRET
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
 
   return await new SignJWT({ wallet_address: input.walletAddress })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
@@ -431,6 +434,7 @@ async function createDisposableCommunity(input: {
     method: "POST",
     path: "/communities",
     token: input.owner.accessToken,
+    headers: allocationAttributionHeaders("api-script:e2e-story-video-royalty-cycle"),
   })
 
   if (created.job.status !== "succeeded") {

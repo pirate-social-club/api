@@ -1,3 +1,5 @@
+import type { ShardSchemaObservationProof } from "./schema-attestation.js"
+
 /**
  * RPC contract between the API Worker and the community D1 shard Worker
  * (read-only). Shared so both sides compile against one shape.
@@ -14,6 +16,15 @@
 export type ShardSqlStatement = {
   sql: string
   args?: unknown[]
+}
+
+/** Stable content digest used by target bootstrap markers and retry verification. */
+export async function shardSnapshotDigest(statements: ShardSqlStatement[]): Promise<string> {
+  const encoded = new TextEncoder().encode(
+    JSON.stringify(statements.map((statement) => [statement.sql, statement.args ?? []])),
+  )
+  const digest = await crypto.subtle.digest("SHA-256", encoded)
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
 export type ShardQueryResultRow = Record<string, unknown>
@@ -39,9 +50,51 @@ export type ShardBatchReadRequest = {
   statements: ShardSqlStatement[]
 }
 
+/**
+ * A bounded set of independent community reads executed by one shard Worker
+ * invocation.  The API uses this for fleet scans: a Service Binding invocation
+ * is the scarce resource, while each operation still gets the same per-
+ * community authorization and D1 batch semantics as `batch`.
+ */
+export type ShardBulkReadOperation = {
+  communityId: string
+  bindingName: string
+  statements: ShardSqlStatement[]
+  /** Read-only legacy-table names that may be absent and should be empty. */
+  allowMissingTables?: string[]
+}
+
+export type ShardBulkReadRequest = {
+  operations: ShardBulkReadOperation[]
+}
+
+export type ShardBulkOperationResult<T> = {
+  communityId: string
+  result: ShardResult<T>
+}
+
+export type ShardBulkReadResponse = {
+  operations: Array<ShardBulkOperationResult<ShardQueryResult[]>>
+}
+
+export type ShardBulkWriteOperation = ShardBulkReadOperation
+
+export type ShardBulkWriteRequest = {
+  operations: ShardBulkWriteOperation[]
+}
+
+export type ShardBulkWriteResponse = {
+  operations: Array<ShardBulkOperationResult<ShardQueryResult[]>>
+}
+
 export interface ShardReadRpc {
   execute(input: ShardReadRequest): Promise<ShardResult<ShardQueryResult>>
   batch(input: ShardBatchReadRequest): Promise<ShardResult<ShardQueryResult[]>>
+}
+
+export interface ShardBulkRpc {
+  bulkRead?(input: ShardBulkReadRequest): Promise<ShardBulkReadResponse>
+  bulkWrite?(input: ShardBulkWriteRequest): Promise<ShardBulkWriteResponse>
 }
 
 /**
@@ -68,7 +121,25 @@ export interface ShardWriteRpc {
  * `COMMUNITY_D1_SHARD` binding as this interface — so neither side imports the
  * other's package, only this shared contract.
  */
-export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc {}
+export interface ShardRpc extends ShardReadRpc, ShardWriteRpc, ShardBulkRpc, ShardPoolRpc, ShardBootstrapRpc, ShardAdminRpc, ShardVersionRpc {}
+
+export type ShardVersionInfo = {
+  build: {
+    gitRef: string | null
+    gitSha: string | null
+    timestamp: string | null
+    sourceVersion: string | null
+  }
+  workerVersion: {
+    id: string | null
+    tag: string | null
+    timestamp: string | null
+  }
+}
+
+export interface ShardVersionRpc {
+  communityD1Version(): Promise<ShardVersionInfo>
+}
 
 /**
  * Step 2 of the D1-native workstream. Allocates a D1 binding from the shard's
@@ -82,6 +153,22 @@ export type ShardBindRequest = {
   communityId: string
   /** ISO timestamp; recorded as allocated_at on the pool row. */
   now: string
+  /**
+   * DIAGNOSTIC-ONLY attribution: who is consuming pool capacity. Recorded on the
+   * pool row when this call actually allocates; ignored on the idempotent path
+   * (the original allocator keeps the credit).
+   *
+   * Optional by design. The pool drains monotonically and has exhausted staging
+   * mid-release, but allocation counts alone cannot be apportioned across the ten
+   * or so consumers that provision communities, so there is no evidence-based way
+   * to pick one to fix. These fields supply that evidence.
+   *
+   * NOTHING may branch on them: allocation must never fail, or behave
+   * differently, because attribution is absent or wrong.
+   */
+  source?: string | null
+  /** DIAGNOSTIC-ONLY: CI run / invocation id, to group allocations by run. */
+  runId?: string | null
 }
 
 export type ShardBindResponse = {
@@ -93,7 +180,18 @@ export type ShardBindResponse = {
   allocated: boolean
 }
 
+export type ShardLookupBindingRequest = {
+  communityId: string
+}
+
+export type ShardLookupBindingResponse = {
+  bindingName: string | null
+  shardWorkerId: string
+}
+
 export interface ShardPoolRpc {
+  /** Read-only cross-pool idempotency probe used before allocating. */
+  communityD1LookupBinding(input: ShardLookupBindingRequest): Promise<ShardResult<ShardLookupBindingResponse>>
   communityD1Bind(input: ShardBindRequest): Promise<ShardResult<ShardBindResponse>>
 }
 
@@ -103,13 +201,18 @@ export interface ShardPoolRpc {
  * retry: if `last_loaded_at` is already set for this binding, the load is a
  * no-op. The shard re-validates the pool row before any write (the §4.2
  * invariant against the release+reallocate window) and sets
- * `last_loaded_at = now()` on full success. DDL allowed (CREATE TABLE IF NOT
- * EXISTS + INSERT only) — the existing `WRITE_NOT_ALLOWED` guard is too strict
+ * `last_loaded_at = now()` on full success. DDL allowed (CREATE TABLE/INDEX/
+ * TRIGGER + INSERT) — the existing `WRITE_NOT_ALLOWED` guard is too strict
  * for bootstrap; a separate `isBootstrapAllowedStatement` guard applies here.
  */
 export type ShardLoadSnapshotRequest = {
   communityId: string
   bindingName: string
+  /** Optional best-effort proof publication after an independently observed load. */
+  attestation?: {
+    effectivePolicyDigest: string
+    expectedObservationProof: ShardSchemaObservationProof
+  }
   /** Ordered D1 statements: schema DDL first, then snapshot rows. */
   statements: ShardSqlStatement[]
 }
@@ -185,15 +288,34 @@ export type ShardAdminResetResponse = {
   tablesDropped: number
 }
 
+export type ShardAdminDecommissionRequest = {
+  adminToken: string
+  bindingName: string
+  communityId: string
+  /** Allocation generation observed before the destructive operation began. */
+  expectedPoolVersion: number
+  /** ISO timestamp recorded as `released_at` after the database is emptied. */
+  now: string
+}
+
+export type ShardAdminDecommissionResponse = {
+  tablesDropped: number
+  released: boolean
+}
+
 export type ShardAdminReleaseRequest = {
   adminToken: string
   bindingName: string
+  /** Tenant observed on the pool row before reset/release began. */
+  expectedCommunityId: string
+  /** Allocation generation observed before reset/release began. */
+  expectedPoolVersion: number
   /** ISO timestamp recorded as `released_at` (starts the §5 quarantine window). */
   now: string
 }
 
 export type ShardAdminReleaseResponse = {
-  /** True if a row was freed; false if the binding had no allocated row. */
+  /** True when the exact expected allocation generation was freed. */
   released: boolean
 }
 
@@ -206,12 +328,17 @@ export type ShardAdminPoolStatsResponse = {
   allocated: number
   free: number
   quarantined: number
+  /** Net currently-allocated rows claimed during the trailing 24 hours. */
+  allocatedLast24Hours?: number
+  /** Net currently-allocated rows claimed during the trailing 7 days. */
+  allocatedLast7Days?: number
 }
 
 export interface ShardAdminRpc {
   communityD1GetPoolRow(input: ShardAdminGetPoolRowRequest): Promise<ShardResult<ShardAdminGetPoolRowResponse>>
   communityD1ListStaleUnloadedPoolRows(input: ShardAdminListStaleUnloadedPoolRowsRequest): Promise<ShardResult<ShardAdminListStaleUnloadedPoolRowsResponse>>
   communityD1Reset(input: ShardAdminResetRequest): Promise<ShardResult<ShardAdminResetResponse>>
+  communityD1Decommission(input: ShardAdminDecommissionRequest): Promise<ShardResult<ShardAdminDecommissionResponse>>
   communityD1Release(input: ShardAdminReleaseRequest): Promise<ShardResult<ShardAdminReleaseResponse>>
   communityD1PoolStats(input: ShardAdminPoolStatsRequest): Promise<ShardResult<ShardAdminPoolStatsResponse>>
 }
@@ -236,6 +363,7 @@ export type ShardErrorCode =
   | "shard_pool_write_conflict"
   | "shard_binding_not_initialized"
   | "shard_binding_not_allocated"
+  | "shard_snapshot_mismatch"
   | "shard_admin_unauthorized"
   | "shard_binding_loaded"
   | "shard_binding_not_empty"
@@ -277,6 +405,10 @@ export function mapShardErrorToHttp(code: ShardErrorCode): { status: number; ret
     case "shard_binding_loaded":
       // Precondition failed: the binding became loaded. Not retryable — the
       // reconciler should re-evaluate (advance to ready), not retry the reset.
+      return { status: 409, retryable: false }
+    case "shard_snapshot_mismatch":
+      // A target bootstrap committed under a different statement digest.
+      // Replaying cannot repair it safely; operator reconciliation is needed.
       return { status: 409, retryable: false }
     case "shard_pool_exhausted":
     case "shard_pool_write_conflict":
@@ -324,6 +456,8 @@ export const SHARD_READ_ERROR = {
    * it.
    */
   BINDING_NOT_ALLOCATED: "shard_binding_not_allocated",
+  /** A committed target bootstrap marker belongs to this tenant but a different snapshot revision. */
+  SNAPSHOT_MISMATCH: "shard_snapshot_mismatch",
   /**
    * An admin RPC (communityD1GetPoolRow/Reset/Release) was called with a missing
    * or incorrect `adminToken`, or the shard has no SHARD_ADMIN_TOKEN configured

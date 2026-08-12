@@ -5,6 +5,7 @@ import { requiredString } from "../../sql-row"
 import { prepareRequestedLockedAssetDelivery } from "../commerce/locked-delivery-service"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityJobHandlerInput } from "./handler-types"
+import { rotateCommunityJobTickIds } from "./tick-rotation"
 import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
 
@@ -20,7 +21,11 @@ type LockedAssetDeliveryReconcileCommunityFailureSummary = {
 
 type LockedAssetDeliveryReconcileSummary = {
   checked_communities: number
+  /** Selected communities left unscanned because the prelude deadline passed. */
+  deferred_communities: number
   enqueued_jobs: number
+  /** Wall time spent scanning communities. */
+  reconcile_ms: number
   communities: LockedAssetDeliveryReconcileCommunitySummary[]
   failed_communities: LockedAssetDeliveryReconcileCommunityFailureSummary[]
 }
@@ -50,16 +55,38 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
   communityIds?: string[] | null
   maxCommunities?: number
   maxAssetsPerCommunity?: number
+  deadlineAtMs?: number | null
+  nowMs?: () => number
 }): Promise<LockedAssetDeliveryReconcileSummary> {
-  const communityIds = (input.communityIds?.length
-    ? input.communityIds
-    : (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).map((community) => community.community_id))
-    .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
+  const nowMs = input.nowMs ?? (() => Date.now())
+  const startedAtMs = nowMs()
+  const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const communityIds = input.communityIds?.length
+    ? input.communityIds.slice(0, maxCommunities)
+    // Rotate the fixed listActiveCommunities order so a deadline-truncated tick
+    // resumes where the last one stopped instead of starving the same tail.
+    : rotateCommunityJobTickIds(
+      (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }))
+        .map((community) => community.community_id)
+        .slice(0, maxCommunities),
+      startedAtMs,
+    )
   const maxAssetsPerCommunity = Math.max(1, Math.trunc(input.maxAssetsPerCommunity ?? 25))
   const communities: LockedAssetDeliveryReconcileCommunitySummary[] = []
   const failedCommunities: LockedAssetDeliveryReconcileCommunityFailureSummary[] = []
 
+  let checkedCommunities = 0
   for (const communityId of communityIds) {
+    // The prelude deadline stops this tick from scanning more communities; it
+    // never interrupts one already open.
+    if (input.deadlineAtMs != null && nowMs() >= input.deadlineAtMs) {
+      console.warn("[community-job] locked delivery reconcile deadline reached", JSON.stringify({
+        checked_communities: checkedCommunities,
+        deferred_communities: communityIds.length - checkedCommunities,
+      }))
+      break
+    }
+    checkedCommunities += 1
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
       db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
@@ -123,8 +150,10 @@ export async function reconcileRequestedLockedAssetDeliveryJobs(input: {
   }
 
   return {
-    checked_communities: communityIds.length,
+    checked_communities: checkedCommunities,
+    deferred_communities: communityIds.length - checkedCommunities,
     enqueued_jobs: communities.reduce((sum, community) => sum + community.enqueued_jobs, 0),
+    reconcile_ms: Math.max(0, nowMs() - startedAtMs),
     communities,
     failed_communities: failedCommunities,
   }

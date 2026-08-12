@@ -148,4 +148,115 @@ describe("hydrateCrosspostSources", () => {
       captured_at: "2026-05-16T00:00:00.000Z",
     })
   })
+
+  test("applies a stricter current source rating to the stored preview", async () => {
+    const post = makeCrosspost()
+    post.crosspost_source = {
+      ...post.crosspost_source!,
+      source_content_safety_state: "safe",
+      source_age_gate_policy: "none",
+      content_safety_state: "safe",
+      age_gate_policy: "none",
+    }
+
+    await hydrateCrosspostSources({
+      posts: [post],
+      communityRepository: {
+        async getCommunityPostProjectionByPostId() {
+          return makeProjection({
+            projected_payload_json: JSON.stringify({
+              title: "Re-rated source",
+              media_refs: [{ storage_ref: "https://cdn.test/adult.jpg", mime_type: "image/jpeg" }],
+              content_safety_state: "adult",
+              age_gate_policy: "18_plus",
+            }),
+          })
+        },
+        async getCommunityById() {
+          return {
+            community_id: "source_community",
+            display_name: "@Music",
+            route_slug: "music",
+            status: "active",
+            provisioning_state: "active",
+          }
+        },
+      } as never,
+    })
+
+    expect(post.crosspost_source).toMatchObject({
+      content_safety_state: "adult",
+      age_gate_policy: "18_plus",
+      thumbnail_ref: "https://cdn.test/adult.jpg",
+    })
+  })
+
+  test("age-gates a pending source rating", async () => {
+    const post = makeCrosspost()
+    post.crosspost_source = {
+      ...post.crosspost_source!,
+      content_safety_state: "pending",
+      age_gate_policy: "none",
+    }
+
+    await hydrateCrosspostSources({
+      posts: [post],
+      communityRepository: {
+        async getCommunityPostProjectionByPostId() {
+          return makeProjection({
+            projected_payload_json: JSON.stringify({
+              content_safety_state: "safe",
+              age_gate_policy: "none",
+            }),
+          })
+        },
+        async getCommunityById() {
+          return {
+            community_id: "source_community",
+            display_name: "@Music",
+            route_slug: "music",
+            status: "active",
+            provisioning_state: "active",
+          }
+        },
+      } as never,
+    })
+
+    expect(post.crosspost_source).toMatchObject({
+      content_safety_state: "pending",
+      age_gate_policy: "18_plus",
+    })
+  })
+
+  test("age-gates a source whose current projection safety is missing", async () => {
+    const post = makeCrosspost()
+    post.crosspost_source = {
+      ...post.crosspost_source!,
+      content_safety_state: "safe",
+      age_gate_policy: "none",
+    }
+
+    await hydrateCrosspostSources({
+      posts: [post],
+      communityRepository: {
+        async getCommunityPostProjectionByPostId() {
+          return makeProjection({ projected_payload_json: JSON.stringify({ content_safety_state: "unknown" }) })
+        },
+        async getCommunityById() {
+          return {
+            community_id: "source_community",
+            display_name: "@Music",
+            route_slug: "music",
+            status: "active",
+            provisioning_state: "active",
+          }
+        },
+      } as never,
+    })
+
+    expect(post.crosspost_source).toMatchObject({
+      content_safety_state: "pending",
+      age_gate_policy: "18_plus",
+    })
+  })
 })

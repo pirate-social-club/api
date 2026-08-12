@@ -8,6 +8,8 @@ const healthy: StorySettlementCoordinatorHealth = {
   signerAddress: "0x1111111111111111111111111111111111111111",
   pendingPlans: 1,
   oldestBacklogAgeMs: 1_000,
+  failedPlans: 0,
+  revertedSteps: 0,
   reconciliationRequiredSteps: 0,
   oldestReconciliationAgeMs: 0,
   replacedSteps: 0,
@@ -31,6 +33,8 @@ describe("classifyStorySettlementCoordinatorHealth", () => {
     const alerts = classifyStorySettlementCoordinatorHealth({
       ...healthy,
       oldestBacklogAgeMs: 10_000,
+      failedPlans: 1,
+      revertedSteps: 1,
       reconciliationRequiredSteps: 1,
       oldestReconciliationAgeMs: 5_000,
       replacedSteps: 2,
@@ -40,6 +44,7 @@ describe("classifyStorySettlementCoordinatorHealth", () => {
       surplusWipWei: "1",
     }, { backlogMs: 10_000, reconciliationMs: 5_000 })
     expect(alerts.map((alert) => alert.key)).toEqual([
+      "failed_plans",
       "backlog_age",
       "nonce_gap",
       "replaced_steps",

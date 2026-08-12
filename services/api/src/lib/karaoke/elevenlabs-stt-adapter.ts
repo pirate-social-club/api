@@ -217,6 +217,7 @@ export class ElevenLabsKaraokeSttAdapter {
   async start(input: {
     attemptId: string
     sessionId: string
+    initialSequence: number
     onMessage: (message: KaraokeSttAdapterMessage) => Promise<void>
     onUnexpectedClose?: () => void
     onTerminalError?: (code: string) => void
@@ -233,7 +234,15 @@ export class ElevenLabsKaraokeSttAdapter {
     this.drainWaiter = null
     this.inbound = Promise.resolve()
     this.streamGeneration = crypto.randomUUID()
-    this.emitter = new KaraokeSttEventEmitter(input.sessionId, input.attemptId, input.onMessage)
+    // Resume the envelope sequence from the host's high-water mark. Every field
+    // reset above is per-stream state; this one is per-ATTEMPT and must survive the
+    // restart, or the host rejects the whole tail of the session.
+    this.emitter = new KaraokeSttEventEmitter(
+      input.sessionId,
+      input.attemptId,
+      input.onMessage,
+      input.initialSequence,
+    )
 
     let socket: KaraokeSttSocket
     try {

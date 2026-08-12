@@ -49,7 +49,7 @@ export async function evaluateMembershipGateRules(input: {
 
   const missingCapabilities: MembershipGateEvaluation["missingCapabilities"] = []
   const mismatchReasons: string[] = []
-  let suggestedProvider: SuggestedVerificationProvider | null = null
+  const suggestedProviders = new Set<SuggestedVerificationProvider>()
 
   for (const rule of rules) {
     if (rule.gate_family === "token_holding") {
@@ -61,16 +61,19 @@ export async function evaluateMembershipGateRules(input: {
       continue
     }
 
-    const result = evaluateIdentityGateRule({ rule, user, suggestedProvider })
+    const result = evaluateIdentityGateRule({ rule, user, suggestedProvider: null })
     missingCapabilities.push(...result.missingCapabilities)
     mismatchReasons.push(...result.mismatchReasons)
-    suggestedProvider = result.suggestedVerificationProvider
+    if (result.suggestedVerificationProvider) {
+      suggestedProviders.add(result.suggestedVerificationProvider)
+    }
   }
 
   return {
     satisfied: missingCapabilities.length === 0 && mismatchReasons.length === 0,
     missingCapabilities,
     mismatchReasons,
-    suggestedVerificationProvider: suggestedProvider,
+    suggestedVerificationProvider:
+      suggestedProviders.size === 1 ? [...suggestedProviders][0] ?? null : null,
   }
 }

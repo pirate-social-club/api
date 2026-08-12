@@ -3,12 +3,23 @@ import { createClient } from "@libsql/client"
 
 import {
   computeVideoRightsOutcome,
+  findSyncedVideoAudioCatalogEnrollment,
+  hasSyncedVideoAudioCatalogEnrollment,
+  persistVideoAudioCatalogEnrollment,
   persistVideoRightsAnalysis,
   type VideoAudioSafetyEvaluation,
   type VideoRightsAcrEvaluation,
   type VideoRightsDeclaredReferences,
 } from "./video-rights-analysis"
-import { chooseVideoSampleWindow, mergeVideoAudioSafetyWithPost } from "../communities/jobs/video-media-analysis-handler"
+import {
+  chooseVideoSampleWindow,
+  enqueueVideoAudioCatalogUnenrollIfEnabled,
+  mergeVideoAudioSafetyWithPost,
+  parseAcrEvaluation,
+  unenrollVideoAudioCatalogSample,
+} from "../communities/jobs/video-media-analysis-handler"
+import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../communities/jobs/runner-types"
+import { mockFetch } from "../../test-helpers/fetch"
 
 function acr(overrides: Partial<VideoRightsAcrEvaluation> = {}): VideoRightsAcrEvaluation {
   return {
@@ -47,7 +58,7 @@ describe("computeVideoRightsOutcome", () => {
   test("declared source verified by catalog match allows", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_1"], declaredAssetIds: ["ast_1"] }),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("allow")
@@ -58,7 +69,7 @@ describe("computeVideoRightsOutcome", () => {
   test("catalog match without any declaration requires a reference", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared(),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("allow_with_required_reference")
@@ -68,7 +79,7 @@ describe("computeVideoRightsOutcome", () => {
   test("catalog match different from the declared song goes to review", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_declared"], declaredAssetIds: ["ast_1"] }),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("review_required")
@@ -79,11 +90,38 @@ describe("computeVideoRightsOutcome", () => {
   test("unmappable catalog match goes to review", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared(),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: null, raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: null, matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     expect(decision.outcome).toBe("review_required")
     expect(decision.policyReasonCode).toBe("unmappable_catalog_match")
+  })
+
+  test("platform video-audio-only match allows as a log-only identity signal", () => {
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: null, matchSource: "platform_video_audio", raw: {} }] }),
+      audioTrackPresent: true,
+    })
+    expect(decision.outcome).toBe("allow")
+    expect(decision.policyReasonCode).toBe("platform_video_audio_match")
+    expect(decision.caseTrigger).toBeNull()
+  })
+
+  test("platform video-audio match neither suppresses nor exculpates song enforcement", () => {
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acr({
+        customMatches: [
+          { song_artifact_bundle_id: null, matchSource: "platform_song", raw: {} },
+          { song_artifact_bundle_id: null, matchSource: "platform_video_audio", raw: {} },
+        ],
+      }),
+      audioTrackPresent: true,
+    })
+    expect(decision.outcome).toBe("review_required")
+    expect(decision.policyReasonCode).toBe("unmappable_catalog_match")
+    expect(decision.caseTrigger).toBe("acrcloud_match")
   })
 
   test("commercial catalog match goes to review by default", () => {
@@ -113,7 +151,7 @@ describe("computeVideoRightsOutcome", () => {
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_1"], declaredAssetIds: ["ast_1"] }),
       acr: acr({
-        customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }],
+        customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }],
         musicMatches: [{ title: "Same Song, Commercial Release" }],
       }),
       audioTrackPresent: true,
@@ -183,6 +221,50 @@ describe("computeVideoRightsOutcome", () => {
     })
     expect(decision.outcome).toBe("allow")
     expect(decision.policyReasonCode).toBe("analysis_skipped_source_too_large")
+  })
+})
+
+describe("parseAcrEvaluation", () => {
+  test("classifies custom matches by user_defined content_type", () => {
+    const evaluation = parseAcrEvaluation({
+      metadata: {
+        custom_files: [
+          { acr_id: "song", user_defined: { song_artifact_bundle_id: "sab_1" } },
+          { acr_id: "video", user_defined: { content_type: "video_audio" } },
+        ],
+      },
+    })
+    expect(evaluation.customMatches).toHaveLength(2)
+    expect(evaluation.customMatches[0]).toMatchObject({
+      song_artifact_bundle_id: "sab_1",
+      matchSource: "platform_song",
+    })
+    expect(evaluation.customMatches[1]).toMatchObject({
+      song_artifact_bundle_id: null,
+      matchSource: "platform_video_audio",
+    })
+  })
+
+  test("classifies flattened user_defined fields the same way", () => {
+    const evaluation = parseAcrEvaluation({
+      metadata: {
+        custom_files: [
+          { acr_id: "video", content_type: "video_audio" },
+        ],
+      },
+    })
+    expect(evaluation.customMatches[0]?.matchSource).toBe("platform_video_audio")
+  })
+
+  test("untagged legacy entries classify as platform songs", () => {
+    const evaluation = parseAcrEvaluation({
+      metadata: {
+        custom_files: [
+          { acr_id: "legacy", user_defined: { source: "pirate", content_hash: "0xabc" } },
+        ],
+      },
+    })
+    expect(evaluation.customMatches[0]?.matchSource).toBe("platform_song")
   })
 })
 
@@ -351,7 +433,7 @@ describe("persistVideoRightsAnalysis", () => {
     const client = await createTestClient()
     const decision = computeVideoRightsOutcome({
       declared: declared({ declaredBundleIds: ["sab_declared"], declaredAssetIds: ["ast_up"] }),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", raw: { acr_id: "x" } }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", matchSource: "platform_song", raw: { acr_id: "x" } }] }),
       audioTrackPresent: true,
     })
     const persisted = await persistVideoRightsAnalysis({
@@ -360,7 +442,7 @@ describe("persistVideoRightsAnalysis", () => {
       postId: "pst_video",
       assetId: "ast_video",
       decision,
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", raw: { acr_id: "x" } }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_other", matchSource: "platform_song", raw: { acr_id: "x" } }] }),
       declared: declared({ declaredBundleIds: ["sab_declared"], declaredAssetIds: ["ast_up"] }),
       sampleWindow: { start_ms: 15_000, duration_ms: 60_000 },
     })
@@ -399,7 +481,7 @@ describe("persistVideoRightsAnalysis", () => {
     const client = await createTestClient()
     const decision = computeVideoRightsOutcome({
       declared: declared(),
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       audioTrackPresent: true,
     })
     await persistVideoRightsAnalysis({
@@ -408,7 +490,7 @@ describe("persistVideoRightsAnalysis", () => {
       postId: "pst_public_video",
       assetId: null,
       decision,
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       declared: declared(),
       sampleWindow: null,
     })
@@ -433,7 +515,7 @@ describe("persistVideoRightsAnalysis", () => {
       communityId: "cmt_test",
       postId: "pst_video",
       assetId: "ast_video",
-      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", raw: {} }] }),
+      acr: acr({ customMatches: [{ song_artifact_bundle_id: "sab_1", matchSource: "platform_song", raw: {} }] }),
       declared: declared({ declaredBundleIds: [], declaredAssetIds: ["ast_up"], unresolvedRefs: [] }),
       sampleWindow: null,
     }
@@ -550,5 +632,510 @@ describe("persistVideoRightsAnalysis", () => {
     expect(safetySignals.transcript).toBe("explicit transcript")
     expect(safetySignals.content_safety_state).toBe("adult")
     expect(safetySignals.age_gate_policy).toBe("18_plus")
+  })
+
+  test("video-audio-only match persists the log payload without a review case or hold", async () => {
+    const client = await createTestClient()
+    const acrResult = acr({
+      customMatches: [{
+        song_artifact_bundle_id: null,
+        matchSource: "platform_video_audio",
+        raw: { acr_id: "vid_1", user_defined: { content_type: "video_audio" } },
+      }],
+      providerResult: { status: { code: 0 } },
+    })
+    const decision = computeVideoRightsOutcome({
+      declared: declared(),
+      acr: acrResult,
+      audioTrackPresent: true,
+    })
+    const persisted = await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_repost_video",
+      assetId: null,
+      decision,
+      acr: acrResult,
+      declared: declared(),
+      sampleWindow: null,
+    })
+
+    expect(persisted.rightsReviewCaseId).toBeNull()
+    const caseRows = await client.execute("SELECT * FROM rights_review_cases")
+    expect(caseRows.rows).toHaveLength(0)
+    const holdRows = await client.execute("SELECT * FROM rights_holds")
+    expect(holdRows.rows).toHaveLength(0)
+
+    const analysisRows = await client.execute(
+      "SELECT outcome, policy_reason_code, acrcloud_custom_match_json FROM media_analysis_results",
+    )
+    expect(analysisRows.rows).toHaveLength(1)
+    expect(analysisRows.rows[0]?.outcome).toBe("allow")
+    expect(analysisRows.rows[0]?.policy_reason_code).toBe("platform_video_audio_match")
+    const loggedMatches = JSON.parse(String(analysisRows.rows[0]?.acrcloud_custom_match_json)) as Array<{
+      user_defined?: { content_type?: string }
+    }>
+    expect(loggedMatches).toHaveLength(1)
+    expect(loggedMatches[0]?.user_defined?.content_type).toBe("video_audio")
+  })
+
+  test("catalog enrollment evidence preserves existing authenticity signals", async () => {
+    const client = await createTestClient()
+    const decision = computeVideoRightsOutcome({
+      declared: declared({ declaredAssetIds: ["ast_upstream"] }),
+      acr: acr(),
+      audioTrackPresent: true,
+    })
+    const persisted = await persistVideoRightsAnalysis({
+      client,
+      communityId: "cmt_test",
+      postId: "pst_catalog_enrollment",
+      assetId: null,
+      decision,
+      acr: acr({ providerResult: { status: { code: 1001 } } }),
+      declared: declared({ declaredAssetIds: ["ast_upstream"] }),
+      sampleWindow: { start_ms: 6_000, duration_ms: 24_000 },
+    })
+
+    await persistVideoAudioCatalogEnrollment({
+      client,
+      mediaAnalysisResultId: persisted.mediaAnalysisResultId,
+      catalogEnrollment: {
+        provider: "acrcloud_catalog",
+        attempted: true,
+        synced: true,
+        acr_id: "acr_video_123",
+      },
+    })
+
+    const rows = await client.execute(
+      "SELECT authenticity_signals_json FROM media_analysis_results WHERE media_analysis_result_id = ?1",
+      [persisted.mediaAnalysisResultId],
+    )
+    const signals = JSON.parse(String(rows.rows[0]?.authenticity_signals_json)) as {
+      declared_asset_ids?: string[]
+      video_audio_catalog_enrollment?: { synced?: boolean; acr_id?: string }
+    }
+    expect(signals.declared_asset_ids).toEqual(["ast_upstream"])
+    expect(signals.video_audio_catalog_enrollment).toMatchObject({
+      synced: true,
+      acr_id: "acr_video_123",
+    })
+  })
+})
+
+describe("video audio catalog enrollment evidence", () => {
+  const clients: Array<ReturnType<typeof createClient>> = []
+  const originalFetch = globalThis.fetch
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch
+    for (const client of clients.splice(0)) {
+      client.close()
+    }
+  })
+
+  async function createEvidenceClient() {
+    const client = createClient({ url: ":memory:" })
+    clients.push(client)
+    await client.execute(`
+      CREATE TABLE media_analysis_results (
+        media_analysis_result_id TEXT PRIMARY KEY,
+        community_id TEXT NOT NULL,
+        source_post_id TEXT,
+        authenticity_signals_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
+    return client
+  }
+
+  async function seedAnalysisRow(
+    client: ReturnType<typeof createClient>,
+    input: { id: string; postId: string; signals: unknown; createdAt?: string },
+  ) {
+    const createdAt = input.createdAt ?? "2026-07-24T00:00:00.000Z"
+    await client.execute({
+      sql: `
+        INSERT INTO media_analysis_results (
+          media_analysis_result_id, community_id, source_post_id,
+          authenticity_signals_json, created_at, updated_at
+        ) VALUES (?1, 'cmt_test', ?2, ?3, ?4, ?4)
+      `,
+      args: [
+        input.id,
+        input.postId,
+        typeof input.signals === "string" ? input.signals : JSON.stringify(input.signals),
+        createdAt,
+      ],
+    })
+  }
+
+  async function readSignals(client: ReturnType<typeof createClient>, id: string) {
+    const rows = await client.execute({
+      sql: "SELECT authenticity_signals_json FROM media_analysis_results WHERE media_analysis_result_id = ?1",
+      args: [id],
+    })
+    return JSON.parse(String(rows.rows[0]?.authenticity_signals_json)) as Record<string, any>
+  }
+
+  function acrConsoleEnv() {
+    return {
+      ACRCLOUD_PERSONAL_ACCESS_TOKEN: "test-token",
+      ACRCLOUD_BUCKET_ID: "30358",
+      ACRCLOUD_CONSOLE_BASE_URL: "https://console.test/api",
+    }
+  }
+
+  describe("findSyncedVideoAudioCatalogEnrollment", () => {
+    test("finds a synced enrollment so re-analysis skips a duplicate enroll", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: {
+            provider: "acrcloud_catalog",
+            attempted: true,
+            synced: true,
+            file_id: "file_1",
+          },
+        },
+      })
+
+      const evidence = await findSyncedVideoAudioCatalogEnrollment({ client, postId: "pst_1" })
+      expect(evidence?.mediaAnalysisResultId).toBe("mar_1")
+      expect(evidence?.enrollment.file_id).toBe("file_1")
+      expect(await hasSyncedVideoAudioCatalogEnrollment({ client, postId: "pst_1" })).toBe(true)
+    })
+
+    test("ignores enrollments already unenrolled successfully", async () => {
+      const client = await createEvidenceClient()
+      for (const [index, outcome] of ["deleted", "already_missing"].entries()) {
+        await seedAnalysisRow(client, {
+          id: `mar_${index}`,
+          postId: `pst_${outcome}`,
+          signals: {
+            video_audio_catalog_enrollment: { attempted: true, synced: true, file_id: "file_1" },
+            video_audio_catalog_unenrollment: { outcome, at: "2026-07-24T01:00:00.000Z" },
+          },
+        })
+        expect(await hasSyncedVideoAudioCatalogEnrollment({ client, postId: `pst_${outcome}` })).toBe(false)
+      }
+    })
+
+    test("a failed unenrollment leaves the enrollment active", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: { attempted: true, synced: true, file_id: "file_1" },
+          video_audio_catalog_unenrollment: {
+            outcome: "failed",
+            at: "2026-07-24T01:00:00.000Z",
+            error: "http_500",
+          },
+        },
+      })
+
+      expect(await hasSyncedVideoAudioCatalogEnrollment({ client, postId: "pst_1" })).toBe(true)
+    })
+
+    test("tolerates malformed evidence and unsynced enrollments", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_malformed",
+        postId: "pst_1",
+        signals: "{not json",
+        createdAt: "2026-07-24T02:00:00.000Z",
+      })
+      await seedAnalysisRow(client, {
+        id: "mar_unsynced",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: { attempted: true, synced: false, error: "http_500" },
+        },
+        createdAt: "2026-07-24T01:00:00.000Z",
+      })
+
+      expect(await findSyncedVideoAudioCatalogEnrollment({ client, postId: "pst_1" })).toBeNull()
+      expect(await hasSyncedVideoAudioCatalogEnrollment({ client, postId: "pst_1" })).toBe(false)
+    })
+  })
+
+  describe("unenrollVideoAudioCatalogSample", () => {
+    test("no-ops when the post has no enrollment evidence", async () => {
+      const client = await createEvidenceClient()
+      let fetchCalls = 0
+      globalThis.fetch = mockFetch(async () => {
+        fetchCalls += 1
+        return new Response(null, { status: 200 })
+      })
+
+      const result = await unenrollVideoAudioCatalogSample({
+        env: acrConsoleEnv(),
+        client,
+        postId: "pst_none",
+      })
+
+      expect(result).toBeNull()
+      expect(fetchCalls).toBe(0)
+    })
+
+    test("deletes the exact bucket file and keeps a redacted tombstone", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: {
+            provider: "acrcloud_catalog",
+            attempted: true,
+            synced: true,
+            file_id: "file_123",
+            acr_id: "acr_1",
+            uploader: "usr_author",
+            post_id: "pst_1",
+            sample_window: { start_ms: 6_000, duration_ms: 24_000 },
+          },
+        },
+      })
+      const requests: Array<{ url: string; method: string; authorization: string | null }> = []
+      globalThis.fetch = mockFetch(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = input instanceof Request ? input : new Request(input, init)
+        requests.push({
+          url: request.url,
+          method: request.method,
+          authorization: request.headers.get("authorization"),
+        })
+        return Response.json({})
+      })
+
+      const result = await unenrollVideoAudioCatalogSample({
+        env: acrConsoleEnv(),
+        client,
+        postId: "pst_1",
+        redactUploader: true,
+        attemptCount: 1,
+        now: "2026-07-24T10:00:00.000Z",
+      })
+
+      expect(result).toBe("mar_1")
+      expect(requests).toEqual([{
+        url: "https://console.test/api/buckets/30358/files/file_123",
+        method: "DELETE",
+        authorization: "Bearer test-token",
+      }])
+
+      const signals = await readSignals(client, "mar_1")
+      expect(signals.video_audio_catalog_unenrollment).toEqual({
+        provider: "acrcloud_catalog",
+        file_id: "file_123",
+        outcome: "deleted",
+        at: "2026-07-24T10:00:00.000Z",
+      })
+      // Tombstone keeps non-identifying operational metadata...
+      expect(signals.video_audio_catalog_enrollment).toMatchObject({
+        synced: true,
+        file_id: "file_123",
+        post_id: "pst_1",
+        sample_window: { start_ms: 6_000, duration_ms: 24_000 },
+      })
+      // ...but the uploader identity is redacted on author-initiated deletion.
+      expect(signals.video_audio_catalog_enrollment).not.toHaveProperty("uploader")
+    })
+
+    test("keeps the uploader identity for moderator-initiated removals", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: {
+            attempted: true,
+            synced: true,
+            file_id: "file_123",
+            uploader: "usr_author",
+          },
+        },
+      })
+      globalThis.fetch = mockFetch(async () => Response.json({}))
+
+      await unenrollVideoAudioCatalogSample({
+        env: acrConsoleEnv(),
+        client,
+        postId: "pst_1",
+        redactUploader: false,
+        attemptCount: 1,
+      })
+
+      const signals = await readSignals(client, "mar_1")
+      expect(signals.video_audio_catalog_enrollment).toMatchObject({ uploader: "usr_author" })
+    })
+
+    test("treats an already-missing bucket entry as success", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: { attempted: true, synced: true, file_id: "file_gone" },
+        },
+      })
+      globalThis.fetch = mockFetch(async () => new Response(null, { status: 404 }))
+
+      const result = await unenrollVideoAudioCatalogSample({
+        env: acrConsoleEnv(),
+        client,
+        postId: "pst_1",
+        attemptCount: 1,
+        now: "2026-07-24T10:00:00.000Z",
+      })
+
+      expect(result).toBe("mar_1")
+      const signals = await readSignals(client, "mar_1")
+      expect(signals.video_audio_catalog_unenrollment).toMatchObject({ outcome: "already_missing" })
+    })
+
+    test("persists the failure and rethrows for retry on a transient provider error", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: { attempted: true, synced: true, file_id: "file_123" },
+        },
+      })
+      globalThis.fetch = mockFetch(async () => new Response(null, { status: 500 }))
+
+      await expect(unenrollVideoAudioCatalogSample({
+        env: acrConsoleEnv(),
+        client,
+        postId: "pst_1",
+        attemptCount: 1,
+        now: "2026-07-24T10:00:00.000Z",
+      })).rejects.toThrow("ACRCloud catalog unenroll failed: http_500")
+
+      const signals = await readSignals(client, "mar_1")
+      expect(signals.video_audio_catalog_unenrollment).toEqual({
+        provider: "acrcloud_catalog",
+        file_id: "file_123",
+        outcome: "failed",
+        at: "2026-07-24T10:00:00.000Z",
+        error: "http_500",
+      })
+      // The failed attempt leaves the enrollment active, so the retried job
+      // finds the evidence and re-attempts the delete.
+      expect(await hasSyncedVideoAudioCatalogEnrollment({ client, postId: "pst_1" })).toBe(true)
+    })
+
+    test("does not rethrow on the terminal attempt", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: { attempted: true, synced: true, file_id: "file_123" },
+        },
+      })
+      globalThis.fetch = mockFetch(async () => new Response(null, { status: 500 }))
+
+      const result = await unenrollVideoAudioCatalogSample({
+        env: acrConsoleEnv(),
+        client,
+        postId: "pst_1",
+        attemptCount: COMMUNITY_JOB_MAX_ATTEMPTS,
+      })
+
+      expect(result).toBe("mar_1")
+      const signals = await readSignals(client, "mar_1")
+      expect(signals.video_audio_catalog_unenrollment).toMatchObject({
+        outcome: "failed",
+        error: "http_500",
+      })
+    })
+
+    test("missing ACR configuration records a terminal failure without a fetch", async () => {
+      const client = await createEvidenceClient()
+      await seedAnalysisRow(client, {
+        id: "mar_1",
+        postId: "pst_1",
+        signals: {
+          video_audio_catalog_enrollment: { attempted: true, synced: true, file_id: "file_123" },
+        },
+      })
+      let fetchCalls = 0
+      globalThis.fetch = mockFetch(async () => {
+        fetchCalls += 1
+        return new Response(null, { status: 200 })
+      })
+
+      const result = await unenrollVideoAudioCatalogSample({
+        env: {},
+        client,
+        postId: "pst_1",
+        attemptCount: 1,
+      })
+
+      expect(result).toBe("mar_1")
+      expect(fetchCalls).toBe(0)
+      const signals = await readSignals(client, "mar_1")
+      expect(signals.video_audio_catalog_unenrollment).toMatchObject({
+        outcome: "failed",
+        error: "missing_configuration",
+      })
+    })
+  })
+
+  describe("enqueueVideoAudioCatalogUnenrollIfEnabled", () => {
+    function makeExecutor() {
+      const statements: Array<{ sql: string; args?: unknown[] }> = []
+      return {
+        statements,
+        executor: {
+          async execute(statement: { sql: string; args?: unknown[] } | string) {
+            const normalized = typeof statement === "string" ? { sql: statement, args: [] } : statement
+            statements.push(normalized)
+            return { rows: [], rowsAffected: 1 }
+          },
+        },
+      }
+    }
+
+    test("enqueues the unenroll job when enrollment is enabled", async () => {
+      const { executor, statements } = makeExecutor()
+
+      await enqueueVideoAudioCatalogUnenrollIfEnabled({
+        env: { VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED: "1" },
+        client: executor,
+        communityId: "cmt_1",
+        postId: "pst_1",
+        redactUploader: true,
+        createdAt: "2026-07-24T10:00:00.000Z",
+      })
+
+      const insert = statements.find((statement) => statement.sql.includes("INSERT OR IGNORE INTO community_jobs"))
+      expect(insert).toBeDefined()
+      expect(insert?.args).toContain("video_audio_catalog_unenroll")
+      expect(insert?.args).toContain("pst_1")
+      const payload = JSON.parse(String(insert?.args?.[5])) as { post_id: string; redact_uploader: boolean }
+      expect(payload).toEqual({ post_id: "pst_1", redact_uploader: true })
+    })
+
+    test("does not enqueue when enrollment is disabled", async () => {
+      const { executor, statements } = makeExecutor()
+
+      await enqueueVideoAudioCatalogUnenrollIfEnabled({
+        env: {},
+        client: executor,
+        communityId: "cmt_1",
+        postId: "pst_1",
+        redactUploader: true,
+      })
+
+      expect(statements).toHaveLength(0)
+    })
   })
 })

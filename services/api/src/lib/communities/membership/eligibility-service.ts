@@ -28,6 +28,23 @@ import {
 } from "./gate-utils"
 import { publicCommunityId } from "../../public-ids"
 import type { AltchaProofInput, AltchaScope, VerifiedAltchaProof } from "../../verification/altcha-provider"
+import { parseCommunitySettingsJson } from "../create/validation"
+
+function verificationPresentation(settingsJson: unknown): Pick<
+  JoinEligibility,
+  "human_verification_lane" | "preferred_verification_provider"
+> {
+  const settings = parseCommunitySettingsJson(settingsJson)
+  const lane = settings.human_verification_lane
+  const preferredProvider = settings.preferred_verification_provider
+  return {
+    human_verification_lane: lane === "self" || lane === "very" ? lane : null,
+    preferred_verification_provider:
+      preferredProvider === "self" || preferredProvider === "zkpassport" || preferredProvider === "very"
+        ? preferredProvider
+        : null,
+  }
+}
 
 export function satisfiesBaselineJoinGate(user: User): boolean {
   if (user.verification_capabilities.unique_human.state === "verified") {
@@ -158,20 +175,21 @@ export async function getJoinEligibility(input: {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     const localResult = await db.client.execute({
-      sql: `SELECT membership_mode FROM communities WHERE community_id = ?1 LIMIT 1`,
+      sql: `SELECT membership_mode, settings_json FROM communities WHERE community_id = ?1 LIMIT 1`,
       args: [input.communityId],
     })
     const membershipMode: Community["membership_mode"] =
       localResult.rows[0]?.membership_mode === "request" || localResult.rows[0]?.membership_mode === "gated"
         ? (localResult.rows[0].membership_mode as Community["membership_mode"])
         : "request"
+    const presentation = verificationPresentation(localResult.rows[0]?.settings_json)
 
     const membership = await getCommunityMembershipState(db.client, input.communityId, input.userId)
     if (canAccessCommunity(membership)) {
       return {
         community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
-        human_verification_lane: "self",
+        ...presentation,
         joinable_now: false,
         status: "already_joined",
         membership_gate_summaries: [],
@@ -183,7 +201,7 @@ export async function getJoinEligibility(input: {
       return {
         community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
-        human_verification_lane: "self",
+        ...presentation,
         joinable_now: false,
         status: "banned",
         membership_gate_summaries: [],
@@ -201,7 +219,7 @@ export async function getJoinEligibility(input: {
         return {
          community: publicCommunityId(input.communityId),
           membership_mode: "request",
-          human_verification_lane: "self",
+          ...presentation,
           joinable_now: false,
           status: "pending_request",
           membership_gate_summaries: [],
@@ -211,7 +229,7 @@ export async function getJoinEligibility(input: {
       return {
         community: publicCommunityId(input.communityId),
         membership_mode: "request",
-        human_verification_lane: "self",
+        ...presentation,
         joinable_now: false,
         status: "requestable",
         membership_gate_summaries: [],
@@ -236,7 +254,7 @@ export async function getJoinEligibility(input: {
       return {
         community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
-        human_verification_lane: "self",
+        ...presentation,
         joinable_now: true,
         status: "joinable",
         membership_gate_summaries: gateSummaries,
@@ -250,7 +268,7 @@ export async function getJoinEligibility(input: {
       return {
         community: publicCommunityId(input.communityId),
         membership_mode: membershipMode,
-        human_verification_lane: "self",
+        ...presentation,
         joinable_now: false,
         status: "verification_required",
         membership_gate_summaries: gateSummaries,
@@ -266,7 +284,7 @@ export async function getJoinEligibility(input: {
     return {
         community: publicCommunityId(input.communityId),
       membership_mode: membershipMode,
-      human_verification_lane: "self",
+      ...presentation,
       joinable_now: false,
       status: "gate_failed",
       membership_gate_summaries: gateSummaries,

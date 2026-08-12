@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
-import { app } from "../../../src/index"
+import handler, { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { MIRROR_REQUEST_HOST_HEADER } from "../../../src/lib/http/request-host-mirror"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
   completeAgeOver18Verification,
@@ -25,9 +26,18 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
   const originalHnsVerifierAuthToken = env.HNS_VERIFIER_AUTH_TOKEN
   env.HNS_VERIFIER_BASE_URL = "http://hns-verifier.test"
   env.HNS_VERIFIER_AUTH_TOKEN = "test-hns-token"
+  const parentObservationCounts = new Map<string, number>()
+  const challengeTxtValues = new Map<string, string>()
+  const dsRecords = [
+    `49194 13 2 ${"05".repeat(32)}`,
+    `49194 13 4 ${"15".repeat(48)}`,
+  ]
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString()
     if (url.startsWith("http://hns-verifier.test")) {
+      const parsedUrl = new URL(url)
+      const rootLabel = parsedUrl.searchParams.get("root_label") ?? "piratecommunityroot"
+      const requestBody = init?.body ? JSON.parse(String(init.body)) as { root_label?: string; challenge_txt_value?: string } : null
       if (url.includes("/inspect-public?")) {
         return new Response(JSON.stringify({
           root_exists: true,
@@ -58,16 +68,70 @@ async function withHnsVerifierMock<T>(env: Env, run: () => Promise<T>): Promise<
           observation_provider: "web3dns_json_doh",
         }), { status: 200, headers: { "content-type": "application/json" } })
       }
+      if (url.includes("/observe-root-parent?")) {
+        const count = (parentObservationCounts.get(rootLabel) ?? 0) + 1
+        parentObservationCounts.set(rootLabel, count)
+        const challengeTxtValue = challengeTxtValues.get(rootLabel) ?? "pirate-verification=test"
+        const committed = count > 1
+        return Response.json({
+          root_label: rootLabel,
+          zone_name: `${rootLabel}.`,
+          provider: "hnsd_json_rpc",
+          observed_at: new Date().toISOString(),
+          chain_anchor: {
+            network: "main",
+            height: count === 1 ? 1000 : count === 2 ? 1040 : 1080,
+            block_hash: "ab".repeat(32),
+            median_time: 1_786_000_000,
+          },
+          parent: {
+            raw_records: committed
+              ? [
+                  { type: "SYNTH4", address: "192.0.2.44" },
+                  { type: "NS", ns: "ns1.pirate." },
+                  { type: "NS", ns: "ns2.pirate." },
+                  { type: "TXT", txt: [challengeTxtValue] },
+                  { type: "DS", keyTag: 49194, algorithm: 13, digestType: 2, digest: "05".repeat(32) },
+                  { type: "DS", keyTag: 49194, algorithm: 13, digestType: 4, digest: "15".repeat(48) },
+                ]
+              : [{ type: "SYNTH4", address: "192.0.2.44" }],
+            nameservers: committed ? ["ns1.pirate.", "ns2.pirate."] : [],
+            ds_records: [],
+            glue4: [],
+            glue6: [],
+          },
+        })
+      }
       // Provisioning publishes the session nonce into the child zone...
       if (url.endsWith("/publish-txt") || url.endsWith("/ensure-zone")) {
+        const provisionedRootLabel = requestBody?.root_label?.trim() || rootLabel
+        const challengeTxtValue = requestBody?.challenge_txt_value ?? `pirate-verification=${provisionedRootLabel}`
+        challengeTxtValues.set(provisionedRootLabel, challengeTxtValue)
         return new Response(JSON.stringify({
-          root_label: "piratecommunityroot",
-          zone_name: "piratecommunityroot.",
-          challenge_name: "_pirate.piratecommunityroot.",
+          root_label: provisionedRootLabel,
+          zone_name: `${provisionedRootLabel}.`,
+          challenge_name: `_pirate.${provisionedRootLabel}.`,
           zone_created: true,
-          nameservers: ["ns1.pirate."],
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: dsRecords,
           observation_provider: "powerdns_api",
         }), { status: 200, headers: { "content-type": "application/json" } })
+      }
+      if (url.includes("/observe-root-authority?")) {
+        return Response.json({
+          root_label: rootLabel,
+          zone_name: `${rootLabel}.`,
+          provider: "powerdns_api",
+          observed_at: new Date().toISOString(),
+          authoritative_dnssec_valid: true,
+          parent_ds_matches_live_dnskey: true,
+          earliest_rrsig_expires_at: "2099-01-01T00:00:00.000Z",
+          parent: { raw_records: [], nameservers: [], ds_records: [] },
+          parent_ds_results: [],
+          authority_redundancy_ok: true,
+          authorities: [],
+          required_rrsets: [],
+        })
       }
       // ...and the authority-health check reads it back through the serving path.
       if (url.includes("/authority-health")) {
@@ -366,11 +430,13 @@ membership_mode: "request",
       }
       const firstCompleted = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${firstNamespaceSessionBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
-      return json(firstCompleted) as Promise<{ namespace_verification: string }>
+      const firstVerified = await json(firstCompleted) as { namespace_verification: string | null }
+      expect(typeof firstVerified.namespace_verification).toBe("string")
+      return firstVerified as { namespace_verification: string }
     })
 
     const firstAttach = await requestJson(
@@ -391,13 +457,15 @@ membership_mode: "request",
       }
       const secondCompleted = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${secondNamespaceSessionBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
+      const secondVerified = await json(secondCompleted) as { namespace_verification: string | null }
+      expect(typeof secondVerified.namespace_verification).toBe("string")
       return {
         session: secondNamespaceSessionBody.id,
-        completed: await json(secondCompleted) as { namespace_verification: string },
+        completed: secondVerified as { namespace_verification: string },
       }
     })
     const secondCompletedBody = secondNamespace.completed
@@ -431,7 +499,7 @@ membership_mode: "request",
       pending_namespace_verification_session: string | null
       route_slug: string | null
     }
-    expect(secondAttachBody.namespace_verification).toBe(firstCompletedBody.namespace_verification)
+    expect(secondAttachBody.namespace_verification).toBe(secondCompletedBody.namespace_verification)
     expect(secondAttachBody.pending_namespace_verification_session).toBeNull()
     expect(secondAttachBody.route_slug).toBe("samenamespaceroot")
   })
@@ -459,12 +527,13 @@ membership_mode: "request",
       const startedBody = await json(started) as { id: string }
       const completed = await requestJson(
         `http://pirate.test/namespace-verification-sessions/${startedBody.id}/complete`,
-        {},
+        { acknowledged_resource_replacement: true },
         ctx.env,
         session.accessToken,
       )
-      const completedBody = await json(completed) as { namespace_verification: string }
-      return completedBody.namespace_verification
+      const completedBody = await json(completed) as { namespace_verification: string | null }
+      expect(typeof completedBody.namespace_verification).toBe("string")
+      return completedBody.namespace_verification as string
     }
 
     const { primaryVerification, mirrorVerification } = await withHnsVerifierMock(ctx.env, async () => ({
@@ -479,6 +548,15 @@ membership_mode: "request",
       session.accessToken,
     )
     expect(primaryAttach.status).toBe(200)
+
+    const conflictingRoleAttach = await requestJson(
+      `http://pirate.test/communities/${communityId}/namespace`,
+      { namespace_verification: primaryVerification, namespace_role: "mirror" },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(conflictingRoleAttach.status).toBe(409)
+    expect(await json(conflictingRoleAttach)).toMatchObject({ code: "conflict" })
 
     const mirrorAttach = await requestJson(
       `http://pirate.test/communities/${communityId}/namespace`,
@@ -521,22 +599,30 @@ membership_mode: "request",
     )
     expect(attachedNamespaces.status).toBe(200)
     expect((await json(attachedNamespaces) as { namespaces: unknown[] }).namespaces).toEqual([
-      {
+      expect.objectContaining({
         namespace_verification: primaryVerification,
         namespace_role: "primary",
         family: "hns",
         root_label: "pokemon",
         route_slug: "pokemon",
         verification_status: "verified",
-      },
-      {
+        delegation: expect.objectContaining({
+          delegation_security: "unknown",
+          pirate_web_routing_allowed: false,
+        }),
+      }),
+      expect.objectContaining({
         namespace_verification: mirrorVerification,
         namespace_role: "mirror",
         family: "hns",
         root_label: "charizard",
         route_slug: "charizard",
         verification_status: "verified",
-      },
+        delegation: expect.objectContaining({
+          delegation_security: "unknown",
+          pirate_web_routing_allowed: false,
+        }),
+      }),
     ])
 
     const communityClient = createClient({
@@ -568,7 +654,35 @@ membership_mode: "request",
       ctx.env,
     )
     expect(mirrorPolicy.status).toBe(200)
-    expect((await json(mirrorPolicy) as { claims_enabled: boolean }).claims_enabled).toBe(false)
+    const mirrorPolicyBody = await json(mirrorPolicy) as { claims_enabled: boolean; revision: number }
+    expect(mirrorPolicyBody.claims_enabled).toBe(false)
+    expect(mirrorPolicyBody.revision).toBe(1)
+
+    const primaryPolicy = await app.request(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(primaryPolicy.status).toBe(200)
+    const primaryPolicyBody = await json(primaryPolicy) as { revision: number }
+    expect(primaryPolicyBody.revision).toBe(1)
+
+    const updatedMirrorPolicy = await requestJson(
+      `http://pirate.test/communities/${communityId}/handle-policy?${mirrorSelector}`,
+      { expected_revision: mirrorPolicyBody.revision, claims_enabled: true },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(updatedMirrorPolicy.status).toBe(200)
+    expect(await json(updatedMirrorPolicy)).toMatchObject({ claims_enabled: true, revision: 2 })
+
+    const unchangedPrimaryPolicy = await app.request(
+      `http://pirate.test/communities/${communityId}/handle-policy`,
+      { headers: { authorization: `Bearer ${session.accessToken}` } },
+      ctx.env,
+    )
+    expect(unchangedPrimaryPolicy.status).toBe(200)
+    expect(await json(unchangedPrimaryPolicy)).toMatchObject({ claims_enabled: false, revision: 1 })
 
     const reservedMirrorHandle = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/reserve?${mirrorSelector}`,
@@ -1386,6 +1500,7 @@ membership_mode: "request",
         namespace_verification: namespaceVerificationId,
       },
       human_verification_lane: "very",
+      preferred_verification_provider: "very",
       agent_posting_policy: "allow",
       agent_posting_scope: "top_level_and_replies",
       agent_daily_post_cap: 10,
@@ -1401,6 +1516,7 @@ membership_mode: "request",
         agent_daily_post_cap: number | null
         agent_daily_reply_cap: number | null
         human_verification_lane: string
+        preferred_verification_provider: string | null
         human_verification_lane_origin: string
         accepted_agent_ownership_providers: string[]
         accepted_agent_ownership_providers_origin: string
@@ -1412,6 +1528,7 @@ membership_mode: "request",
     expect(communityCreateBody.community.agent_daily_post_cap).toBe(10)
     expect(communityCreateBody.community.agent_daily_reply_cap).toBe(50)
     expect(communityCreateBody.community.human_verification_lane).toBe("very")
+    expect(communityCreateBody.community.preferred_verification_provider).toBe("very")
     expect(communityCreateBody.community.human_verification_lane_origin).toBe("explicit")
     expect(communityCreateBody.community.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(communityCreateBody.community.accepted_agent_ownership_providers_origin).toBe("explicit")
@@ -1432,6 +1549,7 @@ membership_mode: "request",
       agent_daily_post_cap: number | null
       agent_daily_reply_cap: number | null
       human_verification_lane: string
+      preferred_verification_provider: string | null
       human_verification_lane_origin: string
       accepted_agent_ownership_providers: string[]
       accepted_agent_ownership_providers_origin: string
@@ -1441,8 +1559,86 @@ membership_mode: "request",
     expect(fetchedBody.agent_daily_post_cap).toBe(10)
     expect(fetchedBody.agent_daily_reply_cap).toBe(50)
     expect(fetchedBody.human_verification_lane).toBe("very")
+    expect(fetchedBody.preferred_verification_provider).toBe("very")
     expect(fetchedBody.human_verification_lane_origin).toBe("explicit")
     expect(fetchedBody.accepted_agent_ownership_providers).toEqual(["clawkey"])
     expect(fetchedBody.accepted_agent_ownership_providers_origin).toBe("explicit")
+  })
+
+  test("community reads mirror stored avatar/banner refs to the allowlisted HNS request host", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-mirror-settings-user")
+    await completeUniqueHumanVerification(ctx.env, session.accessToken)
+
+    const communityCreate = await requestJson("http://pirate.test/communities", {
+      display_name: "Mirror Settings Club",
+      membership_mode: "request",
+      handle_policy: {
+        policy_template: "standard",
+      },
+    }, ctx.env, session.accessToken)
+    expect(communityCreate.status).toBe(202)
+    const communityId = ((await json(communityCreate)) as {
+      community: { id: string }
+    }).community.id.replace(/^com_/, "")
+
+    const profileUpdate = await app.request(
+      `http://pirate.test/communities/${communityId}`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.accessToken}`,
+        },
+        body: settingsJson({
+          avatar_ref: "https://api.pirate.sc/community-media/avatar/avatar_route.jpg",
+          banner_ref: "https://api.pirate.sc/community-media/banner/banner_route.jpg",
+        }),
+      },
+      ctx.env,
+    )
+    expect(profileUpdate.status).toBe(200)
+
+    if (!handler.fetch) {
+      throw new Error("handler fetch is not configured")
+    }
+    const executionCtx = { waitUntil: () => {} } as unknown as ExecutionContext
+    const mirroredResponse = await handler.fetch(
+      new Request(`http://pirate.test/communities/${communityId}`, {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+          [MIRROR_REQUEST_HOST_HEADER]: "api.pirate",
+        },
+      }) as Parameters<NonNullable<typeof handler.fetch>>[0],
+      ctx.env,
+      executionCtx,
+    )
+    expect(mirroredResponse.status).toBe(200)
+    expect(mirroredResponse.headers.get("vary") ?? "").toContain(MIRROR_REQUEST_HOST_HEADER)
+    const mirroredBody = await json(mirroredResponse) as {
+      avatar_ref: string | null
+      banner_ref: string | null
+    }
+    expect(mirroredBody.avatar_ref).toBe("https://api.pirate/community-media/avatar/avatar_route.jpg")
+    expect(mirroredBody.banner_ref).toBe("https://api.pirate/community-media/banner/banner_route.jpg")
+
+    const canonicalResponse = await handler.fetch(
+      new Request(`http://pirate.test/communities/${communityId}`, {
+        headers: {
+          authorization: `Bearer ${session.accessToken}`,
+        },
+      }) as Parameters<NonNullable<typeof handler.fetch>>[0],
+      ctx.env,
+      executionCtx,
+    )
+    expect(canonicalResponse.status).toBe(200)
+    const canonicalBody = await json(canonicalResponse) as {
+      avatar_ref: string | null
+      banner_ref: string | null
+    }
+    expect(canonicalBody.avatar_ref).toBe("https://api.pirate.sc/community-media/avatar/avatar_route.jpg")
+    expect(canonicalBody.banner_ref).toBe("https://api.pirate.sc/community-media/banner/banner_route.jpg")
   })
 })

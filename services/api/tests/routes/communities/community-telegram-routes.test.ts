@@ -832,6 +832,44 @@ async function getSetupIntentRequest(input: {
 }
 
 describe("community Telegram routes", () => {
+  test("provider-link fallback materializes Telegram account without displacing another attachment", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const first = await exchangeJwt(ctx.env, "telegram-provider-materialize")
+    const second = await exchangeJwt(ctx.env, "telegram-provider-conflict")
+    const now = "2026-08-01T05:00:00.000Z"
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO auth_provider_links (
+          auth_provider_link_id, user_id, provider, provider_subject,
+          provider_user_ref, status, linked_at, created_at, updated_at
+        ) VALUES
+          ('apl_materialize', ?1, 'telegram', '880001', 'materialize', 'active', ?3, ?3, ?3),
+          ('apl_conflict', ?2, 'telegram', '880002', 'conflict', 'active', ?3, ?3, ?3)
+      `,
+      args: [first.userId, second.userId, now],
+    })
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO telegram_accounts (
+          telegram_user_id, user_id, username, first_seen_at, last_seen_at, updated_at
+        ) VALUES ('880003', ?1, 'existing_account', ?2, ?2, ?2)
+      `,
+      args: [second.userId, now],
+    })
+
+    expect(await resolveTelegramAccount({ env: ctx.env, telegramUserId: "880001" }))
+      .toEqual({ userId: first.userId })
+    expect(await getTelegramAccount({ client: ctx.client, telegramUserId: "880001" }))
+      .toEqual({ telegram_user_id: "880001", user_id: first.userId })
+
+    expect(await resolveTelegramAccount({ env: ctx.env, telegramUserId: "880002" }))
+      .toEqual({ userId: second.userId })
+    expect(await getTelegramAccount({ client: ctx.client, telegramUserId: "880002" })).toBeNull()
+    expect(await getTelegramAccount({ client: ctx.client, telegramUserId: "880003" }))
+      .toEqual({ telegram_user_id: "880003", user_id: second.userId })
+  })
+
   test("owner can save a community-owned bot token without exposing plaintext", async () => {
     const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
     const telegramRequests = installTelegramApiMock(async (request) => {
@@ -851,7 +889,7 @@ describe("community Telegram routes", () => {
       if (method === "setWebhook") {
         expect(body.url).toContain("/telegram/community-bots/")
         expect(typeof body.secret_token).toBe("string")
-        expect(body.allowed_updates).toEqual(["message", "chat_join_request"])
+        expect(body.allowed_updates).toEqual(["message", "callback_query", "chat_join_request"])
         return { ok: true, result: true }
       }
       if (method === "deleteWebhook") {
@@ -918,6 +956,21 @@ describe("community Telegram routes", () => {
       `https://api.telegram.org/bot${token}/setWebhook`,
     ])
 
+    const refreshResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/telegram-bot/refresh-webhook`,
+      {},
+      ctx.env,
+      owner.accessToken,
+    )
+    expect(refreshResponse.status).toBe(200)
+    const refreshed = await json(refreshResponse) as { webhook_status: string | null }
+    expect(refreshed.webhook_status).toBe("active")
+    expect(telegramRequests.map((request) => request.url)).toEqual([
+      `https://api.telegram.org/bot${token}/getMe`,
+      `https://api.telegram.org/bot${token}/setWebhook`,
+      `https://api.telegram.org/bot${token}/setWebhook`,
+    ])
+
     const revokeResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/telegram-bot/revoke`,
       {},
@@ -930,6 +983,7 @@ describe("community Telegram routes", () => {
     expect(revoked.token_last4).toBeNull()
     expect(telegramRequests.map((request) => request.url)).toEqual([
       `https://api.telegram.org/bot${token}/getMe`,
+      `https://api.telegram.org/bot${token}/setWebhook`,
       `https://api.telegram.org/bot${token}/setWebhook`,
       `https://api.telegram.org/bot${token}/deleteWebhook`,
     ])
@@ -1013,12 +1067,23 @@ describe("community Telegram routes", () => {
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
     expect(sendMessageRequests[0]?.url).toBe(`https://api.telegram.org/bot${token}/sendMessage`)
-    const sendBody = await sendMessageRequests[0]!.json() as { reply_markup?: unknown; text?: string }
-    expect(sendBody.text).toBe("Send a question to talk to this community assistant.")
-    expect(sendBody.reply_markup).toBeUndefined()
+    const sendBody = await sendMessageRequests[0]!.json() as {
+      reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string }>> }
+      text?: string
+    }
+    expect(sendBody.text).toContain("Study song lyrics for free")
+    expect(sendBody.text).toContain("message me directly")
+    expect(sendBody.text).not.toContain("verify")
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).not.toContainEqual(expect.objectContaining({
+      callback_data: "menu:assistant",
+    }))
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).toEqual([{
+      callback_data: "menu:rewards",
+      text: "🪙 Rewards",
+    }])
   })
 
-  test("community bot bare /start falls back to join presentation when preview is disabled", async () => {
+  test("community bot bare /start keeps the product menu when preview is disabled", async () => {
     const token = "123456789:ABCDEFGHIJKLMNOPQRSTUVWXsecretLAST4"
     const telegramRequests = installTelegramApiMock(async (request) => {
       const method = request.url.split("/").at(-1)
@@ -1089,15 +1154,16 @@ describe("community Telegram routes", () => {
     const sendMessageRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
     expect(sendMessageRequests).toHaveLength(1)
     const sendBody = await sendMessageRequests[0]!.json() as {
-      reply_markup?: { inline_keyboard?: Array<Array<{ text?: string; web_app?: { url?: string } }>> }
+      reply_markup?: { inline_keyboard?: Array<Array<{ callback_data?: string; text?: string; web_app?: { url?: string } }>> }
       text?: string
     }
     expect(sendBody.text).toContain("Preview Disabled Club")
     expect(sendBody.text).not.toBe("Send a question to talk to this community assistant.")
-    expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]).toEqual({
-      text: "Verify to join",
-      web_app: { url: `https://staging.pirate.test/tg/verify/com_${communityId}` },
+    expect(sendBody.reply_markup?.inline_keyboard?.flat()).toContainEqual({
+      text: "🪙 Rewards",
+      callback_data: "menu:rewards",
     })
+    expect(sendBody.reply_markup?.inline_keyboard?.flat().some((button) => button.text === "Verify to join")).toBe(false)
   })
 
   test("public bot username endpoint exposes only the active bot username", async () => {
@@ -1328,6 +1394,26 @@ describe("community Telegram routes", () => {
     expect(sendBody.text).toBe("თქვენ ახლა ხართ Community Auto Join Club-ში.")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.text).toBe("საზოგადოების გახსნა")
     expect(sendBody.reply_markup?.inline_keyboard?.[0]?.[0]?.web_app?.url).toBe(`https://staging.pirate.test/tg/c/com_${communityId}`)
+
+    const returning = await telegramCommunityBotWebhook({
+      env: ctx.env,
+      webhookId,
+      secret: webhookSecret,
+      body: {
+        update_id: 6,
+        message: {
+          message_id: 6,
+          chat: { id: 9002, type: "private" },
+          from: { id: 5002, language_code: "zh" },
+          text: "/start",
+        },
+      },
+    })
+    expect(returning.status).toBe(200)
+    const returningRequests = telegramRequests.filter((request) => request.url.endsWith("/sendMessage"))
+    expect(returningRequests).toHaveLength(2)
+    const returningBody = await returningRequests[1]!.json() as { text?: string }
+    expect(returningBody.text).toContain("免费学习歌词")
   })
 
   test("community bot start rejects a join payload for another community", async () => {
@@ -3323,6 +3409,7 @@ describe("community Telegram routes", () => {
       env: ctx.env,
       body: {
         community_id: `com_${communityId}`,
+        context: "study",
         init_data: signedTelegramInitData({
           botToken: communityBotToken,
           user: {
@@ -3338,6 +3425,7 @@ describe("community Telegram routes", () => {
       env: ctx.env,
       body: {
         community_id: `com_${communityId}`,
+        context: "study",
         init_data: signedTelegramInitData({
           botToken: "987654:platform-token",
           user: {
@@ -3384,6 +3472,26 @@ describe("community Telegram routes", () => {
       },
     })
     expect(exchangeResponse.status).toBe(200)
+
+    const studyExchangeResponse = await telegramSessionAutoExchange({
+      env: ctx.env,
+      body: {
+        community_id: `com_${communityId}`,
+        context: "study",
+        init_data: signedTelegramInitData({
+          botToken: "987654:platform-token",
+          user: {
+            id: 779124,
+            username: "platformstudyrejected",
+          },
+        }),
+      },
+    })
+    expect(studyExchangeResponse.status).toBe(409)
+    expect(await json(studyExchangeResponse)).toMatchObject({
+      code: "telegram_study_unavailable",
+      retryable: false,
+    })
   })
 
   test("community bot private DM prompts non-members to verify when preview is unavailable", async () => {

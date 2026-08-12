@@ -20,6 +20,37 @@ coordinator state with hand-written SQL or direct Durable Object storage edits.
 
 ## Abandoned nonce repair
 
+### Staging drill setup
+
+Do not wait for a natural abandoned nonce while admission is disabled; that state cannot arise.
+For the testnet drill, use one throwaway staging community:
+
+1. Set `STORY_SETTLEMENT_COORDINATOR_ADMISSION_ENABLED=true`, allowlist only the throwaway
+   community, and deploy staging.
+2. With peer approval, call repair-scoped `POST
+   /operator/story-settlement/nonce-repair-drills` for that community and an incident reference.
+   The coordinator rejects it outside staging and permits only one unconsumed arm per signer.
+3. Submit one purchase in that community through the normal settlement endpoint. Do not submit any
+   other purchase. Admission atomically consumes the arm. The coordinator admits the normal immutable plan, durably reserves the real
+   signer nonce for its first step, transitions that unsigned step to `failed_prebroadcast`, and
+   freezes the plan in `abandoning`. It never signs or broadcasts the business call.
+4. Inspect the plan and verify: reserved nonce present; signed bytes and transaction hash absent;
+   `last_error_code=staging_nonce_repair_drill_abandoned`; signer pending nonce has not consumed the
+   reservation.
+5. Disable admission and remove the community allowlist entry before invoking repair. Existing
+   coordinator-owned plans remain reconcilable.
+6. Continue with the repair procedure below. Retain the deployment commits and configuration-change
+   audit records with the drill evidence.
+
+Never use a production environment, direct Durable Object storage changes, an arbitrary calldata
+endpoint, or a manually broadcast gap transaction for this drill.
+
+The no-candidate preflight is recorded in
+`../evidence/story-settlement-nonce-repair-drill-2026-07-17.md`. The subsequently completed live
+staging drill and canonical-chain evidence are recorded in
+`../evidence/story-settlement-nonce-repair-drill-2026-07-18.md`. That proof closes the nonce-repair
+half of M4; it does not satisfy the separate fee-replacement requirement.
+
 Use only for a step that is durably `reserving`, has a reserved nonce, has no
 signed transaction or transaction hash, and cannot ever become a valid plan
 step. A rights hold alone freezes admission and is not proof of abandonment.
@@ -86,6 +117,10 @@ community that is deliberately absent from active-community cron enumeration.
 
 ## Manual fee replacement
 
+Implementation is governed by `../story-settlement-manual-fee-replacement-design.md`. The runtime
+route remains unproven until its Aeneid drill is recorded; do not use it outside staging or replace
+transactions with a wallet CLI or direct signer access.
+
 V1 does not create automatic replacements. Use this only for a journaled
 transaction that remains pending beyond the broadcast-age alert and whose
 nonce is still occupied by that exact hash.
@@ -96,13 +131,19 @@ nonce is still occupied by that exact hash.
 3. Choose reviewed fees within the incident-specific treasury ceiling. The
    replacement must preserve signer, chain, nonce, target, value, calldata,
    gas limit, call identity, and plan/step identity. Only fee fields may change.
-4. Use a purpose-built audited replacement action that persists the new signed
-   bytes and replacement hash before broadcasting, while retaining the old
-   hash. Until that action exists, do not replace manually with `cast`, a
-   wallet, or the legacy cancel script.
+4. With a credential carrying only `story:settlement:fee-replace`, POST the plan, step, expected
+   version, expected active hash, decimal max fee, decimal priority fee, and incident reference to
+   `/operator/story-settlement/fee-replacements`. The coordinator independently enforces the
+   versioned rounded-up minimum bump on both fee fields and the deployed caps. `202` means the exact
+   signed candidate is durable; the alarm owns broadcast.
 5. Track both hashes. Confirm exactly one canonical success. Any conflicting
    receipt or nonce consumption moves the step to reconciliation-required and
    pages an operator; it never authorizes another signature.
+6. Inspect the complete immutable chain with scoped POST
+   `/operator/story-settlement/fee-replacement-inspections`. A later bump must name the current active
+   tip and creates one linear child generation; it never branches or forgets prior hashes.
+
+Until the Aeneid drill closes review, do not use the action against an organic incident.
 
 ## Signer rotation
 

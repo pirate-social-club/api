@@ -10,6 +10,7 @@ import { deriveKey } from "altcha-lib/algorithms/pbkdf2"
 // @ts-expect-error The API tsconfig only loads bun-types/test, but this script runs under Bun.
 import { Database } from "bun:sqlite"
 import { publicCommunityId } from "../src/lib/public-ids"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd, readWranglerVarsFromCwd } from "./_lib/dev-vars"
 
 type TimingKind = "song-public" | "song-locked" | "video-public" | "video-locked"
@@ -396,14 +397,14 @@ async function mintUpstreamJwt(input: {
   walletAddress: string
 }): Promise<string> {
   const staging = isStagingApiUrl(input.apiBaseUrl)
-  const explicitIssuer = process.env.AUTH_UPSTREAM_JWT_ISSUER?.trim() || process.env.JWT_BASED_AUTH_ISSUERS?.split(",")[0]?.trim()
-  const explicitAudience = process.env.AUTH_UPSTREAM_JWT_AUDIENCE?.trim() || process.env.JWT_BASED_AUTH_AUDIENCE?.trim()
-  const issuer = (explicitIssuer || (staging ? "pirate-staging-upstream" : (env.AUTH_UPSTREAM_JWT_ISSUER || env.JWT_BASED_AUTH_ISSUERS || "pirate-dev")))
+  const explicitIssuer = process.env.AUTH_UPSTREAM_JWT_ISSUER?.trim()
+  const explicitAudience = process.env.AUTH_UPSTREAM_JWT_AUDIENCE?.trim()
+  const issuer = (explicitIssuer || (staging ? "pirate-staging-upstream" : (env.AUTH_UPSTREAM_JWT_ISSUER || "pirate-dev")))
     .split(",")[0]!
     .trim()
-  const audience = explicitAudience || (staging ? "pirate-api-staging" : env.AUTH_UPSTREAM_JWT_AUDIENCE || env.JWT_BASED_AUTH_AUDIENCE || "pirate-api")
-  const secret = env.AUTH_UPSTREAM_JWT_SHARED_SECRET || env.JWT_BASED_AUTH_SHARED_SECRET
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+  const audience = explicitAudience || (staging ? "pirate-api-staging" : env.AUTH_UPSTREAM_JWT_AUDIENCE || "pirate-api")
+  const secret = env.AUTH_UPSTREAM_JWT_SHARED_SECRET
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
 
   return await new SignJWT({ wallet_address: input.walletAddress })
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
@@ -504,6 +505,7 @@ async function createTimingCommunity(input: {
     apiBaseUrl: input.apiBaseUrl,
     path: "/communities",
     token: input.token,
+    headers: allocationAttributionHeaders("api-script:timing-submission-e2e"),
     body: {
       display_name: `Timing E2E ${input.runId}`,
       description: "Temporary staging timing community for real-file submission measurements.",

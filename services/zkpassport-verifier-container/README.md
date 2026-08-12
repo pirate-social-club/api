@@ -33,6 +33,11 @@ The Wrangler config reuses the already-tested Dockerfile:
 }
 ```
 
+The image installs its production dependencies from
+`services/zkpassport-verifier-runtime`, not from the full API development
+manifest. Keep that runtime manifest limited to packages imported by
+`zkpassport-verifier-service.ts` and audit it independently in CI.
+
 Run deployment commands from this directory:
 
 ```bash

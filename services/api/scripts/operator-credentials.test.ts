@@ -4,9 +4,13 @@ import {
   ALLOWED_SCOPES,
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   credentialEnvNameForScopes,
+  DANCE_CHOREOGRAPHY_SEED_SCOPE,
   normalizeOperatorDatabaseUrl,
   REWARD_CAMPAIGN_INCIDENT_RESOLVE_SCOPE,
+  REWARD_REHEARSAL_EXECUTE_SCOPE,
+  REWARD_SETTLEMENT_RESOLVE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
+  STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
 } from "./operator-credentials"
 
 describe("operator credential issuance config", () => {
@@ -21,10 +25,34 @@ describe("operator credential issuance config", () => {
       .toBe("PIRATE_BOOKING_SETTLEMENT_OPERATOR_CREDENTIAL")
   })
 
+  test("accepts the reward settlement resolution scope with a dedicated secret name", () => {
+    expect(ALLOWED_SCOPES.has(REWARD_SETTLEMENT_RESOLVE_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([REWARD_SETTLEMENT_RESOLVE_SCOPE]))
+      .toBe("PIRATE_REWARD_SETTLEMENT_OPERATOR_CREDENTIAL")
+  })
+
+  test("accepts rehearsal execution with a dedicated secret name", () => {
+    expect(ALLOWED_SCOPES.has(REWARD_REHEARSAL_EXECUTE_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([REWARD_REHEARSAL_EXECUTE_SCOPE]))
+      .toBe("PIRATE_REWARD_REHEARSAL_OPERATOR_CREDENTIAL")
+  })
+
   test("uses a dedicated Story settlement repair credential", () => {
     expect(ALLOWED_SCOPES.has(STORY_SETTLEMENT_REPAIR_SCOPE)).toBe(true)
     expect(credentialEnvNameForScopes([STORY_SETTLEMENT_REPAIR_SCOPE]))
       .toBe("PIRATE_STORY_SETTLEMENT_OPERATOR_CREDENTIAL")
+  })
+
+  test("uses an independently grantable Story fee-replacement credential", () => {
+    expect(ALLOWED_SCOPES.has(STORY_SETTLEMENT_FEE_REPLACE_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([STORY_SETTLEMENT_FEE_REPLACE_SCOPE]))
+      .toBe("PIRATE_STORY_SETTLEMENT_FEE_REPLACE_OPERATOR_CREDENTIAL")
+  })
+
+  test("uses a dedicated dance choreography credential", () => {
+    expect(ALLOWED_SCOPES.has(DANCE_CHOREOGRAPHY_SEED_SCOPE)).toBe(true)
+    expect(credentialEnvNameForScopes([DANCE_CHOREOGRAPHY_SEED_SCOPE]))
+      .toBe("PIRATE_DANCE_CHOREOGRAPHY_OPERATOR_CREDENTIAL")
   })
 
   test("requires an explicit, valid name for a multi-scope credential", () => {

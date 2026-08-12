@@ -68,6 +68,7 @@ export type RightsHold = {
 }
 
 export type RightsReviewCaseListItem = RightsReviewCase & {
+  story_royalty_registration_status: "none" | "pending" | "registered" | "failed" | null
   analysis: MediaAnalysisResult | null
   post: {
     post_id: string

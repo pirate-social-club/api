@@ -1,7 +1,7 @@
 import { nowIso } from "../../helpers"
 import type { Env } from "../../../env"
 import { openCommunityWriteClient } from "../community-read-access"
-import { logPipelineError, logPipelineInfo, summarizeReference } from "../../observability/pipeline-log"
+import { logPipelineError, logPipelineInfo, sanitizeLogText, summarizeReference } from "../../observability/pipeline-log"
 import {
   findNextRunnableCommunityJob,
   getCommunityJobById,
@@ -21,6 +21,8 @@ import {
   type CommunityJobRepository,
 } from "./runner-types"
 import { recordCommunityJobFailure } from "./runner-failure"
+import { rotateCommunityJobTickIds } from "./tick-rotation"
+export { rotateCommunityJobTickIds } from "./tick-rotation"
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms))
@@ -46,6 +48,60 @@ type CommunityJobProcessingSummary = {
   processed_jobs: number
   communities: CommunityJobCommunityProcessingSummary[]
   failed_communities: CommunityJobCommunityFailureSummary[]
+  /** Communities whose stale-running jobs were checked this tick. */
+  swept_communities: number
+  /** Selected communities left unswept because the tick deadline passed. */
+  deferred_sweep_communities: number
+  /** Communities this tick began draining. */
+  started_communities: number
+  /** Communities left for the next tick because the tick deadline passed. */
+  deferred_communities: number
+  /** Wall time spent sweeping stale-running jobs. */
+  sweep_ms: number
+  /** Wall time spent draining runnable jobs. */
+  process_ms: number
+}
+
+export type ExhaustedCommunityJob = {
+  community_id: string
+  job_id: string
+  job_type: CommunityJobType
+  subject_id: string
+  /**
+   * `community_jobs.error_code` is NOT a code — `recordCommunityJobFailure`
+   * writes the raw exception message into it, which routinely carries provider
+   * response bodies, URLs, and addresses (e.g. the OpenRouter 404 payload).
+   * This value reaches console logs and the ops-alert sink, so it is redacted
+   * and truncated on the way out rather than forwarded verbatim.
+   */
+  error: string | null
+}
+
+/**
+ * Jobs that burned their last attempt in this tick.
+ *
+ * Exhaustion is the one community-job outcome nobody recovers from: no further
+ * retry is scheduled and the subject is abandoned in place. It was previously
+ * indistinguishable from ordinary retry noise, so batches of permanently dead
+ * jobs accumulated unnoticed (one prod shard held 28, including 13 songs whose
+ * Study content will never generate).
+ *
+ * Derived from the summary rather than alerted per-failure, so a tick raises at
+ * most one alert no matter how many jobs died in it.
+ */
+export function exhaustedCommunityJobs(
+  summary: Pick<CommunityJobProcessingSummary, "communities">,
+): ExhaustedCommunityJob[] {
+  return summary.communities.flatMap((community) =>
+    community.jobs
+      .filter((job) => job.status === "failed" && job.attempt_count >= COMMUNITY_JOB_MAX_ATTEMPTS)
+      .map((job) => ({
+        community_id: job.community_id,
+        job_id: job.job_id,
+        job_type: job.job_type,
+        subject_id: job.subject_id,
+        error: sanitizeLogText(job.error_code),
+      })))
 }
 
 export class CommunityJobAttemptTimeoutError extends Error {
@@ -225,13 +281,29 @@ export function selectScheduledCommunityJobPollIds(
   communities: Array<{ community_id: string; created_at?: string | null }>,
   maxCommunities: number,
   nowMs: number = Date.now(),
+  priorityCommunityIds: string[] = [],
 ): string[] {
-  if (communities.length <= maxCommunities) {
-    return communities.map((community) => community.community_id)
+  const boundedMax = Math.max(1, Math.trunc(maxCommunities))
+  const communitiesById = new Map(
+    communities.map((community) => [community.community_id, community]),
+  )
+  const selected = new Set<string>()
+  for (const communityId of priorityCommunityIds) {
+    if (communitiesById.has(communityId)) selected.add(communityId)
+    if (selected.size >= boundedMax) return Array.from(selected)
   }
 
-  const recentCount = Math.max(1, Math.min(maxCommunities, Math.ceil(maxCommunities / 4)))
+  if (communities.length <= boundedMax) {
+    for (const community of communities) selected.add(community.community_id)
+    return Array.from(selected)
+  }
+
+  const recentCount = Math.max(
+    0,
+    Math.min(boundedMax - selected.size, Math.ceil(boundedMax / 4)),
+  )
   const newest = communities
+    .filter((community) => !selected.has(community.community_id))
     .slice()
     .sort((left, right) => {
       const createdDiff = createdAtMs(right) - createdAtMs(left)
@@ -239,9 +311,9 @@ export function selectScheduledCommunityJobPollIds(
     })
     .slice(0, recentCount)
 
-  const selected = new Set(newest.map((community) => community.community_id))
+  for (const community of newest) selected.add(community.community_id)
   const remaining = communities.filter((community) => !selected.has(community.community_id))
-  const rotatingCount = maxCommunities - selected.size
+  const rotatingCount = boundedMax - selected.size
   if (rotatingCount <= 0 || remaining.length === 0) {
     return Array.from(selected)
   }
@@ -253,6 +325,58 @@ export function selectScheduledCommunityJobPollIds(
   }
 
   return Array.from(selected)
+}
+
+export function orderScheduledCommunityJobPollIds(
+  selectedCommunityIds: string[],
+  priorityCommunityIds: string[],
+  nowMs: number,
+): string[] {
+  const selected = new Set(selectedCommunityIds)
+  const priority = priorityCommunityIds.filter((communityId, index, ids) => (
+    selected.has(communityId) && ids.indexOf(communityId) === index
+  ))
+  const prioritySet = new Set(priority)
+  const rotating = selectedCommunityIds.filter((communityId) => !prioritySet.has(communityId))
+  return [...priority, ...rotateCommunityJobTickIds(rotating, nowMs)]
+}
+
+/**
+ * Attempt duration, scheduler pickup latency, and end-to-end job age.
+ *
+ * Completion timestamps alone cannot distinguish "the work is slow" from "the
+ * work waited a long time for a runner" — the distinction that mattered when
+ * song posts sat in `processing` for tens of minutes and nothing recorded which
+ * half was responsible. Three separate numbers, because they answer different
+ * questions and conflating them is how the original diagnosis went wrong:
+ *
+ * - `attempt_duration_ms` — how long THIS attempt executed.
+ * - `pickup_latency_ms` — how long the job sat *eligible* before a runner
+ *   claimed it. Measured from `available_at` (the retry-backoff expiry, or a
+ *   deliberate delay) and only falling back to `created_at` for a job that was
+ *   runnable the moment it was enqueued. This is the scheduler-health number:
+ *   measuring from `created_at` on a retry would fold in the previous attempt's
+ *   execution time and its backoff, which are not scheduler wait at all.
+ * - `job_age_at_attempt_start_ms` — created_at → now, across every prior
+ *   attempt and backoff. This is what the user actually waited.
+ */
+export function communityJobTimings(
+  job: Pick<CommunityJobRow, "created_at" | "available_at">,
+  startedAt: string,
+): {
+  attempt_duration_ms: number
+  pickup_latency_ms: number | null
+  job_age_at_attempt_start_ms: number | null
+} {
+  const startedMs = Date.parse(startedAt)
+  const createdMs = Date.parse(job.created_at)
+  const availableMs = job.available_at ? Date.parse(job.available_at) : Number.NaN
+  const eligibleMs = Number.isFinite(availableMs) ? availableMs : createdMs
+  return {
+    attempt_duration_ms: Math.max(0, Date.now() - startedMs),
+    pickup_latency_ms: Number.isFinite(eligibleMs) ? Math.max(0, startedMs - eligibleMs) : null,
+    job_age_at_attempt_start_ms: Number.isFinite(createdMs) ? Math.max(0, startedMs - createdMs) : null,
+  }
 }
 
 export async function processCommunityJobById(input: {
@@ -330,6 +454,7 @@ export async function processCommunityJobById(input: {
         community_id: running.community_id,
         ...summarizeReference("subject_id", running.subject_id),
         attempt_count: running.attempt_count,
+        ...communityJobTimings(running, startedAt),
         ...summarizeReference("result_ref", resultRef),
       })
       if (resultRef?.startsWith("failed:")) {
@@ -356,6 +481,7 @@ export async function processCommunityJobById(input: {
       }
       const failedAt = nowIso()
       return await recordCommunityJobFailure({
+        timings: communityJobTimings(running, startedAt),
         client: db.client,
         env: input.env,
         job: running,
@@ -405,11 +531,17 @@ export async function processCommunityJobsForCommunity(input: {
   communityRepository: CommunityJobRepository
   maxJobs?: number
   skipJobTypes?: CommunityJobType[] | null
+  deadlineAtMs?: number | null
+  now?: () => number
 }): Promise<CommunityJobCommunityProcessingSummary> {
   const maxJobs = Math.max(1, Math.trunc(input.maxJobs ?? 25))
   const jobs: CommunityJobRow[] = []
+  const now = input.now ?? (() => Date.now())
 
   while (jobs.length < maxJobs) {
+    if (input.deadlineAtMs != null && now() >= input.deadlineAtMs) {
+      break
+    }
     const processed = await processNextCommunityJob({
       env: input.env,
       communityId: input.communityId,
@@ -433,13 +565,23 @@ async function sweepStaleRunningCommunityJobs(input: {
   env: Env
   communityRepository: CommunityJobRepository
   communityIds: string[]
-}): Promise<CommunityJobCommunityFailureSummary[]> {
+  deadlineAtMs: number | null
+  nowMs: () => number
+}): Promise<{
+  failures: CommunityJobCommunityFailureSummary[]
+  sweptCommunityIds: string[]
+}> {
   const failures: CommunityJobCommunityFailureSummary[] = []
+  const sweptCommunityIds: string[] = []
   const now = nowIso()
   const staleCheckpointBefore = new Date(
     Date.parse(now) - resolveCommunityJobStaleCheckpointTimeoutMs(input.env),
   ).toISOString()
   for (const communityId of input.communityIds) {
+    if (input.deadlineAtMs != null && input.nowMs() >= input.deadlineAtMs) {
+      break
+    }
+    sweptCommunityIds.push(communityId)
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
       db = await openCommunityWriteClient(input.env, input.communityRepository, communityId)
@@ -467,7 +609,7 @@ async function sweepStaleRunningCommunityJobs(input: {
       await db?.close()
     }
   }
-  return failures
+  return { failures, sweptCommunityIds }
 }
 
 export async function processAvailableCommunityJobs(input: {
@@ -477,27 +619,85 @@ export async function processAvailableCommunityJobs(input: {
   maxCommunities?: number
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
+  priorityCommunityIds?: string[] | null
+  deadlineMs?: number | null
+  sweepDeadlineMs?: number | null
+  now?: () => number
 }): Promise<CommunityJobProcessingSummary> {
   const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const now = input.now ?? (() => Date.now())
+  const startedAt = now()
+  const deadlineMs = input.deadlineMs != null && input.deadlineMs > 0 ? input.deadlineMs : null
+  const deadlineAtMs = deadlineMs == null ? null : startedAt + deadlineMs
+  const sweepDeadlineMs = input.sweepDeadlineMs != null && input.sweepDeadlineMs > 0
+    ? input.sweepDeadlineMs
+    : deadlineMs
+  const sweepDeadlineAtMs = sweepDeadlineMs == null
+    ? null
+    : Math.min(startedAt + sweepDeadlineMs, deadlineAtMs ?? Number.POSITIVE_INFINITY)
   const activeCommunities = input.communityIds?.length
     ? []
     : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const communityIds = input.communityIds?.length
     ? input.communityIds.slice(0, maxCommunities)
-    : selectScheduledCommunityJobPollIds(
-      activeCommunities,
-      maxCommunities,
+    : orderScheduledCommunityJobPollIds(
+      selectScheduledCommunityJobPollIds(
+        activeCommunities,
+        maxCommunities,
+        startedAt,
+        input.priorityCommunityIds ?? [],
+      ),
+      input.priorityCommunityIds ?? [],
+      startedAt,
     )
   const communities: CommunityJobCommunityProcessingSummary[] = []
-  const failedCommunities: CommunityJobCommunityFailureSummary[] = await sweepStaleRunningCommunityJobs({
+  const sweepStartedAt = now()
+  const sweep = await sweepStaleRunningCommunityJobs({
     env: input.env,
     communityRepository: input.communityRepository,
     // Keep all per-tick database work within maxCommunities. Sweeping every
     // active community here made a bounded polling tick perform unbounded I/O.
     communityIds,
+    deadlineAtMs: sweepDeadlineAtMs,
+    nowMs: now,
   })
+  const sweepFinishedAt = now()
+  const failedCommunities = sweep.failures
+  const sweptCommunities = sweep.sweptCommunityIds.length
+  const deferredSweepCommunities = communityIds.length - sweptCommunities
+  const processStartedAt = sweepFinishedAt
+  if (deferredSweepCommunities > 0) {
+    console.warn("[community-job] stale sweep deadline reached", JSON.stringify({
+      swept_communities: sweptCommunities,
+      deferred_sweep_communities: deferredSweepCommunities,
+      deadline_ms: sweepDeadlineMs,
+      sweep_ms: Math.max(0, sweepFinishedAt - sweepStartedAt),
+    }))
+  }
 
+  let startedCommunities = 0
+  // Iterate the SELECTED communities, not the swept ones. Stale sweeping is
+  // bounded maintenance and is allowed to defer; queued jobs are foreground
+  // delivery work and must not inherit the sweep's coverage. Coupling them made
+  // a slow sweep silently gate execution: on a fleet of ~950 routed communities
+  // the sweep reached 10 per tick, so at most 10 could run jobs however large
+  // maxCommunities was, and a queued job outside that subset waited hours.
+  // A community that was skipped by the sweep still runs its jobs here; it just
+  // keeps any stale RUNNING rows until a later tick sweeps it.
   for (const communityId of communityIds) {
+    // The batch deadline stops this tick from starting more communities; it never
+    // interrupts work already in flight.
+    if (deadlineAtMs != null && now() >= deadlineAtMs) {
+      console.warn("[community-job] tick deadline reached", JSON.stringify({
+        swept_communities: sweptCommunities,
+        deferred_sweep_communities: deferredSweepCommunities,
+        started_communities: startedCommunities,
+        deferred_communities: communityIds.length - startedCommunities,
+        deadline_ms: deadlineMs,
+      }))
+      break
+    }
+    startedCommunities += 1
     let processed: CommunityJobCommunityProcessingSummary
     try {
       processed = await processCommunityJobsForCommunity({
@@ -506,6 +706,8 @@ export async function processAvailableCommunityJobs(input: {
         communityRepository: input.communityRepository,
         maxJobs: input.maxJobsPerCommunity ?? 25,
         skipJobTypes: input.skipJobTypes,
+        deadlineAtMs,
+        now,
       })
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -520,11 +722,18 @@ export async function processAvailableCommunityJobs(input: {
       communities.push(processed)
     }
   }
+  const processFinishedAt = now()
 
   return {
     processed_jobs: communities.reduce((sum, community) => sum + community.processed_jobs, 0),
     communities,
     failed_communities: failedCommunities,
+    swept_communities: sweptCommunities,
+    deferred_sweep_communities: deferredSweepCommunities,
+    started_communities: startedCommunities,
+    deferred_communities: communityIds.length - startedCommunities,
+    sweep_ms: Math.max(0, sweepFinishedAt - sweepStartedAt),
+    process_ms: Math.max(0, processFinishedAt - processStartedAt),
   }
 }
 

@@ -7,6 +7,7 @@ import { badRequestError, conflictError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { publicCommunityId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
+import { resolveCanonicalUserId } from "../auth/account-alias-service"
 import type { Client } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { getTelegramLinkedChatBotContext } from "./community-chat-service"
@@ -98,6 +99,31 @@ async function upsertResolvedTelegramAccount(input: {
   })
 }
 
+async function materializeProviderLinkedTelegramAccount(input: {
+  client: Client
+  telegramUserId: string
+  userId: string
+}): Promise<void> {
+  const now = nowIso()
+  await input.client.execute({
+    sql: `
+      INSERT INTO telegram_accounts (
+        telegram_user_id, user_id, username, first_name, last_name, photo_url,
+        first_seen_at, last_seen_at, updated_at
+      )
+      SELECT ?1, ?2, NULL, NULL, NULL, NULL, ?3, ?3, ?3
+      WHERE NOT EXISTS (
+        SELECT 1 FROM telegram_accounts WHERE telegram_user_id = ?1
+      )
+        AND NOT EXISTS (
+          SELECT 1 FROM telegram_accounts WHERE user_id = ?2
+        )
+      ON CONFLICT DO NOTHING
+    `,
+    args: [input.telegramUserId, input.userId, now],
+  })
+}
+
 export async function resolveTelegramAccount(input: {
   env: Env
   telegramUserId: string
@@ -114,7 +140,7 @@ export async function resolveTelegramAccount(input: {
   })
   const accountUserId = stringOrNull(rowValue(account.rows[0], "user_id"))
   if (accountUserId) {
-    return { userId: accountUserId }
+    return { userId: await resolveCanonicalUserId({ env: input.env, userId: accountUserId }) }
   }
 
   const link = await client.execute({
@@ -130,7 +156,14 @@ export async function resolveTelegramAccount(input: {
   })
   const linkedUserId = stringOrNull(rowValue(link.rows[0], "user_id"))
   if (linkedUserId) {
-    return { userId: linkedUserId }
+    // Provider links are authoritative for authentication. Heal the legacy
+    // reverse-lookup table only when neither unique identity is displaced.
+    await materializeProviderLinkedTelegramAccount({
+      client,
+      telegramUserId: input.telegramUserId,
+      userId: linkedUserId,
+    })
+    return { userId: await resolveCanonicalUserId({ env: input.env, userId: linkedUserId }) }
   }
 
   const setupOwner = await client.execute({
@@ -151,13 +184,17 @@ export async function resolveTelegramAccount(input: {
   if (!setupOwnerUserId) {
     return null
   }
+  const canonicalSetupOwnerUserId = await resolveCanonicalUserId({
+    env: input.env,
+    userId: setupOwnerUserId,
+  })
 
   await upsertResolvedTelegramAccount({
     client,
     telegramUserId: input.telegramUserId,
-    userId: setupOwnerUserId,
+    userId: canonicalSetupOwnerUserId,
   })
-  return { userId: setupOwnerUserId }
+  return { userId: canonicalSetupOwnerUserId }
 }
 
 export async function syncTelegramAccountForUser(input: {

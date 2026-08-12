@@ -213,6 +213,35 @@ function runtimeOnlyPaths(fullSpec: OpenApiRecord): OpenApiRecord {
       },
     },
     "/public-communities/{community_id}/posts": implementedPath(fullSpec.paths["/public-communities/{community_id}/posts"]),
+    "/public-communities/{community_id}/feed/videos": {
+      get: {
+        tags: ["Communities", "Feed"],
+        "x-implemented": true,
+        security: [],
+        summary: "List a public community video feed",
+        description: "Returns the viewer-neutral, projection-ranked vertical video feed for one public community.",
+        parameters: [
+          { name: "community_id", in: "path", required: true, schema: { type: "string" } },
+          { $ref: "#/components/parameters/Cursor" },
+          { name: "sort", in: "query", required: false, schema: { type: "string", enum: ["best", "top", "new"], default: "best" } },
+          { name: "time_range", in: "query", required: false, schema: { type: "string", enum: ["hour", "day", "week", "month", "year", "all"], default: "all" } },
+          { name: "locale", in: "query", required: false, schema: { type: "string" } },
+        ],
+        responses: {
+          "200": {
+            description: "Community video feed",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/HomeFeedResponse" },
+              },
+            },
+          },
+          "403": { $ref: "#/components/responses/Forbidden" },
+          "404": { $ref: "#/components/responses/NotFound" },
+          "429": { $ref: "#/components/responses/RateLimited" },
+        },
+      },
+    },
     "/public-posts/{post_id}": implementedPath(fullSpec.paths["/public-posts/{post_id}"]),
     "/public-posts/{post_id}/top-comments": implementedPath(fullSpec.paths["/public-posts/{post_id}/top-comments"]),
     "/public-comments/{comment_id}/replies": {

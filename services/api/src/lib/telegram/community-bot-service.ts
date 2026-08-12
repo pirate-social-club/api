@@ -204,7 +204,9 @@ async function registerCommunityBotWebhook(input: {
     await setTelegramWebhook(input.bot, {
       url: `${origin}/telegram/community-bots/${encodeURIComponent(input.webhookId)}/webhook`,
       secret_token: input.webhookSecret,
-      allowed_updates: ["message", "chat_join_request"],
+      // Keep callback_query explicit: Telegram filters omitted update types before
+      // they reach our webhook, so synthetic webhook tests alone cannot catch this.
+      allowed_updates: ["message", "callback_query", "chat_join_request"],
       drop_pending_updates: false,
     })
     return "active"
@@ -214,6 +216,58 @@ async function registerCommunityBotWebhook(input: {
     })
     return "failed"
   }
+}
+
+export async function refreshCommunityTelegramBotWebhook(input: {
+  env: Env
+  communityRepository: Pick<CommunityReadRepository, "getCommunityById">
+  communityId: string
+  actor: ActorContext | AdminActorContext
+}): Promise<TelegramCommunityBotResource> {
+  const community = await requireOwnedTelegramCommunity({
+    repository: input.communityRepository,
+    communityId: input.communityId,
+    actor: input.actor,
+  })
+  const existing = await readTelegramCommunityBot({
+    env: input.env,
+    communityId: community.community_id,
+    status: "active",
+  })
+  if (!existing) {
+    throw badRequestError("Telegram bot is not connected")
+  }
+
+  const webhookStatus = await registerCommunityBotWebhook({
+    env: input.env,
+    bot: {
+      token: decryptTelegramBotToken({
+        encryptedToken: existing.encrypted_bot_token,
+        encryptionKeyVersion: existing.encryption_key_version,
+        wrapKey: resolveCredentialWrapKey(input.env),
+      }),
+      userId: existing.telegram_bot_user_id,
+      username: existing.bot_username,
+    },
+    webhookId: existing.webhook_id,
+    webhookSecret: existing.webhook_secret,
+  })
+  const updatedAt = nowIso()
+  await getControlPlaneClient(input.env).execute({
+    sql: `
+      UPDATE telegram_community_bots
+      SET webhook_status = ?2,
+          updated_at = ?3
+      WHERE telegram_community_bot_id = ?1
+        AND status = 'active'
+    `,
+    args: [existing.telegram_community_bot_id, webhookStatus, updatedAt],
+  })
+  return serializeBotResource({
+    ...existing,
+    webhook_status: webhookStatus,
+    updated_at: updatedAt,
+  })
 }
 
 export async function getCommunityTelegramBot(input: {

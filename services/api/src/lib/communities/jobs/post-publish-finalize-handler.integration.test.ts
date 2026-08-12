@@ -13,6 +13,7 @@ type State = {
   assetCalls: number
   bundle: SongArtifactBundle
   consumed: number
+  derivativeSourceProjectionStatuses: string[]
   listingDraft: Record<string, unknown> | null
   markedFailed: Array<{ failureCode: string; retryable: boolean }>
   markedPublished: number
@@ -22,6 +23,7 @@ type State = {
   projectionStatuses: string[]
   reconcileRows: Array<{ post_id: string }>
   requestStatuses: string[]
+  throwAnalysisProviderError: boolean
   throwAssetError: boolean
   throwCatalogError: boolean
   throwListingError: boolean
@@ -90,6 +92,7 @@ const state: State = {
   assetCalls: 0,
   bundle: readyBundle(),
   consumed: 0,
+  derivativeSourceProjectionStatuses: [],
   listingDraft: null,
   markedFailed: [],
   markedPublished: 0,
@@ -99,6 +102,7 @@ const state: State = {
   projectionStatuses: [],
   reconcileRows: [],
   requestStatuses: [],
+  throwAnalysisProviderError: false,
   throwAssetError: false,
   throwCatalogError: false,
   throwListingError: false,
@@ -114,6 +118,7 @@ const client = {
 }
 
 const commerceShared = await import("../commerce/shared")
+const derivativeSourceProjection = await import("../commerce/derivative-source-projection")
 const { getListingRowByAssetId: getRealListingRowByAssetId } = await import("../commerce/queries")
 
 const postPublishFinalizeDependencies = {
@@ -172,6 +177,13 @@ mock.module("../../posts/community-post-publish-request-store", () => ({
 mock.module("../../song-artifacts/song-artifact-analysis", () => ({
   analyzeSongBundle: mock(async (input: { skipAcrIdentification?: boolean }) => {
     state.analyzeCalls.push({ skipAcrIdentification: input.skipAcrIdentification })
+    if (state.throwAnalysisProviderError) {
+      throw providerUnavailable("Song audio identification is temporarily unavailable", {
+        provider: "acrcloud",
+        provider_error: "acr_status_3016",
+        reason: "song_audio_identification_failed",
+      })
+    }
     return {
       ageGatePolicy: "none",
       alignmentError: null,
@@ -251,6 +263,13 @@ mock.module("../commerce/service", () => ({
   }),
 }))
 
+mock.module("../commerce/derivative-source-projection", () => ({
+  ...derivativeSourceProjection,
+  updateStoryRegisteredAssetPostStatus: mock(async (input: { sourcePostStatus: string }) => {
+    state.derivativeSourceProjectionStatuses.push(input.sourcePostStatus)
+  }),
+}))
+
 mock.module("../../auth/repositories", () => ({
   getUserRepository: mock(() => ({})),
 }))
@@ -293,7 +312,7 @@ function communityRepository() {
   }
 }
 
-function handlerInput() {
+function handlerInput(jobOverrides: Record<string, unknown> = {}) {
   return {
     communityRepository: communityRepository(),
     env: {},
@@ -301,6 +320,7 @@ function handlerInput() {
       community_id: COMMUNITY_ID,
       payload_json: JSON.stringify({ post_id: POST_ID }),
       subject_id: POST_ID,
+      ...jobOverrides,
     },
   } as never
 }
@@ -323,6 +343,7 @@ beforeEach(() => {
   state.assetCalls = 0
   state.bundle = readyBundle()
   state.consumed = 0
+  state.derivativeSourceProjectionStatuses = []
   state.listingDraft = null
   state.markedFailed = []
   state.markedPublished = 0
@@ -332,6 +353,7 @@ beforeEach(() => {
   state.projectionStatuses = []
   state.reconcileRows = []
   state.requestStatuses = []
+  state.throwAnalysisProviderError = false
   state.throwAssetError = false
   state.throwCatalogError = false
   state.throwListingError = false
@@ -361,10 +383,26 @@ describe("runPostPublishFinalize integration", () => {
     expect(state.markedPublished).toBe(1)
     expect(state.requestStatuses).toEqual(["running", "succeeded"])
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.derivativeSourceProjectionStatuses).toEqual(["published"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
       status: "published",
     })
+  })
+
+  test("does not attempt Story registration for a derivative video with an upstream asset", async () => {
+    state.post = basePost({
+      post_type: "video",
+      rights_basis: "derivative",
+      upstream_asset_refs: ["asset_song_source"],
+    })
+
+    await expectFinalizeFailure({
+      code: "internal_error",
+      retryable: false,
+    })
+
+    expect(state.assetCalls).toBe(0)
   })
 
   test("converges a published post before treating a retried finalize as complete", async () => {
@@ -375,6 +413,7 @@ describe("runPostPublishFinalize integration", () => {
     expect(state.assetCalls).toBe(0)
     expect(state.markedPublished).toBe(0)
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.derivativeSourceProjectionStatuses).toEqual(["published"])
     expect(state.requestStatuses).toEqual(["succeeded"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
@@ -450,6 +489,30 @@ describe("runPostPublishFinalize integration", () => {
     })
   })
 
+  test("rethrows a transient analysis provider failure so the job runner retries it", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+    state.throwAnalysisProviderError = true
+
+    await expect(runPostPublishFinalize(handlerInput({ attempt_count: 1 })))
+      .rejects.toThrow("Song audio identification is temporarily unavailable")
+
+    // The post is not marked failed while the job runner still has retries.
+    expect(state.markedFailed).toEqual([])
+    expect(state.markedPublished).toBe(0)
+    expect(state.projectionStatuses).toEqual([])
+  })
+
+  test("marks the post failed but user-retryable when analysis providers stay down", async () => {
+    state.bundle = readyBundle({ status: "validating" })
+    state.throwAnalysisProviderError = true
+
+    await expect(runPostPublishFinalize(handlerInput({ attempt_count: 8 })))
+      .resolves.toBe(`failed:post_publish_finalize:${POST_ID}`)
+
+    expect(state.markedFailed).toEqual([{ failureCode: "provider_unavailable", retryable: true }])
+    expect(state.markedPublished).toBe(0)
+  })
+
   test("passes the staging ACR bypass into deferred song analysis for allowlisted communities", async () => {
     state.bundle = readyBundle({ status: "validating" })
 
@@ -519,7 +582,9 @@ describe("runPostPublishFinalize integration", () => {
 
     expect(summary).toEqual({
       checked_communities: 1,
+      deferred_communities: 0,
       failed_posts: 1,
+      reconcile_ms: expect.any(Number),
       communities: [{
         community_id: COMMUNITY_ID,
         failed_posts: 1,
@@ -552,13 +617,16 @@ describe("runPostPublishFinalize integration", () => {
 
     expect(summary).toEqual({
       checked_communities: 1,
+      deferred_communities: 0,
       failed_posts: 0,
+      reconcile_ms: expect.any(Number),
       communities: [],
       failed_communities: [],
     })
     expect(state.markedFailed).toEqual([])
     expect(state.requestStatuses).toEqual(["succeeded"])
     expect(state.projectionStatuses).toEqual(["published"])
+    expect(state.derivativeSourceProjectionStatuses).toEqual(["published"])
     expect(JSON.parse(state.projectionPayloads[0] ?? "{}")).toMatchObject({
       post_id: POST_ID,
       status: "published",

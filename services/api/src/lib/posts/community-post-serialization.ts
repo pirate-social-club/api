@@ -66,6 +66,12 @@ export type PostRow = {
   song_cover_art_ref: string | null
   song_duration_ms: number | null
   source_language: string | null
+  lyrics_language: string | null
+  lyrics_language_confidence: number | null
+  lyrics_language_reliable: boolean
+  lyrics_language_detector: string | null
+  lyrics_language_detected_at: string | null
+  lyrics_language_source_hash: string | null
   translation_policy: Post["translation_policy"]
   access_mode: Post["access_mode"]
   asset_id: string | null
@@ -149,6 +155,13 @@ export function toPostRow(row: unknown): PostRow {
     song_cover_art_ref: stringOrNull(rowValue(row, "song_cover_art_ref")),
     song_duration_ms: numberOrNull(rowValue(row, "song_duration_ms")),
     source_language: stringOrNull(rowValue(row, "source_language")),
+    lyrics_language: stringOrNull(rowValue(row, "lyrics_language")),
+    lyrics_language_confidence: numberOrNull(rowValue(row, "lyrics_language_confidence")),
+    // Absent column projects 0, matching the NOT NULL DEFAULT 0 column: never default-reliable.
+    lyrics_language_reliable: Number(rowValue(row, "lyrics_language_reliable") ?? 0) === 1,
+    lyrics_language_detector: stringOrNull(rowValue(row, "lyrics_language_detector")),
+    lyrics_language_detected_at: stringOrNull(rowValue(row, "lyrics_language_detected_at")),
+    lyrics_language_source_hash: stringOrNull(rowValue(row, "lyrics_language_source_hash")),
     translation_policy: stringOrNull(rowValue(row, "translation_policy")) as Post["translation_policy"],
     access_mode: stringOrNull(rowValue(row, "access_mode")) as Post["access_mode"],
     asset_id: stringOrNull(rowValue(row, "asset_id")),
@@ -237,6 +250,12 @@ export function serializePost(row: PostRow): Post {
     song_cover_art_ref: row.song_cover_art_ref,
     song_duration_ms: row.song_duration_ms,
     source_language: row.source_language,
+    lyrics_language: row.lyrics_language,
+    lyrics_language_confidence: row.lyrics_language_confidence,
+    lyrics_language_reliable: row.lyrics_language_reliable,
+    lyrics_language_detector: row.lyrics_language_detector,
+    lyrics_language_detected_at: row.lyrics_language_detected_at,
+    lyrics_language_source_hash: row.lyrics_language_source_hash,
     translation_policy: row.translation_policy,
     access_mode: row.access_mode,
     asset_id: row.asset_id,

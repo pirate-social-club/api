@@ -2,7 +2,7 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
-import { badRequestError, notFoundError } from "../errors"
+import { badRequestError, internalError, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import { writeAuditEventForEnv } from "../audit"
 import { openCommunityReadClient, openCommunityWriteClient } from "./community-read-access"
@@ -40,7 +40,6 @@ export type CommunityKaraokePolicyPatch = {
 
 function defaultCommunityKaraokePolicy(input: {
   communityId: string
-  updatedAt?: string | null
 }): CommunityKaraokePolicy {
   return {
     community_id: input.communityId,
@@ -50,7 +49,7 @@ function defaultCommunityKaraokePolicy(input: {
     karaoke_stt_model: null,
     karaoke_stt_provider: "assistant",
     karaoke_voice_coach_enabled: false,
-    updated_at: input.updatedAt ?? null,
+    updated_at: null,
   }
 }
 
@@ -79,35 +78,15 @@ function toCommunityKaraokePolicy(input: {
   }
 }
 
-type CommunityColumnClient = Pick<Client, "execute">
-
-async function hasCommunityColumn(client: CommunityColumnClient, columnName: string): Promise<boolean> {
-  const result = await client.execute("PRAGMA table_info(communities)")
-  return result.rows.some((row) => String(row.name) === columnName)
+function isMissingKaraokePolicyColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /(?:no such column(?::|\s)+.*karaoke_|unknown column(?::|\s)+.*karaoke_|column .*karaoke_.* does not exist|no column named karaoke_)/iu.test(message)
 }
 
-async function ensureCommunityKaraokePolicyColumns(client: CommunityColumnClient): Promise<void> {
-  const result = await client.execute("PRAGMA table_info(communities)")
-  const columns = new Set(result.rows.map((row) => String(row.name)))
-
-  if (!columns.has("karaoke_enabled")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_enabled IN (0, 1))")
-  }
-  if (!columns.has("karaoke_scoring_enabled")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_scoring_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_scoring_enabled IN (0, 1))")
-  }
-  if (!columns.has("karaoke_stt_provider")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_stt_provider TEXT NOT NULL DEFAULT 'assistant' CHECK (karaoke_stt_provider IN ('assistant', 'elevenlabs', 'mistral', 'openai', 'none'))")
-  }
-  if (!columns.has("karaoke_stt_model")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_stt_model TEXT NOT NULL DEFAULT ''")
-  }
-  if (!columns.has("karaoke_voice_coach_enabled")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_voice_coach_enabled INTEGER NOT NULL DEFAULT 0 CHECK (karaoke_voice_coach_enabled IN (0, 1))")
-  }
-  if (!columns.has("karaoke_audio_retention")) {
-    await client.execute("ALTER TABLE communities ADD COLUMN karaoke_audio_retention TEXT NOT NULL DEFAULT 'not_stored' CHECK (karaoke_audio_retention = 'not_stored')")
-  }
+function missingKaraokePolicyColumnsError(communityId: string) {
+  return internalError(
+    `Community ${communityId} is missing karaoke policy columns (migrations 1096_community_karaoke_enabled.sql and 1098_community_karaoke_scoring_policy.sql); an operator must converge the community database schema via the reviewed migration path before karaoke policy access can proceed`,
+  )
 }
 
 async function ensureCommunityKaraokePolicyRow(input: {
@@ -147,10 +126,6 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
 }): Promise<KaraokeScoringPolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    if (!await hasCommunityColumn(db.client, "karaoke_scoring_enabled")) {
-      return { kind: "disabled" }
-    }
-
     const result = await db.client.execute({
       sql: `
         SELECT c.karaoke_scoring_enabled, c.karaoke_stt_provider, c.karaoke_stt_model,
@@ -162,6 +137,11 @@ export async function resolveCommunityKaraokeScoringPolicy(input: {
         LIMIT 1
       `,
       args: [input.communityId],
+    }).catch((error: unknown) => {
+      if (isMissingKaraokePolicyColumnError(error)) {
+        throw missingKaraokePolicyColumnsError(input.communityId)
+      }
+      throw error
     })
     const row = result.rows[0]
     if (!row) return { kind: "disabled" }
@@ -245,22 +225,6 @@ async function readCommunityKaraokePolicy(input: {
 }): Promise<CommunityKaraokePolicy> {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
-    if (!await hasCommunityColumn(db.client, "karaoke_enabled")) {
-      const legacy = await db.client.execute({
-        sql: `
-          SELECT updated_at
-          FROM communities
-          WHERE community_id = ?1
-          LIMIT 1
-        `,
-        args: [input.communityId],
-      })
-      return defaultCommunityKaraokePolicy({
-        communityId: input.communityId,
-        updatedAt: typeof legacy.rows[0]?.updated_at === "string" ? legacy.rows[0].updated_at : null,
-      })
-    }
-
     const result = await db.client.execute({
       sql: `
         SELECT karaoke_enabled, karaoke_scoring_enabled, karaoke_stt_provider,
@@ -271,6 +235,11 @@ async function readCommunityKaraokePolicy(input: {
         LIMIT 1
       `,
       args: [input.communityId],
+    }).catch((error: unknown) => {
+      if (isMissingKaraokePolicyColumnError(error)) {
+        throw missingKaraokePolicyColumnsError(input.communityId)
+      }
+      throw error
     })
     const row = result.rows[0]
     return toCommunityKaraokePolicy({ communityId: input.communityId, row })
@@ -338,30 +307,41 @@ export async function updateCommunityKaraokePolicy(input: {
       community,
       now,
     })
-    await ensureCommunityKaraokePolicyColumns(db.client)
-    await db.client.execute({
-      sql: `
-        UPDATE communities
-        SET karaoke_enabled = ?2,
-            karaoke_scoring_enabled = ?3,
-            karaoke_stt_provider = ?4,
-            karaoke_stt_model = ?5,
-            karaoke_voice_coach_enabled = ?6,
-            karaoke_audio_retention = ?7,
-            updated_at = ?8
-        WHERE community_id = ?1
-      `,
-      args: [
-        input.communityId,
-        next.karaoke_enabled ? 1 : 0,
-        next.karaoke_scoring_enabled ? 1 : 0,
-        next.karaoke_stt_provider,
-        next.karaoke_stt_model ?? "",
-        next.karaoke_voice_coach_enabled ? 1 : 0,
-        next.karaoke_audio_retention,
-        now,
-      ],
-    })
+    // Writes never widen schema: the karaoke policy columns come from
+    // migrations 1096/1098, and a shard missing them must fail legibly for an
+    // operator to converge via the reviewed migration path, not be silently
+    // ALTERed on a request path — a write-time ALTER creates objects with no
+    // ledger row, the exact drift class the release gate fails on.
+    try {
+      await db.client.execute({
+        sql: `
+          UPDATE communities
+          SET karaoke_enabled = ?2,
+              karaoke_scoring_enabled = ?3,
+              karaoke_stt_provider = ?4,
+              karaoke_stt_model = ?5,
+              karaoke_voice_coach_enabled = ?6,
+              karaoke_audio_retention = ?7,
+              updated_at = ?8
+          WHERE community_id = ?1
+        `,
+        args: [
+          input.communityId,
+          next.karaoke_enabled ? 1 : 0,
+          next.karaoke_scoring_enabled ? 1 : 0,
+          next.karaoke_stt_provider,
+          next.karaoke_stt_model ?? "",
+          next.karaoke_voice_coach_enabled ? 1 : 0,
+          next.karaoke_audio_retention,
+          now,
+        ],
+      })
+    } catch (error) {
+      if (!isMissingKaraokePolicyColumnError(error)) {
+        throw error
+      }
+      throw missingKaraokePolicyColumnsError(input.communityId)
+    }
   } finally {
     db.close()
   }

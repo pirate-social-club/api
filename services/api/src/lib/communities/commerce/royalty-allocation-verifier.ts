@@ -3,6 +3,7 @@ import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../community-repository-types"
 import {
   listPendingStoryRoyaltyAllocationProjectionCommunities,
+  listVerifiedUnsyncedStoryRoyaltyAllocationAssets,
   syncStoryRoyaltyAllocationProjectionForAsset,
 } from "./royalty-allocation-projection"
 import {
@@ -17,6 +18,7 @@ export type RoyaltyAllocationVerificationSummary = {
   checked: number
   verified: number
   pending: number
+  projection_synced: number
   skipped: number
   failed: number
   communities: Array<{
@@ -24,6 +26,7 @@ export type RoyaltyAllocationVerificationSummary = {
     checked: number
     verified: number
     pending: number
+    projection_synced: number
     skipped: number
     failed: number
   }>
@@ -35,6 +38,7 @@ function emptySummary(): RoyaltyAllocationVerificationSummary {
     checked: 0,
     verified: 0,
     pending: 0,
+    projection_synced: 0,
     skipped: 0,
     failed: 0,
     communities: [],
@@ -74,6 +78,13 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
     env: input.env,
     limit: input.maxCommunities,
   })
+  const activeCommunities = await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
+  for (const community of activeCommunities) {
+    if (communityIds.length >= input.maxCommunities) break
+    if (!communityIds.includes(community.community_id)) {
+      communityIds.push(community.community_id)
+    }
+  }
 
   for (const communityId of communityIds) {
     const communitySummary = {
@@ -81,6 +92,7 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
       checked: 0,
       verified: 0,
       pending: 0,
+      projection_synced: 0,
       skipped: 0,
       failed: 0,
     }
@@ -116,6 +128,33 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
           })
         }
       }
+      const verifiedUnsyncedAssets = await listVerifiedUnsyncedStoryRoyaltyAllocationAssets({
+        client: handle.client,
+        limit: input.maxAssetsPerCommunity,
+      })
+      for (const asset of verifiedUnsyncedAssets) {
+        try {
+          const result = await syncStoryRoyaltyAllocationProjectionForAsset({
+            env: input.env,
+            client: handle.client,
+            communityId: asset.communityId,
+            assetId: asset.assetId,
+          })
+          if (result.projectedRows === 0) {
+            throw new Error("royalty_allocation_projection_rows_missing")
+          }
+          summary.projection_synced += 1
+          communitySummary.projection_synced += 1
+        } catch (error) {
+          summary.failed += 1
+          communitySummary.failed += 1
+          console.warn("[royalty-allocation-verifier] verified projection retry failed", {
+            communityId: asset.communityId,
+            assetId: asset.assetId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        }
+      }
     } catch (error) {
       summary.failed += 1
       communitySummary.failed += 1
@@ -125,7 +164,7 @@ export async function reconcileStoryRoyaltyAllocationVerifications(input: {
         error: error instanceof Error ? error.message : String(error),
       })
     } finally {
-      if (communitySummary.checked > 0 || communitySummary.failed > 0) {
+      if (communitySummary.checked > 0 || communitySummary.projection_synced > 0 || communitySummary.failed > 0) {
         summary.communities.push(communitySummary)
       }
       await handle?.close?.()

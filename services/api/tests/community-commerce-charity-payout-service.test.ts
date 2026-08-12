@@ -87,7 +87,7 @@ describe("community commerce charity payouts", () => {
         recipient_ref: "don_hp",
         waterfall_position: 10,
         share_bps: 1000,
-        amount_usd: 0.5,
+        amount_cents: 50,
         settlement_strategy: "provider_payout" as const,
       }
       const first = await executeCharityPayoutsForSettlement({

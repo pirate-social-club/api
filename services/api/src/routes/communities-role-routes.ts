@@ -9,6 +9,8 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { schedulePublicCommunityCachePurge } from "../lib/public-read-cache-invalidation"
+import { getWaitUntil } from "./execution-context"
 
 export function registerCommunityRoleRoutes(communities: Hono<AuthenticatedEnv>): void {
   communities.post("/:communityId/roles/grant", async (c) => {
@@ -21,6 +23,11 @@ export function registerCommunityRoleRoutes(communities: Hono<AuthenticatedEnv>)
       body,
       communityRepository,
       userRepository,
+    })
+    await schedulePublicCommunityCachePurge({
+      env: c.env,
+      communityId,
+      waitUntil: getWaitUntil(c),
     })
     return c.json(result, 200)
   })
@@ -35,6 +42,11 @@ export function registerCommunityRoleRoutes(communities: Hono<AuthenticatedEnv>)
       body,
       communityRepository,
       userRepository,
+    })
+    await schedulePublicCommunityCachePurge({
+      env: c.env,
+      communityId,
+      waitUntil: getWaitUntil(c),
     })
     return c.json(result, 200)
   })

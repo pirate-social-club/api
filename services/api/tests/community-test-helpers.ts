@@ -8,6 +8,7 @@ import type {
   CommunityPostProjectionRepository,
   CommunityReadRepository,
 } from "../src/lib/communities/db-community-repository"
+import type { ParticipationFollowRepository } from "../src/lib/communities/membership/open-participation"
 import { insertPost } from "../src/lib/posts/community-post-create-store"
 import { getPostById } from "../src/lib/posts/community-post-query-store"
 import { resolvePostProjectionSchema } from "../src/lib/posts/community-post-projection"
@@ -101,6 +102,9 @@ function buildCommunityRow(input: {
     description: null,
     avatar_ref: null,
     banner_ref: null,
+    branding_json: "{}",
+    default_surface: "threads",
+    video_feed_enabled: true,
     status: "active",
     provisioning_state: "active",
     transfer_state: "none",
@@ -118,9 +122,11 @@ export type TestCommunityRepository =
   & CommunityDatabaseBindingRepository
   & CommunityPostProjectionRepository
   & CommunityCommentProjectionRepository
+  & ParticipationFollowRepository
   & {
     projections: Map<string, CommunityCommentProjectionRow>
     postProjections: Map<string, CommunityPostProjectionRow>
+    followProjections: Map<string, "active" | "inactive">
     failProjectionWrites: boolean
   }
 
@@ -143,7 +149,21 @@ export function buildTestCommunityRepository(input: {
   const repo = {
     projections,
     postProjections,
+    followProjections: new Map<string, "active" | "inactive">(),
     failProjectionWrites: false,
+    async upsertCommunityFollowProjection(followInput: {
+      communityId: string
+      userId: string
+      followState: "active" | "inactive"
+      sourceUpdatedAt: string
+      unfollowedAt: string | null
+      createdAt: string
+    }) {
+      repo.followProjections.set(`${followInput.communityId}:${followInput.userId}`, followInput.followState)
+    },
+    async incrementCommunityFollowerCount() {
+      return undefined
+    },
     async getCommunityById(requestedCommunityId: string) {
       return requestedCommunityId === input.communityId ? community : null
     },

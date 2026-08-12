@@ -76,6 +76,20 @@ export interface BookingSettlementReviewPage {
   next_cursor: string | null;
 }
 
+export interface BookingListPage {
+  object: "list";
+  data: BookingView[];
+  has_more: boolean;
+  next_cursor: string | null;
+}
+
+export class InvalidBookingListCursorError extends Error {
+  constructor() {
+    super("Invalid booking list cursor");
+    this.name = "InvalidBookingListCursorError";
+  }
+}
+
 export class InvalidBookingSettlementReviewCursorError extends Error {
   constructor() {
     super("Invalid booking settlement review cursor");
@@ -91,6 +105,31 @@ function textToArg(label: string, value: string): string {
 function intToArg(label: string, value: number): number {
   if (!Number.isSafeInteger(value)) throw new RangeError(`${label}: expected a safe integer`);
   return value;
+}
+
+function encodeBookingListCursor(row: BookingView): string {
+  return btoa(JSON.stringify({ slot_start_utc: row.slot_start_utc, booking_id: row.booking_id }))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/u, "");
+}
+
+function decodeBookingListCursor(cursor: string | null | undefined): { slotStartUtc: string; bookingId: string } | null {
+  if (!cursor) return null;
+  try {
+    const normalized = cursor.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const parsed = JSON.parse(atob(padded)) as unknown;
+    if (!parsed || typeof parsed !== "object") throw new InvalidBookingListCursorError();
+    const row = parsed as { slot_start_utc?: unknown; booking_id?: unknown };
+    if (typeof row.slot_start_utc !== "string" || typeof row.booking_id !== "string") {
+      throw new InvalidBookingListCursorError();
+    }
+    return { slotStartUtc: row.slot_start_utc, bookingId: row.booking_id };
+  } catch (error) {
+    if (error instanceof InvalidBookingListCursorError) throw error;
+    throw new InvalidBookingListCursorError();
+  }
 }
 
 function encodeCursor(row: BookingSettlementReviewView): string {
@@ -239,10 +278,12 @@ export async function listGlobalBookingsForUser(input: {
   sourceCommunityId?: string | null;
   statuses?: string[];
   limit?: number;
-}): Promise<BookingView[]> {
+  cursor?: string | null;
+}): Promise<BookingListPage> {
   const limit = Math.min(Math.max(1, Math.trunc(input.limit ?? 50)), 100);
+  const cursor = decodeBookingListCursor(input.cursor);
   const column = input.role === "host" ? "host_user_id" : "booker_user_id";
-  const args: unknown[] = [textToArg("actorUserId", input.actorUserId), intToArg("limit", limit)];
+  const args: unknown[] = [textToArg("actorUserId", input.actorUserId), intToArg("limit", limit + 1)];
   let next = 3;
   const clauses = [`${column} = ?1`];
   if (input.sourceCommunityId !== undefined) {
@@ -257,6 +298,11 @@ export async function listGlobalBookingsForUser(input: {
   if (statuses.length > 0) {
     clauses.push(`status IN (${statuses.map((_status, index) => `?${next + index}`).join(", ")})`);
     args.push(...statuses);
+    next += statuses.length;
+  }
+  if (cursor) {
+    clauses.push(`(slot_start_utc < ?${next}::timestamptz OR (slot_start_utc = ?${next}::timestamptz AND booking_id > ?${next + 1}))`);
+    args.push(cursor.slotStartUtc, cursor.bookingId);
   }
   const res = await input.executor.execute({
     sql: `SELECT ${BOOKING_COLUMNS}
@@ -266,7 +312,14 @@ export async function listGlobalBookingsForUser(input: {
           LIMIT ?2`,
     args,
   });
-  return res.rows.map((row) => toView(decodeBooking(row), input.actorUserId));
+  const rows = res.rows.map((row) => toView(decodeBooking(row), input.actorUserId));
+  const data = rows.slice(0, limit);
+  return {
+    object: "list",
+    data,
+    has_more: rows.length > limit,
+    next_cursor: rows.length > limit && data.length > 0 ? encodeBookingListCursor(data[data.length - 1]!) : null,
+  };
 }
 
 export async function getGlobalBookingSettlementReview(input: {

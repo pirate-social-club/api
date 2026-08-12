@@ -4,6 +4,7 @@ import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
 import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
 import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
+import { resolveRewardsSettlementBackend } from "../../rewards/reward-vault-lit-config"
 
 const BASE_MAINNET_CHAIN_ID = 8453
 const BASE_SEPOLIA_CHAIN_ID = 84532
@@ -117,12 +118,13 @@ export function resolveRewardsSettlementUsdcTokenAddress(env: Env): string {
   return resolveSettlementUsdcTokenAddress(env, "rewards")
 }
 
-function resolveSettlementRpcUrl(env: Env, kind: SettlementOperatorKind): string {
+function resolveSettlementRpcUrl(env: Env, kind: SettlementOperatorKind, requestedChainId?: number): string {
   const names = envNames(kind)
+  const configuredChainId = resolveSettlementChainId(env, kind)
+  const chainId = requestedChainId ?? configuredChainId
   const explicit = String(env[names.rpcUrl] || "").trim()
-  if (explicit) return explicit
+  if (explicit && chainId === configuredChainId) return explicit
 
-  const chainId = resolveSettlementChainId(env, kind)
   if (chainId === BASE_MAINNET_CHAIN_ID) {
     const baseMainnetRpc = String(env.BASE_MAINNET_RPC_URL || "").trim()
     if (baseMainnetRpc) return baseMainnetRpc
@@ -143,6 +145,15 @@ export function resolveRewardsSettlementRpcUrl(env: Env): string {
   return resolveSettlementRpcUrl(env, "rewards")
 }
 
+export function resolveRewardsSettlementBroadcastRpcUrl(env: Env): string {
+  const explicit = String(env.PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL || "").trim()
+  return explicit || resolveRewardsSettlementRpcUrl(env)
+}
+
+export function resolveRewardsSettlementRpcUrlForChain(env: Env, chainId: number): string {
+  return resolveSettlementRpcUrl(env, "rewards", chainId)
+}
+
 function resolveSettlementOperatorPrivateKey(env: Env, kind: SettlementOperatorKind): string {
   const names = envNames(kind)
   const privateKey = normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
@@ -161,7 +172,11 @@ export function resolveRewardsSettlementOperatorPrivateKey(env: Env): string {
 function resolveSettlementOperatorAddress(env: Env, kind: SettlementOperatorKind): string {
   const names = envNames(kind)
   const explicit = parseExpectedEvmAddress(env[names.operatorAddress] as string | undefined)
-  const privateKey = normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
+  const rewardsBackend = kind === "rewards" ? resolveRewardsSettlementBackend(env) : "local"
+  const usesExternalSigner = kind === "rewards" && rewardsBackend === "lit_vault"
+  const privateKey = usesExternalSigner
+    ? null
+    : normalizeDirectSignerPrivateKey(String(env[names.operatorPrivateKey] || "").trim())
 
   if (explicit) {
     const expected = getAddress(explicit)
@@ -189,6 +204,25 @@ export function resolveBookingSettlementOperatorAddress(env: Env): string {
 
 export function resolveRewardsSettlementOperatorAddress(env: Env): string {
   return resolveSettlementOperatorAddress(env, "rewards")
+}
+
+export function assertRewardsCampaignTreasuryMatchesSettlementOperator(env: Env): void {
+  const treasury = parseExpectedEvmAddress(env.REWARDS_CAMPAIGN_TREASURY_ADDRESS)
+  if (!treasury) throw badRequestError("REWARDS_CAMPAIGN_TREASURY_ADDRESS is invalid")
+  if (["lit_vault", "eoa_vault"].includes(resolveRewardsSettlementBackend(env))) {
+    const vault = parseExpectedEvmAddress(env.REWARDS_TREASURY_VAULT_ADDRESS)
+    if (!vault) throw badRequestError("REWARDS_TREASURY_VAULT_ADDRESS is invalid")
+    if (getAddress(treasury) !== getAddress(vault)) {
+      throw badRequestError("Reward campaign treasury must match the rewards treasury vault")
+    }
+    if (getAddress(vault) === resolveRewardsSettlementOperatorAddress(env)) {
+      throw badRequestError("Rewards treasury vault and settlement signer must be distinct")
+    }
+    return
+  }
+  if (getAddress(treasury) !== resolveRewardsSettlementOperatorAddress(env)) {
+    throw badRequestError("Reward campaign treasury must match the rewards settlement operator")
+  }
 }
 
 export function assertDistinctBookingAndRewardsSignerDomains(env: Env): void {

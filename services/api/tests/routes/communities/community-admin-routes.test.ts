@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { KARAOKE_SCORING_VERSION } from "@pirate-social-club/karaoke-runtime"
+import { KARAOKE_RUNTIME_BUILD } from "@pirate-social-club/karaoke-runtime/build"
 import { app, buildVersionMetadata } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -32,24 +34,116 @@ describe("admin auth middleware", () => {
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
+      source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })).toEqual({
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
+      source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })
 
     expect(buildVersionMetadata({
       BUILD_GIT_SHA: "runtime-api123",
       BUILD_GIT_REF: "runtime-main",
       BUILD_TIMESTAMP: "2026-05-26T17:51:00Z",
+      BUILD_RELEASE_ID: "runtime-release",
+      BUILD_ID: "runtime-build",
+      BUILD_WEB_SHA: "runtime-web123",
+      BUILD_API_SHA: "runtime-api123",
+      BUILD_CORE_SHA: "runtime-core123",
+      BUILD_SOURCE_STATE: "dirty",
+      BUILD_DEPLOY_REASON_SLUG: "runtime-repair",
+      BUILD_HOTFIX_REASON_SLUG: "runtime-repair",
+      BUILD_PATCH_SHA256: "f".repeat(64),
     }, {
       git_sha: "compiled-api123",
       git_ref: "compiled-main",
       build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
+      source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
     })).toEqual({
-      git_sha: "runtime-api123",
-      git_ref: "runtime-main",
-      build_timestamp: "2026-05-26T17:51:00Z",
+      git_sha: "compiled-api123",
+      git_ref: "compiled-main",
+      build_timestamp: "2026-05-26T17:50:00Z",
+      release_id: "compiled-release",
+      build_id: "compiled-build",
+      web_sha: "compiled-web123",
+      api_sha: "compiled-api123",
+      core_sha: "compiled-core123",
+      source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
+      hotfix_reason_slug: null,
+      patch_sha256: null,
+    })
+  })
+
+  test("version endpoint exposes the public release attestation tuple", async () => {
+    const response = await app.request("http://pirate.test/__version", undefined, {
+      ENVIRONMENT: "production",
+      BUILD_GIT_SHA: "a".repeat(40),
+      BUILD_GIT_REF: "main",
+      BUILD_TIMESTAMP: "2026-08-11T11:23:15Z",
+      BUILD_RELEASE_ID: "d".repeat(64),
+      BUILD_ID: "build-123",
+      BUILD_WEB_SHA: "b".repeat(40),
+      BUILD_API_SHA: "a".repeat(40),
+      BUILD_CORE_SHA: "c".repeat(40),
+      BUILD_SOURCE_STATE: "clean",
+      BUILD_DEPLOY_REASON_SLUG: "approved-clean-deploy",
+    })
+    expect(response.status).toBe(200)
+    expect(await json(response)).toMatchObject({
+      service: "api",
+      environment: "production",
+      git_sha: "a".repeat(40),
+      release_id: "d".repeat(64),
+      build_id: "build-123",
+      web_sha: "b".repeat(40),
+      api_sha: "a".repeat(40),
+      core_sha: "c".repeat(40),
+      source_state: "clean",
+      deploy_reason_slug: "approved-clean-deploy",
+      hotfix: null,
+    })
+  })
+
+  test("version endpoint exposes the active karaoke scoring contract", async () => {
+    const response = await app.request("http://pirate.test/__version", undefined, {
+      ENVIRONMENT: "test",
+      PIRATE_API_PUBLIC_ORIGIN: "http://pirate.test",
+    })
+    expect(response.status).toBe(200)
+    const body = await json(response) as {
+      karaoke_scoring_version: number
+      karaoke_runtime: { version: string; git_sha: string }
+    }
+    expect(body.karaoke_scoring_version).toBe(KARAOKE_SCORING_VERSION)
+    expect(body.karaoke_runtime).toEqual({
+      version: KARAOKE_RUNTIME_BUILD.version,
+      git_sha: KARAOKE_RUNTIME_BUILD.gitSha,
     })
   })
 
@@ -695,6 +789,9 @@ membership_mode: "request",
       const url = typeof input === "string" ? input : input.toString()
       if (url.startsWith("http://hns-verifier.test") && url.includes("/inspect-public?")) {
         return new Response(JSON.stringify({
+          root_exists: true,
+          root_control_verified: true,
+          expiry_horizon_sufficient: true,
           zone_exists: false,
           challenge_present: false,
           nameservers: ["ns1.pirate.sc."],
@@ -703,6 +800,44 @@ membership_mode: "request",
         }), {
           status: 200,
           headers: { "content-type": "application/json" },
+        })
+      }
+
+      if (url.includes("/observe-root-parent?")) {
+        return Response.json({
+          root_label: "adminverifierroot",
+          zone_name: "adminverifierroot.",
+          provider: "hsd_json_rpc",
+          observed_at: "2026-04-27T00:00:00.000Z",
+          chain_anchor: {
+            network: "main",
+            height: 1_000,
+            block_hash: "ab".repeat(32),
+            median_time: 1_700_000_000,
+          },
+          parent: {
+            raw_records: [],
+            nameservers: [],
+            ds_records: [],
+            glue4: [],
+            glue6: [],
+          },
+        })
+      }
+
+      if (url.endsWith("/publish-txt")) {
+        return Response.json({
+          root_label: "adminverifierroot",
+          zone_name: "adminverifierroot.",
+          challenge_name: "_pirate.adminverifierroot.",
+          challenge_txt_value: "pirate-verification=nvs_test",
+          zone_created: true,
+          nameservers: ["ns1.pirate.", "ns2.pirate."],
+          ds_records: [
+            `49194 13 2 ${"05".repeat(32)}`,
+            `49194 13 4 ${"15".repeat(48)}`,
+          ],
+          observation_provider: "powerdns_api",
         })
       }
 
@@ -735,7 +870,7 @@ membership_mode: "request",
       expect(createdBody.status).toBe("challenge_required")
       expect(createdBody.challenge_host).toBe("adminverifierroot")
       expect(typeof createdBody.challenge_txt_value).toBe("string")
-      expect(createdBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
+      expect(createdBody.setup_nameservers).toEqual(["ns1.pirate.", "ns2.pirate."])
 
       const fetched = await Promise.resolve(app.request(
         `http://pirate.test/namespace-verification-sessions/${createdBody.id}`,
@@ -758,7 +893,7 @@ membership_mode: "request",
       expect(fetchedBody.status).toBe("challenge_required")
       expect(fetchedBody.challenge_host).toBe("adminverifierroot")
       expect(fetchedBody.challenge_txt_value).toBe(createdBody.challenge_txt_value)
-      expect(fetchedBody.setup_nameservers).toEqual(["ns1.pirate.sc."])
+      expect(fetchedBody.setup_nameservers).toEqual(["ns1.pirate.", "ns2.pirate."])
     })
   })
 

@@ -3,19 +3,21 @@
 // The repository owns the idempotency ledger only. Coordinator calls, signing, broadcast,
 // confirmation polling, and payout/refund policy stay in higher layers.
 import type { InStatement, QueryResult, QueryResultRow } from "../sql-client";
-import { intFromRow, intFromRowNullable, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg, textFromRow, textFromRowNullable } from "./codecs";
+import { atomicFromRowNullable, atomicToArg, intFromRow, intFromRowNullable, isoUtcFromRow, isoUtcFromRowNullable, isoUtcToArg, textFromRow, textFromRowNullable } from "./codecs";
 import type { BookingSettlementEffect, BookingSettlementEffectKind, BookingSettlementEffectStatus } from "./types";
 
 export interface SettlementEffectSqlExecutor {
   execute(statement: InStatement | string): Promise<QueryResult>;
 }
 
-interface BeginSettlementEffectAttemptInput {
+export interface BeginSettlementEffectAttemptInput {
   bookingSettlementEffectId?: string;
-  bookingId: string;
+  bookingId?: string;
+  paymentIntentId?: string;
   effectKind: BookingSettlementEffectKind;
   idempotencyKey: string;
-  amountCents: number;
+  amountCents?: number;
+  amountAtomic?: string;
   recipientAddress: string;
   nowUtc: string;
 }
@@ -92,11 +94,13 @@ function settlementEffectIdForIdempotencyKey(idempotencyKey: string): string {
 function decodeSettlementEffect(row: QueryResultRow): BookingSettlementEffect {
   return {
     bookingSettlementEffectId: textFromRow(row.booking_settlement_effect_id),
-    bookingId: textFromRow(row.booking_id),
+    bookingId: textFromRowNullable(row.booking_id),
+    paymentIntentId: textFromRowNullable(row.payment_intent_id),
     effectKind: decodeEffectKind(row.effect_kind),
     idempotencyKey: textFromRow(row.idempotency_key),
     status: decodeEffectStatus(row.status),
-    amountCents: intFromRow(row.amount_cents),
+    amountCents: intFromRowNullable(row.amount_cents),
+    amountAtomic: atomicFromRowNullable(row.amount_atomic),
     recipientAddress: textFromRow(row.recipient_address),
     settlementRef: textFromRowNullable(row.settlement_ref),
     failureReason: textFromRowNullable(row.failure_reason),
@@ -114,7 +118,7 @@ function decodeSettlementEffect(row: QueryResultRow): BookingSettlementEffect {
 }
 
 const COLUMNS =
-  "booking_settlement_effect_id, booking_id, effect_kind, idempotency_key, status, amount_cents, " +
+  "booking_settlement_effect_id, booking_id, payment_intent_id, effect_kind, idempotency_key, status, amount_cents, amount_atomic, " +
   "recipient_address, settlement_ref, failure_reason, attempt_count, signed_tx, broadcast_nonce, " +
   "coordinator_ref, coordinator_state, submitted_at, confirmed_at, failed_at, created_at, updated_at";
 
@@ -124,6 +128,7 @@ const VALID_COORDINATOR_STATES = new Set([
   "broadcast",
   "confirmed",
   "failed_preparation",
+  "preparation_parked",
   "reconciliation_required",
   "replaced",
   "failed_onchain",
@@ -131,9 +136,11 @@ const VALID_COORDINATOR_STATES = new Set([
 
 function immutableEffectMatches(input: BeginSettlementEffectAttemptInput, effect: BookingSettlementEffect): boolean {
   return (
-    effect.bookingId === input.bookingId &&
+    effect.bookingId === (input.bookingId ?? null) &&
+    effect.paymentIntentId === (input.paymentIntentId ?? null) &&
     effect.effectKind === input.effectKind &&
-    effect.amountCents === input.amountCents &&
+    effect.amountCents === (input.amountCents ?? null) &&
+    effect.amountAtomic === (input.amountAtomic ?? null) &&
     effect.recipientAddress === input.recipientAddress
   );
 }
@@ -182,6 +189,12 @@ async function beginSettlementEffectAttempt(
   exec: SettlementEffectSqlExecutor,
   input: BeginSettlementEffectAttemptInput,
 ): Promise<BeginSettlementEffectAttemptResult> {
+  const hasBookingOwner = Boolean(input.bookingId);
+  const hasIntentOwner = Boolean(input.paymentIntentId);
+  const hasCents = input.amountCents != null;
+  const hasAtomic = input.amountAtomic != null;
+  if (hasBookingOwner === hasIntentOwner) throw new TypeError("settlement effect requires exactly one owner");
+  if (hasCents === hasAtomic) throw new TypeError("settlement effect requires exactly one amount");
   const existing = await getSettlementEffectByIdempotencyKey(exec, input.idempotencyKey);
   if (existing) {
     if (!immutableEffectMatches(input, existing)) return { ok: false, reason: "replay-conflict" };
@@ -215,23 +228,25 @@ async function beginSettlementEffectAttempt(
   try {
     const res = await exec.execute({
       sql: `INSERT INTO bookings.settlement_effects (
-              booking_settlement_effect_id, booking_id, effect_kind, idempotency_key, status,
-              amount_cents, recipient_address, settlement_ref, failure_reason, attempt_count,
+              booking_settlement_effect_id, booking_id, payment_intent_id, effect_kind, idempotency_key, status,
+              amount_cents, amount_atomic, recipient_address, settlement_ref, failure_reason, attempt_count,
               signed_tx, broadcast_nonce, coordinator_ref, coordinator_state,
               submitted_at, confirmed_at, failed_at, created_at, updated_at
             ) VALUES (
-              ?1, ?2, ?3, ?4, 'submitted',
-              ?5, ?6, NULL, NULL, 1,
+              ?1, ?2, ?3, ?4, ?5, 'submitted',
+              ?6, ?7::numeric, ?8, NULL, NULL, 1,
               NULL, NULL, NULL, NULL,
-              ?7::timestamptz, NULL, NULL, ?7::timestamptz, ?7::timestamptz
+              ?9::timestamptz, NULL, NULL, ?9::timestamptz, ?9::timestamptz
             )
             RETURNING ${COLUMNS}`,
       args: [
         textToArg("bookingSettlementEffectId", input.bookingSettlementEffectId ?? settlementEffectIdForIdempotencyKey(input.idempotencyKey)),
-        textToArg("bookingId", input.bookingId),
+        nullableTextToArg("bookingId", input.bookingId),
+        nullableTextToArg("paymentIntentId", input.paymentIntentId),
         effectKindToArg(input.effectKind),
         textToArg("idempotencyKey", input.idempotencyKey),
-        intToArg("amountCents", input.amountCents),
+        input.amountCents == null ? null : intToArg("amountCents", input.amountCents),
+        input.amountAtomic == null ? null : atomicToArg(input.amountAtomic),
         textToArg("recipientAddress", input.recipientAddress),
         isoUtcToArg(input.nowUtc),
       ],
@@ -270,8 +285,9 @@ async function mirrorSettlementCoordinatorEffect(
             AND (
               coordinator_state IS NULL
               OR coordinator_state = ?3
-              OR (coordinator_state = 'reserving' AND ?3 IN ('prepared', 'failed_preparation'))
-              OR (coordinator_state = 'failed_preparation' AND ?3 = 'prepared')
+              OR (coordinator_state = 'reserving' AND ?3 IN ('prepared', 'failed_preparation', 'preparation_parked'))
+              OR (coordinator_state = 'failed_preparation' AND ?3 IN ('prepared', 'preparation_parked'))
+              OR (coordinator_state = 'preparation_parked' AND ?3 = 'reserving')
               OR (coordinator_state = 'prepared' AND ?3 IN ('broadcast', 'reconciliation_required'))
               OR (coordinator_state = 'reconciliation_required' AND ?3 IN ('broadcast', 'replaced', 'failed_onchain', 'confirmed'))
               OR (coordinator_state = 'broadcast' AND ?3 IN ('reconciliation_required', 'replaced', 'failed_onchain', 'confirmed'))

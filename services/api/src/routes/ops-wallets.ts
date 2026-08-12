@@ -7,8 +7,58 @@ import { resolveEnforcedFloorWei, resolveStorySignerExplorerUrl } from "../lib/s
 import { resolveStoryChainId } from "../lib/story/story-runtime-config"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { listFundingReceiptsForRefundReview } from "../lib/communities/commerce/observed-funding-receipts"
+import {
+  operatorSigningCoordinatorName,
+  type OperatorSigningCoordinatorDO,
+} from "../lib/communities/bookings/operator-signing-coordinator-do"
+import {
+  resolveRewardsSettlementChainId,
+  resolveRewardsSettlementOperatorAddress,
+} from "../lib/communities/bookings/booking-chain-config"
 
 const opsWallets = new Hono<AuthenticatedEnv>()
+
+opsWallets.get("/rewards-settlement-diagnostics", async (c) => {
+  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  const coordinatorRef = String(c.req.query("coordinator_ref") ?? "").trim()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(coordinatorRef)
+  } catch {
+    return c.json({ error: "invalid_coordinator_ref" }, 400)
+  }
+  if (
+    !Array.isArray(parsed)
+    || parsed.length !== 2
+    || (parsed[0] !== "reward_payout" && parsed[0] !== "reward_funding_refund")
+    || typeof parsed[1] !== "string"
+    || parsed[1].length < 1
+    || parsed[1].length > 500
+  ) {
+    return c.json({ error: "invalid_coordinator_ref" }, 400)
+  }
+  const namespace = c.env.OPERATOR_SIGNING_COORDINATOR as DurableObjectNamespace<OperatorSigningCoordinatorDO> | undefined
+  if (!namespace) return c.json({ error: "coordinator_unavailable" }, 503)
+  const stub = namespace.getByName(operatorSigningCoordinatorName(
+    resolveRewardsSettlementOperatorAddress(c.env),
+    resolveRewardsSettlementChainId(c.env),
+    "rewards",
+  ))
+  const result = await stub.lookupByKey(coordinatorRef)
+  if (!result) return c.json({ error: "not_found" }, 404)
+  return c.json({
+    coordinator_ref: result.idempotencyKey,
+    state: result.state,
+    nonce: result.nonce,
+    attempt_count: result.attemptCount ?? null,
+    transaction_present: Boolean(result.txHash),
+    transaction_hash: result.txHash ?? null,
+    preparation_failure: result.preparationFailure ?? null,
+    settlement_failure: result.settlementFailure ?? null,
+  }, 200, {
+    "cache-control": "private, no-store",
+  })
+})
 
 opsWallets.get("/funding-refund-reviews", async (c) => {
   if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)

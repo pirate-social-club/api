@@ -7,6 +7,10 @@ import {
 } from "../../src/lib/rewards/reward-cashout-service"
 import { setPrivyAccessProofVerifierForTests } from "../../src/lib/auth/privy-auth"
 import { setBookingPaymentVerifierForTests } from "../../src/lib/communities/commerce/funding-proof-service"
+import {
+  reconcileRewardFundingRefunds,
+  setRewardFundingRefundCoordinatorForTests,
+} from "../../src/lib/rewards/reward-funding-refund-reconciler"
 import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
 import { openCommunityWriteClient } from "../../src/lib/communities/community-read-access"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
@@ -22,6 +26,7 @@ beforeEach(() => {
   setRewardSettlementConfirmPollPlanForTests(null)
   setPrivyAccessProofVerifierForTests(null)
   setBookingPaymentVerifierForTests(null)
+  setRewardFundingRefundCoordinatorForTests(null)
   offerRateLimitAllows = true
   offerRateLimitCalls = 0
 })
@@ -31,6 +36,7 @@ afterEach(async () => {
   setRewardSettlementConfirmPollPlanForTests(null)
   setPrivyAccessProofVerifierForTests(null)
   setBookingPaymentVerifierForTests(null)
+  setRewardFundingRefundCoordinatorForTests(null)
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -49,11 +55,21 @@ describe("rewards routes", () => {
   function campaignEnv(): Partial<Parameters<typeof createRouteTestContext>[0]> {
     return {
       REWARDS_CAMPAIGNS_ENABLED: "true",
+      REWARDS_ACCRUAL_ENABLED: "true",
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_IDENTITY_PROVIDER: "self",
+      REWARDS_REFUNDS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
       REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
-      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",
+      REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
       REWARDS_CAMPAIGN_RPC_URL: "https://base-sepolia.example.test",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: "0x7000000000000000000000000000000000000000000000000000000000000007",
+      PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
+      PIRATE_REWARDS_SETTLEMENT_RPC_URL: "https://base-sepolia.example.test",
+      PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE: "true",
       REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS: "900",
       REWARDS_CAMPAIGN_MIN_BUDGET_CENTS: "1000",
       REWARDS_CAMPAIGN_MAX_BUDGET_CENTS: "1000000",
@@ -245,8 +261,10 @@ describe("rewards routes", () => {
   function campaignBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
     const now = Math.floor(Date.now() / 1000)
     return {
-      community: "cmt_rewards_route",
-      post: "pst_reward_campaign_song",
+      // The web client sends canonical public IDs from the page route.
+      community: "com_cmt_rewards_route",
+      post: "post_pst_reward_campaign_song",
+      reward_identity_provider: "very",
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
@@ -274,6 +292,449 @@ describe("rewards routes", () => {
     expect(response.status).toBe(403)
     const rows = await ctx.client.execute("SELECT COUNT(*) AS count FROM reward_campaigns")
     expect(Number(rows.rows[0]?.count)).toBe(0)
+  })
+
+  test("uses the flat-bounty provider independently of the legacy cashout provider", async () => {
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      REWARDS_IDENTITY_PROVIDER: "self",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-provider-compatibility")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const created = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        idempotency_key: "provider-independent-create",
+        reward_identity_provider: "very",
+      })),
+    }, ctx.env)
+    expect(created.status).toBe(201)
+    const campaign = await json(created) as { id: string }
+
+    ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
+    const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "provider-independent-quote" }),
+    }, ctx.env)
+    expect(quoted.status).toBe(201)
+    const quote = await json(quoted) as { id: string }
+    const txHash = `0x${"e".repeat(64)}`
+    const confirmUrl = `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`
+
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+    }))
+    const confirmed = await app.request(confirmUrl, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ tx_hash: txHash }),
+    }, ctx.env)
+    expect(confirmed.status).toBe(200)
+
+    const grandfatheredReplay = await app.request(confirmUrl, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ tx_hash: txHash }),
+    }, ctx.env)
+    expect(grandfatheredReplay.status).toBe(200)
+  }, 30_000)
+
+  test("lets only the rewarder cancel an untouched draft and atomically releases its song slot", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-owner")
+    const stranger = await exchangeJwt(ctx.env, "reward-draft-cancel-stranger")
+    await seedCampaignSong(ctx, owner.userId)
+
+    const created = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-first" })),
+    }, ctx.env)
+    expect(created.status).toBe(201)
+    const campaign = await json(created) as { id: string }
+
+    const strangerCancel = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(stranger.accessToken),
+    }, ctx.env)
+    expect(strangerCancel.status).toBe(404)
+
+    const canceled = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(canceled.status).toBe(200)
+    expect(await json(canceled)).toMatchObject({ id: campaign.id, status: "canceled" })
+    const released = await ctx.client.execute({
+      sql: "SELECT reward_campaign_id FROM reward_song_pools WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(released.rows).toEqual([])
+
+    const replay = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(replay.status).toBe(200)
+    expect(await json(replay)).toMatchObject({ id: campaign.id, status: "canceled" })
+
+    const reusedCreateKey = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-first" })),
+    }, ctx.env)
+    expect(reusedCreateKey.status).toBe(201)
+    expect(await json(reusedCreateKey)).toMatchObject({ id: campaign.id, status: "canceled" })
+    expect((await ctx.client.execute({
+      sql: "SELECT reward_campaign_id FROM reward_song_pools WHERE post_id = ?1",
+      args: ["pst_reward_campaign_song"],
+    })).rows).toEqual([])
+
+    const replacement = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-replacement" })),
+    }, ctx.env)
+    expect(replacement.status).toBe(201)
+    const replacementCampaign = await json(replacement) as { id: string }
+    expect(replacementCampaign.id).not.toBe(campaign.id)
+
+    const replacementCanceled = await app.request(`http://pirate.test/reward_campaigns/${replacementCampaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(replacementCanceled.status).toBe(200)
+
+    const strangerReplacement = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(stranger.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-stranger-replacement" })),
+    }, ctx.env)
+    expect(strangerReplacement.status).toBe(201)
+    expect((await json(strangerReplacement) as { id: string }).id).not.toBe(replacementCampaign.id)
+  })
+
+  test("refuses cancellation once funding has started or completed", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-funded-owner")
+    await addWallet(ctx, owner.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, owner.userId)
+
+    const created = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "draft-cancel-funded" })),
+    }, ctx.env)
+    const campaign = await json(created) as { id: string }
+    const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "draft-cancel-funded-quote" }),
+    }, ctx.env)
+    expect(quoted.status).toBe(201)
+    const quote = await json(quoted) as { id: string }
+
+    const duringFunding = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(duringFunding.status).toBe(409)
+
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+    }))
+    const confirmed = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"f".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(confirmed.status).toBe(200)
+
+    const afterFunding = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(afterFunding.status).toBe(409)
+    const pool = await ctx.client.execute({
+      sql: "SELECT reward_campaign_id FROM reward_song_pools WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(pool.rows).toEqual([{ reward_campaign_id: campaign.id }])
+  }, 30_000)
+
+  test("allows cancellation after every funding effect is terminal or expired", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-draft-cancel-terminal-owner")
+    await addWallet(ctx, owner.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, owner.userId)
+
+    const createAndQuote = async (suffix: string) => {
+      const created = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+        body: JSON.stringify(campaignBody({ idempotency_key: `draft-cancel-${suffix}` })),
+      }, ctx.env)
+      const campaign = await json(created) as { id: string }
+      const quoted = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+        method: "POST",
+        headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100000, idempotency_key: `draft-cancel-${suffix}-quote` }),
+      }, ctx.env)
+      return { campaign, quote: await json(quoted) as { id: string } }
+    }
+
+    const failed = await createAndQuote("failed")
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET status = 'failed' WHERE reward_campaign_funding_effect_id = ?1",
+      args: [failed.quote.id],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'draft' WHERE reward_campaign_id = ?1",
+      args: [failed.campaign.id],
+    })
+    const failedCancel = await app.request(`http://pirate.test/reward_campaigns/${failed.campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(failedCancel.status).toBe(200)
+
+    const expired = await createAndQuote("expired")
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [expired.quote.id, "2020-01-01T00:00:00.000Z"],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'draft' WHERE reward_campaign_id = ?1",
+      args: [expired.campaign.id],
+    })
+    const expiredCancel = await app.request(`http://pirate.test/reward_campaigns/${expired.campaign.id}/cancel`, {
+      method: "POST",
+      headers: authHeaders(owner.accessToken),
+    }, ctx.env)
+    expect(expiredCancel.status).toBe(200)
+  })
+
+  test("does not advertise or quote campaign funding without a usable settlement signer", async () => {
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY: undefined,
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-unready-signer")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const capabilities = await app.request("http://pirate.test/reward_campaign_capabilities?post_id=pst_reward_campaign_song", {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(capabilities.status).toBe(200)
+    expect(await json(capabilities)).toMatchObject({ enabled: false, post_eligible: false })
+
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "unready-signer-campaign" })),
+    }, ctx.env)
+    expect(create.status).toBe(201)
+    const campaign = await json(create) as { id: string }
+    const quote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "unready-signer-quote" }),
+    }, ctx.env)
+    expect(quote.status).toBe(502)
+    const rows = await ctx.client.execute("SELECT COUNT(*) AS count FROM reward_campaign_funding_effects")
+    expect(Number(rows.rows[0]?.count)).toBe(0)
+  })
+
+  test("reports post-specific campaign eligibility from the configured allowlist", async () => {
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+      REWARDS_CAMPAIGN_POST_ALLOWLIST: "pst_reward_campaign_song",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-post-eligibility")
+
+    const allowed = await app.request(
+      "http://pirate.test/reward_campaign_capabilities?post_id=pst_reward_campaign_song",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(allowed.status).toBe(200)
+    expect(await json(allowed)).toMatchObject({ enabled: true, post_eligible: true })
+
+    const blocked = await app.request(
+      "http://pirate.test/reward_campaign_capabilities?post_id=pst_other_song",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(blocked.status).toBe(200)
+    expect(await json(blocked)).toMatchObject({ enabled: true, post_eligible: false })
+
+    const missing = await app.request(
+      "http://pirate.test/reward_campaign_capabilities",
+      { headers: authHeaders(session.accessToken) },
+      ctx.env,
+    )
+    expect(missing.status).toBe(400)
+  })
+
+  test("persists canonical tier terms and admits funding after tier accounting activation", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-tier-owner")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const tieredBody = campaignBody({
+      default_amount_cents: 40,
+      reward_identity_provider: "self",
+      payout_tiers: [
+        { nationalities: ["vnm"], amount_cents: 60 },
+        { nationalities: ["USA", "CAN"], amount_cents: 80 },
+      ],
+      reward_period_cap_cents: 80,
+      idempotency_key: "reward-campaign-tier-create",
+    })
+    const createdResponse = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(tieredBody),
+    }, ctx.env)
+    expect(createdResponse.status).toBe(201)
+    const campaign = await json(createdResponse) as {
+      id: string
+      daily_reward_cents: number
+      default_amount_cents: number
+      max_claim_cents: number
+      payout_tiers: Array<{ nationalities: string[]; amount_cents: number }>
+    }
+    expect(campaign).toMatchObject({
+      daily_reward_cents: 40,
+      default_amount_cents: 40,
+      max_claim_cents: 80,
+      payout_tiers: [
+        { nationalities: ["CAN", "USA"], amount_cents: 80 },
+        { nationalities: ["VNM"], amount_cents: 60 },
+      ],
+    })
+
+    const replay = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({
+        ...tieredBody,
+        payout_tiers: [
+          { nationalities: ["CAN"], amount_cents: 80 },
+          { nationalities: ["USA"], amount_cents: 80 },
+          { nationalities: ["VNM"], amount_cents: 60 },
+        ],
+      }),
+    }, ctx.env)
+    expect(replay.status).toBe(201)
+    expect((await json(replay) as { id: string }).id).toBe(campaign.id)
+
+    const stored = await ctx.client.execute({
+      sql: "SELECT default_amount_cents, max_claim_cents, payout_tiers_json, terms_version FROM reward_campaigns WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(stored.rows[0]).toMatchObject({
+      default_amount_cents: 40,
+      max_claim_cents: 80,
+      terms_version: 4,
+    })
+
+    const quote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "tier-funding-blocked" }),
+    }, ctx.env)
+    expect(quote.status).toBe(201)
+    expect(await json(quote)).toMatchObject({
+      campaign: campaign.id,
+      amount_cents: 100000,
+      status: "quoted",
+    })
+  })
+
+  test("rejects ambiguous or insolvent nationality tier terms", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-campaign-tier-validation")
+    await seedCampaignSong(ctx, session.userId)
+
+    const cases = [
+      campaignBody({
+        default_amount_cents: 41,
+        idempotency_key: "tier-default-mismatch",
+      }),
+      campaignBody({
+        payout_tiers: [
+          { nationalities: ["USA"], amount_cents: 50 },
+          { nationalities: ["usa"], amount_cents: 60 },
+        ],
+        reward_period_cap_cents: 60,
+        idempotency_key: "tier-country-duplicate",
+      }),
+      campaignBody({
+        payout_tiers: Array.from({ length: 11 }, (_, index) => ({
+          nationalities: [index === 0 ? "USA" : "CAN"],
+          amount_cents: 40,
+        })),
+        idempotency_key: "tier-count-overflow",
+      }),
+      campaignBody({
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 79,
+        idempotency_key: "tier-period-under-max",
+      }),
+      campaignBody({
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 80,
+        budget_cents: 79,
+        idempotency_key: "tier-budget-under-max",
+      }),
+      campaignBody({
+        reward_identity_provider: "very",
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 80,
+        idempotency_key: "tier-very-provider",
+      }),
+      campaignBody({
+        reward_identity_provider: "zkpassport",
+        payout_tiers: [{ nationalities: ["USA"], amount_cents: 80 }],
+        reward_period_cap_cents: 80,
+        idempotency_key: "tier-zkpassport-provider",
+      }),
+      campaignBody({
+        reward_identity_provider: "self",
+        idempotency_key: "flat-self-provider",
+      }),
+    ]
+    for (const body of cases) {
+      const response = await app.request("http://pirate.test/reward_campaigns", {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }, ctx.env)
+      expect(response.status).toBe(400)
+    }
   })
 
   test("creates, quotes, uniquely verifies, and activates a fully funded campaign", async () => {
@@ -323,8 +784,23 @@ describe("rewards routes", () => {
       body: JSON.stringify(createBody),
     }, ctx.env)
     expect(create.status).toBe(201)
-    const campaign = await json(create) as { id: string; status: string; song_owner: string; eligible_activity: string; min_score_bps: number }
-    expect(campaign).toMatchObject({ status: "draft", song_owner: session.userId, eligible_activity: "either", min_score_bps: 7000 })
+    const campaign = await json(create) as {
+      id: string
+      status: string
+      song_owner: string
+      eligible_activity: string
+      min_score_bps: number
+      starts_at: number
+      ends_at: number
+    }
+    expect(campaign).toMatchObject({
+      community: "cmt_rewards_route",
+      post: "pst_reward_campaign_song",
+      status: "draft",
+      song_owner: session.userId,
+      eligible_activity: "either",
+      min_score_bps: 7000,
+    })
 
     const replay = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
@@ -347,6 +823,13 @@ describe("rewards routes", () => {
     }, ctx.env)
     expect(changedScoreReplay.status).toBe(409)
 
+    const changedProviderReplay = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ ...createBody, reward_identity_provider: "zkpassport" }),
+    }, ctx.env)
+    expect(changedProviderReplay.status).toBe(400)
+
     const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
@@ -363,7 +846,7 @@ describe("rewards routes", () => {
     expect(quote).toMatchObject({
       amount_atomic: "1000000000",
       sender_address: "0x1000000000000000000000000000000000000001",
-      treasury_address: "0x2000000000000000000000000000000000000002",
+      treasury_address: "0xCb23683A41ec98F506B67D89dEAF0Bb52ACC97A6",
       status: "quoted",
     })
 
@@ -394,16 +877,27 @@ describe("rewards routes", () => {
     const read = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(read)).toMatchObject({
+    const activeCampaign = await json(read) as {
+      id: string
+      status: string
+      starts_at: number
+      ends_at: number
+      funding_tx_hash: string | null
+    }
+    expect(activeCampaign).toMatchObject({
       id: campaign.id,
       status: "active",
       budget_cents: 100000,
       funded_cents: 100000,
       remaining_cents: 100000,
+      funding_tx_hash: txHash,
     })
+    expect(activeCampaign.starts_at).toBeGreaterThan(campaign.starts_at)
+    expect(activeCampaign.ends_at - activeCampaign.starts_at).toBe(campaign.ends_at - campaign.starts_at)
     const publicOffer = await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)
     expect(publicOffer.status).toBe(200)
     expect(await json(publicOffer)).toEqual({
+      campaign: campaign.id,
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
@@ -419,13 +913,32 @@ describe("rewards routes", () => {
     )
     expect(songOffer.status).toBe(200)
     expect(await json(songOffer)).toEqual({
+      campaign: campaign.id,
       eligible_activity: "either",
       min_score_bps: 7000,
       daily_reward_cents: 40,
       chain_id: 84532,
       ends_at: expect.any(Number),
     })
-    expect(offerRateLimitCalls).toBe(2)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'paused' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect((await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)).status).toBe(404)
+    expect((await app.request(
+      "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
+      {}, ctx.env,
+    )).status).toBe(404)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'active', reserved_cents = funded_cents WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect((await app.request(`http://pirate.test/public/reward_campaigns/${campaign.id}`, {}, ctx.env)).status).toBe(404)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET reserved_cents = 0 WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    expect(offerRateLimitCalls).toBe(5)
     offerRateLimitAllows = false
     const rateLimitedOffer = await app.request(
       "http://pirate.test/public/reward_campaigns?community_id=cmt_rewards_route&post_id=pst_reward_campaign_song",
@@ -490,7 +1003,7 @@ describe("rewards routes", () => {
     const outsider = await exchangeJwt(ctx.env, "reward-policy-outsider")
     await seedCampaignSong(ctx, owner.userId)
     await addWallet(ctx, booster.userId, new Date().toISOString())
-    const policyUrl = "http://pirate.test/reward_song_policies/cmt_rewards_route/pst_reward_campaign_song"
+    const policyUrl = "http://pirate.test/reward_song_policies/com_cmt_rewards_route/post_pst_reward_campaign_song"
 
     const unauthorizedPolicy = await app.request(policyUrl, {
       method: "PUT",
@@ -575,6 +1088,202 @@ describe("rewards routes", () => {
     expect(await json(paused)).toMatchObject({ status: "paused", funded_cents: 100000 })
   })
 
+  test("uses one stable song pool and accepts concurrent contribution lots from different funders", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-slot-owner")
+    const firstBooster = await exchangeJwt(ctx.env, "reward-slot-first")
+    const secondBooster = await exchangeJwt(ctx.env, "reward-slot-second")
+    await seedCampaignSong(ctx, owner.userId)
+    await addWallet(ctx, firstBooster.userId, new Date().toISOString())
+    await addWallet(ctx, secondBooster.userId, new Date().toISOString(), "0x3000000000000000000000000000000000000003")
+
+    const firstCreate = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(firstBooster.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "reward-pool-first" })),
+    }, ctx.env)
+    expect(firstCreate.status).toBe(201)
+    const pool = await json(firstCreate) as { id: string; reward_identity_provider: string }
+    expect(pool.reward_identity_provider).toBe("very")
+    const duplicatePool = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(secondBooster.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        idempotency_key: "reward-pool-second",
+      })),
+    }, ctx.env)
+    expect(duplicatePool.status).toBe(409)
+    expect(await json(duplicatePool)).toMatchObject({ code: "pool_exists" })
+
+    const quoteCampaign = (
+      accessToken: string,
+      campaignId: string,
+      amountCents: number,
+      key: string,
+      provider?: string,
+    ) => app.request(
+      `http://pirate.test/reward_campaigns/${campaignId}/funding_quotes`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(accessToken), "content-type": "application/json" },
+        body: JSON.stringify({
+          amount_cents: amountCents,
+          idempotency_key: key,
+          ...(provider ? { reward_identity_provider: provider } : {}),
+        }),
+      },
+      ctx.env,
+    )
+
+    const firstQuote = await quoteCampaign(firstBooster.accessToken, pool.id, 40_000, "reward-pool-quote-first")
+    expect(firstQuote.status).toBe(201)
+    const firstLot = await json(firstQuote) as { id: string }
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+    }))
+    const firstConfirmation = await app.request(
+      `http://pirate.test/reward_campaigns/${pool.id}/funding_quotes/${firstLot.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(firstBooster.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"8".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(firstConfirmation.status).toBe(200)
+    await ctx.client.execute({
+      sql: `
+        UPDATE reward_campaigns
+        SET credited_cents = funded_cents, status = 'exhausted', exhausted_at = updated_at
+        WHERE reward_campaign_id = ?1
+      `,
+      args: [pool.id],
+    })
+    const conflictingProviderQuote = await quoteCampaign(
+      secondBooster.accessToken,
+      pool.id,
+      100_000,
+      "reward-pool-quote-conflicting-provider",
+      "zkpassport",
+    )
+    expect(conflictingProviderQuote.status).toBe(409)
+    expect(await json(conflictingProviderQuote)).toMatchObject({
+      message: "Funding provider assertion does not match the permanent song pool",
+    })
+    const secondQuote = await quoteCampaign(
+      secondBooster.accessToken,
+      pool.id,
+      100_000,
+      "reward-pool-quote-second",
+      "very",
+    )
+    expect(secondQuote.status).toBe(201)
+    const secondLot = await json(secondQuote) as { id: string }
+    const secondConfirmation = await app.request(
+      `http://pirate.test/reward_campaigns/${pool.id}/funding_quotes/${secondLot.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(secondBooster.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"9".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(secondConfirmation.status).toBe(200)
+    const refilled = await app.request(`http://pirate.test/reward_campaigns/${pool.id}`, {
+      headers: authHeaders(secondBooster.accessToken),
+    }, ctx.env)
+    expect(await json(refilled)).toMatchObject({
+      status: "active",
+      funded_cents: 140_000,
+      budget_cents: 140_000,
+      remaining_cents: 100_000,
+      reward_identity_provider: "very",
+    })
+    const persistedProvider = await ctx.client.execute({
+      sql: "SELECT reward_identity_provider FROM reward_campaigns WHERE reward_campaign_id = ?1",
+      args: [pool.id],
+    })
+    expect(persistedProvider.rows[0]?.reward_identity_provider).toBe("very")
+    const lots = await ctx.client.execute({
+      sql: `
+        SELECT funder_user_id, expected_amount_cents
+        FROM reward_campaign_funding_effects
+        WHERE reward_campaign_id = ?1
+        ORDER BY expected_amount_cents
+      `,
+      args: [pool.id],
+    })
+    expect(lots.rows).toEqual([
+      { funder_user_id: firstBooster.userId, expected_amount_cents: 40000 },
+      { funder_user_id: secondBooster.userId, expected_amount_cents: 100000 },
+    ])
+  })
+
+  test("an expired quote and its replacement can both become contribution lots without a budget ceiling", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-expired-full-budget")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "expired-full-budget-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quote = async (key: string) => {
+      const response = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100000, idempotency_key: key }),
+      }, ctx.env)
+      expect(response.status).toBe(201)
+      return await json(response) as { id: string }
+    }
+    const confirm = (fundingId: string, hash: string) => app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${fundingId}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: hash }),
+      },
+      ctx.env,
+    )
+
+    const expired = await quote("expired-full-budget-first")
+    const expiredAt = new Date(Date.now() - 60_000)
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
+      args: [expired.id, expiredAt.toISOString()],
+    })
+
+    const replacement = await quote("expired-full-budget-replacement")
+    const replacementHash = `0x${"8".repeat(64)}`
+    const expiredHash = `0x${"9".repeat(64)}`
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => ({
+      kind: "verified",
+      senderAddress: expected.senderAddress,
+      txRef: fundingTxRef,
+      blockTimestamp: fundingTxRef === expiredHash
+        ? Math.floor(expiredAt.getTime() / 1000) - 30
+        : Math.floor(Date.now() / 1000),
+    }))
+
+    expect(await json(await confirm(replacement.id, replacementHash))).toMatchObject({
+      status: "confirmed",
+    })
+    expect(await json(await confirm(expired.id, expiredHash))).toMatchObject({
+      status: "confirmed",
+    })
+    expect(await json(await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env))).toMatchObject({ funded_cents: 200000 })
+  })
+
   test("a transfer broadcast before expiry still funds the campaign when confirmation is resumed after expiry", async () => {
     // The money-stranding case. A wallet broadcasts valid USDC, the confirm request is lost, the
     // quote lapses, and the client resumes with the SAME hash on reload. Refusing on wall-clock
@@ -634,7 +1343,102 @@ describe("rewards routes", () => {
     expect(await json(funded)).toMatchObject({ status: "active", funded_cents: 100000 })
   })
 
-  test("a transfer mined after expiry cannot revive stale campaign terms", async () => {
+  test("does not reopen an expired quote from a retired settlement chain", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-retired-chain-quote")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "retired-chain-campaign" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "retired-chain-quote" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+    await ctx.client.execute({
+      sql: `UPDATE reward_campaign_funding_effects
+        SET chain_id = 8453, expires_at = '2020-01-01T00:00:00.000Z'
+        WHERE reward_campaign_funding_effect_id = ?1`,
+      args: [quote.id],
+    })
+    let verifierCalled = false
+    setBookingPaymentVerifierForTests(async () => {
+      verifierCalled = true
+      throw new Error("retired quote must not reach receipt verification")
+    })
+    const response = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"d".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(409)
+    expect(verifierCalled).toBe(false)
+    const effect = await ctx.client.execute({
+      sql: "SELECT status, tx_hash FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
+      args: [quote.id],
+    })
+    expect(effect.rows[0]).toEqual({ status: "quoted", tx_hash: null })
+  })
+
+  test("does not confirm a quote after its campaign has ended", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-ended-campaign-quote")
+    await addWallet(ctx, session.userId, new Date().toISOString())
+    await seedCampaignSong(ctx, session.userId)
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "ended-campaign-confirm" })),
+    }, ctx.env)
+    const campaign = await json(create) as { id: string }
+    const quoteResponse = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 100000, idempotency_key: "ended-campaign-quote" }),
+    }, ctx.env)
+    const quote = await json(quoteResponse) as { id: string }
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    let verifierCalled = false
+    setBookingPaymentVerifierForTests(async () => {
+      verifierCalled = true
+      throw new Error("ended campaign must not reach receipt verification")
+    })
+    const response = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ tx_hash: `0x${"e".repeat(64)}` }),
+      },
+      ctx.env,
+    )
+    expect(response.status).toBe(409)
+    expect(verifierCalled).toBe(false)
+    const state = await ctx.client.execute({
+      sql: `SELECT c.status AS campaign_status, f.status AS funding_status, f.tx_hash
+        FROM reward_campaigns c
+        JOIN reward_campaign_funding_effects f ON f.reward_campaign_id = c.reward_campaign_id
+        WHERE f.reward_campaign_funding_effect_id = ?1`,
+      args: [quote.id],
+    })
+    expect(state.rows[0]).toEqual({ campaign_status: "ended", funding_status: "quoted", tx_hash: null })
+  })
+
+  test("a narrowly late transfer re-acquires its slot and receives a fresh campaign window", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-funding-post-expiry")
@@ -653,7 +1457,7 @@ describe("rewards routes", () => {
     }, ctx.env)
     const quote = await json(quoteResponse) as { id: string }
 
-    const expiresAt = "2020-01-01T00:00:00.000Z"
+    const expiresAt = new Date(Date.now() - 2 * 60 * 1000).toISOString()
     await ctx.client.execute({
       sql: "UPDATE reward_campaign_funding_effects SET expires_at = ?2 WHERE reward_campaign_funding_effect_id = ?1",
       args: [quote.id, expiresAt],
@@ -668,7 +1472,7 @@ describe("rewards routes", () => {
       blockTimestamp: minedAt,
     }))
 
-    const rejected = await app.request(
+    const accepted = await app.request(
       `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes/${quote.id}/confirm`,
       {
         method: "POST",
@@ -677,26 +1481,30 @@ describe("rewards routes", () => {
       },
       ctx.env,
     )
-    expect(rejected.status).toBe(409)
-    expect(await json(rejected)).toMatchObject({ code: "funding_quote_expired" })
+    expect(accepted.status).toBe(200)
+    expect(await json(accepted)).toMatchObject({ status: "confirmed" })
 
-    // The campaign is not funded, and the effect records why the transfer was refused.
-    const unfunded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
+    const funded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(unfunded)).toMatchObject({ funded_cents: 0 })
-    const effect = await ctx.client.execute({
-      sql: "SELECT status, failure_reason FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
-      args: [quote.id],
+    const fundedBody = await json(funded) as { status: string; funded_cents: number; starts_at: number; ends_at: number }
+    expect(fundedBody).toMatchObject({ status: "active", funded_cents: 100000 })
+    expect(fundedBody.starts_at).toBeGreaterThan(Math.floor(Date.now() / 1000) - 10)
+    const schedule = await ctx.client.execute({
+      sql: "SELECT requested_starts_at, requested_ends_at, starts_at, ends_at FROM reward_campaigns WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
     })
-    expect(effect.rows[0]).toMatchObject({
-      status: "failed",
-      failure_reason: "funding_confirmed_after_quote_expiry",
-    })
+    expect(schedule.rows[0]?.requested_starts_at).not.toBe(schedule.rows[0]?.starts_at)
+    expect(schedule.rows[0]?.requested_ends_at).not.toBe(schedule.rows[0]?.ends_at)
+    expect(fundedBody.ends_at - fundedBody.starts_at).toBe(
+      Math.floor((Date.parse(String(schedule.rows[0]?.requested_ends_at)) - Date.parse(String(schedule.rows[0]?.requested_starts_at))) / 1000),
+    )
   })
 
   test("handles partial, pending, expired, and rejected campaign funding safely", async () => {
-    const ctx = await createRouteTestContext(campaignEnv())
+    const ctx = await createRouteTestContext({
+      ...campaignEnv(),
+    })
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-funding-adversarial")
     await addWallet(ctx, session.userId, new Date().toISOString())
@@ -739,7 +1547,7 @@ describe("rewards routes", () => {
     const partiallyFunded = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(partiallyFunded)).toMatchObject({ status: "funding_quoted", funded_cents: 40000 })
+    expect(await json(partiallyFunded)).toMatchObject({ status: "active", funded_cents: 40000 })
 
     const expired = await quote(10000, "expired-funding")
     await ctx.client.execute({
@@ -747,14 +1555,100 @@ describe("rewards routes", () => {
       args: [expired.id],
     })
     const expiredConfirm = await confirm(expired.id, "d")
-    expect(expiredConfirm.status).toBe(409)
-    expect(await json(expiredConfirm)).toMatchObject({ code: "funding_quote_expired" })
+    expect(expiredConfirm.status).toBe(200)
+    expect(await json(expiredConfirm)).toMatchObject({
+      status: "refund_pending",
+      failure_reason: "funding_confirmed_after_quote_expiry",
+    })
     // A lapsed quote is now verified rather than refused on wall-clock alone: only the chain can
     // say whether the transfer was mined in time. This stub reports no block timestamp, so the
-    // transfer cannot be proven timely and is refused — fail closed.
+    // transfer cannot be proven timely and is held for an operator refund — fail closed.
     expect(verificationCalls).toBe(3)
 
-    for (const [reason, hex] of [["wrong_transfer_recipient", "e"], ["wrong_transfer_amount", "f"]] as const) {
+    const wrongAmount = await quote(10000, "wrong-amount-custody")
+    let custodyVerificationCalls = 0
+    setBookingPaymentVerifierForTests(async ({ fundingTxRef, expected }) => {
+      custodyVerificationCalls += 1
+      return {
+        kind: "custody_mismatch",
+        reason: "wrong_transfer_amount",
+        senderAddress: expected.senderAddress,
+        txRef: fundingTxRef,
+        observedAmountAtomic: "90000000",
+      }
+    })
+    const wrongAmountResponse = await confirm(wrongAmount.id, "f")
+    expect(wrongAmountResponse.status).toBe(200)
+    expect(await json(wrongAmountResponse)).toMatchObject({
+      status: "refund_pending",
+      failure_reason: "wrong_transfer_amount",
+    })
+    expect(await json(await confirm(wrongAmount.id, "f"))).toMatchObject({ status: "refund_pending" })
+    expect(custodyVerificationCalls).toBe(1)
+    const custodyEffect = await ctx.client.execute({
+      sql: "SELECT status, received_amount_atomic FROM reward_campaign_funding_effects WHERE reward_campaign_funding_effect_id = ?1",
+      args: [wrongAmount.id],
+    })
+    expect(custodyEffect.rows).toEqual([{ status: "refund_pending", received_amount_atomic: "90000000" }])
+
+    const awaitingFinality = await reconcileRewardFundingRefunds({
+      env: {
+        ...ctx.env,
+        REWARDS_CAMPAIGNS_ENABLED: "false",
+        REWARDS_PAYOUTS_ENABLED: "false",
+        REWARDS_REFUNDS_ENABLED: "true",
+      },
+      client: ctx.client,
+      verify: async () => ({ kind: "pending", reason: "safe_block_pending" }),
+    })
+    expect(awaitingFinality).toMatchObject({
+      scanned: 2,
+      enqueued: 0,
+      confirmed: 0,
+      pending_finality: 2,
+      errors: 0,
+    })
+
+    let refundSequence = 0
+    setRewardFundingRefundCoordinatorForTests({
+      settle: async (request) => {
+        refundSequence += 1
+        expect(request).toMatchObject({
+          operatorKind: "rewards",
+          effectKind: "reward_funding_refund",
+          fundingEffectId: request.idempotencyKey,
+        })
+        return {
+          idempotencyKey: JSON.stringify(["reward_funding_refund", request.idempotencyKey]),
+          txHash: `0x${refundSequence.toString(16).padStart(64, "0")}`,
+          nonce: refundSequence,
+          state: "confirmed",
+        }
+      },
+    })
+    const refunded = await reconcileRewardFundingRefunds({
+      env: ctx.env,
+      client: ctx.client,
+      verify: async (expected, txHash) => ({
+        kind: "verified",
+        senderAddress: expected.senderAddress,
+        txRef: txHash,
+      }),
+    })
+    expect(refunded).toMatchObject({ scanned: 2, enqueued: 2, confirmed: 2, errors: 0 })
+    const refundEffects = await ctx.client.execute({
+      sql: `
+        SELECT status, received_amount_atomic, refund_tx_hash, refund_confirmed_at
+        FROM reward_campaign_funding_effects
+        WHERE reward_campaign_funding_effect_id IN (?1, ?2)
+        ORDER BY reward_campaign_funding_effect_id
+      `,
+      args: [expired.id, wrongAmount.id],
+    })
+    expect(refundEffects.rows).toHaveLength(2)
+    expect(refundEffects.rows.every((row) => row.status === "refunded" && row.refund_tx_hash && row.refund_confirmed_at)).toBe(true)
+
+    for (const [reason, hex] of [["wrong_transfer_recipient", "e"]] as const) {
       const rejected = await quote(10000, `rejected-${reason}`)
       let rejectedVerificationCalls = 0
       setBookingPaymentVerifierForTests(async () => {
@@ -770,7 +1664,11 @@ describe("rewards routes", () => {
     const finalCampaign = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}`, {
       headers: authHeaders(session.accessToken),
     }, ctx.env)
-    expect(await json(finalCampaign)).toMatchObject({ status: "funding_quoted", funded_cents: 40000 })
+    expect(await json(finalCampaign)).toMatchObject({
+      status: "funding_quoted",
+      funded_cents: 40000,
+      refunded_cents: 0,
+    })
     const reconciliation = await ctx.client.execute({
       sql: `
         SELECT stored_funded_cents, computed_funded_cents, counters_match
@@ -843,6 +1741,7 @@ describe("rewards routes", () => {
       REWARDS_READS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -885,7 +1784,7 @@ describe("rewards routes", () => {
       balance_cents: number
       today_earned_cents: number
       recent_events: Array<{ id: string; amount_cents: number; reward_kind: string }>
-      cashout: { eligible: boolean; min_cents: number; verification_state: string }
+      cashout: { eligible: boolean; min_cents: number; verification_state: string; verification_provider: string }
     }
     expect(unverifiedBody.balance_cents).toBe(80)
     expect(unverifiedBody.today_earned_cents).toBe(30)
@@ -894,6 +1793,7 @@ describe("rewards routes", () => {
       eligible: false,
       min_cents: 100,
       verification_state: "unverified",
+      verification_provider: null,
     })
 
     await addNullifier(ctx, session.userId, now)
@@ -929,19 +1829,21 @@ describe("rewards routes", () => {
     expect(verified.status).toBe(200)
     const verifiedBody = await json(verified) as {
       balance_cents: number
-      cashout: { eligible: boolean; min_cents: number; verification_state: string }
-      latest_in_flight_cashout: { id: string; amount_cents: number; status: string } | null
+      cashout: { eligible: boolean; min_cents: number; verification_state: string; verification_provider: string }
+      latest_in_flight_cashout: { id: string; amount_cents: number; status: string; settlement_stage: string } | null
     }
     expect(verifiedBody.balance_cents).toBe(90)
     expect(verifiedBody.cashout).toEqual({
       eligible: false,
       min_cents: 100,
       verification_state: "verified",
+      verification_provider: "self",
     })
     expect(verifiedBody.latest_in_flight_cashout).toMatchObject({
       id: "rpe_route_pending",
       amount_cents: 10,
       status: "submitted",
+      settlement_stage: "reserved",
     })
 
     ctx.env.REWARDS_IDENTITY_PROVIDER = "very"
@@ -950,7 +1852,7 @@ describe("rewards routes", () => {
       { headers: authHeaders(session.accessToken) },
       ctx.env,
     )
-    expect((await json(wrongIdentityNamespace) as { cashout: { verification_state: string } }).cashout.verification_state).toBe("unverified")
+    expect((await json(wrongIdentityNamespace) as { cashout: { verification_state: string } }).cashout.verification_state).toBe("verified")
   })
 
   test("GET /me/rewards requires authentication", async () => {
@@ -959,6 +1861,54 @@ describe("rewards routes", () => {
 
     const response = await app.request("http://pirate.test/me/rewards", {}, ctx.env)
     expect(response.status).toBe(401)
+  })
+
+  test("selects a nullifier-scoped nationality document through the authenticated rewards route", async () => {
+    const ctx = await createRouteTestContext({ REWARDS_IDENTITY_PROVIDER: "self" })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-binding-route-user")
+    const now = "2026-08-01T10:00:00.000Z"
+    await addNullifier(ctx, session.userId, now)
+    const nullifierId = `idn_rewards_${session.userId}`
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, provider, attestation_type, capability_key, status,
+          value_json, verified_at, created_at, updated_at, source_identity_nullifier_id
+        ) VALUES ('att_reward_binding_route', ?1, 'self', 'nationality', 'nationality',
+          'accepted', ?2, ?3, ?3, ?3, ?4)
+      `,
+      args: [session.userId, JSON.stringify({ nationality: "USA" }), now, nullifierId],
+    })
+
+    const before = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      headers: authHeaders(session.accessToken),
+    }, ctx.env)
+    expect(before.status).toBe(200)
+    expect(await json(before)).toMatchObject({
+      capability: "selection_required",
+      selectable_documents: [{ identity_nullifier_id: nullifierId, nationality: "USA" }],
+    })
+
+    const selected = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ identity_nullifier_id: nullifierId }),
+    }, ctx.env)
+    expect(selected.status).toBe(201)
+    const selectedBody = await json(selected) as { active_binding: { id: string; selected_at: number } }
+    expect(selectedBody).toMatchObject({
+      capability: "selected",
+      active_binding: { identity_nullifier_id: nullifierId, nationality: "USA" },
+    })
+
+    const retry = await app.request("http://pirate.test/me/rewards/identity-binding", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ identity_nullifier_id: nullifierId }),
+    }, ctx.env)
+    expect(retry.status).toBe(201)
+    expect((await json(retry) as { active_binding: unknown }).active_binding).toEqual(selectedBody.active_binding)
   })
 
   test("reward reads and payouts fail closed when their independent flags are not true", async () => {
@@ -995,10 +1945,18 @@ describe("rewards routes", () => {
       balance_cents: 0,
       today_earned_cents: 0,
       recent_events: [],
+      recent_qualifications: [],
+      pending_verification: {
+        count: 0,
+        conditional_cents: 0,
+        earliest_expires_at: null,
+        provider_requirements: [],
+      },
       cashout: {
         eligible: false,
         min_cents: 100,
         verification_state: "unverified",
+        verification_provider: null,
       },
       latest_in_flight_cashout: null,
     })
@@ -1016,12 +1974,12 @@ describe("rewards routes", () => {
     expect(settleCount).toBe(0)
   })
 
-  test("does not accept ZKPassport as the configured reward identity namespace", async () => {
+  test("accepts ZKPassport and Very cashouts while the legacy environment provider is Self", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
-      REWARDS_IDENTITY_PROVIDER: "zkpassport",
+      REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
     cleanup = ctx.cleanup
@@ -1072,8 +2030,47 @@ describe("rewards routes", () => {
       },
       ctx.env,
     )
-    expect(response.status).toBe(403)
-    expect(settleCount).toBe(0)
+    expect(response.status).toBe(202)
+    expect(settleCount).toBe(1)
+
+    const verySession = await exchangeJwt(ctx.env, "reward-very-namespace-user")
+    await addWallet(ctx, verySession.userId, now, "0x2000000000000000000000000000000000000002")
+    await addRewardEvent(ctx, verySession.userId, 150, now)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash, status,
+          first_seen_at, created_at, updated_at
+        ) VALUES (
+          'idn_rewards_very', ?1, 'very', 'palm-nullifier',
+          'reward-very-nullifier', 'active', ?2, ?2, ?2
+        )
+      `,
+      args: [verySession.userId, now],
+    })
+    await ctx.client.execute({
+      sql: "UPDATE users SET verification_capabilities_json = ?2 WHERE user_id = ?1",
+      args: [verySession.userId, JSON.stringify({
+        unique_human: {
+          state: "verified",
+          provider: "very",
+          proof_type: "unique_human",
+          mechanism: "palm-nullifier",
+          verified_at: Math.floor(Date.parse(now) / 1000),
+        },
+      })],
+    })
+    const veryResponse = await app.request(
+      "http://pirate.test/me/rewards/cashouts",
+      {
+        method: "POST",
+        headers: { ...authHeaders(verySession.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 100, idempotency_key: "reward-cashout-very" }),
+      },
+      ctx.env,
+    )
+    expect(veryResponse.status).toBe(202)
+    expect(settleCount).toBe(2)
   })
 
   test("POST /me/rewards/cashouts gates on nullifier, balance, and idempotently confirms a payout", async () => {
@@ -1081,6 +2078,7 @@ describe("rewards routes", () => {
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1162,13 +2160,14 @@ describe("rewards routes", () => {
     )
     expect(response.status).toBe(202)
     const body = await json(response) as {
-      payout: { id: string; amount_cents: number; status: string; settlement_ref: string | null; recipient_address: string }
+      payout: { id: string; amount_cents: number; status: string; settlement_stage: string; settlement_ref: string | null; recipient_address: string }
       balance_cents: number
     }
     expect(body.payout.amount_cents).toBe(100)
     expect((body as typeof body & { chain_id: number }).chain_id).toBe(84532)
     expect((body.payout as typeof body.payout & { chain_id: number }).chain_id).toBe(84532)
     expect(body.payout.status).toBe("confirmed")
+    expect(body.payout.settlement_stage).toBe("confirmed")
     expect(body.payout.settlement_ref).toBe("0xrewardtx")
     expect(body.payout.recipient_address).toBe("0x1000000000000000000000000000000000000001")
     expect(body.balance_cents).toBe(50)
@@ -1479,6 +2478,7 @@ describe("rewards routes", () => {
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1528,6 +2528,9 @@ describe("rewards routes", () => {
       failed: 0,
       pending: 0,
       errors: 0,
+      capacityDeferred: 0,
+      capacityObservationStale: false,
+      overdueSongs: 0,
     })
     expect(settleCount).toBe(1)
     expect(confirmCount).toBe(1)
@@ -1544,12 +2547,102 @@ describe("rewards routes", () => {
     expect(Number(countRows.rows[0]?.count ?? 0)).toBe(1)
   })
 
+  test("prepared reward payouts respect the durable executor retry schedule", async () => {
+    const ctx = await createRouteTestContext({
+      REWARDS_PAYOUTS_ENABLED: "true",
+      REWARDS_CAMPAIGN_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
+      REWARDS_IDENTITY_PROVIDER: "self",
+      REWARDS_MIN_CASHOUT_CENTS: "100",
+    })
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "reward-payout-prepared-backoff-user")
+    const now = "2026-07-09T12:00:00.000Z"
+    let settleCount = 0
+    let reconcileCount = 0
+    let confirmCount = 0
+    setRewardSettlementCoordinatorForTests({
+      settle: async (req) => {
+        settleCount += 1
+        return {
+          idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]),
+          txHash: "0xrewardprepared",
+          nonce: 9,
+          state: "prepared",
+        }
+      },
+      confirm: async (req, txHash) => {
+        confirmCount += 1
+        return {
+          idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]),
+          txHash,
+          nonce: 9,
+          state: "prepared",
+        }
+      },
+      reconcile: async (req) => {
+        reconcileCount += 1
+        return {
+          idempotencyKey: JSON.stringify(["reward_payout", req.idempotencyKey]),
+          txHash: "0xrewardprepared",
+          nonce: 9,
+          state: "prepared",
+        }
+      },
+    })
+
+    await addRewardEvent(ctx, session.userId, 100, now)
+    await ctx.client.execute({
+      sql: `
+        INSERT INTO reward_payout_effects (
+          reward_payout_effect_id, user_id, amount_cents, recipient_address,
+          idempotency_key, status, settlement_ref, coordinator_state,
+          submitted_at, created_at, updated_at
+        )
+        VALUES (
+          'rpe_route_prepared_backoff', ?1, 100,
+          '0x1000000000000000000000000000000000000001',
+          'reward-cashout-prepared-backoff', 'submitted', '0xrewardprepared',
+          'prepared', ?2, ?2, ?2
+        )
+      `,
+      args: [session.userId, now],
+    })
+
+    const summary = await reconcileSubmittedRewardPayouts({
+      env: ctx.env,
+      client: ctx.client,
+      nowUtc: now,
+      limit: 10,
+      confirmPollMs: [],
+    })
+
+    expect(summary).toMatchObject({ scanned: 1, pending: 1, errors: 0 })
+    expect(settleCount).toBe(1)
+    expect(reconcileCount).toBe(0)
+    expect(confirmCount).toBe(0)
+    const rows = await ctx.client.execute({
+      sql: `
+        SELECT status, settlement_ref, coordinator_state
+        FROM reward_payout_effects
+        WHERE reward_payout_effect_id = 'rpe_route_prepared_backoff'
+      `,
+    })
+    expect(rows.rows).toEqual([{
+      status: "submitted",
+      settlement_ref: "0xrewardprepared",
+      coordinator_state: "prepared",
+    }])
+  })
+
   test("failed preparation remains submitted while the durable executor owns retry", async () => {
     const ctx = await createRouteTestContext({
       REWARDS_READS_ENABLED: "true",
       REWARDS_PAYOUTS_ENABLED: "true",
       REWARDS_CAMPAIGN_CHAIN_ID: "84532",
       PIRATE_REWARDS_SETTLEMENT_CHAIN_ID: "84532",
+      PIRATE_REWARDS_SETTLEMENT_BACKEND: "local",
       REWARDS_IDENTITY_PROVIDER: "self",
       REWARDS_MIN_CASHOUT_CENTS: "100",
     })
@@ -1605,6 +2698,24 @@ describe("rewards routes", () => {
       args: [session.userId, "reward-cashout-prep-fails"],
     })
     expect(rows.rows).toEqual([{ status: "submitted", failure_reason: null, attempt_count: 3 }])
+
+    await ctx.client.execute({
+      sql: `
+        UPDATE reward_payout_effects
+        SET attempt_count = 12
+        WHERE user_id = ?1 AND idempotency_key = ?2
+      `,
+      args: [session.userId, "reward-cashout-prep-fails"],
+    })
+    const cappedRetry = await reconcileSubmittedRewardPayouts({
+      env: ctx.env,
+      client: ctx.client,
+      nowUtc: now,
+      limit: 10,
+      confirmPollMs: [],
+    })
+    expect(cappedRetry.scanned).toBe(0)
+    expect(cappedRetry.pending).toBe(0)
 
     const summary = await app.request(
       "http://pirate.test/me/rewards",

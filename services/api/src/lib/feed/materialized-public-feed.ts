@@ -3,16 +3,28 @@ import { getProfileRepository } from "../auth/repositories"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Client } from "../sql-client"
-import { HOME_FEED_SERVER_TIMING, listHomeFeed, type HomeFeedResponseWithTiming } from "./home-feed-service"
+import {
+  HOME_FEED_SERVER_TIMING,
+  listHomeFeed,
+  type HomeFeedResponseWithTiming,
+} from "./home-feed-service"
 import type { Env, HomeFeedResponse } from "../../types"
+import { VIDEO_SCORER_VERSION } from "./video-scorer"
 
-const MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION = "public_home_feed_v1"
+// v2 stops reusing bodies that froze booking discovery before materialized reads began
+// reapplying that volatile projection.
+const MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION = "public_home_feed_v2"
 const MATERIALIZED_PUBLIC_HOME_FEED_FRESH_MS = 5 * 60 * 1000
 const MATERIALIZED_PUBLIC_HOME_FEED_STALE_MS = 30 * 60 * 1000
+// Keep the homepage available through a short scheduler/control-plane incident.
+// Expired snapshots are public-only and trigger a background refresh; the bound
+// prevents deleted or reordered content from remaining visible indefinitely.
+const MATERIALIZED_PUBLIC_HOME_FEED_EXPIRED_GRACE_MS = 2 * 60 * 60 * 1000
 const DEFAULT_MATERIALIZED_PUBLIC_HOME_FEED_LOCALES = ["en"]
 
 type MaterializedPublicHomeFeedTarget = {
   cacheKey: string
+  contentKind: "video" | null
   locale: string | null
   sort: "best"
   timeRange: "all"
@@ -53,6 +65,7 @@ function normalizeTimeRange(timeRange: string | null | undefined): "all" | "othe
 }
 
 export function buildMaterializedPublicHomeFeedTarget(input: {
+  contentKind?: "video" | null
   cursor?: string | null
   locale?: string | null
   searchParams?: URLSearchParams
@@ -79,14 +92,25 @@ export function buildMaterializedPublicHomeFeedTarget(input: {
 
   const locale = normalizeLocale(input.locale)
   const localeKey = locale ?? "default"
+  const contentKind = input.contentKind ?? null
+  const contentKindCacheKey = contentKind ? [`content_kind=${contentKind}`] : []
+  const scorerCacheKey = contentKind === "video"
+    ? [
+        "ranking=scorer",
+        `scorer=${VIDEO_SCORER_VERSION}`,
+      ]
+    : []
   return {
     cacheKey: [
       MATERIALIZED_PUBLIC_HOME_FEED_SCHEMA_VERSION,
+      ...contentKindCacheKey,
+      ...scorerCacheKey,
       "sort=best",
       `locale=${localeKey}`,
       "time_range=all",
       "cursor=first",
     ].join(":"),
+    contentKind,
     locale,
     sort: "best",
     timeRange: "all",
@@ -136,7 +160,8 @@ export async function readMaterializedPublicHomeFeed(input: {
   }
 
   const startedAt = performance.now()
-  const now = nowIso(input.nowMs)
+  const nowMs = input.nowMs ?? Date.now()
+  const now = nowIso(nowMs)
   try {
     const result = await input.client.execute({
       sql: `
@@ -169,6 +194,16 @@ export async function readMaterializedPublicHomeFeed(input: {
       }
     }
     if (staleAt > now) {
+      return {
+        result: attachMaterializedServerTiming(body, {
+          durationMs: Math.round(performance.now() - startedAt),
+          state: "stale",
+        }),
+        state: "stale",
+      }
+    }
+    const staleAtMs = Date.parse(staleAt)
+    if (Number.isFinite(staleAtMs) && nowMs <= staleAtMs + MATERIALIZED_PUBLIC_HOME_FEED_EXPIRED_GRACE_MS) {
       return {
         result: attachMaterializedServerTiming(body, {
           durationMs: Math.round(performance.now() - startedAt),
@@ -276,6 +311,7 @@ async function refreshMaterializedPublicHomeFeedOnce(input: {
       sort: input.target.sort,
       timeRange: input.target.timeRange,
       cursor: input.target.cursor,
+      contentKind: input.target.contentKind,
       communityRepository,
       userRepository: null,
       profileRepository: getProfileRepository(input.env),

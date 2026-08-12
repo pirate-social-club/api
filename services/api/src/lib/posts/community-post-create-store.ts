@@ -152,10 +152,14 @@ export async function insertPost(input: {
   const mediaRefsJson = boundedPostJsonProjection(input.body.media_refs ? JSON.stringify(input.body.media_refs) : null)
   const crosspostSourceJson = boundedPostJsonProjection(input.body.crosspost_source
     ? JSON.stringify({
-        version: 1,
+        version: 2,
         source_post_id: input.body.crosspost_source.post_id,
         source_community_id: input.body.crosspost_source.community_id,
         captured_at: input.body.crosspost_source.captured_at ?? input.createdAt,
+        source_content_safety_state: input.body.crosspost_source.source_content_safety_state,
+        source_age_gate_policy: input.body.crosspost_source.source_age_gate_policy,
+        content_safety_state: input.body.crosspost_source.content_safety_state,
+        age_gate_policy: input.body.crosspost_source.age_gate_policy,
       })
     : null)
   const upstreamAssetRefsJson = boundedPostJsonProjection(

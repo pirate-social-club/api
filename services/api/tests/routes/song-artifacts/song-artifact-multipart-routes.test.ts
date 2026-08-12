@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
+import { reconcileHeadVerifyingSongArtifactUploads } from "../../../src/lib/song-artifacts/song-artifact-upload-session-service"
 import { json, createRouteTestContext, resetRuntimeCaches } from "../../helpers"
 import { createOpenSongCommunity } from "./song-artifact-locked-test-helpers"
 import { exchangeJwt, requestJson } from "./song-artifact-test-helpers"
@@ -33,13 +34,14 @@ function installMultipartFilebaseMock(input: {
   cid?: string
   contentLength?: number
   contentType?: string
-} = {}): { completeBodies: string[]; abortUrls: string[] } {
+} = {}): { completeBodies: string[]; abortUrls: string[]; headUrls: string[]; readonly headCalls: number } {
   const uploadId = input.uploadId ?? "filebase-upload-1"
   const cid = input.cid ?? "QmMultipartRouteCid"
   const contentLength = input.contentLength ?? VIDEO_SIZE_BYTES
   const contentType = input.contentType ?? "video/mp4"
   const completeBodies: string[] = []
   const abortUrls: string[] = []
+  const headUrls: string[] = []
 
   ;(globalThis as { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> }).fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
@@ -64,6 +66,7 @@ function installMultipartFilebaseMock(input: {
     }
 
     if (request.method === "HEAD") {
+      headUrls.push(request.url)
       return new Response(null, {
         status: 200,
         headers: {
@@ -83,7 +86,7 @@ function installMultipartFilebaseMock(input: {
     return new Response(`unexpected Filebase request: ${request.method} ${request.url}`, { status: 500 })
   }
 
-  return { completeBodies, abortUrls }
+  return { completeBodies, abortUrls, headUrls, get headCalls() { return headUrls.length } }
 }
 
 async function createMultipartRouteSetup() {
@@ -196,6 +199,41 @@ describe("song artifact multipart routes", () => {
     expect(new Date(String(session.rows[0]?.expires_at)).getTime()).toBeGreaterThan(new Date(oldExpiry).getTime())
   })
 
+  test("pins multipart signing and completion to the session storage target", async () => {
+    const setup = await createMultipartRouteSetup()
+    const intent = await createMultipartIntent(setup)
+
+    setup.env.FILEBASE_MEDIA_BUCKET = "rotated-media"
+    setup.env.FILEBASE_S3_ENDPOINT = "https://rotated.filebase.test"
+
+    const signed = await app.request(
+      `http://pirate.test/communities/${setup.communityId}/song-artifact-uploads/${intent.id}/sessions/${intent.upload_session.id}/parts/1/signed-url`,
+      { headers: { authorization: `Bearer ${setup.owner.accessToken}` } },
+      setup.env,
+    )
+    expect(signed.status).toBe(200)
+    const signedBody = await json(signed) as { url: string }
+    const signedUrl = new URL(signedBody.url)
+    expect(signedUrl.origin).toBe("https://s3.filebase.test")
+    expect(signedUrl.pathname).toStartWith("/pirate-media/")
+
+    const completed = await requestJson(
+      `http://pirate.test/communities/${setup.communityId}/song-artifact-uploads/${intent.id}/sessions/${intent.upload_session.id}/complete`,
+      {
+        upload_id: intent.upload_session.upload_id,
+        content_hash: CONTENT_HASH,
+        parts: PART_ETAGS.map((etag, index) => ({ part_number: index + 1, etag })),
+      },
+      setup.env,
+      setup.owner.accessToken,
+    )
+    expect(completed.status).toBe(200)
+    expect(setup.filebase.completeBodies).toHaveLength(1)
+    const completedBody = await json(completed) as { storage_bucket?: string | null; storage_endpoint?: string | null }
+    expect(completedBody.storage_bucket).toBe("pirate-media")
+    expect(completedBody.storage_endpoint).toBe("https://s3.filebase.test/")
+  })
+
   test("rejects invalid or expired part signing requests", async () => {
     const setup = await createMultipartRouteSetup()
     const intent = await createMultipartIntent(setup)
@@ -266,6 +304,7 @@ describe("song artifact multipart routes", () => {
     expect(completeBody.ipfs_cid).toBe("QmMultipartRouteCid")
     expect(completeBody.content_hash).toBe(CONTENT_HASH)
     expect(setup.filebase.completeBodies[0]).toContain("<PartNumber>3</PartNumber>")
+    expect(setup.filebase.headCalls).toBe(0)
 
     const rows = await setup.client.execute({
       sql: `
@@ -282,7 +321,26 @@ describe("song artifact multipart routes", () => {
     })
     expect(rows.rows[0]?.upload_status).toBe("uploaded")
     expect(rows.rows[0]?.content_hash_verified_at).toBeNull()
-    expect(rows.rows[0]?.session_status).toBe("uploaded")
+    // Multipart completion is durable from the provider's Complete response;
+    // S3 metadata verification advances the session asynchronously.
+    expect(rows.rows[0]?.session_status).toBe("head_verifying")
+
+    await setup.client.execute({
+      sql: `UPDATE song_artifact_upload_sessions SET updated_at = '2026-01-01T00:00:00.000Z' WHERE song_artifact_upload_session_id = ?1`,
+      args: [intent.upload_session.id],
+    })
+    await expect(reconcileHeadVerifyingSongArtifactUploads({
+      env: setup.env,
+      limit: 1,
+      now: "2026-01-01T00:01:00.000Z",
+    })).resolves.toMatchObject({ scanned: 1, verified: 1, pending: 0, failed: 0 })
+    expect(setup.filebase.headCalls).toBe(1)
+
+    const verifiedRows = await setup.client.execute({
+      sql: `SELECT status AS session_status FROM song_artifact_upload_sessions WHERE song_artifact_upload_session_id = ?1`,
+      args: [intent.upload_session.id],
+    })
+    expect(verifiedRows.rows[0]?.session_status).toBe("uploaded")
   })
 
   test("rejects malformed multipart completion payloads", async () => {

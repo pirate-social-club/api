@@ -42,6 +42,7 @@ type StaleUnloadedPoolBinding = {
   communityId: string
   bindingName: string
   allocatedAt: string
+  version: number
 }
 
 export type ReconcilerDeps = {
@@ -56,7 +57,7 @@ export type ReconcilerDeps = {
   /** Shard admin RPC: verify/reset a never-loaded D1 (refuses if loaded or non-empty). */
   shardReset(bindingName: string): Promise<ShardResult<ShardAdminResetResponse>>
   /** Shard admin RPC: free a pool binding (starts the quarantine). */
-  shardRelease(bindingName: string): Promise<ShardResult<ShardAdminReleaseResponse>>
+  shardRelease(bindingName: string, expectedCommunityId: string, expectedPoolVersion: number): Promise<ShardResult<ShardAdminReleaseResponse>>
   /** Control-plane write: flip routing row to 'ready' + re-mark the binding row. */
   advanceRoutingToReady(binding: StuckBinding): Promise<void>
   /** Control-plane write: mark routing row 'degraded' after a release (re-provisionable). */
@@ -128,6 +129,9 @@ async function reconcileOne(
   if (!poolRow.ok) return recordError(`getPoolRow: ${poolRow.code}`)
   const row = poolRow.value.row
   if (!row) return recordError("no pool row for stuck binding")
+  if (row.communityId !== binding.communityId) {
+    return recordError("pool allocation changed for stuck binding")
+  }
 
   // Loaded → the crash was on the final routing flip. Advance.
   if (row.lastLoadedAt != null) {
@@ -146,7 +150,7 @@ async function reconcileOne(
     return recordError(`reset: ${reset.code}`)
   }
 
-  const release = await deps.shardRelease(binding.bindingName)
+  const release = await deps.shardRelease(binding.bindingName, binding.communityId, row.version)
   if (!release.ok) return recordError(`release: ${release.code}`)
 
   await deps.markRoutingDegraded(binding, "d1_native provisioning stranded; binding released for re-provision")
@@ -175,13 +179,12 @@ async function reconcileUnclaimedStalePoolBinding(
     return recordError(`orphan reset: ${reset.code}: ${reset.message}`)
   }
 
-  const release = await deps.shardRelease(binding.bindingName).catch((error) => ({
+  const release = await deps.shardRelease(binding.bindingName, binding.communityId, binding.version).catch((error) => ({
     ok: false as const,
     code: "exception",
     message: errorReason(error),
   }))
   if (!release.ok) return recordError(`orphan release: ${release.code}: ${release.message}`)
-  if (!release.value.released) return recordError("orphan release: already_free")
 
   return "released"
 }

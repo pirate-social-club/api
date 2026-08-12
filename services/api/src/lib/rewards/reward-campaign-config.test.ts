@@ -2,11 +2,16 @@ import { describe, expect, test } from "bun:test"
 
 import type { Env } from "../../env"
 import { HttpError } from "../errors"
-import { resolveRewardCampaignConfig } from "./reward-campaign-config"
+import {
+  resolveRewardCampaignAssetConfig,
+  resolveRewardCampaignConfig,
+} from "./reward-campaign-config"
 
 function configuredEnv(overrides: Partial<Env> = {}): Env {
   return {
     REWARDS_CAMPAIGNS_ENABLED: "true",
+    REWARDS_ACCRUAL_ENABLED: "true",
+    REWARDS_PAYOUTS_ENABLED: "true",
     REWARDS_CAMPAIGN_CHAIN_ID: "84532",
     REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS: "0x1000000000000000000000000000000000000001",
     REWARDS_CAMPAIGN_TREASURY_ADDRESS: "0x2000000000000000000000000000000000000002",
@@ -37,6 +42,47 @@ describe("reward campaign config", () => {
     })
   })
 
+  test("prefers an explicit campaign RPC over the chain fallback", () => {
+    expect(resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_RPC_URL: "https://explicit.example.test",
+      BASE_MAINNET_RPC_URL: "https://fallback.example.test",
+    })).rpcUrl).toBe("https://explicit.example.test")
+  })
+
+  test("resolves an empty campaign RPC from the Base mainnet fallback", () => {
+    expect(resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_CHAIN_ID: "8453",
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_MAINNET_RPC_URL: "https://base-mainnet.example.test",
+    })).rpcUrl).toBe("https://base-mainnet.example.test")
+  })
+
+  test("resolves an empty campaign RPC from the Base Sepolia fallback", () => {
+    expect(resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_SEPOLIA_RPC_URL: "https://base-sepolia.example.test",
+    })).rpcUrl).toBe("https://base-sepolia.example.test")
+  })
+
+  test("fails closed when the selected chain has no RPC fallback", () => {
+    expect(() => resolveRewardCampaignAssetConfig(configuredEnv({
+      REWARDS_CAMPAIGN_RPC_URL: undefined,
+      BASE_SEPOLIA_RPC_URL: undefined,
+    }))).toThrow(HttpError)
+  })
+
+  test("rejects campaigns unless accrual and payouts are enabled together", () => {
+    for (const env of [
+      configuredEnv({ REWARDS_ACCRUAL_ENABLED: "false" }),
+      configuredEnv({ REWARDS_PAYOUTS_ENABLED: "false" }),
+      configuredEnv({ REWARDS_ACCRUAL_ENABLED: undefined }),
+      configuredEnv({ REWARDS_PAYOUTS_ENABLED: undefined }),
+    ]) {
+      expect(() => resolveRewardCampaignConfig(env)).toThrow(HttpError)
+    }
+  })
+
   test("parses an optional post creation allowlist", () => {
     const unrestricted = resolveRewardCampaignConfig(configuredEnv())
     expect(unrestricted.postAllowlist).toBeNull()
@@ -44,7 +90,7 @@ describe("reward campaign config", () => {
     const restricted = resolveRewardCampaignConfig(configuredEnv({
       REWARDS_CAMPAIGN_POST_ALLOWLIST: " post_pst_allowed ,post_pst_second,post_pst_allowed ",
     }))
-    expect([...restricted.postAllowlist ?? []]).toEqual(["post_pst_allowed", "post_pst_second"])
+    expect([...restricted.postAllowlist ?? []]).toEqual(["pst_allowed", "pst_second"])
   })
 
   test("fails closed when an enabled rail is incomplete or inconsistent", () => {

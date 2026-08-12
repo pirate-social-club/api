@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "bun run ../api/scripts/deploy-with-version.ts",
     "audit:gates:staging": "bun run scripts/audit-gate-policies.ts --environment staging",
+    "repair:pool-migration-ledger": "bun run scripts/reconcile-pool-migration-ledger.ts",
+    "seed:handle-claim-fixture:staging": "bun run scripts/seed-handle-claim-fixture.ts",
     "check": "tsc --noEmit",
     "test": "bun test"
   },
@@ -18,5 +20,8 @@
     "@types/node": "^24.5.2",
     "typescript": "7.0.2",
     "wrangler": "^4.13.2"
+  },
+  "overrides": {
+    "undici": "^7.29.0"
   }
 }

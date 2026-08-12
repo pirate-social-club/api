@@ -1,6 +1,9 @@
 import type { CommentListItem } from "../../types"
-import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { ProfileRepository } from "../auth/repositories"
+import {
+  hydratePublicHumanAuthorHandles,
+  type AuthorHandleSurface,
+} from "../identity/author-handle-hydration"
 
 /**
  * Resolves the read-time public handle label for public-identity human comment
@@ -13,31 +16,11 @@ import type { ProfileRepository } from "../auth/repositories"
 export async function hydrateCommentAuthorPublicHandles(
   items: readonly CommentListItem[],
   profileRepository?: ProfileRepository | null,
+  surface?: AuthorHandleSurface,
 ): Promise<void> {
-  if (!profileRepository) return
-
-  const eligibleComments = items
-    .map((item) => item.comment)
-    .filter((comment): comment is CommentListItem["comment"] & { author_user_id: string } =>
-      comment.identity_mode === "public"
-      && comment.authorship_mode === "human_direct"
-      && Boolean(comment.author_user_id))
-
-  const authorUserIds = [...new Set(eligibleComments.map((comment) => comment.author_user_id))]
-  if (authorUserIds.length === 0) return
-
-  const profilesByUserId = profileRepository.listProfilesByUserIds
-    ? await profileRepository.listProfilesByUserIds(authorUserIds).catch(() => new Map())
-    : new Map(await Promise.all(authorUserIds.map(async (userId): Promise<[
-        string,
-        Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>,
-      ]> => [
-        userId,
-        await profileRepository.getProfileByUserId(userId).catch(() => null),
-      ])))
-
-  for (const comment of eligibleComments) {
-    const profile = profilesByUserId.get(comment.author_user_id) ?? null
-    comment.author_public_handle = profile ? getProfilePublicHandleLabel(profile) : null
-  }
+  await hydratePublicHumanAuthorHandles({
+    authors: items.map((item) => item.comment),
+    profileRepository,
+    surface,
+  })
 }

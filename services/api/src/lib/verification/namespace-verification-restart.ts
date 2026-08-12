@@ -1,10 +1,15 @@
 import type { Client } from "../sql-client"
 import type { NamespaceVerificationSessionRow } from "../auth/auth-db-rows"
-import { providerUnavailable, verificationRequired } from "../errors"
+import { conflictError, HttpError, providerUnavailable, verificationRequired } from "../errors"
 import { makeId } from "../helpers"
+import { withTransaction } from "../transactions"
+import { prepareHnsImportChallenge } from "./hns-import-challenge"
 import {
-  inspectHnsRoot,
-} from "./hns-verifier"
+  acquireHnsImportRestartAttempt,
+  completeHnsImportRestartAttempt,
+  releaseHnsImportRestartAttempt,
+  reserveHnsImportSessionLock,
+} from "./hns-import-session-lock"
 import {
   inspectSpacesNamespace,
   mintSpacesChallenge,
@@ -12,18 +17,18 @@ import {
 import type { Env } from "../../env"
 import type { NamespaceVerificationSession } from "../../types"
 import {
-  HNS_VERIFIER_OBSERVATION_PROVIDER,
-  resolveHnsObservationProviderFallback,
-} from "./namespace-observation-provider"
-import {
-  deriveHnsInspectionSnapshot,
   getHnsChallengeTtlHours,
-  isHnsVerifierConfigured,
   isProductionEnv,
   isSpacesVerifierConfigured,
-  serializeSetupNameservers,
-  type HnsSessionAssertionSnapshot,
 } from "./verification-shared"
+
+const RESTARTABLE_SESSION_STATUSES = new Set<NamespaceVerificationSession["status"]>([
+  "challenge_required",
+  "dns_setup_required",
+  "expired",
+  "failed",
+])
+const HNS_RESTART_ATTEMPT_TTL_MS = 10 * 60 * 1000
 
 export async function restartNamespaceVerificationChallenge(input: {
   client: Client
@@ -33,6 +38,12 @@ export async function restartNamespaceVerificationChallenge(input: {
   now: Date
   updatedAt: string
 }): Promise<void> {
+  if (!RESTARTABLE_SESSION_STATUSES.has(input.row.status)) {
+    throw conflictError("Namespace verification session cannot be restarted from its current state", {
+      status: input.row.status,
+    })
+  }
+
   if (input.row.family === "spaces") {
     await restartSpacesChallenge(input)
     return
@@ -127,92 +138,118 @@ async function restartHnsChallenge(input: {
 }): Promise<void> {
   const rootLabel = input.row.normalized_root_label ?? input.row.submitted_root_label.toLowerCase()
   const challengeHost = rootLabel
-  const challengeTxtValue = `pirate-verification=${makeId("nch")}`
   const challengeExpiresAt = new Date(input.now.getTime() + getHnsChallengeTtlHours(input.env) * 60 * 60 * 1000).toISOString()
   const expiresAt = new Date(input.now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-  let status: NamespaceVerificationSession["status"] = "challenge_required"
-  let challengeKind: NamespaceVerificationSession["challenge_kind"] = "dns_txt"
-  let persistedChallengeHost: string | null = challengeHost
-  let persistedChallengeTxtValue: string | null = challengeTxtValue
-  let persistedSetupNameservers: string | null = input.row.setup_nameservers_json
-  let persistedChallengeExpiresAt: string | null = challengeExpiresAt
-  let failureReason: string | null = null
-  let observationProvider = input.row.observation_provider ?? resolveHnsObservationProviderFallback(input.env)
-  let inspectionSnapshot: HnsSessionAssertionSnapshot = {
-    rootExists: input.row.root_exists,
-    rootControlVerified: input.row.root_control_verified ?? null,
-    expiryHorizonSufficient: input.row.expiry_horizon_sufficient,
-    routingEnabled: input.row.routing_enabled,
-    pirateDnsAuthorityVerified: input.row.pirate_dns_authority_verified,
-    clubAttachAllowed: null,
-    pirateWebRoutingAllowed: null,
-    pirateSubdomainIssuanceAllowed: null,
-    controlClass: input.row.control_class,
-    operationClass: input.row.operation_class,
-  }
 
-  if (isHnsVerifierConfigured(input.env)) {
-    const inspection = await inspectHnsRoot(input.env, {
+  await reserveHnsImportSessionLock(input.client, {
+    normalizedRootLabel: rootLabel,
+    sessionId: input.namespaceVerificationSessionId,
+    userId: input.row.user_id,
+    expiresAt: challengeExpiresAt,
+    now: input.updatedAt,
+  })
+  const attempt = await acquireHnsImportRestartAttempt(input.client, {
+    normalizedRootLabel: rootLabel,
+    sessionId: input.namespaceVerificationSessionId,
+    token: makeId("hra"),
+    challengeTxtValue: `pirate-verification=${makeId("nch")}`,
+    expiresAt: new Date(input.now.getTime() + HNS_RESTART_ATTEMPT_TTL_MS).toISOString(),
+    now: input.updatedAt,
+  })
+  let prepared: Awaited<ReturnType<typeof prepareHnsImportChallenge>>
+  try {
+    prepared = await prepareHnsImportChallenge(input.env, {
       rootLabel,
+      challengeTxtValue: attempt.challengeTxtValue,
     })
-    inspectionSnapshot = deriveHnsInspectionSnapshot(inspection)
-    persistedSetupNameservers = serializeSetupNameservers(inspection.nameservers?.map((entry) => entry.trim()).filter(Boolean) ?? null)
-    observationProvider = inspection.observation_provider ?? HNS_VERIFIER_OBSERVATION_PROVIDER
-  } else {
-    throw providerUnavailable("HNS verifier is not configured")
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "verifier_contract_incompatible") {
+      await releaseHnsImportRestartAttempt(input.client, {
+        normalizedRootLabel: rootLabel,
+        sessionId: input.namespaceVerificationSessionId,
+        token: attempt.token,
+      })
+    }
+    throw error
   }
+  const snapshot = prepared.inspectionSnapshot
 
-  await input.client.execute({
-    sql: `
+  await withTransaction(input.client, "write", async (tx) => {
+    const result = await tx.execute({
+      sql: `
       UPDATE namespace_verification_sessions
       SET namespace_verification_id = NULL,
-          status = ?2,
-          challenge_kind = ?3,
-          challenge_payload_json = NULL,
-          challenge_host = ?4,
-          challenge_txt_value = ?5,
-          setup_nameservers_json = ?6,
-          challenge_expires_at = ?7,
-          root_exists = ?8,
-          root_control_verified = ?9,
-          expiry_horizon_sufficient = ?10,
-          routing_enabled = ?11,
-          pirate_dns_authority_verified = ?12,
-          club_attach_allowed = ?13,
-          pirate_web_routing_allowed = ?14,
-          pirate_subdomain_issuance_allowed = ?15,
-          control_class = ?16,
-          operation_class = ?17,
-          observation_provider = ?18,
+          status = 'challenge_required',
+          challenge_kind = 'hns_import',
+          challenge_payload_json = ?2,
+          challenge_host = ?3,
+          challenge_txt_value = ?4,
+          setup_nameservers_json = ?5,
+          challenge_expires_at = ?6,
+          root_exists = ?7,
+          root_control_verified = ?8,
+          expiry_horizon_sufficient = ?9,
+          routing_enabled = ?10,
+          pirate_dns_authority_verified = ?11,
+          club_attach_allowed = ?12,
+          pirate_web_routing_allowed = ?13,
+          pirate_subdomain_issuance_allowed = ?14,
+          control_class = ?15,
+          operation_class = ?16,
+          observation_provider = ?17,
           evidence_bundle_ref = NULL,
-          failure_reason = ?19,
+          failure_reason = NULL,
           accepted_at = NULL,
+          anchor_height = ?18,
+          anchor_block_hash = ?19,
+          anchor_root_hash = NULL,
+          proof_root_hash = NULL,
           expires_at = ?20,
           updated_at = ?21
       WHERE namespace_verification_session_id = ?1
+        AND status IN ('challenge_required', 'dns_setup_required', 'expired', 'failed')
+        AND EXISTS (
+          SELECT 1
+          FROM hns_import_session_locks
+          WHERE normalized_root_label = ?22
+            AND namespace_verification_session_id = ?1
+            AND restart_attempt_token = ?23
+        )
     `,
-    args: [
-      input.namespaceVerificationSessionId,
-      status,
-      challengeKind,
-      persistedChallengeHost,
-      persistedChallengeTxtValue,
-      persistedSetupNameservers,
-      persistedChallengeExpiresAt,
-      inspectionSnapshot.rootExists ?? null,
-      inspectionSnapshot.rootControlVerified ?? null,
-      inspectionSnapshot.expiryHorizonSufficient ?? null,
-      inspectionSnapshot.routingEnabled ?? null,
-      inspectionSnapshot.pirateDnsAuthorityVerified ?? null,
-      inspectionSnapshot.clubAttachAllowed ?? null,
-      inspectionSnapshot.pirateWebRoutingAllowed ?? null,
-      inspectionSnapshot.pirateSubdomainIssuanceAllowed ?? null,
-      inspectionSnapshot.controlClass ?? null,
-      inspectionSnapshot.operationClass ?? null,
-      observationProvider,
-      failureReason,
-      expiresAt,
-      input.updatedAt,
-    ],
+      args: [
+        input.namespaceVerificationSessionId,
+        JSON.stringify(prepared.challengePayload),
+        challengeHost,
+        attempt.challengeTxtValue,
+        prepared.setupNameservers,
+        challengeExpiresAt,
+        snapshot.rootExists ?? null,
+        snapshot.rootControlVerified ?? null,
+        snapshot.expiryHorizonSufficient ?? null,
+        snapshot.routingEnabled ?? null,
+        snapshot.pirateDnsAuthorityVerified ?? null,
+        snapshot.clubAttachAllowed ?? null,
+        snapshot.pirateWebRoutingAllowed ?? null,
+        snapshot.pirateSubdomainIssuanceAllowed ?? null,
+        snapshot.controlClass ?? null,
+        snapshot.operationClass ?? null,
+        prepared.observationProvider,
+        prepared.anchorHeight,
+        prepared.anchorBlockHash,
+        expiresAt,
+        input.updatedAt,
+        rootLabel,
+        attempt.token,
+      ],
+    })
+    if (result.rowsAffected !== 1) {
+      throw conflictError("Handshake import restart lost its session state or lock")
+    }
+    await completeHnsImportRestartAttempt(tx, {
+      normalizedRootLabel: rootLabel,
+      sessionId: input.namespaceVerificationSessionId,
+      token: attempt.token,
+      sessionExpiresAt: challengeExpiresAt,
+    })
   })
 }

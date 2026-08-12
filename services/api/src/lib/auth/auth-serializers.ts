@@ -68,7 +68,9 @@ export function serializeUser(row: UserRow): ContractUser {
     verification_state: deriveVerificationState(verificationCapabilities),
     capability_provider: row.capability_provider === "self" || row.capability_provider === "very"
       ? row.capability_provider
-      : null,
+      : row.capability_provider === "zkpass"
+        ? "zkpassport"
+        : null,
     verification_capabilities: verificationCapabilities,
     verified_at: nullableUnixSeconds(row.verified_at),
     created: unixSeconds(row.created_at),
@@ -84,9 +86,7 @@ export function serializeGlobalHandle(row: GlobalHandleRow): GlobalHandle {
     status: row.status,
     issuance_source: row.issuance_source,
     redirect_target_global_handle: row.redirect_target_global_handle_id,
-    price_paid_cents: typeof row.price_paid_usd === "number" && Number.isFinite(row.price_paid_usd)
-      ? Math.round(row.price_paid_usd * 100)
-      : null,
+    price_paid_cents: row.price_paid_cents,
     free_rename_consumed: Boolean(row.free_rename_consumed),
     issued_at: unixSeconds(row.issued_at),
     replaced_at: nullableUnixSeconds(row.replaced_at),

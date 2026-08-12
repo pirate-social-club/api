@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import {
+  setBookingFeedDiscoveryRefresherForTests,
   setBookingHostConfigRepositoriesForTests,
   upsertBookingProfile,
 } from "./host-authoring-service"
@@ -10,6 +11,7 @@ import {
 let createdInput: { platformFeeBps?: number; hostUserId?: string } | null = null
 let updatedInput: { platformFeeBps?: number } | null = null
 let existingProfile: unknown = null
+let refreshedHosts: string[] = []
 
 const fakeReadRepo = {
   getProfile: async () => existingProfile,
@@ -38,13 +40,18 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     createdInput = null
     updatedInput = null
     existingProfile = null
+    refreshedHosts = []
     setBookingHostConfigRepositoriesForTests({
       read: fakeReadRepo as never,
       write: fakeWriteRepo as never,
     })
+    setBookingFeedDiscoveryRefresherForTests(async (hostUserId) => {
+      refreshedHosts.push(hostUserId)
+    })
   })
 
   afterEach(() => {
+    setBookingFeedDiscoveryRefresherForTests(null)
     setBookingHostConfigRepositoriesForTests(null)
   })
 
@@ -56,6 +63,7 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     expect(res.ok).toBe(true)
     expect(createdInput).not.toBeNull()
     expect(createdInput?.platformFeeBps).toBe(1000)
+    expect(refreshedHosts).toEqual(["host_1"])
   })
 
   test("update never writes a host-supplied platform_fee_bps", async () => {
@@ -74,5 +82,15 @@ describe("host booking profile — platform_fee_bps is not host-settable", () =>
     expect(res.ok).toBe(true)
     expect(updatedInput).not.toBeNull()
     expect(updatedInput?.platformFeeBps).toBeUndefined()
+    expect(refreshedHosts).toEqual(["host_1"])
+  })
+
+  test("a failed warm projection does not fail the committed profile write", async () => {
+    setBookingFeedDiscoveryRefresherForTests(async () => {
+      throw new Error("projection unavailable")
+    })
+    const res = await upsertBookingProfile({} as never, "host_1", validProfile)
+    expect(res.ok).toBe(true)
+    expect(createdInput?.hostUserId).toBe("host_1")
   })
 })

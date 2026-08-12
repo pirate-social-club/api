@@ -26,3 +26,23 @@ export function assertRewardSettlementAddress(input: {
   return actual
 }
 
+export function assertRewardSettlementSyncTarget(input: {
+  environment: string
+  infisicalEnvironment: string | undefined
+  confirmProduction: boolean
+}): "staging" | "production" {
+  const environment = input.environment.trim().toLowerCase()
+  const infisicalEnvironment = String(input.infisicalEnvironment ?? "").trim().toLowerCase()
+  if (environment === "staging") {
+    if (infisicalEnvironment !== "staging") throw new Error("infisical_environment_must_be_staging")
+    return "staging"
+  }
+  if (environment === "production") {
+    if (!input.confirmProduction) throw new Error("production_reward_signer_sync_requires_confirmation")
+    if (infisicalEnvironment !== "prod" && infisicalEnvironment !== "production") {
+      throw new Error("infisical_environment_must_be_production")
+    }
+    return "production"
+  }
+  throw new Error("reward_settlement_signer_sync_environment_is_invalid")
+}

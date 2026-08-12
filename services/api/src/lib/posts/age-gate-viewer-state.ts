@@ -1,4 +1,5 @@
 import type { UserRepository } from "../auth/repositories"
+import { verificationRequired } from "../errors"
 
 export type AgeGateViewerState = "proof_required" | "verified_allowed"
 
@@ -29,4 +30,15 @@ export async function resolveAgeGateViewerState(input: {
   }
   console.info("[age-gate] verified_allowed", { userId: input.userId })
   return "verified_allowed"
+}
+
+export async function requireAgeGateAccess(input: {
+  userId: string | null | undefined
+  userRepository: UserRepository
+  postAgeGatePolicy: "none" | "18_plus"
+}): Promise<void> {
+  const state = await resolveAgeGateViewerState(input)
+  if (state === "proof_required") {
+    throw verificationRequired("Age verification is required to access this content")
+  }
 }

@@ -34,12 +34,14 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
 } from "./db-community-repository"
+import type { CommunityRow } from "../auth/auth-db-rows"
 import { notFoundError } from "../errors"
 import type {
   CommunityPreview,
   CommunityRoleSummary,
   Env,
 } from "../../types"
+import { communityPresentationFromRow } from "./community-presentation"
 import type { GatePolicy } from "./membership/gate-types"
 
 type CommunityPreviewRule = NonNullable<CommunityPreview["rules"]>[number]
@@ -137,67 +139,40 @@ function parsePreviewAcceptedAgentOwnershipProviders(
 function resolvePreviewAcceptedAgentOwnershipProviders(input: {
   env: Env
   settings: Record<string, unknown>
-  humanVerificationLane: CommunityPreview["human_verification_lane"]
 }): AgentOwnershipProvider[] {
   const explicit = parsePreviewAcceptedAgentOwnershipProviders(input.settings)
   if (explicit !== null) {
     return explicit
   }
 
-  if (input.humanVerificationLane === "very") {
-    return input.env.PLATFORM_APPROVED_KYA_PROVIDERS == null
-      ? [...DEFAULT_PLATFORM_APPROVED_DERIVED_KYA_PROVIDERS]
-      : dedupeStrings(splitCsv(input.env.PLATFORM_APPROVED_KYA_PROVIDERS))
-          .filter((value): value is AgentOwnershipProvider => value === "self_agent_id" || value === "clawkey")
-  }
-
-  return []
+  return input.env.PLATFORM_APPROVED_KYA_PROVIDERS == null
+    ? [...DEFAULT_PLATFORM_APPROVED_DERIVED_KYA_PROVIDERS]
+    : dedupeStrings(splitCsv(input.env.PLATFORM_APPROVED_KYA_PROVIDERS))
+        .filter((value): value is AgentOwnershipProvider => value === "self_agent_id" || value === "clawkey")
 }
 
 function parsePreviewHumanVerificationLane(
   settings: Record<string, unknown>,
-  summaries: NonNullable<CommunityPreview["membership_gate_summaries"]>,
 ): CommunityPreview["human_verification_lane"] {
   if (settings.human_verification_lane === "self" || settings.human_verification_lane === "very") {
     return settings.human_verification_lane
   }
+  return null
+}
 
-  if (summaries.some((summary) =>
-    summary.gate_type === "nationality"
-    || summary.gate_type === "gender"
-    || summary.gate_type === "minimum_age"
-    || (summary.gate_type !== "unique_human" && summary.accepted_providers?.includes("self"))
-  )) {
-    return "self"
-  }
-
-  if (summaries.some((summary) =>
-    summary.gate_type === "unique_human"
-    && (!summary.accepted_providers?.length || summary.accepted_providers.includes("very"))
-  )) {
-    return "very"
-  }
-
-  if (summaries.some((summary) =>
-    summary.gate_type === "unique_human"
-    && summary.accepted_providers?.includes("self")
-  )) {
-    return "self"
-  }
-
-  return "very"
+function parsePreviewPreferredVerificationProvider(
+  settings: Record<string, unknown>,
+): CommunityPreview["preferred_verification_provider"] {
+  const value = settings.preferred_verification_provider
+  return value === "self" || value === "zkpassport" || value === "very"
+    ? value
+    : null
 }
 
 async function getActiveCommunityForPreview(
   repository: Pick<CommunityReadRepository, "getCommunityById">,
   communityId: string,
-): Promise<{
-  creator_user_id: string
-  display_name: string
-  created_at: string
-  namespace_verification_id?: string | null
-  route_slug?: string | null
-}> {
+): Promise<CommunityRow> {
   const community = await repository.getCommunityById(communityId)
   if (!isCommunityLive(community)) {
     throw notFoundError("Community not found")
@@ -300,6 +275,7 @@ async function buildPreviewForViewer(input: {
   viewer?: { userId: string } | null
 }): Promise<CommunityPreview> {
   const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
+  const presentation = communityPresentationFromRow(community)
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
@@ -316,6 +292,9 @@ async function buildPreviewForViewer(input: {
       communityId: input.communityId,
       communityDisplayName: community.display_name,
       communityCreatedAt: community.created_at,
+      branding: presentation.branding,
+      defaultSurface: presentation.default_surface,
+      videoFeedEnabled: presentation.video_feed_enabled,
       namespaceVerificationId: community.namespace_verification_id ?? null,
       routeSlug: community.route_slug ?? null,
       locale: input.locale ?? null,
@@ -364,6 +343,7 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
   communityRepository: CommunityPreviewRepository
 }): Promise<CommunityPreview> {
   const community = await getActiveCommunityForPreview(input.communityRepository, input.communityId)
+  const presentation = communityPresentationFromRow(community)
   const gatePolicy = await getMembershipGatePolicy(input.client, input.communityId)
   return await buildCommunityPreview({
     env: input.env,
@@ -371,6 +351,9 @@ export async function getPublicCommunityPreviewFromCommunityDb(input: {
     communityId: input.communityId,
     communityDisplayName: community.display_name,
     communityCreatedAt: community.created_at,
+    branding: presentation.branding,
+    defaultSurface: presentation.default_surface,
+    videoFeedEnabled: presentation.video_feed_enabled,
     namespaceVerificationId: community.namespace_verification_id ?? null,
     routeSlug: community.route_slug ?? null,
     locale: input.locale ?? null,
@@ -416,6 +399,9 @@ async function buildCommunityPreview(input: {
   communityId: string
   communityDisplayName: string
   communityCreatedAt: string
+  branding: CommunityPreview["branding"]
+  defaultSurface: CommunityPreview["default_surface"]
+  videoFeedEnabled: boolean
   namespaceVerificationId?: string | null
   routeSlug?: string | null
   locale?: string | null
@@ -424,14 +410,11 @@ async function buildCommunityPreview(input: {
   viewerCommunityRole: CommunityPreview["viewer_community_role"]
   viewerFollowing: boolean
 }): Promise<CommunityPreview> {
-  const communitiesColumns = await input.client.execute("PRAGMA table_info(communities)")
-  const hasKaraokeEnabledColumn = communitiesColumns.rows.some((row) => String(row.name ?? "") === "karaoke_enabled")
   const localResult = await input.client.execute({
     sql: `
       SELECT display_name, description, avatar_ref, banner_ref, membership_mode,
              allow_anonymous_identity, anonymous_identity_scope,
-             donation_policy_mode, donation_partner_id, settings_json
-             ${hasKaraokeEnabledColumn ? ", karaoke_enabled" : ""}
+             donation_policy_mode, donation_partner_id, settings_json, karaoke_enabled
       FROM communities
       WHERE community_id = ?1
       LIMIT 1
@@ -516,7 +499,7 @@ async function buildCommunityPreview(input: {
     )),
   ])
 
-  const humanVerificationLane = parsePreviewHumanVerificationLane(settings, membershipGateSummaries)
+  const humanVerificationLane = parsePreviewHumanVerificationLane(settings)
   const preview: CommunityPreview = {
     community_id: input.communityId,
     display_name: displayName,
@@ -534,6 +517,9 @@ async function buildCommunityPreview(input: {
       displayName,
       bannerRef: localRow?.banner_ref == null ? null : String(localRow.banner_ref),
     }),
+    branding: input.branding,
+    default_surface: input.defaultSurface,
+    video_feed_enabled: input.videoFeedEnabled,
     country_code: countryCode,
     membership_mode: membershipMode,
     karaoke_enabled: Number(localRow?.karaoke_enabled ?? 0) === 1,
@@ -547,11 +533,11 @@ async function buildCommunityPreview(input: {
     accepted_agent_ownership_providers: resolvePreviewAcceptedAgentOwnershipProviders({
       env: input.env,
       settings,
-      humanVerificationLane,
     }),
     allowed_disclosed_qualifiers: parsePreviewAllowedDisclosedQualifiers(settings),
     allow_qualifiers_on_anonymous_posts: parsePreviewAllowQualifiersOnAnonymousPosts(settings),
     human_verification_lane: humanVerificationLane,
+    preferred_verification_provider: parsePreviewPreferredVerificationProvider(settings),
     member_count: memberCount,
     follower_count: followerCount,
     donation_policy_mode: donationPolicyMode,

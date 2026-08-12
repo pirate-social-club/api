@@ -39,3 +39,13 @@ export async function deriveKaraokeRevisionId(input: {
   })
   return `krv_${await sha256Hex(JSON.stringify(payload))}`
 }
+
+export async function resolveKaraokeRevisionId(input: {
+  instrumentalAudio: SongArtifactBundle["instrumental_audio"]
+  karaokeRevisionId: string | null
+  timedLyrics: Record<string, unknown> | null
+}): Promise<string | null> {
+  const stored = input.karaokeRevisionId?.trim()
+  if (stored) return stored
+  return await deriveKaraokeRevisionId(input)
+}

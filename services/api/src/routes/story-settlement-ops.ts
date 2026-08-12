@@ -6,15 +6,23 @@ import { badRequestError, notFoundError } from "../lib/errors"
 import {
   authenticateOperatorCredential,
   requireOperatorScope,
+  STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
   STORY_SETTLEMENT_REPAIR_SCOPE,
 } from "../lib/operator-credential-auth"
 import type { OperatorActorContext } from "../lib/operator-credential-auth"
-import { captureScheduledWarning } from "../lib/ops-alerts/scheduled"
+import {
+  captureScheduledWarningWithEvidence,
+  type ScheduledAlertDeliveryResult,
+} from "../lib/ops-alerts/scheduled"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { reconcileCommunityPurchaseSettlement } from "../lib/communities/commerce/settlement-service"
 import { resolveStoryCoordinatorDirectSigner } from "../lib/story/story-direct-signer"
 import { resolveStoryChainId } from "../lib/story/story-runtime-config"
 import { storySettlementCoordinatorName } from "../lib/story/story-settlement-wallet-coordinator-do"
+import { recoverOperatorBlockedPostPublish } from "../lib/posts/operator-blocked-publish-recovery"
+import { openCommunityWriteClient } from "../lib/communities/community-read-access"
+import { decodePublicAssetId, decodePublicCommunityId } from "../lib/public-ids"
+import { operatorAttestStoryRegistrationNotBroadcast } from "../lib/story/story-registration-effect-ops"
 
 type StorySettlementOpsEnv = { Bindings: Env }
 const storySettlementOps = new Hono<StorySettlementOpsEnv>()
@@ -22,19 +30,39 @@ const REASONS = new Set(["operator_cancelled", "terminal_configuration", "rights
 const REFERENCE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/
 
 type OperatorAuthenticator = (input: { env: Env; authorization: string | undefined }) => Promise<OperatorActorContext>
-type AlertCapture = typeof captureScheduledWarning
+type AlertCapture = (
+  env: Env,
+  message: string,
+  task: string,
+  extra?: Record<string, unknown>,
+  tags?: Record<string, string>,
+) => Promise<ScheduledAlertDeliveryResult>
 let testAuthenticator: OperatorAuthenticator | null = null
 let testAlertCapture: AlertCapture | null = null
 let testPurchaseReconciler: typeof reconcileCommunityPurchaseSettlement | null = null
+let testOperatorBlockedPublishRecovery: typeof recoverOperatorBlockedPostPublish | null = null
+type ConfirmRegistrationNoBroadcast = (input: {
+  env: Env
+  communityId: string
+  assetId: string
+  operationId: string
+  actorId: string
+  reason: string
+}) => Promise<{ operationId: string; status: string; errorCode: string | null }>
+let testConfirmRegistrationNoBroadcast: ConfirmRegistrationNoBroadcast | null = null
 
 export function setStorySettlementOpsDependenciesForTests(input: {
   authenticate?: OperatorAuthenticator | null
   captureAlert?: AlertCapture | null
   reconcilePurchase?: typeof reconcileCommunityPurchaseSettlement | null
+  recoverOperatorBlockedPublish?: typeof recoverOperatorBlockedPostPublish | null
+  confirmRegistrationNoBroadcast?: ConfirmRegistrationNoBroadcast | null
 }): void {
   testAuthenticator = input.authenticate ?? null
   testAlertCapture = input.captureAlert ?? null
   testPurchaseReconciler = input.reconcilePurchase ?? null
+  testOperatorBlockedPublishRecovery = input.recoverOperatorBlockedPublish ?? null
+  testConfirmRegistrationNoBroadcast = input.confirmRegistrationNoBroadcast ?? null
 }
 
 function bytes32(name: string, value: unknown): Hex {
@@ -62,6 +90,20 @@ async function operator(c: Context<StorySettlementOpsEnv>) {
   })
   requireOperatorScope(actor, STORY_SETTLEMENT_REPAIR_SCOPE)
   return actor
+}
+
+async function feeReplacementOperator(c: Context<StorySettlementOpsEnv>) {
+  const actor = await (testAuthenticator ?? authenticateOperatorCredential)({
+    env: c.env,
+    authorization: c.req.header("authorization"),
+  })
+  requireOperatorScope(actor, STORY_SETTLEMENT_FEE_REPLACE_SCOPE)
+  return actor
+}
+
+function positiveUint(name: string, value: unknown): bigint {
+  if (typeof value !== "string" || !/^[1-9][0-9]*$/.test(value)) throw badRequestError(`${name}_must_be_positive_decimal`)
+  return BigInt(value)
 }
 
 function coordinator(c: Context<StorySettlementOpsEnv>) {
@@ -118,6 +160,100 @@ storySettlementOps.post("/nonce-repairs", async (c) => {
   return c.json({ plan }, 202)
 })
 
+storySettlementOps.post("/fee-replacements", async (c) => {
+  const actor = await feeReplacementOperator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const clientReference = reference(body.authorization_ref)
+  const replacement = await coordinator(c).requestFeeReplacement({
+    planRef: bytes32("plan_ref", body.plan_ref),
+    stepRef: bytes32("step_ref", body.step_ref),
+    expectedVersion: positiveVersion(body.expected_version),
+    expectedActiveCandidateHash: bytes32("expected_active_candidate_hash", body.expected_active_candidate_hash),
+    maxFeePerGas: positiveUint("max_fee_per_gas", body.max_fee_per_gas),
+    maxPriorityFeePerGas: positiveUint("max_priority_fee_per_gas", body.max_priority_fee_per_gas),
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: `operator:${actor.operatorCredentialId}:${clientReference}`,
+  })
+  console.warn(JSON.stringify({
+    message: "Story settlement fee replacement requested by operator",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: clientReference,
+    planRef: replacement.planRef,
+    stepRef: replacement.stepRef,
+    candidateRef: replacement.candidateRef,
+    generation: replacement.generation,
+    transactionHash: replacement.transactionHash,
+  }))
+  return c.json({ replacement }, 202)
+})
+
+storySettlementOps.post("/fee-replacement-inspections", async (c) => {
+  const actor = await feeReplacementOperator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const planRef = bytes32("plan_ref", body.plan_ref)
+  const stepRef = bytes32("step_ref", body.step_ref)
+  const authorizationRef = reference(body.authorization_ref)
+  const candidates = await coordinator(c).inspectFeeReplacementCandidates(planRef, stepRef)
+  console.info(JSON.stringify({
+    message: "Story settlement fee replacement candidates inspected",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    planRef,
+    stepRef,
+    candidateCount: candidates.length,
+  }))
+  return c.json({ candidates }, 200)
+})
+
+storySettlementOps.post("/nonce-repair-drills", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = reference(body.community_id)
+  const clientReference = reference(body.authorization_ref)
+  const drill = await coordinator(c).armNonceRepairDrill({
+    communityId,
+    authorizationRef: `operator:${actor.operatorCredentialId}:${clientReference}`,
+  })
+  console.info(JSON.stringify({
+    message: "staging Story settlement nonce-repair drill armed by operator",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: clientReference,
+    armRef: drill.armRef,
+    communityId,
+  }))
+  return c.json({ drill }, 202)
+})
+
+storySettlementOps.post("/nonce-repair-drills/:armRef/retargets", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = reference(body.community_id)
+  const clientReference = reference(body.authorization_ref)
+  const drill = await coordinator(c).retargetNonceRepairDrill({
+    armRef: bytes32("arm_ref", c.req.param("armRef")),
+    communityId,
+    authorizationRef: `operator:${actor.operatorCredentialId}:${clientReference}`,
+  })
+  console.info(JSON.stringify({
+    message: "staging Story settlement nonce-repair drill retargeted by operator",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef: clientReference,
+    armRef: drill.armRef,
+    retargetRef: drill.retargetRef,
+    communityId,
+  }))
+  return c.json({ drill }, 202)
+})
+
 storySettlementOps.post("/purchase-reconciliations", async (c) => {
   const actor = await operator(c)
   let body: Record<string, unknown>
@@ -146,13 +282,91 @@ storySettlementOps.post("/purchase-reconciliations", async (c) => {
   return c.json({ outcome }, outcome === "finalized" ? 200 : 202)
 })
 
+storySettlementOps.post("/operator-blocked-publish-recoveries", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = reference(body.community_id)
+  const postId = reference(body.post_id)
+  const authorizationRef = reference(body.authorization_ref)
+  const communityRepository = testOperatorBlockedPublishRecovery
+    ? {} as Parameters<typeof recoverOperatorBlockedPostPublish>[0]["communityRepository"]
+    : getCommunityRepository(c.env)
+  const result = await (testOperatorBlockedPublishRecovery ?? recoverOperatorBlockedPostPublish)({
+    env: c.env,
+    communityRepository,
+    communityId,
+    postId,
+  })
+  console.info(JSON.stringify({
+    message: "operator-blocked Story publish recovery requested",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    communityId,
+    postId,
+    jobId: result.jobId,
+  }))
+  return c.json({ result }, 202)
+})
+
+storySettlementOps.post("/registration-effect-no-broadcast-confirmations", async (c) => {
+  const actor = await operator(c)
+  let body: Record<string, unknown>
+  try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
+  const communityId = decodePublicCommunityId(reference(body.community_id))
+  const assetId = decodePublicAssetId(reference(body.asset_id))
+  const operationId = reference(body.operation_id)
+  const authorizationRef = reference(body.authorization_ref)
+  const reason = typeof body.reason === "string" ? body.reason.trim() : ""
+  if (reason.length < 10 || reason.length > 600) throw badRequestError("reason_must_be_10_to_600_characters")
+
+  const confirm = testConfirmRegistrationNoBroadcast ?? (async (input) => {
+    const communityRepository = getCommunityRepository(input.env)
+    const db = await openCommunityWriteClient(input.env, communityRepository, input.communityId)
+    try {
+      const effect = await operatorAttestStoryRegistrationNotBroadcast({
+        env: input.env,
+        client: db.client,
+        communityId: input.communityId,
+        assetId: input.assetId,
+        expectedOperationId: input.operationId,
+        actorId: input.actorId,
+        reason: input.reason,
+        now: new Date().toISOString(),
+      })
+      return { operationId: effect.operationId, status: effect.status, errorCode: effect.errorCode }
+    } finally {
+      db.close()
+    }
+  })
+  const effect = await confirm({
+    env: c.env,
+    communityId,
+    assetId,
+    operationId,
+    actorId: actor.operatorActorId,
+    reason,
+  })
+  console.info(JSON.stringify({
+    message: "Story registration no-broadcast outcome confirmed",
+    operatorCredentialId: actor.operatorCredentialId,
+    operatorActorId: actor.operatorActorId,
+    authorizationRef,
+    communityId,
+    assetId,
+    operationId,
+  }))
+  return c.json({ effect, next_action: "recycle the owning finalize job" }, 200)
+})
+
 storySettlementOps.post("/alerts/synthetic", async (c) => {
   const actor = await operator(c)
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "synthetic_alert_staging_only" }, 403)
   let body: Record<string, unknown>
   try { body = await c.req.json<Record<string, unknown>>() } catch { throw badRequestError("invalid_json_body") }
   const authorizationRef = reference(body.authorization_ref)
-  const delivered = await (testAlertCapture ?? captureScheduledWarning)(
+  const delivery = await (testAlertCapture ?? captureScheduledWarningWithEvidence)(
     c.env,
     "Synthetic Story settlement coordinator alert",
     `story_settlement_coordinator_synthetic:${authorizationRef}`,
@@ -164,7 +378,8 @@ storySettlementOps.post("/alerts/synthetic", async (c) => {
     },
     { urgency: "high" },
   )
-  return c.json({ delivered }, delivered ? 202 : 503)
+  const proven = delivery.delivered && delivery.evidenceRecorded
+  return c.json({ ...delivery, proven }, proven ? 202 : 503)
 })
 
 export default storySettlementOps

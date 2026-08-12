@@ -55,7 +55,7 @@ type CheckoutFundingQuote = Pick<
   | "quote_id"
   | "route_provider"
   | "funding_mode"
-  | "final_price_usd"
+  | "final_price_cents"
   | "source_chain_json"
   | "funding_destination_address"
 >
@@ -85,14 +85,10 @@ export function setBuyerFundingProviderFactoryForTests(
 }
 
 function requireCheckoutFundingAmountAtomic(quote: CheckoutFundingQuote): bigint {
-  if (!Number.isFinite(quote.final_price_usd) || quote.final_price_usd <= 0) {
+  if (!Number.isSafeInteger(quote.final_price_cents) || quote.final_price_cents <= 0) {
     throw badRequestError("Quote funding amount is invalid")
   }
-  const micros = Math.round(quote.final_price_usd * 1_000_000)
-  if (micros <= 0) {
-    throw badRequestError("Quote funding amount is below USDC precision")
-  }
-  return BigInt(micros)
+  return BigInt(quote.final_price_cents) * 10_000n
 }
 
 function topicAddress(topic: string): string | null {
@@ -227,12 +223,19 @@ export interface BookingPaymentExpectation {
   amountAtomic: bigint
   senderAddress: string
 }
+export type BookingCustodyTransfer = {
+  senderAddress: string
+  observedAmountAtomic: string
+  transferCount: number
+}
 export type BookingPaymentVerification =
   // blockTimestamp lets a caller judge WHEN the transfer was mined, not merely that it was.
   // Reward funding uses it to honour a transfer broadcast before its quote expired even when
   // confirmation only arrives afterwards, without letting a genuinely late transfer revive
   // stale terms.
   | { kind: "verified"; senderAddress: string; txRef: string; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
+  | { kind: "custody_mismatch"; reason: "wrong_transfer_amount" | "unexpected_sender"; senderAddress: string; txRef: string; observedAmountAtomic: string; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
+  | { kind: "custody_incident"; reason: "multiple_senders"; txRef: string; transfers: BookingCustodyTransfer[]; blockNumber?: number; blockHash?: string; blockTimestamp?: number }
   | { kind: "pending"; reason?: string } // not yet final / transient RPC — resumable, never clears the claimed hash
   | { kind: "rejected"; reason: string } // mined-but-reverted or no matching transfer — terminal
 
@@ -316,7 +319,7 @@ async function classifyFinalizedPaymentReceipt(input: {
     }
   }
   const evaluated = evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
-  return evaluated.kind === "verified"
+  return evaluated.kind === "verified" || evaluated.kind === "custody_mismatch" || evaluated.kind === "custody_incident"
     ? {
         ...evaluated,
         blockNumber: receipt.blockNumber,
@@ -337,23 +340,57 @@ export function evaluateBookingPaymentReceipt(receipt: MinimalReceipt | null, ex
   if (receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
   const expectedToken = getAddress(expected.tokenAddress)
   const expectedRecipientTopic = zeroPadValue(getAddress(expected.recipientAddress), 32).toLowerCase()
-  const expectedSenderTopic = zeroPadValue(getAddress(expected.senderAddress), 32).toLowerCase()
+  const expectedSender = getAddress(expected.senderAddress)
+  const transfersBySender = new Map<string, { senderAddress: string; amount: bigint; count: number }>()
   for (const log of receipt.logs) {
     if (getAddress(log.address) !== expectedToken) continue
     const [topic0, fromTopic, toTopic] = log.topics
     if (String(topic0).toLowerCase() !== ERC20_TRANSFER_TOPIC) continue
     if (String(toTopic).toLowerCase() !== expectedRecipientTopic) continue
-    if (String(fromTopic).toLowerCase() !== expectedSenderTopic) continue
     const parsed = ERC20_TRANSFER_INTERFACE.parseLog({ topics: [...log.topics], data: log.data })
     const amount = parsed?.args.value as bigint | undefined
-    // EXACT amount — neither underpayment nor overpayment satisfies the intent (a larger payment
-    // intended for something else must not confirm this booking).
-    if (amount == null || amount !== expected.amountAtomic) continue
+    if (amount == null || amount <= 0n) continue
     const sender = topicAddress(String(fromTopic))
     if (sender == null) continue
-    return { kind: "verified", senderAddress: getAddress(sender), txRef }
+    const senderAddress = getAddress(sender)
+    const key = senderAddress.toLowerCase()
+    const current = transfersBySender.get(key)
+    transfersBySender.set(key, {
+      senderAddress,
+      amount: (current?.amount ?? 0n) + amount,
+      count: (current?.count ?? 0) + 1,
+    })
   }
-  return { kind: "rejected", reason: "no_matching_transfer" }
+  const transfers = [...transfersBySender.values()]
+    .sort((left, right) => left.senderAddress.toLowerCase().localeCompare(right.senderAddress.toLowerCase()))
+    .map((transfer) => ({
+      senderAddress: transfer.senderAddress,
+      observedAmountAtomic: transfer.amount.toString(),
+      transferCount: transfer.count,
+    }))
+  if (transfers.length > 1) {
+    return { kind: "custody_incident", reason: "multiple_senders", txRef, transfers }
+  }
+  const [observed] = transfers
+  if (!observed) return { kind: "rejected", reason: "no_matching_transfer" }
+  // EXACTLY one exact transfer satisfies the intent. Multiple matching transfers are treated as
+  // custody mismatch even when one is exact, so excess funds cannot disappear from refund work.
+  if (
+    observed.transferCount === 1
+    && BigInt(observed.observedAmountAtomic) === expected.amountAtomic
+    && observed.senderAddress.toLowerCase() === expectedSender.toLowerCase()
+  ) {
+    return { kind: "verified", senderAddress: observed.senderAddress, txRef }
+  }
+  return {
+    kind: "custody_mismatch",
+    reason: observed.senderAddress.toLowerCase() === expectedSender.toLowerCase()
+      ? "wrong_transfer_amount"
+      : "unexpected_sender",
+    senderAddress: observed.senderAddress,
+    txRef,
+    observedAmountAtomic: observed.observedAmountAtomic,
+  }
 }
 
 export async function classifyBookingPaymentReceipt(input: {
@@ -393,7 +430,7 @@ export async function classifyBookingPaymentReceipt(input: {
 export async function verifyPirateCheckoutUsdcFunding(input: {
   env: Env
   quoteId: string
-  amountUsd: number
+  amountCents: number
   buyerAddress: string
   fundingTxRef: string
   fundingDestinationAddress?: string | null
@@ -411,7 +448,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
       quote_id: input.quoteId,
       route_provider: "pirate_checkout",
       funding_mode: "routed",
-      final_price_usd: input.amountUsd,
+      final_price_cents: input.amountCents,
       source_chain_json: input.sourceChainJson ?? null,
       funding_destination_address: input.fundingDestinationAddress ?? null,
     },

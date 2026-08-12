@@ -8,6 +8,7 @@ import type {
   JobRow,
 } from "../auth/auth-db-rows"
 import type { Post } from "../../types"
+import type { DelegationResponseProjection } from "@pirate/hns-delegation"
 
 interface CommunityRepositoryLifecycle {
   close?(): void | Promise<void>
@@ -20,6 +21,7 @@ export interface CommunityReadRepository {
   listActiveCommunities(input?: {
     limit?: number
     requireReadyRouting?: boolean
+    communityIds?: string[]
   }): Promise<CommunityRow[]>
   searchActiveCommunities(input: {
     query: string
@@ -45,6 +47,8 @@ export type CommunityNamespaceAttachmentRow = {
   family: "hns" | "spaces"
   normalizedRootLabel: string
   verificationStatus: "verified" | "stale" | "expired" | "disputed"
+  hnsSetupStatus: "legacy_import_required" | "setup_complete" | null
+  delegation: DelegationResponseProjection | null
 }
 
 export interface CommunityNamespaceReadRepository {
@@ -238,6 +242,13 @@ export interface CommunityProvisioningRepository {
 }
 
 export interface CommunityMutationRepository {
+  updateCommunityPresentation(input: {
+    brandingJson: string
+    communityId: string
+    defaultSurface: CommunityRow["default_surface"]
+    videoFeedEnabled: boolean
+    updatedAt: string
+  }): Promise<CommunityRow>
   updateCommunitySeoProjection(input: {
     communityId: string
     description: string | null
@@ -250,6 +261,7 @@ export interface CommunityMutationRepository {
     communityId: string
     namespaceVerificationId: string
     namespaceRole: CommunityNamespaceRole
+    replacesNamespaceVerificationId?: string
     routeSlug: string
     updatedAt: string
   }): Promise<CommunityRow>

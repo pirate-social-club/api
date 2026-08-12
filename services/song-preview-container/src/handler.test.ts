@@ -146,6 +146,27 @@ describe("song preview container handler", () => {
     }]);
   });
 
+  test("forwards authenticated duration probes to the container", async () => {
+    spyOn(console, "log").mockImplementation(() => undefined);
+    const calls: ProxyCall[] = [];
+    const response = await handleSongPreviewContainerRequest(
+      new Request("https://preview.example/duration", {
+        method: "POST",
+        headers: { authorization: "Bearer shared-secret" },
+        body: JSON.stringify({ community_id: "com_test", song_artifact_bundle: "sab_test" }),
+      }),
+      testEnv(),
+      recordingProxy(calls),
+    );
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{
+      method: "POST",
+      path: "/duration",
+      body: "{\"community_id\":\"com_test\",\"song_artifact_bundle\":\"sab_test\"}",
+    }]);
+  });
+
   test("forwards authenticated deep health checks as container /health", async () => {
     const calls: ProxyCall[] = [];
     const response = await handleSongPreviewContainerRequest(

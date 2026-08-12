@@ -20,6 +20,7 @@ import {
   createBookingHostConfigWriteRepository,
 } from "./host-config-repository"
 import type { AvailabilityException, AvailabilityRule, BookingProfile, PriceRule } from "./types"
+import { recomputeBookingFeedDiscoverySnapshotAfterWrite } from "./booking-feed-discovery"
 
 export type ServiceOk<T> = { ok: true; data: T }
 export type ServiceErr = { ok: false; reason: string; fields?: ValidationError[] }
@@ -48,6 +49,7 @@ let repositoriesForTests: {
   read: BookingHostConfigReadRepository
   write: BookingHostConfigWriteRepository
 } | null = null
+let feedDiscoveryRefresherForTests: ((hostUserId: string) => Promise<void>) | null = null
 
 export function setBookingHostConfigRepositoriesForTests(
   repositories: {
@@ -56,6 +58,12 @@ export function setBookingHostConfigRepositoriesForTests(
   } | null,
 ): void {
   repositoriesForTests = repositories
+}
+
+export function setBookingFeedDiscoveryRefresherForTests(
+  refresher: ((hostUserId: string) => Promise<void>) | null,
+): void {
+  feedDiscoveryRefresherForTests = refresher
 }
 
 function nowIso(): string {
@@ -70,6 +78,24 @@ function readRepo(env: Env) {
 function writeRepo(env: Env) {
   if (repositoriesForTests) return repositoriesForTests.write
   return createBookingHostConfigWriteRepository(getControlPlaneClient(env))
+}
+
+async function refreshFeedDiscovery(env: Env, hostUserId: string): Promise<void> {
+  try {
+    if (repositoriesForTests) {
+      await feedDiscoveryRefresherForTests?.(hostUserId)
+      return
+    }
+    await recomputeBookingFeedDiscoverySnapshotAfterWrite({
+      executor: getControlPlaneClient(env),
+      hostUserId,
+    })
+  } catch (error) {
+    // The authoring mutation and its trigger-owned invalidation have already committed.
+    // A cold feed miss will rebuild the absent snapshot; projection failure must not turn
+    // a successful host write into a client-visible error.
+    console.error("[bookings] feed discovery warm refresh failed", error)
+  }
 }
 
 function validatePayoutWallet(input: BookingProfileInput & { payout_wallet_address?: string | null }): ServiceResult<string | null | undefined> {
@@ -150,10 +176,12 @@ export async function upsertBookingProfile(
       createdAt: now,
       updatedAt: now,
     })
+    await refreshFeedDiscovery(env, hostUserId)
     return { ok: true, data: { created: true, profile } }
   }
 
   const profile = await repo.updateProfile(hostUserId, toProfileUpdateInput(input, payoutWallet.data, now))
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: { created: false, profile: profile! } }
 }
 
@@ -173,6 +201,7 @@ export async function setProfilePublished(
     ? await repo.publishProfile(hostUserId, nowIso())
     : await repo.unpublishProfile(hostUserId, nowIso())
   if (!profile) return { ok: false, reason: "profile_not_found" }
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: profile }
 }
 
@@ -209,6 +238,7 @@ export async function createAvailabilityRule(
     createdAt: now,
     updatedAt: now,
   })
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: rule }
 }
 
@@ -241,11 +271,14 @@ export async function updateAvailabilityRule(
     ...(input.effective_until_utc !== undefined ? { effectiveUntilUtc: input.effective_until_utc ?? null } : {}),
     updatedAt: nowIso(),
   })
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: updated! }
 }
 
 export async function deleteAvailabilityRule(env: Env, hostUserId: string, ruleId: string): Promise<boolean> {
-  return writeRepo(env).deleteAvailabilityRule(hostUserId, ruleId)
+  const deleted = await writeRepo(env).deleteAvailabilityRule(hostUserId, ruleId)
+  if (deleted) await refreshFeedDiscovery(env, hostUserId)
+  return deleted
 }
 
 export async function listAvailabilityExceptions(env: Env, hostUserId: string): Promise<ExceptionRow[]> {
@@ -272,6 +305,7 @@ export async function createAvailabilityException(
     endUtc: input.end_utc,
     createdAt: nowIso(),
   })
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: exception }
 }
 
@@ -297,11 +331,14 @@ export async function updateAvailabilityException(
     ...(input.start_utc !== undefined ? { startUtc: input.start_utc } : {}),
     ...(input.end_utc !== undefined ? { endUtc: input.end_utc } : {}),
   })
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: updated! }
 }
 
 export async function deleteAvailabilityException(env: Env, hostUserId: string, exceptionId: string): Promise<boolean> {
-  return writeRepo(env).deleteAvailabilityException(hostUserId, exceptionId)
+  const deleted = await writeRepo(env).deleteAvailabilityException(hostUserId, exceptionId)
+  if (deleted) await refreshFeedDiscovery(env, hostUserId)
+  return deleted
 }
 
 export async function listPriceRules(env: Env, hostUserId: string): Promise<PriceRuleRow[]> {
@@ -334,6 +371,7 @@ export async function createPriceRule(
     createdAt: now,
     updatedAt: now,
   })
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: priceRule }
 }
 
@@ -367,9 +405,12 @@ export async function updatePriceRule(
     ...(input.priority !== undefined ? { priority: input.priority } : {}),
     updatedAt: nowIso(),
   })
+  await refreshFeedDiscovery(env, hostUserId)
   return { ok: true, data: updated! }
 }
 
 export async function deletePriceRule(env: Env, hostUserId: string, priceRuleId: string): Promise<boolean> {
-  return writeRepo(env).deletePriceRule(hostUserId, priceRuleId)
+  const deleted = await writeRepo(env).deletePriceRule(hostUserId, priceRuleId)
+  if (deleted) await refreshFeedDiscovery(env, hostUserId)
+  return deleted
 }

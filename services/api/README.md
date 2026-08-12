@@ -27,7 +27,8 @@ Current route surface:
 - media routes
   `POST /profile-media`, `POST /community-media`
 - jobs and posts
-  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`, public post and comment read endpoints
+  `GET /jobs/{job_id}`, `GET /posts/{post_id}`, `POST /posts/{post_id}/vote`,
+  `POST /posts/{post_id}/clear_vote`, public post and comment read endpoints
 - comments, feed, and notifications
   authenticated comment replies/context/vote/delete, `GET /feed/home`, and notification summary/task/feed read and mutation endpoints
 - agents
@@ -160,12 +161,37 @@ rtk bun run coverage
 
 The current coverage command does not enforce thresholds. Use it to inspect drift before adding policy gates.
 
+## GitHub Packages auth (`@pirate-social-club/karaoke-runtime`)
+
+The API installs the private `@pirate-social-club/karaoke-runtime` package from
+GitHub Packages. The committed `.npmrc` maps the `@pirate-social-club` scope to
+GitHub Packages and reads authentication from `NODE_AUTH_TOKEN`; it never stores
+a credential.
+
+Before running `bun install` locally in `services/api`, provide a token with
+`read:packages` for an account that can access the `pirate-social-club`
+organization package:
+
+```sh
+gh auth refresh -h github.com -s read:packages
+export NODE_AUTH_TOKEN="$(gh auth token)"
+bun install
+```
+
+API Actions use only their short-lived `github.token` with `packages: read`;
+the package grants the `pirate-social-club/api` repository read access.
+Publishing stays exclusively in the web repository workflow with
+`packages: write`; API workflows never receive write access.
+
+Manual deploy shells must also provide `NODE_AUTH_TOKEN` if dependency
+installation is required. Never print, persist, or commit a package token.
+
 ## Local Dev
 
 Memory mode:
 
 1. Set `DEV_MEMORY_STORE_ENABLED=true`.
-2. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET` or `JWT_BASED_AUTH_SHARED_SECRET`.
+2. Fill in `AUTH_UPSTREAM_JWT_SHARED_SECRET`.
 3. Fill in `PIRATE_APP_JWT_PRIVATE_KEY` and `PIRATE_APP_JWT_PUBLIC_KEY`.
 4. Run `rtk bun run dev`.
 
@@ -297,9 +323,9 @@ rtk bun run mint:dev-jwt --sub dev-user --wallet 0x11111111111111111111111111111
 
 The script reads:
 
-- `AUTH_UPSTREAM_JWT_SHARED_SECRET` or `JWT_BASED_AUTH_SHARED_SECRET`
-- `AUTH_UPSTREAM_JWT_ISSUER` or `JWT_BASED_AUTH_ISSUERS`
-- `AUTH_UPSTREAM_JWT_AUDIENCE` or `JWT_BASED_AUTH_AUDIENCE`
+- `AUTH_UPSTREAM_JWT_SHARED_SECRET`
+- `AUTH_UPSTREAM_JWT_ISSUER`
+- `AUTH_UPSTREAM_JWT_AUDIENCE`
 
 from `.dev.vars` or the current shell environment.
 

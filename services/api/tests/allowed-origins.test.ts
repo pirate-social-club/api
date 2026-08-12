@@ -29,6 +29,36 @@ describe("allowed origins", () => {
     })).toBeNull()
   })
 
+  test("allows only activation-authorized HNS apex and app origins", () => {
+    expect(configuredCorsOrigin("https://dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://app.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    }, true)).toBe("https://dankmeme")
+    expect(configuredCorsOrigin("https://app.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    }, true)).toBe("https://app.dankmeme")
+    expect(configuredCorsOrigin("https://xn--pokmon-dva", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://app.xn--pokmon-dva", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    }, true)).toBe("https://app.xn--pokmon-dva")
+  })
+
+  test("does not treat arbitrary nested origins as imported HNS apps", () => {
+    expect(configuredCorsOrigin("https://www.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://app.dankmeme.example", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+  })
+
   test("rejects malformed or null karaoke origins", () => {
     const env = {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",

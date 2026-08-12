@@ -6,6 +6,7 @@ import {
   resolveBookingSettlementOperatorAddress,
   resolveBookingSettlementChainId,
   resolveBookingSettlementUsdcTokenAddress,
+  resolveNewBookingIntentChainId,
 } from "./booking-settlement-config";
 
 const SEPOLIA_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
@@ -17,6 +18,24 @@ describe("global booking settlement config guards", () => {
     expect(() => resolveBookingSettlementChainId({ PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "1" } as Env)).toThrow(/not an allowlisted/);
     expect(() => resolveBookingSettlementChainId({ PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "999999" } as Env)).toThrow(/not an allowlisted/);
     expect(() => resolveBookingSettlementChainId({} as Env)).toThrow(/is required/);
+  });
+
+  test("production refuses to mint a new paid booking intent on a testnet", () => {
+    const testnet = { ENVIRONMENT: "production", PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532" } as Env;
+    expect(() => resolveNewBookingIntentChainId(testnet)).toThrow(/production paid bookings require Base mainnet/);
+    expect(resolveNewBookingIntentChainId({ ...testnet, PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "8453" } as Env)).toBe(8453);
+
+    // Non-production keeps working on Sepolia.
+    expect(resolveNewBookingIntentChainId({ PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532" } as Env)).toBe(84532);
+    expect(resolveNewBookingIntentChainId({ ENVIRONMENT: "staging", PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532" } as Env)).toBe(84532);
+  });
+
+  test("the intent guard does not leak into settlement or reconciliation reads", () => {
+    // Existing bookings — including the pre-api#426 Base mainnet records — must
+    // stay serviceable in production while new paid intents are refused.
+    const prodTestnet = { ENVIRONMENT: "production", PIRATE_BOOKING_SETTLEMENT_CHAIN_ID: "84532" } as Env;
+    expect(resolveBookingSettlementChainId(prodTestnet)).toBe(84532);
+    expect(resolveBookingSettlementUsdcTokenAddress(prodTestnet)).toBe(SEPOLIA_USDC);
   });
 
   test("defaults to canonical USDC and pins overrides", () => {

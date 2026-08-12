@@ -2,19 +2,48 @@ import type { ShardRpc } from "@pirate/api-shared"
 import type { RateLimiterBinding } from "./lib/rate-limit"
 import type { CommentCreateRateLimiterDO } from "./lib/comment-create-rate-limit"
 import type { StorySettlementWalletCoordinatorDO } from "./lib/story/story-settlement-wallet-coordinator-do"
+import type { HnsWalletOriginAuthorityDO } from "./lib/hns-wallet-origin-authority-do"
+
+/** RPC surface of the `CachedPublicReads` entrypoint, reached via self-binding. */
+export type PublicReadCacheRpc = {
+  fetch?(request: Request): Promise<Response>
+  purgeCacheTags(tags: string[]): Promise<{ success: boolean; errors?: unknown }>
+}
 
 export type Env = {
   // Runtime
   BUILD_GIT_REF?: string
   BUILD_GIT_SHA?: string
   BUILD_TIMESTAMP?: string
+  BUILD_RELEASE_ID?: string
+  BUILD_ID?: string
+  BUILD_WEB_SHA?: string
+  BUILD_API_SHA?: string
+  BUILD_CORE_SHA?: string
+  BUILD_SOURCE_STATE?: "clean" | "dirty"
+  BUILD_DEPLOY_REASON_SLUG?: string
+  BUILD_HOTFIX_REASON_SLUG?: string
+  BUILD_PATCH_SHA256?: string
   ENVIRONMENT?: string
   DEV_MEMORY_STORE_ENABLED?: string
   CONTROL_PLANE_DATABASE_URL?: string
   CONTROL_PLANE_HYPERDRIVE?: Hyperdrive
+  HNS_ROOT_DELEGATION_ROUTING_ENABLED?: string
+  HNS_WALLET_ORIGIN_AUTHORITY?: DurableObjectNamespace<HnsWalletOriginAuthorityDO>
   CORS_ALLOWED_ORIGINS?: string
   PIRATE_ANDROID_KARAOKE_ORIGINS?: string
   MATERIALIZED_PUBLIC_HOME_FEED_LOCALES?: string
+  PUBLIC_HOME_FEED_COMPUTE_BUDGET_MS?: string
+  /**
+   * Authenticated video-feed control-plane rollout. `shadow` validates the
+   * projected payload against the shard-hydrated response without serving it.
+   * `serve` is reserved for a later rollout once viewer-specific projections
+   * are complete; it currently behaves as `off`.
+   */
+  AUTHENTICATED_VIDEO_FEED_CONTROL_PLANE_MODE?: "off" | "shadow" | "serve"
+  /** Sample percentage (0-100) for non-blocking owned-vs-hosted EFP read comparisons. */
+  EFP_FOLLOW_SHADOW_SAMPLE_PERCENT?: string
+  EFP_HOSTED_API_URL?: string
   PIRATE_ADMIN_TOKEN?: string
   OPS_ALERT_DEDUPE?: KVNamespace
   OPS_ALERT_EMAIL?: SendEmail
@@ -22,14 +51,30 @@ export type Env = {
   OPS_ALERT_EMAIL_FROM_NAME?: string
   OPS_ALERT_EMAIL_TO?: string
   OPS_ALERT_WEBHOOK_URL?: string
+  /** Dedicated bearer token for the VPS edge-alert ingress. */
+  HNS_EDGE_ALERT_TOKEN?: string
   OPS_ALERT_MAX_COMMUNITIES?: string
   OPS_ALERT_LOOKBACK_MS?: string
+  COMMUNITY_JOB_PICKUP_ALERT_MS?: string
   OPS_ALERT_BUCKET_MS?: string
+  OPS_ALERT_HIGH_BUCKET_MS?: string
+  OPS_ALERT_MEDIUM_BUCKET_MS?: string
   OPS_ALERT_LOW_BUCKET_MS?: string
   CLOUDFLARE_CACHE_PURGE_ZONE_ID?: string
+  /** Web delivery zone; presentation changes purge tagged SSR redirects here too. */
+  CLOUDFLARE_WEB_CACHE_PURGE_ZONE_ID?: string
   CLOUDFLARE_CACHE_PURGE_API_TOKEN?: string
   CLOUDFLARE_ZONE_ID?: string
   CLOUDFLARE_API_TOKEN?: string
+  /**
+   * Self-binding to this Worker's `CachedPublicReads` entrypoint. Zone-level
+   * purges do not reach Workers Caching, and a Workers cache purge only affects
+   * the entrypoint that issues it — so public-read invalidation has to be
+   * dispatched into that entrypoint rather than run inline.
+   */
+  PUBLIC_READ_CACHE?: PublicReadCacheRpc
+  PUBLIC_READ_CACHE_CANARY_ENABLED?: string
+  PUBLIC_READ_CACHE_CANARY_INTERVAL_MINUTES?: string
 
   // Analytics
   ANALYTICS_ENABLED?: string
@@ -45,6 +90,14 @@ export type Env = {
   LOCAL_COMMUNITY_DB_ROOT?: string
   /** PR2/PR3: read+write RPC binding to the community D1 shard Worker (absent until provisioned). */
   COMMUNITY_D1_SHARD?: ShardRpc
+  /** JSON map from persisted shard_worker_id values to service-binding names. */
+  COMMUNITY_D1_SHARD_ROUTES?: string
+  /**
+   * shard_worker_id used for new allocations. Optional while exactly one route
+   * is configured; required before a second pool route is added so retries
+   * cannot silently allocate the same community from a different pool.
+   */
+  COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID?: string
   /**
    * Step 5: shared secret for the shard's admin RPCs, consulted by the
    * D1-native reconciler scheduled task (reconciler-host.ts). Must equal the
@@ -59,6 +112,12 @@ export type Env = {
   COMMUNITY_D1_RECONCILER_ONLY?: string
   /** Warn from scheduled cron when allocatable community D1 bindings are at or below this count. Defaults to 2. */
   COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD?: string
+  /** Warn when recent allocation burn predicts pool exhaustion within this many hours. Defaults to 72. */
+  COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS?: string
+  /** Expected shard/shared source fingerprint, compile-stamped by the deploy wrapper. */
+  COMMUNITY_D1_SHARD_SOURCE_VERSION?: string
+  /** Effective release schema-policy digest used by generation-fenced local attestations. */
+  COMMUNITY_SCHEMA_POLICY_DIGEST?: string
   /**
    * Region label recorded on D1-native routing rows (satisfies the 0117
    * `chk_d1_fields` NOT NULL). Informational — actual D1 placement is set
@@ -69,9 +128,6 @@ export type Env = {
 
   // Auth and identity
   JWT_BASED_AUTH_ENABLED?: string
-  JWT_BASED_AUTH_SHARED_SECRET?: string
-  JWT_BASED_AUTH_ISSUERS?: string
-  JWT_BASED_AUTH_AUDIENCE?: string
   AUTH_UPSTREAM_JWT_ISSUER?: string
   AUTH_UPSTREAM_JWT_AUDIENCE?: string
   AUTH_UPSTREAM_JWT_SHARED_SECRET?: string
@@ -140,6 +196,8 @@ export type Env = {
   TELEGRAM_WEBHOOK_SECRET?: string
   TELEGRAM_BOT_INTEGRATION_SECRET?: string
   TELEGRAM_SETUP_INTENT_TTL_SECONDS?: string
+  TELEGRAM_STUDY_TTS_CACHE?: R2Bucket
+  TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET?: string
 
   // Media storage
   FILEBASE_S3_ACCESS_KEY?: string
@@ -161,7 +219,12 @@ export type Env = {
   COURTYARD_OWNERSHIP_FETCH_TIMEOUT_MS?: string
   COURTYARD_OWNERSHIP_MAX_ASSETS_PER_WALLET?: string
   BASE_MAINNET_RPC_URL?: string
+  OPTIMISM_MAINNET_RPC_URL?: string
   BASE_SEPOLIA_RPC_URL?: string
+  EFP_FOLLOW_ACCOUNT_HOURLY_LIMIT?: string
+  EFP_FOLLOW_INTENT_TTL_SECONDS?: string
+  EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT?: string
+  EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION?: string
   PIRATE_CHECKOUT_OPERATOR_ADDRESS?: string
   PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY?: string
   PIRATE_CHECKOUT_RPC_URL?: string
@@ -176,13 +239,37 @@ export type Env = {
   PIRATE_BOOKING_SETTLEMENT_USDC_TOKEN_ADDRESS?: string
   // Opt out of the canonical-USDC pin (only honor a non-canonical token override when "true").
   PIRATE_BOOKING_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
-  // Rewards payout custody/settlement is funded by a separate operator treasury.
+  // Rewards use the raw-key operator/treasury only in the local backend.
+  // lit_vault and eoa_vault split the gas-only signer from vault custody.
+  PIRATE_REWARDS_SETTLEMENT_BACKEND?: string
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS?: string
   PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY?: string
   PIRATE_REWARDS_SETTLEMENT_RPC_URL?: string
+  PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL?: string
   PIRATE_REWARDS_SETTLEMENT_CHAIN_ID?: string
   PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS?: string
   PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE?: string
+  REWARDS_TREASURY_VAULT_ADDRESS?: string
+  REWARDS_TREASURY_VAULT_POLICY_VERSION?: string
+  REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI?: string
+  LIT_REWARDS_API_URL?: string
+  LIT_REWARDS_USAGE_API_KEY?: string
+  LIT_REWARDS_ACTION_IPFS_ID?: string
+  /** Reviewed policy version embedded in the registered action CID. */
+  LIT_REWARDS_ACTION_POLICY_VERSION?: string
+  LIT_REWARDS_REQUEST_TIMEOUT_MS?: string
+  LIT_REWARDS_REQUEST_MAX_ATTEMPTS?: string
+  LIT_REWARDS_SIGNING_DEADLINE_SECONDS?: string
+  /**
+   * Gas ceilings mirroring the values pinned into the reviewed Lit action
+   * source. Required when the rewards backend is lit_vault: reconciliation
+   * re-checks signed gas against them, and a default would make that check
+   * weaker than the signing-side policy it corroborates.
+   */
+  LIT_REWARDS_MAX_FEE_PER_GAS_WEI?: string
+  LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI?: string
+  LIT_REWARDS_MAX_GAS_LIMIT?: string
+  REWARDS_REFUNDS_ENABLED?: string
   // Caps RPC receipt waits for routed checkout funding confirmation. Paid
   // handle claims can be retried with the same funding_tx_ref after timeout.
   // Use 15000-30000 for pilot smoke.
@@ -197,6 +284,10 @@ export type Env = {
   STORY_CHAIN_ID?: string
   STORY_RPC_URL?: string
   STORY_RPC_FALLBACK_URLS?: string
+  // Optional coordinator-only RPC endpoint. Registration and all other Story
+  // traffic continue to use STORY_RPC_URL.
+  STORY_COORDINATOR_RPC_URL?: string
+  STORY_COORDINATOR_RPC_AUTH_TOKEN?: string
   STORY_ASSET_PUBLISH_COORDINATOR_CONTRACT?: string
   STORY_COMPOSITE_READ_CONDITION_ADDRESS?: string
   STORY_ENTITLEMENT_CLASS_CONFIGURER_ADDRESS?: string
@@ -221,10 +312,25 @@ export type Env = {
   SONG_PREVIEW_SERVICE_URL?: string
   SONG_PREVIEW_SHARED_SECRET?: string
   SONG_PREVIEW_SERVICE_TIMEOUT_MS?: string
+  DANCE_GRADER_CALLBACK_HMAC_KEY?: string
+  DANCE_GRADER_CALLBACK_KEY_VERSION?: string
+  DANCE_GRADER_DISPATCH_URL?: string
+  DANCE_GRADER_DISPATCH_HMAC_KEY?: string
+  DANCE_GRADER_DISPATCH_KEY_VERSION?: string
+  DANCE_GRADER_ATTEMPT_DISPATCH_URL?: string
+  DANCE_ATTEMPT_FINGERPRINT_HMAC_KEY?: string
+  DANCE_ATTEMPT_S3_ENDPOINT?: string
+  DANCE_ATTEMPT_S3_ACCESS_KEY?: string
+  DANCE_ATTEMPT_S3_SECRET_KEY?: string
+  DANCE_ATTEMPT_S3_BUCKET?: string
+  DANCE_ATTEMPT_S3_REGION?: string
+  DANCE_CAPTURE_ENABLED?: string
+  DANCE_CHOREOGRAPHY_ENABLED?: string
   SONG_PREVIEW_FFMPEG_BIN?: string
   VIDEO_ANALYSIS_MAX_SOURCE_BYTES?: string
   VIDEO_MEDIA_ANALYSIS_ENABLED?: string
   VIDEO_MEDIA_ANALYSIS_BLOCK_COMMERCIAL_MATCHES?: string
+  VIDEO_AUDIO_CATALOG_ENROLLMENT_ENABLED?: string
   AGORA_APP_ID?: string
   AGORA_APP_CERTIFICATE?: string
   AGORA_CLOUD_RECORDING_BASE_URL?: string
@@ -284,6 +390,9 @@ export type Env = {
   STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI?: string
   STORY_COORDINATOR_GAS_LIMIT_MAX?: string
   STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS?: string
+  // Minimum per-field EIP-1559 replacement bump. Replacement signing fails
+  // closed when absent or below the reviewed 10% Aeneid floor.
+  STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS?: string
   STORY_COORDINATOR_FINALITY_CONFIRMATIONS?: string
   STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK?: string
   STORY_COORDINATOR_BACKLOG_ALERT_MS?: string
@@ -291,9 +400,7 @@ export type Env = {
   // Unattended booking-settlement cron gate. Missing/empty/invalid = disabled; only "true" enables.
   // Stays off until migrations 1103/1104 are applied and the Base Sepolia smoke has passed.
   BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
-  // Legacy community-scoped booking settlement sweep. The global booking path is canonical; this
-  // remains fail-closed unless an operator explicitly opts into sweeping old community D1 rows.
-  LEGACY_COMMUNITY_BOOKINGS_SETTLEMENT_CRON_ENABLED?: string
+  BOOKINGS_PAYMENT_REVERIFICATION_CRON_ENABLED?: string
   // When true, attendance-ambiguous due bookings are moved to disputed/pending operator review
   // instead of being left untouched by the settlement cron.
   BOOKING_SETTLEMENT_AMBIGUOUS_REVIEW_ENABLED?: string
@@ -304,12 +411,30 @@ export type Env = {
   REWARDS_READS_ENABLED?: string
   REWARDS_PAYOUTS_ENABLED?: string
   REWARDS_CAMPAIGNS_ENABLED?: string
+  /** At-least-once hint transport; the community outbox and cron remain authoritative. */
+  REWARD_QUALIFICATION_WAKEUPS?: Queue<import("./lib/rewards/reward-qualification-wakeup").RewardQualificationWakeup>
+  /** Producer rollout gate. Missing or any value other than "true" disables sends. */
+  REWARD_QUALIFICATION_WAKEUP_ENQUEUE_ENABLED?: string
+  /** Consumer rollout gate. Missing or any value other than "true" acknowledges telemetry-only hints. */
+  REWARD_QUALIFICATION_WAKEUP_CONSUMER_ENABLED?: string
+  /** Comma-separated internal community IDs admitted to the wake-up canary. Empty admits none. */
+  REWARD_QUALIFICATION_WAKEUP_COMMUNITY_IDS?: string
   // Direct Base USDC campaign funding. These are required when campaigns are enabled;
   // missing or invalid values keep campaign mutation paths fail-closed.
   REWARDS_CAMPAIGN_CHAIN_ID?: string
   REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS?: string
   REWARDS_CAMPAIGN_TREASURY_ADDRESS?: string
   REWARDS_CAMPAIGN_RPC_URL?: string
+  /** Dark rollout gate. When true, stale/unknown/insolvent observations stop new funding and credits. */
+  REWARDS_SOLVENCY_FREEZE_ENABLED?: string
+  /** Maximum age of the last successful treasury observation. Defaults to 15 minutes. */
+  REWARDS_SOLVENCY_MAX_OBSERVATION_AGE_SECONDS?: string
+  /** Maximum age of the last block-pinned vault capacity observation. */
+  REWARDS_CAPACITY_MAX_OBSERVATION_AGE_SECONDS?: string
+  /** Maximum age of a song's oldest submitted payout before a high-urgency alert. */
+  REWARDS_PAYOUT_MAX_WAIT_SECONDS?: string
+  /** Alert-only signer gas floor; this is operational friction, never a security cap. */
+  REWARDS_LIT_SIGNER_MIN_ETH_WEI?: string
   // Optional comma-separated public post IDs. When set, self-serve campaign
   // creation fails closed for every other post.
   REWARDS_CAMPAIGN_POST_ALLOWLIST?: string
@@ -324,6 +449,15 @@ export type Env = {
   REWARDS_CAMPAIGN_MAX_DURATION_SECONDS?: string
   // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
   REWARDS_IDENTITY_PROVIDER?: string
+  /**
+   * Explicit opt-in for nationality shadow evaluation and minimal decision
+   * writes. Canonical nationality evidence is only read transiently and is not
+   * copied into rewards storage. Unset or any value other than "true" pauses
+   * evaluation without affecting rewards.
+   */
+  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED?: string
+  /** Identity provider evaluated by the shadow path; independent of money-path eligibility. */
+  REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER?: string
   REWARDS_DAILY_STREAK_CENTS?: string
   REWARDS_DAILY_USER_CAP_CENTS?: string
   REWARDS_STREAK_MILESTONE_7_CENTS?: string
@@ -376,7 +510,11 @@ export type Env = {
   SONG_STUDY_GENERATION_TARGET_LANGUAGE_LIMIT?: string
   SONG_STUDY_ATTEMPT_TIMING_LOGS?: string
   SONG_STUDY_DUE_REVIEW_SERVING_ENABLED?: string
+  /** Additive orchestration-v2 rollout gate; remains off until each study surface renders ungradable retries. */
+  SONG_STUDY_UNGRADABLE_RERECORD_ENABLED?: string
   SONG_STUDY_STREAK_WRITES_ENABLED?: string
+  TELEGRAM_STUDY_VOICE_ENABLED?: string
+  TELEGRAM_STUDY_VOICE_COMMUNITY_IDS?: string
   OPENROUTER_TIMEOUT_MS?: string
   OPENROUTER_VISUAL_POLICY_MODEL?: string
   OPENROUTER_VISUAL_POLICY_TIMEOUT_MS?: string
@@ -416,5 +554,10 @@ export type Env = {
   HNS_NAMESPACE_REVALIDATION_INTERVAL_SECONDS?: string
   HNS_NAMESPACE_REVALIDATION_VALIDITY_SECONDS?: string
   HNS_NAMESPACE_REVALIDATION_BATCH_SIZE?: string
+  // Root-scoped DS/DNSSEC/redundancy observer. Strict "true" enables; dark by default.
+  HNS_ROOT_OBSERVER_ENABLED?: string
+  // Defaults to the five-minute evidence cadence required by the freshness model.
+  HNS_ROOT_OBSERVER_INTERVAL_SECONDS?: string
+  HNS_ROOT_OBSERVER_BATCH_SIZE?: string
   HNS_CHALLENGE_TTL_HOURS?: string
 }

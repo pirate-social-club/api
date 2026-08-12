@@ -26,6 +26,7 @@ import {
   setIdentityWalletAttachment,
 } from "./auth-db-user-queries"
 import { listIdentityWallets } from "./upstream-wallets"
+import { logPipelineError, logPipelineInfo, type PipelineLogFields } from "../observability/pipeline-log"
 import { listCreatedCommunityRowsByCreatorUserId } from "./auth-db-community-queries"
 import {
   hasUniqueConstraintField,
@@ -125,6 +126,51 @@ async function resolveExistingUserIdForWalletIdentity(
   return [...userIds][0] ?? null
 }
 
+// Identity exchange is the one hot path that opens a control-plane write
+// transaction on every login, and its stages are otherwise indistinguishable
+// from the outside: a stall anywhere between BEGIN and COMMIT presents as a
+// request that never responds. Recording each awaited stage turns that into a
+// named boundary. See the 2026-07-31 staging incident, where wallet-bearing
+// exchanges hung for minutes with no statement reaching Postgres.
+class IdentityExchangeStages {
+  private readonly stages: Array<[string, number]> = []
+  private current: { name: string; startedAt: number } | null = null
+
+  async run<T>(name: string, operation: () => Promise<T>): Promise<T> {
+    const startedAt = Date.now()
+    this.current = { name, startedAt }
+    try {
+      const result = await operation()
+      this.stages.push([name, Date.now() - startedAt])
+      this.current = null
+      return result
+    } catch (error) {
+      this.stages.push([name, Date.now() - startedAt])
+      throw error
+    }
+  }
+
+  private fields(): PipelineLogFields {
+    return {
+      stages: this.stages.map(([name, elapsedMs]) => `${name}=${elapsedMs}ms`).join(" "),
+      total_ms: this.stages.reduce((total, [, elapsedMs]) => total + elapsedMs, 0),
+    }
+  }
+
+  logSuccess(hasWallet: boolean): void {
+    logPipelineInfo("auth identity exchange completed", { ...this.fields(), has_wallet: hasWallet })
+  }
+
+  logFailure(hasWallet: boolean, error: unknown): void {
+    logPipelineError("auth identity exchange failed", {
+      ...this.fields(),
+      has_wallet: hasWallet,
+      failed_stage: this.current?.name ?? this.stages.at(-1)?.[0] ?? "unknown",
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
 export class DatabaseIdentityRepository {
   constructor(private readonly client: Client) {}
 
@@ -136,24 +182,53 @@ export class DatabaseIdentityRepository {
     const provider = identity.provider
     const providerSubject = identity.providerSubject
     const providerUserRef = identity.providerUserRef ?? providerSubject
-    const tx = await this.client.transaction("write")
+    const stages = new IdentityExchangeStages()
+    const hasWallet = listIdentityWallets(identity).length > 0
+    try {
+      return await this.exchangeIdentityStages({ identity, provider, providerSubject, providerUserRef, stages })
+    } catch (error) {
+      stages.logFailure(hasWallet, error)
+      throw error
+    }
+  }
+
+  private async exchangeIdentityStages(input: {
+    identity: UpstreamIdentity
+    provider: string
+    providerSubject: string
+    providerUserRef: string
+    stages: IdentityExchangeStages
+  }): Promise<SessionSnapshot> {
+    const { identity, provider, providerSubject, providerUserRef, stages } = input
+    const hasWallet = listIdentityWallets(identity).length > 0
+    const tx = await stages.run("tx_begin", () => this.client.transaction("write"))
     let resolvedUserId: string | null = null
 
     try {
-      const existing = await findActiveAuthProviderLink(tx, provider, providerSubject)
+      const existing = await stages.run(
+        "provider_link_lookup",
+        () => findActiveAuthProviderLink(tx, provider, providerSubject),
+      )
       if (existing) {
         resolvedUserId = existing.user_id
         const updatedAt = nowIso()
-        await reconcileWalletAttachments(tx, {
-          userId: resolvedUserId,
+        const linkedUserId = resolvedUserId
+        await stages.run("wallet_reconcile", () => reconcileWalletAttachments(tx, {
+          userId: linkedUserId,
           identity,
           updatedAt,
-        })
-        await initializePrimaryWalletIfNeeded(tx, { userId: resolvedUserId, identity, updatedAt })
+        }))
+        await stages.run(
+          "primary_wallet_init",
+          () => initializePrimaryWalletIfNeeded(tx, { userId: linkedUserId, identity, updatedAt }),
+        )
       } else {
         const createdAt = nowIso()
         const authProviderLinkId = makeId("apl")
-        const existingWalletUserId = await resolveExistingUserIdForWalletIdentity(tx, identity)
+        const existingWalletUserId = await stages.run(
+          "wallet_owner_lookup",
+          () => resolveExistingUserIdForWalletIdentity(tx, identity),
+        )
 
         if (existingWalletUserId) {
           await tx.execute({
@@ -174,12 +249,15 @@ export class DatabaseIdentityRepository {
             args: [authProviderLinkId, existingWalletUserId, provider, providerSubject, providerUserRef, createdAt],
           })
 
-          await reconcileWalletAttachments(tx, {
+          await stages.run("wallet_reconcile", () => reconcileWalletAttachments(tx, {
             userId: existingWalletUserId,
             identity,
             updatedAt: createdAt,
-          })
-          await initializePrimaryWalletIfNeeded(tx, { userId: existingWalletUserId, identity, updatedAt: createdAt })
+          }))
+          await stages.run(
+            "primary_wallet_init",
+            () => initializePrimaryWalletIfNeeded(tx, { userId: existingWalletUserId, identity, updatedAt: createdAt }),
+          )
 
           resolvedUserId = existingWalletUserId
         } else {
@@ -221,7 +299,7 @@ export class DatabaseIdentityRepository {
                     tier,
                     issuance_source,
                     redirect_target_global_handle_id,
-                    price_paid_usd,
+                    price_paid_cents,
                     free_rename_consumed,
                     issued_at,
                     replaced_at,
@@ -277,18 +355,21 @@ export class DatabaseIdentityRepository {
             args: [authProviderLinkId, userId, provider, providerSubject, providerUserRef, createdAt],
           })
 
-          await reconcileWalletAttachments(tx, {
+          await stages.run("wallet_reconcile", () => reconcileWalletAttachments(tx, {
             userId,
             identity,
             updatedAt: createdAt,
-          })
-          await initializePrimaryWalletIfNeeded(tx, { userId, identity, updatedAt: createdAt })
+          }))
+          await stages.run(
+            "primary_wallet_init",
+            () => initializePrimaryWalletIfNeeded(tx, { userId, identity, updatedAt: createdAt }),
+          )
 
           resolvedUserId = userId
         }
       }
 
-      await tx.commit()
+      await stages.run("commit", () => tx.commit())
     } catch (error) {
       try {
         await tx.rollback()
@@ -321,7 +402,10 @@ export class DatabaseIdentityRepository {
       throw internalError("Resolved user id is missing after exchange")
     }
 
-    return await loadSnapshot(this.client, resolvedUserId)
+    const snapshotUserId = resolvedUserId
+    const snapshot = await stages.run("snapshot_load", () => loadSnapshot(this.client, snapshotUserId))
+    stages.logSuccess(hasWallet)
+    return snapshot
   }
 
   async getUserById(userId: string): Promise<User | null> {

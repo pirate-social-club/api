@@ -1,11 +1,20 @@
 import type { Env } from "../../env"
 import { notFoundError, providerUnavailable } from "../errors"
 import { resolveFilebaseConfig } from "./filebase-config"
-import { buildS3PresignedUrl, buildS3SignedRequest } from "./s3-signing"
+import { buildS3PresignedUrl, buildS3SignedRequest, type S3SigningConfig } from "./s3-signing"
 
 const encoder = new TextEncoder()
 const FILEBASE_REQUEST_TIMEOUT_MS = 30_000
 const FILEBASE_MULTIPART_COMPLETE_TIMEOUT_MS = 120_000
+
+type FilebaseRequestConfig = {
+  env: Env
+  config?: S3SigningConfig
+}
+
+function requestConfig(input: FilebaseRequestConfig): S3SigningConfig {
+  return input.config ?? resolveFilebaseConfig(input.env)
+}
 
 export type CompletedMultipartPart = {
   partNumber: number
@@ -62,6 +71,11 @@ function providerErrorMessage(label: string, response: Response, responseText: s
   return `${label} failed with status ${response.status}${responseText ? `: ${responseText}` : ""}`
 }
 
+function parseContentRangeTotal(value: string | null): number | null {
+  const match = value?.trim().match(/^bytes \d+-\d+\/(\d+)$/i)
+  return match?.[1] ? parseRequiredInteger(match[1], "Content-Range") : null
+}
+
 async function requireProviderOk(response: Response, label: string): Promise<string> {
   const responseText = await providerResponseText(response)
   if (!response.ok) {
@@ -113,7 +127,9 @@ export async function createMultipartUpload(input: {
 
 export async function headObject(input: {
   env: Env
+  config?: S3SigningConfig
   objectKey: string
+  timeoutMs?: number
 }): Promise<{
   contentLength: number
   contentType: string | null
@@ -122,12 +138,44 @@ export async function headObject(input: {
 }> {
   const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "HEAD",
-    config: resolveFilebaseConfig(input.env),
+    config: requestConfig(input),
     objectKey: input.objectKey,
     bodyHashMode: "empty",
-  }), "Filebase object HEAD")
+  }), "Filebase object HEAD", input.timeoutMs)
   if (response.status === 404) {
     throw notFoundError("Object not found")
+  }
+  // Some S3-compatible gateways reject header-authenticated HEAD requests from
+  // edge runtimes while accepting the equivalent presigned range GET. Keep
+  // HEAD as the cheap, normal path and use a one-byte GET only for that
+  // specific response. Presigning avoids the gateway-specific rejection of
+  // edge-runtime Authorization headers while retaining object authorization.
+  if (response.status === 403) {
+    const rangeUrl = await buildS3PresignedUrl({
+      method: "GET",
+      config: requestConfig(input),
+      objectKey: input.objectKey,
+      bodyHashMode: "unsigned",
+      headers: { range: "bytes=0-0" },
+    })
+    const rangeResponse = await fetchFilebaseWithTimeout(new Request(rangeUrl.toString(), {
+      method: "GET",
+      headers: { range: "bytes=0-0" },
+    }), "Filebase object range GET", input.timeoutMs)
+    if (rangeResponse.status === 404) {
+      throw notFoundError("Object not found")
+    }
+    if (!rangeResponse.ok) {
+      throw providerUnavailable(providerErrorMessage("Filebase object HEAD", rangeResponse, await providerResponseText(rangeResponse)))
+    }
+    const contentRangeTotal = parseContentRangeTotal(rangeResponse.headers.get("content-range"))
+    await rangeResponse.arrayBuffer()
+    return {
+      contentLength: contentRangeTotal ?? parseRequiredInteger(rangeResponse.headers.get("content-length"), "Content-Length"),
+      contentType: rangeResponse.headers.get("content-type")?.trim() || null,
+      etag: rangeResponse.headers.get("etag")?.trim() || null,
+      cid: rangeResponse.headers.get("x-amz-meta-cid")?.trim() || null,
+    }
   }
   if (!response.ok) {
     throw providerUnavailable(providerErrorMessage("Filebase object HEAD", response, await providerResponseText(response)))
@@ -142,6 +190,7 @@ export async function headObject(input: {
 
 export async function completeMultipartUpload(input: {
   env: Env
+  config?: S3SigningConfig
   objectKey: string
   uploadId: string
   parts: ReadonlyArray<CompletedMultipartPart>
@@ -157,7 +206,7 @@ export async function completeMultipartUpload(input: {
   const body = encoder.encode(`<CompleteMultipartUpload>${partsXml}</CompleteMultipartUpload>`)
   const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "POST",
-    config: resolveFilebaseConfig(input.env),
+    config: requestConfig(input),
     objectKey: input.objectKey,
     query: { uploadId: input.uploadId },
     headers: {
@@ -182,6 +231,7 @@ export async function completeMultipartUpload(input: {
 
 export async function abortMultipartUpload(input: {
   env: Env
+  config?: S3SigningConfig
   objectKey: string
   uploadId: string
 }): Promise<void> {
@@ -189,7 +239,7 @@ export async function abortMultipartUpload(input: {
   try {
     response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
       method: "DELETE",
-      config: resolveFilebaseConfig(input.env),
+      config: requestConfig(input),
       objectKey: input.objectKey,
       query: { uploadId: input.uploadId },
       bodyHashMode: "empty",
@@ -211,6 +261,7 @@ export async function abortMultipartUpload(input: {
 
 export async function listParts(input: {
   env: Env
+  config?: S3SigningConfig
   objectKey: string
   uploadId: string
   partNumberMarker?: number | null
@@ -229,7 +280,7 @@ export async function listParts(input: {
   }
   const response = await fetchFilebaseWithTimeout(await buildS3SignedRequest({
     method: "GET",
-    config: resolveFilebaseConfig(input.env),
+    config: requestConfig(input),
     objectKey: input.objectKey,
     query,
     bodyHashMode: "empty",
@@ -258,6 +309,7 @@ export async function listParts(input: {
 
 export async function buildUploadPartPresignedUrl(input: {
   env: Env
+  config?: S3SigningConfig
   objectKey: string
   uploadId: string
   partNumber: number
@@ -267,7 +319,7 @@ export async function buildUploadPartPresignedUrl(input: {
 }): Promise<URL> {
   return await buildS3PresignedUrl({
     method: "PUT",
-    config: resolveFilebaseConfig(input.env),
+    config: requestConfig(input),
     objectKey: input.objectKey,
     query: {
       partNumber: String(input.partNumber),

@@ -5,7 +5,15 @@ import type { RightsHoldType } from "../rights/rights-review-types"
 
 // Video attribution guardrail: every run records a media_analysis_results row;
 // outcomes that need action open a rights_review_cases row and create a
-// rights_holds row that commerce/delivery gates can enforce.
+// rights_holds row that commerce/delivery gates can enforce. Custom-bucket
+// matches are split by matchSource: platform video-audio entries are a
+// repost-identity signal only (log-only, never enforced); only platform song
+// matches drive the attribution outcomes below. Video-audio catalog enrollment
+// evidence lives in authenticity_signals_json; post deletion unenrolls the
+// bucket entry asynchronously and keeps a redacted tombstone for measurement.
+// media_analysis_results is the canonical candidate-signal record for repost
+// detection: a candidate signal never establishes identity, ownership,
+// suppression, or payout entitlement (docs/rights-attribution-remediation.md).
 
 type VideoRightsOutcome =
   | "allow"
@@ -15,8 +23,11 @@ type VideoRightsOutcome =
 
 type VideoRightsCaseTrigger = "acrcloud_match" | "declared_reference_mismatch"
 
+export type VideoRightsAcrMatchSource = "platform_song" | "platform_video_audio"
+
 export type VideoRightsAcrCustomMatch = {
   song_artifact_bundle_id: string | null
+  matchSource: VideoRightsAcrMatchSource
   raw: Record<string, unknown>
 }
 
@@ -97,12 +108,16 @@ export function computeVideoRightsOutcome(input: {
   }
 
   const declaredBundleIds = new Set(input.declared.declaredBundleIds)
-  const matchedBundleIds = input.acr.customMatches
+  // Only platform song matches participate in rights enforcement; platform
+  // video-audio matches are a repost-identity signal and stay log-only.
+  const songMatches = input.acr.customMatches.filter((match) => match.matchSource === "platform_song")
+  const videoAudioMatches = input.acr.customMatches.filter((match) => match.matchSource === "platform_video_audio")
+  const matchedBundleIds = songMatches
     .map((match) => match.song_artifact_bundle_id)
     .filter((id): id is string => Boolean(id))
   const undeclaredMatches = matchedBundleIds.filter((id) => !declaredBundleIds.has(id))
   const declarationExists = declaredBundleIds.size > 0 || input.declared.unresolvedRefs.length > 0
-  const hasCustomMatch = input.acr.customMatches.length > 0
+  const hasCustomMatch = songMatches.length > 0
   const hasMusicMatch = input.acr.musicMatches.length > 0
 
   if (hasMusicMatch) {
@@ -119,6 +134,14 @@ export function computeVideoRightsOutcome(input: {
       policyReasonCode: "commercial_catalog_match",
       policyReason: "Soundtrack matches commercial music that is not available for reuse on this platform.",
       caseTrigger: "acrcloud_match",
+    }
+  }
+  if (!hasCustomMatch && videoAudioMatches.length > 0) {
+    return {
+      outcome: "allow",
+      policyReasonCode: "platform_video_audio_match",
+      policyReason: "Soundtrack matches platform video audio; the match is a platform-identity signal only and does not affect rights enforcement.",
+      caseTrigger: null,
     }
   }
   if (hasCustomMatch && matchedBundleIds.length > 0 && undeclaredMatches.length === 0 && declaredBundleIds.size > 0) {
@@ -338,4 +361,160 @@ export async function persistVideoRightsAnalysis(
   }
 
   return { mediaAnalysisResultId, rightsReviewCaseId }
+}
+
+function parseAuthenticitySignals(raw: unknown): Record<string, unknown> | null {
+  if (typeof raw !== "string" || !raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // Preserve forward progress if a legacy row contains malformed evidence.
+  }
+  return null
+}
+
+// Unenrollment outcomes that mean the bucket no longer holds the fingerprint;
+// anything else (including a failed attempt) leaves the enrollment active.
+const VIDEO_AUDIO_UNENROLL_SUCCESS_OUTCOMES = new Set(["deleted", "already_missing"])
+
+export type VideoAudioCatalogEnrollmentEvidence = {
+  mediaAnalysisResultId: string
+  authenticitySignals: Record<string, unknown>
+  enrollment: Record<string, unknown>
+}
+
+// Latest active video-audio catalog enrollment for a post: a media_analysis_results
+// row whose evidence shows a synced enrollment with no later successful unenrollment.
+// Rows with malformed evidence are skipped rather than blocking the caller.
+export async function findSyncedVideoAudioCatalogEnrollment(input: {
+  client: Pick<Client, "execute">
+  postId: string
+}): Promise<VideoAudioCatalogEnrollmentEvidence | null> {
+  const result = await input.client.execute({
+    sql: `
+      SELECT media_analysis_result_id, authenticity_signals_json
+      FROM media_analysis_results
+      WHERE source_post_id = ?1
+      ORDER BY created_at DESC, media_analysis_result_id DESC
+    `,
+    args: [input.postId],
+  })
+  for (const row of result.rows) {
+    const authenticitySignals = parseAuthenticitySignals(row.authenticity_signals_json)
+    if (!authenticitySignals) {
+      continue
+    }
+    const enrollment = authenticitySignals.video_audio_catalog_enrollment
+    if (!enrollment || typeof enrollment !== "object" || Array.isArray(enrollment)) {
+      continue
+    }
+    const enrollmentRecord = enrollment as Record<string, unknown>
+    if (enrollmentRecord.synced !== true) {
+      continue
+    }
+    const unenrollment = authenticitySignals.video_audio_catalog_unenrollment
+    const unenrollmentOutcome = unenrollment && typeof unenrollment === "object" && !Array.isArray(unenrollment)
+      ? (unenrollment as Record<string, unknown>).outcome
+      : null
+    if (typeof unenrollmentOutcome === "string" && VIDEO_AUDIO_UNENROLL_SUCCESS_OUTCOMES.has(unenrollmentOutcome)) {
+      continue
+    }
+    const mediaAnalysisResultId = row.media_analysis_result_id
+    if (typeof mediaAnalysisResultId !== "string" || !mediaAnalysisResultId) {
+      continue
+    }
+    return { mediaAnalysisResultId, authenticitySignals, enrollment: enrollmentRecord }
+  }
+  return null
+}
+
+export async function hasSyncedVideoAudioCatalogEnrollment(input: {
+  client: Pick<Client, "execute">
+  postId: string
+}): Promise<boolean> {
+  return Boolean(await findSyncedVideoAudioCatalogEnrollment(input))
+}
+
+export async function persistVideoAudioCatalogEnrollment(input: {
+  client: Pick<Client, "execute">
+  mediaAnalysisResultId: string
+  catalogEnrollment: Record<string, unknown>
+  updatedAt?: string
+}): Promise<void> {
+  const existing = await input.client.execute({
+    sql: `
+      SELECT authenticity_signals_json
+      FROM media_analysis_results
+      WHERE media_analysis_result_id = ?1
+      LIMIT 1
+    `,
+    args: [input.mediaAnalysisResultId],
+  })
+  const authenticitySignals = parseAuthenticitySignals(existing.rows[0]?.authenticity_signals_json) ?? {}
+  await input.client.execute({
+    sql: `
+      UPDATE media_analysis_results
+      SET authenticity_signals_json = ?2,
+          updated_at = ?3
+      WHERE media_analysis_result_id = ?1
+    `,
+    args: [
+      input.mediaAnalysisResultId,
+      JSON.stringify({
+        ...authenticitySignals,
+        video_audio_catalog_enrollment: input.catalogEnrollment,
+      }),
+      input.updatedAt ?? nowIso(),
+    ],
+  })
+}
+
+// Records the unenrollment outcome next to the enrollment tombstone. On
+// author-initiated deletion the uploader identity is redacted from the stored
+// evidence; post/asset/sample-window metadata stays for measurement integrity.
+export async function persistVideoAudioCatalogUnenrollment(input: {
+  client: Pick<Client, "execute">
+  mediaAnalysisResultId: string
+  unenrollment: Record<string, unknown>
+  redactUploader?: boolean
+  updatedAt?: string
+}): Promise<void> {
+  const existing = await input.client.execute({
+    sql: `
+      SELECT authenticity_signals_json
+      FROM media_analysis_results
+      WHERE media_analysis_result_id = ?1
+      LIMIT 1
+    `,
+    args: [input.mediaAnalysisResultId],
+  })
+  const authenticitySignals = parseAuthenticitySignals(existing.rows[0]?.authenticity_signals_json) ?? {}
+  const enrollment = authenticitySignals.video_audio_catalog_enrollment
+  const redactedEnrollment = input.redactUploader && enrollment && typeof enrollment === "object" && !Array.isArray(enrollment)
+    ? Object.fromEntries(
+      Object.entries(enrollment as Record<string, unknown>).filter(([key]) => key !== "uploader"),
+    )
+    : enrollment
+  await input.client.execute({
+    sql: `
+      UPDATE media_analysis_results
+      SET authenticity_signals_json = ?2,
+          updated_at = ?3
+      WHERE media_analysis_result_id = ?1
+    `,
+    args: [
+      input.mediaAnalysisResultId,
+      JSON.stringify({
+        ...authenticitySignals,
+        ...(redactedEnrollment ? { video_audio_catalog_enrollment: redactedEnrollment } : {}),
+        video_audio_catalog_unenrollment: input.unenrollment,
+      }),
+      input.updatedAt ?? nowIso(),
+    ],
+  })
 }

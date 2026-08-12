@@ -3,6 +3,7 @@
 // against the actual bookings.payment_intents constraints.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   createPaymentIntentRepository, createPaymentIntentTxWriteRepository, createPaymentIntentWriteRepository,
@@ -10,6 +11,9 @@ import {
 } from "./payment-intent-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for bookings payment intent repository PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_payment_intent_repo_test";
 
@@ -101,6 +105,10 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "payment-intent-repository-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("createOrGet is idempotent, replay-validates immutable fields, and preserves uint256 amount strings", async () => {
@@ -228,6 +236,87 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
     }
   });
 
+  test("pending discovery is booker-scoped and bounded by creation time", async () => {
+    await seedHold("hold_pi_pending_own");
+    await seedHold("hold_pi_pending_old");
+    await seedHold("hold_pi_pending_foreign");
+    await repoDb.unsafe(
+      `UPDATE bookings.holds
+       SET booker_user_id = CASE
+         WHEN hold_id = 'hold_pi_pending_own' THEN 'booker_pending'
+         WHEN hold_id = 'hold_pi_pending_old' THEN 'booker_pending'
+         ELSE 'booker_foreign'
+       END
+       WHERE hold_id IN ('hold_pi_pending_own', 'hold_pi_pending_old', 'hold_pi_pending_foreign')`,
+    );
+    const repo = writeRepo();
+    const own = await repo.createOrGetPaymentIntent(inputFor("hold_pi_pending_own", {
+      createdAt: "2026-06-10T10:00:00Z",
+    }));
+    const old = await repo.createOrGetPaymentIntent(inputFor("hold_pi_pending_old", {
+      createdAt: "2026-06-07T10:00:00Z",
+    }));
+    const foreign = await repo.createOrGetPaymentIntent(inputFor("hold_pi_pending_foreign", {
+      createdAt: "2026-06-10T10:00:00Z",
+    }));
+    if (!own.ok || !old.ok || !foreign.ok) throw new Error("expected creates");
+
+    const records = await repo.listRecentPaymentIntentsForBooker(
+      "booker_pending",
+      "2026-06-08T10:00:00Z",
+      50,
+    );
+    expect(records.map((record) => record.intent.holdId)).toEqual(["hold_pi_pending_own"]);
+    expect(records[0]).toMatchObject({
+      bookerUserId: "booker_pending",
+      hostUserId: "host_hold_pi_pending_own",
+      holdStatus: "active",
+      bookingId: null,
+    });
+  });
+
+  test("custody refund worklist rotates failed attempts behind untouched obligations", async () => {
+    await seedHold("hold_pi_refund_fairness_old");
+    await seedHold("hold_pi_refund_fairness_new");
+    const repo = writeRepo();
+    const old = await repo.createOrGetPaymentIntent(inputFor("hold_pi_refund_fairness_old"));
+    const fresh = await repo.createOrGetPaymentIntent(inputFor("hold_pi_refund_fairness_new"));
+    if (!old.ok || !fresh.ok) throw new Error("expected creates");
+
+    for (const [intent, suffix, detectedAt] of [
+      [old.intent, "old", "2026-06-10T10:00:00Z"],
+      [fresh.intent, "new", "2026-06-10T10:10:00Z"],
+    ] as const) {
+      const reserved = await repo.reservePaymentIntentForVerification({
+        paymentIntentId: intent.paymentIntentId,
+        claimToken: `claim_fairness_${suffix}`,
+        claimExpiresAt: "2026-06-10T10:30:00Z",
+        normalizedTxRef: `0xfairness_${suffix}`,
+        walletAttachmentId: `wallet_fairness_${suffix}`,
+        nowUtc: detectedAt,
+      });
+      if (!reserved.ok) throw new Error(`expected reserve for ${suffix}`);
+      const pending = await repo.markPaymentIntentCustodyRefundPending({
+        paymentIntentId: intent.paymentIntentId,
+        claimToken: `claim_fairness_${suffix}`,
+        observedAmountAtomic: "50000001",
+        senderAddress: "0x0000000000000000000000000000000000000003",
+        reason: "wrong_transfer_amount",
+        nowUtc: detectedAt,
+      });
+      if (!pending) throw new Error(`expected custody obligation for ${suffix}`);
+    }
+
+    await repo.recordCustodyRefundAttemptFailure(
+      old.intent.paymentIntentId,
+      "receipt_pending",
+      "2026-06-10T10:20:00Z",
+    );
+
+    const selected = await repo.listCustodyRefundPendingPaymentIntents(1);
+    expect(selected.map((intent) => intent.paymentIntentId)).toEqual([fresh.intent.paymentIntentId]);
+  });
+
   test("verified, rejected, expired, and consumed transitions are claim/status guarded", async () => {
     await seedHold("hold_pi_verified");
     await seedHold("hold_pi_rejected");
@@ -292,6 +381,118 @@ describe.skipIf(!RUN)("bookings payment intent repository (real Postgres)", () =
       walletAttachmentId: "wallet_expired",
       nowUtc: "2026-06-10T10:01:00Z",
     })).toEqual({ ok: false, reason: "not-reservable" });
+  });
+
+  test("never expires a claimed unresolved payment and lists it for server re-verification", async () => {
+    await seedHold("hold_pi_claimed_unresolved", { expiresAt: "2026-06-10T10:01:00Z" });
+    const repo = writeRepo();
+    const created = await repo.createOrGetPaymentIntent(inputFor("hold_pi_claimed_unresolved", {
+      quoteExpiresAt: "2026-06-10T10:01:00Z",
+      holdExpiresAt: "2026-06-10T10:01:00Z",
+    }));
+    if (!created.ok) throw new Error("expected create");
+    const reserved = await repo.reservePaymentIntentForVerification({
+      paymentIntentId: created.intent.paymentIntentId,
+      claimToken: "claim_unresolved",
+      claimExpiresAt: "2026-06-10T10:01:30Z",
+      normalizedTxRef: "0xclaimed_unresolved",
+      walletAttachmentId: "wallet_claimed_unresolved",
+      nowUtc: "2026-06-10T10:00:00Z",
+    });
+    if (!reserved.ok) throw new Error("expected reserve");
+    const failed = await repo.markPaymentIntentVerificationFailed({
+      paymentIntentId: created.intent.paymentIntentId,
+      claimToken: "claim_unresolved",
+      nowUtc: "2026-06-10T10:02:00Z",
+    });
+    expect(failed).toMatchObject({
+      status: "verification_failed",
+      claimedTxRef: "0xclaimed_unresolved",
+      consumedWalletAttachmentId: "wallet_claimed_unresolved",
+    });
+
+    expect(await repo.expirePaymentIntentIfDue(
+      created.intent.paymentIntentId,
+      "2026-06-10T10:20:00Z",
+    )).toBeNull();
+    const unresolved = await repo.listClaimedUnresolvedPaymentIntents("2026-06-10T10:20:00Z", 50);
+    expect(unresolved.find((record) => record.intent.paymentIntentId === created.intent.paymentIntentId))
+      .toMatchObject({
+        bookerUserId: "booker_payment",
+        holdStatus: "active",
+        intent: {
+          status: "verification_failed",
+          claimedTxRef: "0xclaimed_unresolved",
+        },
+      });
+  });
+
+  test("worklist covers every claimed recoverable state without stealing a live lease", async () => {
+    const repo = writeRepo();
+    const nowUtc = "2026-06-10T10:10:00Z";
+    const states = [
+      { name: "failed", claimExpiresAt: "2026-06-10T10:05:00Z" },
+      { name: "expired_lease", claimExpiresAt: "2026-06-10T10:05:00Z" },
+      { name: "live_lease", claimExpiresAt: "2026-06-10T10:15:00Z" },
+      { name: "verified", claimExpiresAt: "2026-06-10T10:05:00Z" },
+    ] as const;
+
+    const intents = new Map<string, string>();
+    for (const state of states) {
+      const holdId = `hold_pi_worklist_${state.name}`;
+      await seedHold(holdId);
+      const created = await repo.createOrGetPaymentIntent(inputFor(holdId));
+      if (!created.ok) throw new Error(`expected create for ${state.name}`);
+      intents.set(state.name, created.intent.paymentIntentId);
+      const reserved = await repo.reservePaymentIntentForVerification({
+        paymentIntentId: created.intent.paymentIntentId,
+        claimToken: `claim_${state.name}`,
+        claimExpiresAt: state.claimExpiresAt,
+        normalizedTxRef: `0xworklist_${state.name}`,
+        walletAttachmentId: `wallet_${state.name}`,
+        nowUtc: "2026-06-10T10:00:00Z",
+      });
+      if (!reserved.ok) throw new Error(`expected reserve for ${state.name}`);
+    }
+
+    await repo.markPaymentIntentVerificationFailed({
+      paymentIntentId: intents.get("failed") as string,
+      claimToken: "claim_failed",
+      nowUtc: "2026-06-10T10:01:00Z",
+    });
+    await repo.markPaymentIntentVerified({
+      paymentIntentId: intents.get("verified") as string,
+      claimToken: "claim_verified",
+      verifiedSenderAddress: "0x0000000000000000000000000000000000000003",
+      nowUtc: "2026-06-10T10:01:00Z",
+    });
+
+    const worklist = await repo.listClaimedUnresolvedPaymentIntents(nowUtc, 50);
+    const selected = new Map(worklist.map(({ intent }) => [intent.paymentIntentId, intent.status]));
+    expect(selected.get(intents.get("failed") as string)).toBe("verification_failed");
+    expect(selected.get(intents.get("expired_lease") as string)).toBe("verifying");
+    expect(selected.get(intents.get("verified") as string)).toBe("verified");
+    expect(selected.has(intents.get("live_lease") as string)).toBe(false);
+
+    const reclaim = await repo.reservePaymentIntentForVerification({
+      paymentIntentId: intents.get("expired_lease") as string,
+      claimToken: "claim_expired_lease_reclaimed",
+      claimExpiresAt: "2026-06-10T10:20:00Z",
+      normalizedTxRef: "0xworklist_expired_lease",
+      walletAttachmentId: "wallet_expired_lease",
+      nowUtc,
+    });
+    expect(reclaim.ok).toBe(true);
+
+    const steal = await repo.reservePaymentIntentForVerification({
+      paymentIntentId: intents.get("live_lease") as string,
+      claimToken: "claim_live_lease_stolen",
+      claimExpiresAt: "2026-06-10T10:20:00Z",
+      normalizedTxRef: "0xworklist_live_lease",
+      walletAttachmentId: "wallet_live_lease",
+      nowUtc,
+    });
+    expect(steal).toEqual({ ok: false, reason: "not-reservable" });
   });
 
   test("transaction-bound create rolls back the payment intent", async () => {

@@ -57,6 +57,12 @@ export async function resolvePrimaryWalletAddress(input: {
   env: Env
   userRepository: UserRepository
   userId: string
+  /**
+   * Opt-in escape hatch for local dev/test harnesses where users have no
+   * wallets: substitute the platform Story operator (or CDR writer) address.
+   * Never pass this from production call paths — the platform signer is not
+   * the user's identity in royalty registration or access packages.
+   */
   fallbackToRuntimeSigner?: boolean
 }): Promise<string> {
   const user = await input.userRepository.getUserById(input.userId)
@@ -66,7 +72,7 @@ export async function resolvePrimaryWalletAddress(input: {
   const attachments = await input.userRepository.getWalletAttachmentsByUserId(input.userId)
   const address = getPrimaryWalletSnapshot(user, attachments)
   if (!address?.trim()) {
-    if (input.fallbackToRuntimeSigner !== false) {
+    if (input.fallbackToRuntimeSigner === true) {
       const operator = resolveStoryOperatorDirectSigner(input.env)
       if (operator.ok && operator.value) {
         return operator.value.address

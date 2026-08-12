@@ -8,6 +8,7 @@
 // Runs only when BOOKINGS_REPO_TEST_ADMIN_URL is set. Isolated DB, full teardown, no credentials printed.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import type { Env } from "../../env";
 import {
   getControlPlaneClient, setControlPlanePostgresPoolFactoryForTests, withRequestControlPlaneClients,
@@ -27,6 +28,9 @@ import {
 } from "./host-authoring-service";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for bookings host-config production-path PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_prodpath_test";
 // The URL value only keys the request-scoped cache; the injected factory ignores it and uses repoDb.
@@ -87,6 +91,10 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "host-config-repository-production-path-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("getControlPlaneClient(postgresEnv) throws outside withRequestControlPlaneClients", () => {
@@ -163,6 +171,12 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
           slot_duration_seconds: 1800,
         });
         expect(ruleResult.ok).toBe(true);
+        const warmedAfterRule = await repoDb.unsafe(`
+          SELECT has_available_slot, starting_price_cents
+          FROM bookings.feed_discovery_snapshots
+          WHERE host_user_id = $1
+        `, [hostUserId]) as Array<{ has_available_slot: boolean; starting_price_cents: number }>;
+        expect(warmedAfterRule).toEqual([{ has_available_slot: true, starting_price_cents: 5000 }]);
 
         const exceptionResult = await createAvailabilityException(PG_ENV, hostUserId, {
           kind: "block",
@@ -181,6 +195,32 @@ describe.skipIf(!RUN)("bookings host-config repository (production request-scope
         expect((await listAvailabilityRules(PG_ENV, hostUserId)).map((rule) => rule.ruleId)).toHaveLength(1);
         expect((await listAvailabilityExceptions(PG_ENV, hostUserId)).map((exception) => exception.kind)).toEqual(["block"]);
         expect((await listPriceRules(PG_ENV, hostUserId)).map((price) => price.priceCents)).toEqual([6500]);
+
+        // A config write must replace stale discovery data immediately. With base raised to 7000,
+        // Monday resolves to the 6500 override and Tuesday falls back to 7000, so the real floor is 6500.
+        await repoDb.unsafe(`
+          UPDATE bookings.feed_discovery_snapshots
+          SET has_available_slot = TRUE, starting_price_cents = 1234
+          WHERE host_user_id = $1
+        `, [hostUserId]);
+        const updateResult = await upsertBookingProfile(PG_ENV, hostUserId, {
+          base_price_cents: 7000,
+        });
+        expect(updateResult.ok).toBe(true);
+        const warmedAfterProfileWrite = await repoDb.unsafe(`
+          SELECT has_available_slot, starting_price_cents, valid_until > NOW() AS is_valid
+          FROM bookings.feed_discovery_snapshots
+          WHERE host_user_id = $1
+        `, [hostUserId]) as Array<{
+          has_available_slot: boolean;
+          is_valid: boolean;
+          starting_price_cents: number;
+        }>;
+        expect(warmedAfterProfileWrite).toEqual([{
+          has_available_slot: true,
+          starting_price_cents: 6500,
+          is_valid: true,
+        }]);
       });
     } finally {
       setControlPlanePostgresPoolFactoryForTests(null);

@@ -1,0 +1,150 @@
+import type { HomeFeedItem } from "../../types"
+import { decodePublicUserId } from "../public-ids"
+import { boolOrNull, numberOrNull, requiredNumber, requiredString, rowValue } from "../sql-row"
+import type { InStatement, QueryResult } from "../sql-client"
+
+type FeedBooking = NonNullable<HomeFeedItem["booking"]>
+
+export interface FeedBookingExecutor {
+  execute(statement: InStatement | string): Promise<QueryResult>
+}
+
+export type FeedBookingLookup = (
+  hostUserIds: string[],
+) => Promise<Map<string, FeedBooking>>
+
+export interface FeedBookingDiscovery {
+  bookingByHostUserId: Map<string, FeedBooking>
+  staleHostUserIds: string[]
+}
+
+const DEFAULT_LOOKUP_TIMEOUT_MS = 250
+const LOOKUP_UNAVAILABLE: unique symbol = Symbol("feed-booking-lookup-unavailable")
+
+function uniqueHostUserIds(hostUserIds: string[]): string[] {
+  return [...new Set(hostUserIds.filter((hostUserId) => hostUserId.trim().length > 0))]
+}
+
+/**
+ * Batch-resolves booking discovery metadata. Presence means the host is configured enough to
+ * accept bookings: the profile is published and at least one availability rule exists.
+ */
+export async function listFeedBookingDiscoveryByHostUserIds(
+  executor: FeedBookingExecutor,
+  hostUserIds: string[],
+): Promise<FeedBookingDiscovery> {
+  const uniqueIds = uniqueHostUserIds(hostUserIds)
+  if (uniqueIds.length === 0) {
+    return { bookingByHostUserId: new Map(), staleHostUserIds: [] }
+  }
+
+  const placeholders = uniqueIds.map((_, index) => `?${index + 1}`).join(", ")
+  const result = await executor.execute({
+    sql: `
+      SELECT
+        p.host_user_id,
+        p.base_price_cents,
+        snapshot.has_available_slot,
+        snapshot.starting_price_cents,
+        snapshot.valid_until <= NOW() AS snapshot_is_stale
+      FROM bookings.profiles p
+      INNER JOIN bookings.feed_discovery_snapshots snapshot
+        ON snapshot.host_user_id = p.host_user_id
+      WHERE p.host_user_id IN (${placeholders})
+        AND p.is_published = TRUE
+      ORDER BY p.host_user_id ASC
+    `,
+    args: uniqueIds,
+  })
+
+  const staleHostUserIds: string[] = []
+  const bookingByHostUserId = new Map(result.rows.map((row) => {
+    const hostUserId = requiredString(row, "host_user_id")
+    const basePriceCents = requiredNumber(row, "base_price_cents")
+    const hasAvailableSlot = boolOrNull(rowValue(row, "has_available_slot"))
+    const startingPriceCents = numberOrNull(rowValue(row, "starting_price_cents"))
+    const snapshotIsStale = boolOrNull(rowValue(row, "snapshot_is_stale"))
+    if (hasAvailableSlot === null) {
+      throw new TypeError("Feed booking availability must be a boolean")
+    }
+    if (snapshotIsStale === null) {
+      throw new TypeError("Feed booking snapshot freshness must be a boolean")
+    }
+    if (!Number.isSafeInteger(basePriceCents) || basePriceCents < 0) {
+      throw new TypeError("Feed booking base price must be a non-negative integer")
+    }
+    if (startingPriceCents !== null && (!Number.isSafeInteger(startingPriceCents) || startingPriceCents < 0)) {
+      throw new TypeError("Feed booking starting price must be null or a non-negative integer")
+    }
+    if (hasAvailableSlot !== (startingPriceCents !== null)) {
+      throw new TypeError("Feed booking availability and starting price are inconsistent")
+    }
+    if (snapshotIsStale) staleHostUserIds.push(hostUserId)
+    return [hostUserId, {
+      host_user_id: hostUserId,
+      base_price_cents: basePriceCents,
+      has_available_slot: hasAvailableSlot,
+      starting_price_cents: startingPriceCents,
+      currency: "USDC" as const,
+    }]
+  }))
+
+  return { bookingByHostUserId, staleHostUserIds }
+}
+
+export async function listFeedBookingsByHostUserIds(
+  executor: FeedBookingExecutor,
+  hostUserIds: string[],
+): Promise<Map<string, FeedBooking>> {
+  const discovery = await listFeedBookingDiscoveryByHostUserIds(executor, hostUserIds)
+  return discovery.bookingByHostUserId
+}
+
+function discoverableAuthorUserId(item: HomeFeedItem): string | null {
+  const post = item.post.post
+  if (post.identity_mode !== "public" || post.authorship_mode !== "human_direct") return null
+  const publicUserId = post.author_user?.trim()
+  return publicUserId ? decodePublicUserId(publicUserId) : null
+}
+
+/**
+ * Adds optional booking blocks without changing feed availability. Booking discovery becomes
+ * unavailable on errors or slowness so it cannot take down the home/video feed.
+ */
+export async function decorateHomeFeedItemsWithBookings(input: {
+  items: HomeFeedItem[]
+  lookup: FeedBookingLookup
+  lookupTimeoutMs?: number
+}): Promise<HomeFeedItem[]> {
+  const hostUserIds = uniqueHostUserIds(
+    input.items.flatMap((item) => {
+      const hostUserId = discoverableAuthorUserId(item)
+      return hostUserId ? [hostUserId] : []
+    }),
+  )
+  if (hostUserIds.length === 0) return input.items
+
+  const lookup = input
+    .lookup(hostUserIds)
+    .catch((): typeof LOOKUP_UNAVAILABLE => LOOKUP_UNAVAILABLE)
+  const timeoutMs = Math.max(
+    0,
+    input.lookupTimeoutMs ?? DEFAULT_LOOKUP_TIMEOUT_MS,
+  )
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<typeof LOOKUP_UNAVAILABLE>((resolve) => {
+    timeoutId = setTimeout(() => resolve(LOOKUP_UNAVAILABLE), timeoutMs)
+  })
+  const bookingByHostUserId = await Promise.race([lookup, timeout])
+  if (timeoutId !== undefined) clearTimeout(timeoutId)
+
+  if (bookingByHostUserId === LOOKUP_UNAVAILABLE) {
+    return input.items
+  }
+
+  return input.items.map((item) => {
+    const hostUserId = discoverableAuthorUserId(item)
+    const booking = hostUserId ? bookingByHostUserId.get(hostUserId) : undefined
+    return booking ? { ...item, booking } : item
+  })
+}

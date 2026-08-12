@@ -1,11 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test"
 
 import { createControlPlaneTestClient } from "../../tests/helpers"
+import type { Env } from "../../src/env"
+import { resolveRewardNationalityBindingShadow } from "../../src/lib/rewards/reward-nationality-shadow-evaluator"
 import { resolveActiveRewardIdentity } from "../../src/lib/verification/unique-human-eligibility"
 import type { Client } from "../../src/lib/sql-client"
 import {
+  cleanupStagingRewardNationalityShadowIdentity,
   cleanupStagingRewardIdentity,
+  seedStagingRewardNationalityShadowIdentity,
   seedStagingRewardIdentity,
+  type StagingRewardNationalityShadowSnapshot,
   type StagingRewardIdentitySnapshot,
 } from "./staging-reward-identity"
 
@@ -19,6 +24,10 @@ const ORIGINAL_CAPABILITIES = JSON.stringify({
   gender: { state: "unverified" },
   wallet_score: { state: "unverified" },
 })
+const SHADOW_ENV = {
+  REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED: "true",
+  REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER: "self",
+} as Env
 
 const cleanups: Array<() => Promise<void>> = []
 afterEach(async () => {
@@ -26,7 +35,7 @@ afterEach(async () => {
 })
 
 async function setup(options: { wallet?: boolean; verificationState?: "unverified" | "verified" } = {}) {
-  const database = await createControlPlaneTestClient()
+  const database = await createControlPlaneTestClient({ includeAllMigrations: true })
   cleanups.push(database.cleanup)
   const state = options.verificationState ?? "unverified"
   await database.client.execute({
@@ -68,6 +77,26 @@ async function seed(client: Client): Promise<StagingRewardIdentitySnapshot> {
   const result = await seedStagingRewardIdentity({
     client,
     userId: USER_ID,
+    now: NOW,
+    writeSnapshot: (value) => { snapshot = value },
+  })
+  expect(snapshot).toEqual(result)
+  return result
+}
+
+async function seedNationalityShadow(
+  client: Client,
+  nationality: string | null,
+  provider: "self" | "zkpassport" = "self",
+  projectEligibility = false,
+): Promise<StagingRewardNationalityShadowSnapshot> {
+  let snapshot: StagingRewardNationalityShadowSnapshot | null = null
+  const result = await seedStagingRewardNationalityShadowIdentity({
+    client,
+    userId: USER_ID,
+    provider,
+    projectEligibility,
+    nationality,
     now: NOW,
     writeSnapshot: (value) => { snapshot = value },
   })
@@ -146,5 +175,152 @@ describe("staging reward identity projection", () => {
     })
     expect(Number(nullifiers.rows[0]?.count)).toBe(1)
   })
-})
 
+  test("seeds and exactly cleans up the Self nationality chain without changing reward eligibility", async () => {
+    const client = await setup()
+    const snapshot = await seedNationalityShadow(client, "VNM")
+
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "very")).toBeNull()
+    const rows = await client.execute({
+      sql: `
+        SELECT n.provider, n.mechanism, b.status AS binding_status,
+          a.capability_key, a.status AS attestation_status, a.value_json
+        FROM identity_nullifiers n
+        JOIN reward_identity_bindings b ON b.identity_nullifier_id = n.identity_nullifier_id
+        JOIN user_attestations a ON a.source_identity_nullifier_id = n.identity_nullifier_id
+        WHERE n.identity_nullifier_id = ?1
+      `,
+      args: [snapshot.seed.identity_nullifier_id],
+    })
+    expect(rows.rows[0]).toMatchObject({
+      provider: "self",
+      mechanism: "zk-nullifier",
+      binding_status: "active",
+      capability_key: "nationality",
+      attestation_status: "accepted",
+    })
+    expect(JSON.parse(String(rows.rows[0]?.value_json))).toEqual({ nationality: "VNM" })
+    expect(await resolveRewardNationalityBindingShadow({ env: SHADOW_ENV, client, userId: USER_ID })).toMatchObject({
+      capability: "binding_preview",
+      outcome: "resolved",
+      retryability: "resolved",
+      nationality: "VNM",
+      identityNullifierId: snapshot.seed.identity_nullifier_id,
+    })
+
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("cleaned")
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("already_clean")
+    const leftovers = await client.execute({
+      sql: `
+        SELECT
+          (SELECT COUNT(*) FROM identity_nullifiers WHERE identity_nullifier_id = ?1) AS nullifiers,
+          (SELECT COUNT(*) FROM reward_identity_bindings WHERE reward_identity_binding_id = ?2) AS bindings,
+          (SELECT COUNT(*) FROM user_attestations WHERE user_attestation_id = ?3) AS attestations,
+          (SELECT COUNT(*) FROM verification_sessions WHERE verification_session_id = ?4) AS sessions
+      `,
+      args: [
+        snapshot.seed.identity_nullifier_id,
+        snapshot.seed.reward_identity_binding_id,
+        snapshot.seed.user_attestation_id,
+        snapshot.seed.verification_session_id,
+      ],
+    })
+    expect(leftovers.rows[0]).toEqual({ nullifiers: 0, bindings: 0, attestations: 0, sessions: 0 })
+  })
+
+  test("seeds a bound Self identity without evidence for the retryable shadow path", async () => {
+    const client = await setup({ wallet: false })
+    const snapshot = await seedNationalityShadow(client, null)
+
+    expect(snapshot.seed).toMatchObject({
+      provider: "self",
+      mechanism: "zk-nullifier",
+      nationality: null,
+      verification_session_id: null,
+      user_attestation_id: null,
+    })
+    const rows = await client.execute({
+      sql: `
+        SELECT
+          (SELECT COUNT(*) FROM identity_nullifiers WHERE identity_nullifier_id = ?1) AS nullifiers,
+          (SELECT COUNT(*) FROM reward_identity_bindings WHERE reward_identity_binding_id = ?2) AS bindings,
+          (SELECT COUNT(*) FROM user_attestations WHERE source_identity_nullifier_id = ?1) AS attestations
+      `,
+      args: [snapshot.seed.identity_nullifier_id, snapshot.seed.reward_identity_binding_id],
+    })
+    expect(rows.rows[0]).toEqual({ nullifiers: 1, bindings: 1, attestations: 0 })
+    expect(await resolveRewardNationalityBindingShadow({ env: SHADOW_ENV, client, userId: USER_ID })).toMatchObject({
+      capability: "binding_preview",
+      outcome: "nationality_evidence_missing",
+      retryability: "retryable",
+      nationality: null,
+      identityNullifierId: snapshot.seed.identity_nullifier_id,
+    })
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("cleaned")
+  })
+
+  test("seeds and exactly cleans up a ZKPassport nationality chain", async () => {
+    const client = await setup()
+    const snapshot = await seedNationalityShadow(client, "JPN", "zkpassport", true)
+
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "zkpassport")).toMatchObject({
+      provider: "zkpassport",
+    })
+
+    const rows = await client.execute({
+      sql: `
+        SELECT n.provider, n.mechanism, a.provider AS attestation_provider,
+          a.value_json, s.provider AS session_provider
+        FROM identity_nullifiers n
+        JOIN user_attestations a ON a.source_identity_nullifier_id = n.identity_nullifier_id
+        JOIN verification_sessions s ON s.verification_session_id = a.source_verification_session_id
+        WHERE n.identity_nullifier_id = ?1
+      `,
+      args: [snapshot.seed.identity_nullifier_id],
+    })
+    expect(rows.rows[0]).toMatchObject({
+      provider: "zkpassport",
+      mechanism: "zkpassport-unique-identifier",
+      attestation_provider: "zkpassport",
+      session_provider: "zkpassport",
+    })
+    expect(JSON.parse(String(rows.rows[0]?.value_json))).toEqual({ nationality: "JPN" })
+
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("cleaned")
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "zkpassport")).toBeNull()
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("already_clean")
+  })
+
+  test("adds and removes only the Self shadow chain beside an existing Very reward identity", async () => {
+    const client = await setup({ verificationState: "verified" })
+    await client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+          status, first_seen_at, created_at, updated_at
+        ) VALUES ('nul_existing_very', ?1, 'very', 'palm-nullifier',
+          'hash_existing_very', 'active', ?2, ?2, ?2)
+      `,
+      args: [USER_ID, NOW],
+    })
+    const before = await resolveActiveRewardIdentity(client, USER_ID, "very")
+    const snapshot = await seedNationalityShadow(client, "CAN")
+
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "very")).toEqual(before)
+    expect(await resolveRewardNationalityBindingShadow({ env: SHADOW_ENV, client, userId: USER_ID })).toMatchObject({
+      outcome: "resolved",
+      nationality: "CAN",
+    })
+    expect(await cleanupStagingRewardNationalityShadowIdentity({ client, snapshot })).toBe("cleaned")
+    expect(await resolveActiveRewardIdentity(client, USER_ID, "very")).toEqual(before)
+    const remaining = await client.execute({
+      sql: "SELECT provider, mechanism, nullifier_hash FROM identity_nullifiers WHERE user_id = ?1",
+      args: [USER_ID],
+    })
+    expect(remaining.rows).toEqual([{
+      provider: "very",
+      mechanism: "palm-nullifier",
+      nullifier_hash: "hash_existing_very",
+    }])
+  })
+})

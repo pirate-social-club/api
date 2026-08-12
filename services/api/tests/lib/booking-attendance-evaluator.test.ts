@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 
-import { evaluateAttendance } from "../../src/lib/communities/bookings/booking-attendance-evaluator"
+import { evaluateAttendance } from "../../src/lib/bookings/booking-attendance-evaluator"
 
 const SLOT_START = "2026-06-23T10:00:00.000Z"
 const SLOT_END = "2026-06-23T11:00:00.000Z" // 60-min slot → required overlap = min(10min, 30min) = 10min

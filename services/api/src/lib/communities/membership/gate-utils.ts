@@ -33,12 +33,11 @@ export function missingCapabilitiesFromRequiredActionSet(
 export function suggestedProviderFromRequiredActionSet(
   actionSet: RequiredActionSet | null,
 ): JoinEligibility["suggested_verification_provider"] {
-  const action = flattenRequiredActions(actionSet).find((item) => (
+  const providers = new Set(flattenRequiredActions(actionSet).flatMap((item) => (
     item.kind === "action"
     && (item.provider === "self" || item.provider === "very" || item.provider === "passport" || item.provider === "zkpassport")
-  ))
-  return action?.kind === "action"
-    && (action.provider === "self" || action.provider === "very" || action.provider === "passport" || action.provider === "zkpassport")
-    ? action.provider
-    : null
+      ? [item.provider]
+      : []
+  )))
+  return providers.size === 1 ? [...providers][0] ?? null : null
 }

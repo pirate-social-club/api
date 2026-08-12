@@ -20,12 +20,47 @@ function extensionFromMimeType(mimeType: string | undefined): string {
   return "bin"
 }
 
+// ACRCloud error bodies carry the real failure reason (for example bucket
+// capacity) that the bare http_<status> code hides. Persist a short sanitized
+// snippet so diagnosis does not need a manual provider probe. JSON bodies
+// contribute only their message/code fields; anything else is truncated raw
+// text. Response headers and request data are never captured.
+const ACR_ERROR_DETAIL_MAX_LENGTH = 300
+
+async function readAcrErrorDetail(response: Response): Promise<string | null> {
+  const text = (await response.text().catch(() => "")).trim()
+  if (!text) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(text) as unknown
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const parts: string[] = []
+      for (const key of ["code", "error", "message", "msg", "detail"]) {
+        const value = (parsed as Record<string, unknown>)[key]
+        if (typeof value === "string" && value.trim()) {
+          parts.push(value.trim())
+        } else if (typeof value === "number" || typeof value === "boolean") {
+          parts.push(`${key}=${value}`)
+        }
+      }
+      if (parts.length > 0) {
+        return parts.join("; ").slice(0, ACR_ERROR_DETAIL_MAX_LENGTH)
+      }
+    }
+  } catch {
+    // Not JSON: fall through to the raw snippet.
+  }
+  return text.replace(/\s+/g, " ").slice(0, ACR_ERROR_DETAIL_MAX_LENGTH)
+}
+
 function normalizeCatalogSyncResult(input: {
   bucketId: string
   synced: boolean
   attempted: boolean
   providerResult?: Record<string, unknown> | null
   error?: string | null
+  errorDetail?: string | null
 }): Record<string, unknown> {
   const providerResult = input.providerResult && typeof input.providerResult === "object"
     ? input.providerResult
@@ -40,6 +75,7 @@ function normalizeCatalogSyncResult(input: {
     attempted: input.attempted,
     synced: input.synced,
     ...(typeof input.error === "string" && input.error ? { error: input.error } : {}),
+    ...(typeof input.errorDetail === "string" && input.errorDetail ? { error_detail: input.errorDetail } : {}),
     ...(data && "id" in data ? { file_id: data.id } : {}),
     ...(data && typeof data.acr_id === "string" ? { acr_id: data.acr_id } : {}),
     ...(data && typeof data.state === "number" ? { state: data.state } : {}),
@@ -47,12 +83,13 @@ function normalizeCatalogSyncResult(input: {
   }
 }
 
-export async function syncSongBundleToAcrCloudCatalog(input: {
+async function uploadAudioToAcrCloudCatalog(input: {
   env: Env
-  communityId: string
-  songArtifactBundleId: string
-  bundle: SongArtifactBundle
-  primaryAudioUpload?: SongArtifactUpload | null
+  bytes: ArrayBuffer | Uint8Array
+  filename: string
+  mimeType: string
+  title: string
+  userDefined: Record<string, unknown>
 }): Promise<Record<string, unknown>> {
   const token = trimEnv(input.env.ACRCLOUD_PERSONAL_ACCESS_TOKEN)
   const bucketId = trimEnv(input.env.ACRCLOUD_BUCKET_ID)
@@ -67,51 +104,15 @@ export async function syncSongBundleToAcrCloudCatalog(input: {
     })
   }
 
-  const storageRef = String(input.bundle.primary_audio?.storage_ref || "").trim()
-  if (!storageRef) {
-    return normalizeCatalogSyncResult({
-      bucketId,
-      attempted: false,
-      synced: false,
-      error: "missing_primary_audio",
-    })
-  }
-
   try {
-    const audioResponse = input.primaryAudioUpload?.storage_object_key
-      ? await fetchSongArtifactBytes({
-          env: input.env,
-          objectKey: input.primaryAudioUpload.storage_object_key,
-        })
-      : await fetch(storageRef)
-    if (!audioResponse.ok) {
-      return normalizeCatalogSyncResult({
-        bucketId,
-        attempted: true,
-        synced: false,
-        error: `audio_fetch_http_${audioResponse.status}`,
-      })
-    }
-
-    const audioBytes = await audioResponse.arrayBuffer()
-    const mimeType = String(input.bundle.primary_audio?.mime_type || "application/octet-stream")
-    const contentHash = String(input.bundle.primary_audio?.content_hash || "").trim()
-    const title = String(input.bundle.title || "").trim() || `Pirate song ${input.songArtifactBundleId}`
-
+    const fileBytes = input.bytes instanceof ArrayBuffer
+      ? input.bytes
+      : Uint8Array.from(input.bytes).buffer
     const body = new FormData()
-    body.set(
-      "file",
-      new File([audioBytes], `${title}.${extensionFromMimeType(mimeType)}`, { type: mimeType }),
-    )
-    body.set("title", title)
+    body.set("file", new File([fileBytes], input.filename, { type: input.mimeType }))
+    body.set("title", input.title)
     body.set("data_type", "audio")
-    body.set("user_defined", JSON.stringify({
-      source: "pirate",
-      community_id: input.communityId,
-      song_artifact_bundle_id: input.songArtifactBundleId,
-      content_hash: contentHash || null,
-      lyrics_sha256: input.bundle.lyrics_sha256 || null,
-    }))
+    body.set("user_defined", JSON.stringify(input.userDefined))
 
     const response = await fetch(`${baseUrl.replace(/\/+$/, "")}/buckets/${bucketId}/files`, {
       method: "POST",
@@ -128,6 +129,7 @@ export async function syncSongBundleToAcrCloudCatalog(input: {
         attempted: true,
         synced: false,
         error: `http_${response.status}`,
+        errorDetail: await readAcrErrorDetail(response),
       })
     }
 
@@ -150,6 +152,194 @@ export async function syncSongBundleToAcrCloudCatalog(input: {
   } catch (error) {
     return normalizeCatalogSyncResult({
       bucketId,
+      attempted: true,
+      synced: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+function normalizeCatalogDeleteResult(input: {
+  bucketId: string
+  fileId: string
+  attempted: boolean
+  deleted: boolean
+  alreadyMissing?: boolean
+  error?: string | null
+  errorDetail?: string | null
+}): Record<string, unknown> {
+  return {
+    provider: "acrcloud_catalog",
+    bucket_id: Number.parseInt(input.bucketId, 10) || input.bucketId,
+    file_id: input.fileId,
+    attempted: input.attempted,
+    deleted: input.deleted,
+    ...(input.alreadyMissing ? { already_missing: true } : {}),
+    ...(typeof input.error === "string" && input.error ? { error: input.error } : {}),
+    ...(typeof input.errorDetail === "string" && input.errorDetail ? { error_detail: input.errorDetail } : {}),
+  }
+}
+
+// Unenrollment counterpart to the upload path: removes one exact bucket file
+// by file_id. Idempotent — an already-missing entry (404) counts as success —
+// and never throws, so post deletion flows can fire it without blocking.
+export async function deleteVideoAudioSampleFromAcrCloudCatalog(input: {
+  env: Env
+  fileId: string
+}): Promise<Record<string, unknown>> {
+  const token = trimEnv(input.env.ACRCLOUD_PERSONAL_ACCESS_TOKEN)
+  const bucketId = trimEnv(input.env.ACRCLOUD_BUCKET_ID)
+  const baseUrl = trimEnv(input.env.ACRCLOUD_CONSOLE_BASE_URL) || "https://api-v2.acrcloud.com/api"
+  const fileId = input.fileId.trim()
+
+  if (!token || !bucketId) {
+    return normalizeCatalogDeleteResult({
+      bucketId,
+      fileId,
+      attempted: false,
+      deleted: false,
+      error: "missing_configuration",
+    })
+  }
+
+  try {
+    const response = await fetch(
+      `${baseUrl.replace(/\/+$/, "")}/buckets/${bucketId}/files/${encodeURIComponent(fileId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${token}`,
+        },
+      },
+    )
+
+    if (response.status === 404) {
+      return normalizeCatalogDeleteResult({
+        bucketId,
+        fileId,
+        attempted: true,
+        deleted: true,
+        alreadyMissing: true,
+      })
+    }
+    if (!response.ok) {
+      return normalizeCatalogDeleteResult({
+        bucketId,
+        fileId,
+        attempted: true,
+        deleted: false,
+        error: `http_${response.status}`,
+        errorDetail: await readAcrErrorDetail(response),
+      })
+    }
+    return normalizeCatalogDeleteResult({
+      bucketId,
+      fileId,
+      attempted: true,
+      deleted: true,
+    })
+  } catch (error) {
+    return normalizeCatalogDeleteResult({
+      bucketId,
+      fileId,
+      attempted: true,
+      deleted: false,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+export async function syncVideoAudioSampleToAcrCloudCatalog(input: {
+  env: Env
+  sampleBytes: ArrayBuffer | Uint8Array
+  communityId: string
+  postId: string
+  assetId: string | null
+  uploaderUserId: string | null
+  sampleWindow: { start_ms: number; duration_ms: number }
+}): Promise<Record<string, unknown>> {
+  return await uploadAudioToAcrCloudCatalog({
+    env: input.env,
+    bytes: input.sampleBytes,
+    filename: `${input.postId}-video-audio.wav`,
+    mimeType: "audio/wav",
+    title: `Pirate video audio ${input.postId}`,
+    userDefined: {
+      source: "pirate",
+      content_type: "video_audio",
+      post_id: input.postId,
+      asset_id: input.assetId,
+      community_id: input.communityId,
+      uploader: input.uploaderUserId,
+      sample_window: input.sampleWindow,
+    },
+  })
+}
+
+export async function syncSongBundleToAcrCloudCatalog(input: {
+  env: Env
+  communityId: string
+  songArtifactBundleId: string
+  bundle: SongArtifactBundle
+  primaryAudioUpload?: SongArtifactUpload | null
+}): Promise<Record<string, unknown>> {
+  const bucketId = trimEnv(input.env.ACRCLOUD_BUCKET_ID)
+  if (!trimEnv(input.env.ACRCLOUD_PERSONAL_ACCESS_TOKEN) || !bucketId) {
+    return normalizeCatalogSyncResult({
+      bucketId,
+      attempted: false,
+      synced: false,
+      error: "missing_configuration",
+    })
+  }
+  const storageRef = String(input.bundle.primary_audio?.storage_ref || "").trim()
+  if (!storageRef) {
+    return normalizeCatalogSyncResult({
+      bucketId: trimEnv(input.env.ACRCLOUD_BUCKET_ID),
+      attempted: false,
+      synced: false,
+      error: "missing_primary_audio",
+    })
+  }
+
+  try {
+    const audioResponse = input.primaryAudioUpload?.storage_object_key
+      ? await fetchSongArtifactBytes({
+          env: input.env,
+          objectKey: input.primaryAudioUpload.storage_object_key,
+        })
+      : await fetch(storageRef)
+    if (!audioResponse.ok) {
+      return normalizeCatalogSyncResult({
+        bucketId: trimEnv(input.env.ACRCLOUD_BUCKET_ID),
+        attempted: true,
+        synced: false,
+        error: `audio_fetch_http_${audioResponse.status}`,
+      })
+    }
+
+    const audioBytes = await audioResponse.arrayBuffer()
+    const mimeType = String(input.bundle.primary_audio?.mime_type || "application/octet-stream")
+    const contentHash = String(input.bundle.primary_audio?.content_hash || "").trim()
+    const title = String(input.bundle.title || "").trim() || `Pirate song ${input.songArtifactBundleId}`
+    return await uploadAudioToAcrCloudCatalog({
+      env: input.env,
+      bytes: audioBytes,
+      filename: `${title}.${extensionFromMimeType(mimeType)}`,
+      mimeType,
+      title,
+      userDefined: {
+        source: "pirate",
+        community_id: input.communityId,
+        song_artifact_bundle_id: input.songArtifactBundleId,
+        content_hash: contentHash || null,
+        lyrics_sha256: input.bundle.lyrics_sha256 || null,
+      },
+    })
+  } catch (error) {
+    return normalizeCatalogSyncResult({
+      bucketId: trimEnv(input.env.ACRCLOUD_BUCKET_ID),
       attempted: true,
       synced: false,
       error: error instanceof Error ? error.message : String(error),

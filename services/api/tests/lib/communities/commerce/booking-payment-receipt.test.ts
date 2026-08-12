@@ -40,17 +40,38 @@ describe("evaluateBookingPaymentReceipt — exact-amount matching", () => {
     expect(r.kind).toBe("verified")
     if (r.kind === "verified") expect(getAddress(r.senderAddress)).toBe(SENDER)
   })
-  test("underpayment → rejected (no matching transfer)", () => {
-    expect(evaluateBookingPaymentReceipt(receipt(49_999_999n), EXPECTED, "0xtx").kind).toBe("rejected")
+  test("underpayment → custody mismatch with the observed amount", () => {
+    expect(evaluateBookingPaymentReceipt(receipt(49_999_999n), EXPECTED, "0xtx")).toMatchObject({
+      kind: "custody_mismatch",
+      reason: "wrong_transfer_amount",
+      observedAmountAtomic: "49999999",
+    })
   })
-  test("overpayment → rejected (a larger payment for something else must not satisfy the intent)", () => {
-    expect(evaluateBookingPaymentReceipt(receipt(50_000_001n), EXPECTED, "0xtx").kind).toBe("rejected")
+  test("overpayment → custody mismatch for a full refund, not partial credit", () => {
+    expect(evaluateBookingPaymentReceipt(receipt(50_000_001n), EXPECTED, "0xtx")).toMatchObject({
+      kind: "custody_mismatch",
+      observedAmountAtomic: "50000001",
+    })
+  })
+  test("an exact transfer plus an extra strict transfer is custody mismatch for their total", () => {
+    const exact = receipt(50_000_000n)
+    const extra = receipt(7n)
+    expect(evaluateBookingPaymentReceipt({ status: 1, logs: [...exact.logs, ...extra.logs] }, EXPECTED, "0xtx"))
+      .toMatchObject({ kind: "custody_mismatch", observedAmountAtomic: "50000007" })
   })
   test("wrong recipient → rejected", () => {
     expect(evaluateBookingPaymentReceipt(receipt(50_000_000n, { to: getAddress("0x2222222222222222222222222222222222222222") }), EXPECTED, "0xtx").kind).toBe("rejected")
   })
-  test("wrong sender → rejected", () => {
-    expect(evaluateBookingPaymentReceipt(receipt(50_000_000n, { from: getAddress("0x3333333333333333333333333333333333333333") }), EXPECTED, "0xtx").kind).toBe("rejected")
+  test("wrong sender into operator custody → refundable custody mismatch", () => {
+    expect(evaluateBookingPaymentReceipt(
+      receipt(50_000_000n, { from: getAddress("0x3333333333333333333333333333333333333333") }),
+      EXPECTED,
+      "0xtx",
+    )).toMatchObject({
+      kind: "custody_mismatch",
+      reason: "unexpected_sender",
+      observedAmountAtomic: "50000000",
+    })
   })
   test("wrong token → rejected", () => {
     expect(evaluateBookingPaymentReceipt(receipt(50_000_000n, { token: getAddress("0x4444444444444444444444444444444444444444") }), EXPECTED, "0xtx").kind).toBe("rejected")

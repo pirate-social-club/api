@@ -6,6 +6,7 @@ import { fetchSongArtifactBytes } from "./song-artifact-storage"
 const DEFAULT_FFMPEG_BIN = "ffmpeg"
 const FFMPEG_TIMEOUT_MS = 120_000
 const SOURCE_DOWNLOAD_TIMEOUT_MS = 60_000
+const DEFAULT_EXTRACTION_SERVICE_TIMEOUT_MS = 180_000
 // Full-resolution source is only needed long enough to demux one short audio
 // sample; refuse to pull absurd sources into the container.
 const DEFAULT_MAX_SOURCE_BYTES = 512 * 1024 * 1024
@@ -204,6 +205,60 @@ export async function extractVideoAudioSampleForObject(input: {
   } finally {
     await unlink(sourcePath).catch(() => {})
   }
+}
+
+function isLocalServiceHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1"
+}
+
+export function canRunLocalFfmpeg(env: Env): boolean {
+  if (trimEnv(env.SONG_PREVIEW_FFMPEG_BIN) === "__test_passthrough__") {
+    return false
+  }
+  const runtime = (globalThis as typeof globalThis & { Bun?: { spawn?: unknown } }).Bun
+  return Boolean(runtime && typeof runtime.spawn === "function")
+}
+
+export function extractionServiceUrl(env: Env): string | null {
+  const configured = trimEnv(env.SONG_PREVIEW_SERVICE_URL)
+  if (!configured) return null
+  let url: URL
+  try {
+    url = new URL(configured)
+  } catch {
+    throw providerUnavailable("Song preview service URL is invalid", { reason: "invalid_song_preview_service_url" })
+  }
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && isLocalServiceHost(url.hostname))) {
+    throw providerUnavailable("Song preview service URL must use HTTPS outside localhost", {
+      reason: "insecure_song_preview_service_url",
+    })
+  }
+  return url.toString()
+}
+
+// Composite extractor shared by the video rights-analysis job and the song ACR
+// identification path: local ffmpeg when running inside the song-preview
+// container, else the song-preview service, else an explicit skip so callers
+// can fall back.
+export async function extractAudioSampleForObject(input: {
+  env: Env
+  objectKey: string
+  window: VideoAudioSampleWindow
+}): Promise<VideoAudioSampleResult> {
+  if (canRunLocalFfmpeg(input.env)) {
+    return extractVideoAudioSampleForObject(input)
+  }
+  const serviceUrl = extractionServiceUrl(input.env)
+  if (!serviceUrl && !input.env.SONG_PREVIEW_SERVICE) {
+    return { kind: "skipped", reason: "extraction_unavailable" }
+  }
+  return requestVideoAudioSampleFromService({
+    env: input.env,
+    serviceUrl,
+    objectKey: input.objectKey,
+    window: input.window,
+    timeoutMs: DEFAULT_EXTRACTION_SERVICE_TIMEOUT_MS,
+  })
 }
 
 // Worker-side client: asks the song-preview container (which owns native

@@ -1,6 +1,21 @@
 import { describe, expect, test } from "bun:test"
 import { app } from "../../src/index"
 
+const SHARD_SOURCE_VERSION = "shard-tree.shared-tree"
+const shardVersion = {
+  build: {
+    gitRef: "main",
+    gitSha: "shard-commit",
+    timestamp: "2026-07-23T10:00:00.000Z",
+    sourceVersion: SHARD_SOURCE_VERSION,
+  },
+  workerVersion: {
+    id: "worker-version-id",
+    tag: "shard-commit",
+    timestamp: "2026-07-23T10:00:01.000Z",
+  },
+}
+
 describe("health route", () => {
   test("GET /health returns ok", async () => {
     const response = await app.request("http://pirate.test/health")
@@ -15,8 +30,10 @@ describe("health route", () => {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
       COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({
           ok: true as const,
           value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
@@ -28,9 +45,59 @@ describe("health route", () => {
     expect(await response.json()).toMatchObject({
       ok: true,
       backend: "d1_native",
+      shard_version: shardVersion,
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_attestation: { healthy: true, status: "verified" },
       pool_capacity: { free: 10, threshold: 8, healthy: true },
     })
     expect(response.headers.get("cache-control")).toBe("no-store")
+  })
+
+  test("GET /health/provisioning reports every pool and gates on the selected allocation pool", async () => {
+    const primary = {
+      communityD1Version: async () => shardVersion,
+      communityD1PoolStats: async () => ({
+        ok: true as const,
+        value: { total: 20, allocated: 12, free: 8, quarantined: 0 },
+      }),
+    }
+    const secondary = {
+      communityD1Version: async () => shardVersion,
+      communityD1PoolStats: async () => ({
+        ok: true as const,
+        value: { total: 10, allocated: 3, free: 7, quarantined: 0 },
+      }),
+    }
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "2",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: primary,
+      COMMUNITY_D1_SHARD_SECONDARY: secondary,
+      COMMUNITY_D1_SHARD_ROUTES: JSON.stringify({
+        "shard-primary": "COMMUNITY_D1_SHARD",
+        "shard-secondary": "COMMUNITY_D1_SHARD_SECONDARY",
+      }),
+      COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID: "shard-secondary",
+    } as never)
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      allocation_shard_worker_id: "shard-secondary",
+      pool_capacity: { total: 30, allocated: 15, free: 15, quarantined: 0 },
+      allocation_pool_capacity: { total: 10, allocated: 3, free: 7, quarantined: 0 },
+      pool_capacities: [
+        { shardWorkerId: "shard-primary", stats: { free: 8 } },
+        { shardWorkerId: "shard-secondary", stats: { free: 7 } },
+      ],
+      shard_versions: [
+        { shardWorkerId: "shard-primary", version: shardVersion },
+        { shardWorkerId: "shard-secondary", version: shardVersion },
+      ],
+    })
   })
 
   // Low-but-nonzero capacity is a WARNING. It must NOT fail this probe: deploy
@@ -42,8 +109,10 @@ describe("health route", () => {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
       COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({
           ok: true as const,
           value: { total: 30, allocated: 22, free: 8, quarantined: 0 },
@@ -56,6 +125,7 @@ describe("health route", () => {
       ok: true,
       degraded: true,
       degraded_reason: "d1_pool_low_capacity",
+      degraded_reasons: ["d1_pool_low_capacity"],
       pool_capacity: { free: 8, threshold: 8, healthy: false },
     })
   })
@@ -65,8 +135,10 @@ describe("health route", () => {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
       COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD: "8",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({
           ok: true as const,
           value: { total: 30, allocated: 30, free: 0, quarantined: 0 },
@@ -89,8 +161,10 @@ describe("health route", () => {
     const response = await app.request("http://pirate.test/health/provisioning", {}, {
       ENVIRONMENT: "staging",
       COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
       SHARD_ADMIN_TOKEN: "admin-token",
       COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
         communityD1PoolStats: async () => ({ ok: false as const, code: "shard_unavailable" }),
       } as never,
     })
@@ -102,6 +176,112 @@ describe("health route", () => {
     })
   })
 
+  test("GET /health/provisioning degrades but stays available when shard RPC is unavailable", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => {
+          throw new Error("RPC method unavailable")
+        },
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_version: null,
+      shard_attestation: { healthy: false, status: "rpc_unavailable" },
+      degraded: true,
+      degraded_reason: "d1_shard_attestation_rpc_unavailable",
+      degraded_reasons: ["d1_shard_attestation_rpc_unavailable"],
+    })
+  })
+
+  test("GET /health/provisioning degrades but stays available without an expected shard version", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => shardVersion,
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      expected_shard_source_version: null,
+      shard_attestation: { healthy: false, status: "expected_missing" },
+      degraded: true,
+      degraded_reason: "d1_shard_attestation_expected_missing",
+    })
+  })
+
+  test("GET /health/provisioning degrades but stays available without an actual shard version", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => ({
+          ...shardVersion,
+          build: { ...shardVersion.build, sourceVersion: null },
+        }),
+        communityD1PoolStats: async () => ({
+          ok: true as const,
+          value: { total: 30, allocated: 20, free: 10, quarantined: 0 },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_attestation: { healthy: false, status: "actual_missing" },
+      degraded: true,
+      degraded_reason: "d1_shard_attestation_actual_missing",
+    })
+  })
+
+  test("GET /health/provisioning fails closed on shard source skew", async () => {
+    const response = await app.request("http://pirate.test/health/provisioning", {}, {
+      ENVIRONMENT: "staging",
+      COMMUNITY_D1_SHARD_REGION: "eeur",
+      COMMUNITY_D1_SHARD_SOURCE_VERSION: SHARD_SOURCE_VERSION,
+      SHARD_ADMIN_TOKEN: "admin-token",
+      COMMUNITY_D1_SHARD: {
+        communityD1Version: async () => ({
+          ...shardVersion,
+          build: { ...shardVersion.build, sourceVersion: "stale-shard.stale-shared" },
+        }),
+      } as never,
+    })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error_code: "d1_shard_version_mismatch",
+      expected_shard_source_version: SHARD_SOURCE_VERSION,
+      shard_version: {
+        build: { sourceVersion: "stale-shard.stale-shared" },
+      },
+    })
+  })
+
   test("CORS denies cross-origin access when no origins are configured", async () => {
     const response = await app.request("http://pirate.test/health", {
       headers: { origin: "https://app.pirate.test" },
@@ -110,20 +290,54 @@ describe("health route", () => {
     expect(response.headers.get("access-control-allow-origin")).toBeNull()
   })
 
-  test("CORS allows HNS web origins without explicit configuration", async () => {
+  test("CORS allows canonical Pirate web origins without explicit configuration", async () => {
     const appHost = await app.request("http://pirate.test/health", {
       headers: { origin: "https://app.pirate" },
-    })
-    const importedRoot = await app.request("http://pirate.test/health", {
-      headers: { origin: "https://xn--pokmon-dva" },
     })
     const profileHost = await app.request("http://pirate.test/health", {
       headers: { origin: "https://blackbeard.pirate" },
     })
 
     expect(appHost.headers.get("access-control-allow-origin")).toBe("https://app.pirate")
-    expect(importedRoot.headers.get("access-control-allow-origin")).toBe("https://xn--pokmon-dva")
     expect(profileHost.headers.get("access-control-allow-origin")).toBe("https://blackbeard.pirate")
+  })
+
+  test("CORS denies unknown and non-activated imported apex origins", async () => {
+    const apex = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://unactivated-root" },
+    })
+    const appOrigin = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://app.unactivated-root" },
+    })
+
+    expect(apex.headers.get("access-control-allow-origin")).toBeNull()
+    expect(appOrigin.headers.get("access-control-allow-origin")).toBeNull()
+  })
+
+  test("CORS allows both imported surfaces when the root is activated", async () => {
+    const now = new Date().toISOString()
+    const binding = {
+      getByName: () => ({
+        readRoutingSnapshot: async (rootLabel: string) => ({
+          authorityVersion: 1,
+          effective: true,
+          originHostname: `https://${rootLabel}`,
+          reasonCode: "enabled" as const,
+          updatedAt: now,
+        }),
+        applyRoutingSnapshot: async (snapshot: unknown) => snapshot,
+      }),
+    }
+    const env = { HNS_WALLET_ORIGIN_AUTHORITY: binding } as never
+    const apex = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://activated-root" },
+    }, env)
+    const appOrigin = await app.request("http://pirate.test/health", {
+      headers: { origin: "https://app.activated-root" },
+    }, env)
+
+    expect(apex.headers.get("access-control-allow-origin")).toBe("https://activated-root")
+    expect(appOrigin.headers.get("access-control-allow-origin")).toBe("https://app.activated-root")
   })
 
   test("CORS does not treat ordinary web origins as HNS origins", async () => {

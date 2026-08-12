@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createLiveRoomInTransaction } from "./service"
+import { createLiveRoomInTransaction, shouldProjectLiveRoomAnchorPost } from "./service"
 import type { PreparedLiveRoomCreate } from "./create-input"
 import type { DbExecutor } from "../../db-helpers"
 
@@ -12,13 +12,16 @@ import type { DbExecutor } from "../../db-helpers"
  */
 function recordingExecutor() {
   const sqls: string[] = []
+  const statements: Array<{ sql: string; args?: unknown[] }> = []
   const executor: DbExecutor = {
     execute: async (statement: Parameters<DbExecutor["execute"]>[0]) => {
-      sqls.push(typeof statement === "string" ? statement : statement.sql)
+      const recorded = typeof statement === "string" ? { sql: statement } : statement
+      sqls.push(recorded.sql)
+      statements.push(recorded)
       return { rows: [] }
     },
   }
-  return { executor, sqls }
+  return { executor, sqls, statements }
 }
 
 const PREPARED: PreparedLiveRoomCreate = {
@@ -42,6 +45,28 @@ const PREPARED: PreparedLiveRoomCreate = {
 }
 
 describe("createLiveRoomInTransaction (buffer-safe)", () => {
+  test("projects only discoverable public room anchors", () => {
+    expect(shouldProjectLiveRoomAnchorPost("public")).toBe(true)
+    expect(shouldProjectLiveRoomAnchorPost("unlisted")).toBe(false)
+  })
+
+  test("persists the live submission identity on its anchor post", async () => {
+    const { executor, statements } = recordingExecutor()
+    await createLiveRoomInTransaction({
+      tx: executor,
+      userId: "usr_host",
+      communityId: "cmt_lr",
+      prepared: PREPARED,
+      idempotencyKey: "live_submit_operation",
+      idempotencyBodyHash: "0xbody",
+    })
+
+    const postInsert = statements.find((statement) => /insert\s+into\s+posts/i.test(statement.sql))
+    expect(postInsert?.sql).toContain("idempotency_body_hash")
+    expect(postInsert?.args).toContain("live_submit_operation")
+    expect(postInsert?.args).toContain("0xbody")
+  })
+
   test("issues only writes; returns descriptor with no in-tx room hydration", async () => {
     const { executor, sqls } = recordingExecutor()
     const result = await createLiveRoomInTransaction({

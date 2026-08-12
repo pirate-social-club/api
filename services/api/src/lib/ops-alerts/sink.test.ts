@@ -13,6 +13,52 @@ const alert: OpsAlert = {
 }
 
 describe("sendOpsAlerts", () => {
+  test("keeps development alerts in logs even when an email binding is configured", async () => {
+    let sends = 0
+    const result = await sendOpsAlerts({
+      ENVIRONMENT: "development",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async () => {
+          sends += 1
+          return { messageId: "should-not-send" }
+        },
+      },
+    } as unknown as Env, [alert])
+
+    expect(result).toEqual({
+      delivered: true,
+      sent: 0,
+      sink: "log",
+      providerMessageId: null,
+    })
+    expect(sends).toBe(0)
+  })
+
+  test("includes ownership and an actionable runbook for Story reconciliation", async () => {
+    const sent: Array<{ text?: string }> = []
+    await sendOpsAlerts({
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string }) => {
+          sent.push(message)
+          return { messageId: "message-story" }
+        },
+      },
+    } as unknown as Env, [{
+      ...alert,
+      key: "story_registration_reconciliation_required",
+      title: "Story registration effects require transaction reconciliation",
+    }])
+
+    expect(sent[0]?.text).toContain("Owner: Story operations")
+    expect(sent[0]?.text).toContain("Runbook: https://github.com/pirate-social-club/api/blob/main/services/api/docs/runbooks/story-registration-effect-resolution.md")
+    expect(sent[0]?.text).toContain("never infer no-broadcast")
+  })
+
   test("sends configured alerts through the email binding", async () => {
     const sent: unknown[] = []
     const env = {
@@ -31,7 +77,7 @@ describe("sendOpsAlerts", () => {
 
     const result = await sendOpsAlerts(env, [alert])
 
-    expect(result).toEqual({ delivered: true, sent: 1, sink: "email" })
+    expect(result).toEqual({ delivered: true, sent: 1, sink: "email", providerMessageId: "msg_test" })
     expect(sent).toHaveLength(1)
     expect(sent[0]).toMatchObject({
       to: "piratesocialclub@proton.me",
@@ -42,6 +88,31 @@ describe("sendOpsAlerts", () => {
     expect(text).toContain("[HIGH][staging] Ops alert smoke test")
     expect(text).toContain("Deploy: 1234567890ab")
     expect(text).toContain("details: {\"source\":\"test\"}")
+  })
+
+  test("also pages high-severity alerts when a paging webhook is configured", async () => {
+    const originalFetch = globalThis.fetch
+    const pages: string[] = []
+    globalThis.fetch = async (input, init) => {
+      pages.push(String(input))
+      expect(JSON.parse(String(init?.body)).text).toContain("[HIGH][production]")
+      return new Response(null, { status: 204 })
+    }
+    try {
+      const result = await sendOpsAlerts({
+        ENVIRONMENT: "production",
+        OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+        OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+        OPS_ALERT_WEBHOOK_URL: "https://pager.invalid/alert",
+        OPS_ALERT_EMAIL: {
+          send: async () => ({ messageId: "msg_paged" }),
+        },
+      } as unknown as Env, [alert])
+      expect(result.delivered).toBe(true)
+      expect(pages).toEqual(["https://pager.invalid/alert"])
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test("does not mark delivery successful when email send throws", async () => {
@@ -58,7 +129,20 @@ describe("sendOpsAlerts", () => {
 
     const result = await sendOpsAlerts(env, [alert])
 
-    expect(result).toEqual({ delivered: false, sent: 0, sink: "email" })
+    expect(result).toEqual({ delivered: false, sent: 0, sink: "email", providerMessageId: null })
+  })
+
+  test("does not mark production alerts delivered when no external sink is configured", async () => {
+    const result = await sendOpsAlerts({
+      ENVIRONMENT: "production",
+    } as unknown as Env, [alert])
+
+    expect(result).toEqual({
+      delivered: false,
+      sent: 0,
+      sink: "log",
+      providerMessageId: null,
+    })
   })
 
   test("includes Story signer funding and explorer details in email summaries", async () => {

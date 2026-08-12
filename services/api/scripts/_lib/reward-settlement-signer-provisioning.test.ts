@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   assertRewardSettlementAddress,
+  assertRewardSettlementSyncTarget,
   deriveRewardSettlementAddress,
 } from "./reward-settlement-signer-provisioning"
 
@@ -26,5 +27,27 @@ describe("reward settlement signer provisioning", () => {
       "PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY_must_be_a_32_byte_hex_private_key",
     )
   })
-})
 
+  test("requires an explicit confirmation and matching Infisical environment for production", () => {
+    expect(assertRewardSettlementSyncTarget({
+      environment: "staging",
+      infisicalEnvironment: "staging",
+      confirmProduction: false,
+    })).toBe("staging")
+    expect(assertRewardSettlementSyncTarget({
+      environment: "production",
+      infisicalEnvironment: "prod",
+      confirmProduction: true,
+    })).toBe("production")
+    expect(() => assertRewardSettlementSyncTarget({
+      environment: "production",
+      infisicalEnvironment: "prod",
+      confirmProduction: false,
+    })).toThrow("production_reward_signer_sync_requires_confirmation")
+    expect(() => assertRewardSettlementSyncTarget({
+      environment: "production",
+      infisicalEnvironment: "staging",
+      confirmProduction: true,
+    })).toThrow("infisical_environment_must_be_production")
+  })
+})

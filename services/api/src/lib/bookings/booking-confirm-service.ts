@@ -16,10 +16,10 @@ import {
 } from "./payment-intent-repository";
 import type { Booking, BookingHold, PaymentIntent } from "./types";
 import {
-  resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorAddress,
   resolveBookingSettlementRpcUrl,
   resolveBookingSettlementUsdcTokenAddress,
+  resolveNewBookingIntentChainId,
 } from "./booking-settlement-config";
 
 export interface BookingConfirmSqlExecutor {
@@ -119,6 +119,23 @@ interface BookingPaymentExpectation {
 
 type BookingPaymentVerification =
   | { kind: "verified"; senderAddress: string; txRef: string }
+  | {
+    kind: "custody_mismatch";
+    reason: "wrong_transfer_amount" | "unexpected_sender";
+    senderAddress: string;
+    txRef: string;
+    observedAmountAtomic: string;
+  }
+  | {
+    kind: "custody_incident";
+    reason: "multiple_senders";
+    txRef: string;
+    transfers: Array<{
+      senderAddress: string;
+      observedAmountAtomic: string;
+      transferCount: number;
+    }>;
+  }
   | { kind: "pending" }
   | { kind: "rejected"; reason: string };
 
@@ -172,7 +189,7 @@ async function createOrGetIntent(input: {
   const snapshot = feeSnapshot(settlement.platformFeeBps, input.hold.priceCents);
   const result = await createPaymentIntentWriteRepository(input.executor).createOrGetPaymentIntent({
     holdId: input.hold.holdId,
-    chainId: resolveBookingSettlementChainId(input.env),
+    chainId: resolveNewBookingIntentChainId(input.env),
     tokenAddress: resolveBookingSettlementUsdcTokenAddress(input.env),
     tokenDecimals: USDC_DECIMALS,
     tokenSymbol: USDC_SYMBOL,
@@ -270,6 +287,8 @@ export type ConfirmGlobalBookingResult =
       | "host_payout_unconfigured"
       | "payment_pending"
       | "payment_rejected"
+      | "payment_refund_pending"
+      | "payment_review_required"
       | "transaction_already_used"
       | "verification_in_progress"
       | "replay_mismatch"
@@ -339,11 +358,11 @@ export async function confirmGlobalBookingHold(input: {
   if (intent.status === "consumed") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
   if (intent.status === "verified") return finalizeFromVerifiedIntent(input, hold, intent, buyerAddress, normalizedTxRef);
   if (intent.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
-  if (intent.status === "expired" || intent.status === "superseded") return { ok: false, reason: "hold_expired" };
+  if (intent.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
+  if (intent.status === "custody_operator_incident") return { ok: false, reason: "payment_review_required" };
+  if (intent.status === "expired") return { ok: false, reason: "hold_expired" };
   // status is now active | verifying | verification_failed — attempt verification even if the hold TTL
   // has elapsed. Slot safety is enforced by the finalize CAS (fails closed → durable orphan refund).
-  const holdExpired = hold.status !== "active" || hold.expiresAtUtc <= input.nowUtc;
-
   const claimToken = crypto.randomUUID();
   const reserved = await intentRepo.reservePaymentIntentForVerification({
     paymentIntentId: intentId,
@@ -360,6 +379,8 @@ export async function confirmGlobalBookingHold(input: {
       return finalizeFromVerifiedIntent(input, hold, current, buyerAddress, normalizedTxRef);
     }
     if (current?.status === "verification_rejected") return { ok: false, reason: "payment_rejected" };
+    if (current?.status === "custody_refund_pending") return { ok: false, reason: "payment_refund_pending" };
+    if (current?.status === "custody_operator_incident") return { ok: false, reason: "payment_review_required" };
     return { ok: false, reason: "verification_in_progress" };
   }
 
@@ -377,17 +398,54 @@ export async function confirmGlobalBookingHold(input: {
   });
   if (outcome.kind === "pending") {
     await intentRepo.markPaymentIntentVerificationFailed({ paymentIntentId: intentId, claimToken, nowUtc: input.nowUtc });
-    // No CONFIRMED funds are at risk for a pending (unmined / not-found) tx. If the hold window has
-    // already closed, retire the intent as expired; otherwise let the buyer retry as the tx mines.
-    if (holdExpired) {
-      await intentRepo.expirePaymentIntentIfDue(intentId, input.nowUtc);
-      return { ok: false, reason: "hold_expired" };
-    }
+    // Pending means unresolved, not terminal. The claim may mine after this RPC response, including
+    // after the hold TTL. Preserve the immutable hash so a later client or scheduled re-verification
+    // can salvage the booking or create the durable verified/unconsumed refund obligation.
     return { ok: false, reason: "payment_pending" };
   }
   if (outcome.kind === "rejected") {
     await intentRepo.markPaymentIntentRejected({ paymentIntentId: intentId, claimToken, nowUtc: input.nowUtc });
     return { ok: false, reason: "payment_rejected" };
+  }
+  if (outcome.kind === "custody_mismatch") {
+    const transitioned = await intentRepo.markPaymentIntentCustodyRefundPending({
+      paymentIntentId: intentId,
+      claimToken,
+      observedAmountAtomic: outcome.observedAmountAtomic,
+      senderAddress: outcome.senderAddress,
+      reason: outcome.reason,
+      nowUtc: input.nowUtc,
+    });
+    if (transitioned) return { ok: false, reason: "payment_refund_pending" };
+    const current = await intentRepo.getPaymentIntent(intentId);
+    if (
+      current?.status === "custody_refund_pending"
+      && current.claimedTxRef === normalizedTxRef
+      && current.custodyObservedAmountAtomic === outcome.observedAmountAtomic
+      && sameAddress(current.custodySenderAddress, outcome.senderAddress)
+      && current.custodyReason === outcome.reason
+    ) {
+      return { ok: false, reason: "payment_refund_pending" };
+    }
+    return { ok: false, reason: "verification_in_progress" };
+  }
+  if (outcome.kind === "custody_incident") {
+    const transitioned = await intentRepo.markPaymentIntentCustodyOperatorIncident({
+      paymentIntentId: intentId,
+      claimToken,
+      transfers: outcome.transfers,
+      nowUtc: input.nowUtc,
+    });
+    if (transitioned) return { ok: false, reason: "payment_review_required" };
+    const current = await intentRepo.getPaymentIntent(intentId);
+    if (
+      current?.status === "custody_operator_incident"
+      && current.claimedTxRef === normalizedTxRef
+      && JSON.stringify(current.custodyEvidence?.transfers) === JSON.stringify(outcome.transfers)
+    ) {
+      return { ok: false, reason: "payment_review_required" };
+    }
+    return { ok: false, reason: "verification_in_progress" };
   }
 
   const transitioned = await intentRepo.markPaymentIntentVerified({

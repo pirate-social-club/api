@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
+import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
 import publicReadApp from "../../../src/routes/public-read-app"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt, requestJson } from "./community-routes-test-helpers"
@@ -18,6 +20,59 @@ afterEach(async () => {
 })
 
 describe("public community routes", () => {
+  test("serves a viewer-neutral community video feed and honors its surface policy", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "public-community-video-feed-owner")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Video Feed Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const communityId = ((await json(create)) as { community: { id: string } }).community.id
+
+    const response = await app.request(
+      `http://pirate.test/public-communities/${communityId}/feed/videos?sort=best`,
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("cdn-cache-control")).toBe("no-store")
+    expect(response.headers.get("cache-tag")).toBeNull()
+    expect(response.headers.get("server-timing")).toContain("home-feed;dur=")
+    expect(response.headers.get("vary")).toBeNull()
+    expect(await json(response)).toEqual({
+      items: [],
+      top_communities: [],
+      next_cursor: null,
+    })
+
+    const disable = await requestJson(
+      `http://pirate.test/communities/${communityId}/presentation`,
+      { video_feed_enabled: false },
+      ctx.env,
+      session.accessToken,
+    )
+    expect(disable.status).toBe(200)
+
+    const disabled = await app.request(
+      `http://pirate.test/public-communities/${communityId}/feed/videos`,
+      {},
+      ctx.env,
+    )
+    expect(disabled.status).toBe(403)
+    expect(await json(disabled)).toMatchObject({
+      code: "structured_surface_disabled",
+      details: {
+        community: communityId,
+        reason: "community_opt_out",
+        surface: "video_feed",
+      },
+    })
+  })
+
   test("returns not found for a punycode handle missing the @ prefix", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
@@ -45,41 +100,13 @@ describe("public community routes", () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "public-community-search-user")
-
-    await ctx.client.execute({
-      sql: `
-        INSERT INTO communities (
-          community_id,
-          creator_user_id,
-          display_name,
-          membership_mode,
-          status,
-          provisioning_state,
-          transfer_state,
-          route_slug,
-          namespace_verification_id,
-          pending_namespace_verification_session_id,
-          created_at,
-          updated_at
-        ) VALUES
-          (?1, ?2, ?3, 'request', 'active', 'active', 'none', NULL, NULL, NULL, ?4, ?4),
-          (?5, ?2, ?6, 'request', 'active', 'active', 'none', ?7, NULL, NULL, ?8, ?8),
-          (?9, ?2, ?10, 'request', 'draft', 'requested', 'none', NULL, NULL, NULL, ?11, ?11)
-      `,
-      args: [
-        "cmt_infinity",
-        session.userId,
-        "Infinity",
-        "2026-04-20T00:00:00.000Z",
-        "cmt_infinite_loop",
-        "Infinite Loop",
-        "infinite-loop",
-        "2026-04-20T00:01:00.000Z",
-        "cmt_hidden",
-        "Infinity Draft",
-        "2026-04-20T00:02:00.000Z",
-      ],
-    })
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Infinity",
+      membership_mode: "request",
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const created = await json(create) as { community: { id: string; route_slug: string | null } }
+    expect(created.community.route_slug).toBeNull()
 
     const response = await app.request("http://pirate.test/public-communities?query=infinity", {}, ctx.env)
     expect(response.status).toBe(200)
@@ -101,10 +128,10 @@ describe("public community routes", () => {
     expect(body.query).toBe("infinity")
     expect(body.communities).toHaveLength(1)
     expect(body.communities[0]).toMatchObject({
-      community: "com_cmt_infinity",
+      community: created.community.id,
       display_name: "Infinity",
       route_slug: null,
-      membership_mode: "gated",
+      membership_mode: "request",
       guest_comment_policy: "disallow",
       agent_posting_policy: "disallow",
       agent_posting_scope: "replies_only",
@@ -113,6 +140,35 @@ describe("public community routes", () => {
       accepted_agent_ownership_providers: ["clawkey"],
       membership_gate_summaries: [],
     })
+  })
+
+  test("community search propagates local preview schema drift instead of returning default policy fields", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    const session = await exchangeJwt(ctx.env, "public-community-search-schema-drift")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Search Schema Drift Club",
+      membership_mode: "request",
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const body = await json(create) as { community: { id: string } }
+    const communityId = body.community.id.replace(/^com_/, "")
+    const local = createClient({
+      url: buildLocalCommunityDbUrl(String(ctx.env.LOCAL_COMMUNITY_DB_ROOT ?? ""), communityId),
+    })
+    try {
+      await local.execute("ALTER TABLE communities DROP COLUMN karaoke_enabled")
+    } finally {
+      local.close()
+    }
+
+    const response = await app.request(
+      "http://pirate.test/public-communities?query=Search%20Schema%20Drift",
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(500)
+    expect(await json(response)).toMatchObject({ code: "internal_error" })
   })
 
   test("public community capabilities returns an action matrix for agent and guest writes", async () => {
@@ -197,6 +253,38 @@ describe("public community routes", () => {
       agent_posting_policy: "allow",
       agent_posting_scope: "top_level_and_replies",
     })
+  })
+
+  test("does not cache a public preview when its owner summary is unavailable", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "public-community-missing-owner-summary-user")
+    const create = await requestJson("http://pirate.test/communities", {
+      display_name: "Owner Summary Retry Club",
+      membership_mode: "request",
+      handle_policy: { policy_template: "standard" },
+    }, ctx.env, session.accessToken)
+    expect(create.status).toBe(202)
+    const communityId = ((await json(create)) as { community: { id: string } }).community.id
+
+    // The community and its owner role remain valid. Removing only the public
+    // profile linkage simulates the control-plane summary lookup returning no
+    // row after the shard preview has otherwise completed successfully.
+    await ctx.client.execute({
+      sql: "UPDATE profiles SET global_handle_id = NULL WHERE user_id = ?1",
+      args: [session.userId],
+    })
+
+    const response = await app.request(
+      `http://pirate.test/public-communities/${communityId}`,
+      {},
+      ctx.env,
+    )
+    expect(response.status).toBe(200)
+    expect((await json(response) as { owner: unknown }).owner).toBeNull()
+    expect(response.headers.get("cache-control")).toBe("no-store")
+    expect(response.headers.get("cdn-cache-control")).toBe("no-store")
   })
 
   test("archived community is hidden from the public single-community preview, restored on unarchive", async () => {
@@ -298,7 +386,7 @@ describe("public community routes", () => {
 
     // Listing create — requireLiveCommunity guard from #64.
     const listing = await requestJson(`http://pirate.test/communities/${cid}/listings`, {
-      title: "blocked", price_usd: 5,
+      title: "blocked", price_cents: 5,
     }, ctx.env, owner.accessToken)
     expect(listing.status).toBe(404)
   })

@@ -184,23 +184,17 @@ These are module-global mutable state in Worker code. Static search found no cal
 - `src/lib/bookings/booking-custody-adapter.ts` — `setGlobalBookingSettlementCoordinatorForTests`, `setGlobalBookingSettlementConfirmPollPlanForTests`.
 - `src/lib/communities/jobs/video-media-analysis-handler.ts` — `setVideoMediaAnalysisProvidersForTests`.
 
-## Community-bookings product decision
+## Community-bookings decision — resolved
 
-Do not use these findings to justify unmounting or deleting the community-scoped booking API. The routes remain live on main.
+Global bookings are the only service and persistence boundary. The
+community-scoped routes were already unmounted, and the legacy lifecycle,
+settlement, custody, authoring fallback, cron, and tests were deleted in the
+dedicated mainlining worktree.
 
-- `booking-attendance-evaluator.ts` — `DEFAULT_ATTENDANCE_CONFIG`.
-- `booking-chain-config.ts` — `resolveBookingSettlementChainName`.
-- `booking-confirm-service.ts` — `PaymentInstructions`.
-- `booking-hold-service.ts` — `BookingHold`.
-- `booking-payment-intent-service.ts` — `PaymentIntentStatus`.
-- `booking-read-service.ts` — `BookingSettlementReviewResolution`.
-- `booking-session-service.ts` — `deriveBookingChannel`.
-- `booking-settlement-cron.ts` — `processCommunityBookingSettlements`, `ProcessCommunityFn`.
-- `booking-settlement-effects.ts` — `BookingSettlementEffectStatus`.
-- `booking-settlement-evaluator.ts` — `isBookingSettlementAmbiguousReviewEnabled`.
-- `operator-signing-coordinator-do.ts` — `OperatorEffectKind`, `GasParams`, `TxLiveness`.
-
-If product approves global-only bookings, remove the route registration and subtree in a dedicated breaking-change PR with route-contract review. Otherwise only narrow these individual exports.
+The remaining operator coordinator and chain-configuration modules are shared
+by global booking settlement and rewards. They are reachable production code,
+not part of the deleted legacy table-set service. Audit their individual
+exports normally; do not classify the modules themselves as dead.
 
 ## Cross-repo contract boundary: `src/types.ts`
 
@@ -223,7 +217,7 @@ Before changing this file, run:
 | --- | --- |
 | Auth/agents | `tests/routes/auth/auth-routes.test.ts`, `tests/routes/agents/agents-routes.test.ts`, `tests/agent-ownership-state-machine.test.ts` |
 | Global bookings | `tests/routes/host-bookings-routes.test.ts`, `tests/lib/booking-attendance-evaluator.test.ts` |
-| Community bookings | Existing `tests/routes/communities/community-bookings-*.test.ts` and `tests/lib/communities/bookings/*.test.ts` |
+| Removed community bookings boundary | `tests/routes/communities/community-bookings-removed.test.ts` |
 | Assistant | Community-assistant route tests and assistant policy/service tests |
 | Commerce/Story | Quote-helper, royalty-allocation, settlement buffer, EVM, and Story runtime tests |
 | Community routing/gates | Routing repository/resolver, membership gate, and machine-access tests |

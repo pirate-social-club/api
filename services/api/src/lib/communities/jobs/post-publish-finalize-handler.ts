@@ -7,6 +7,7 @@ import { createCommunityListingInTransaction } from "../commerce/listing-service
 import { getListingRowByAssetId } from "../commerce/shared"
 import { createSongAssetForPost } from "../commerce/service"
 import { assertDerivativeParentRevenueShare } from "../commerce/derivative-parent-revenue-share"
+import { updateStoryRegisteredAssetPostStatus } from "../commerce/derivative-source-projection"
 import { mergeAnalysisState } from "../../posts/post-analysis"
 import { songRightsInvariantFailure } from "../../posts/song-rights-invariant"
 import { getPostById } from "../../posts/community-post-query-store"
@@ -33,6 +34,7 @@ import {
 } from "../../song-artifacts/song-artifact-repository"
 import type { CreatePostRequest, Post, RoyaltyAllocationRequest, SongArtifactBundle } from "../../../types"
 import type { CommunityJobHandlerInput } from "./handler-types"
+import { rotateCommunityJobTickIds } from "./tick-rotation"
 import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
@@ -223,6 +225,7 @@ export function shouldRunPostPublishFinalize(postStatus: Post["status"]): boolea
 async function convergePublishedPostProjection(input: {
   client: Parameters<typeof markPostPublishRequestStatus>[0]["client"]
   communityRepository: CommunityJobHandlerInput["communityRepository"]
+  env: CommunityJobHandlerInput["env"]
   post: Post
   now: string
 }): Promise<void> {
@@ -260,6 +263,31 @@ async function convergePublishedPostProjection(input: {
       createdAt: input.now,
     })
   }
+
+  try {
+    await enqueueCommunityJob({
+      client: input.client,
+      communityId: input.post.community_id,
+      jobType: "telegram_post_publish",
+      subjectType: "post",
+      subjectId: input.post.post_id,
+      createdAt: input.now,
+    })
+  } catch (error) {
+    logPipelineError("[community-job] Telegram publication enqueue failed", {
+      community_id: input.post.community_id,
+      post_id: input.post.post_id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  await updateStoryRegisteredAssetPostStatus({
+    env: input.env,
+    communityId: input.post.community_id,
+    sourcePostId: input.post.post_id,
+    sourcePostStatus: "published",
+    updatedAt: input.now,
+  })
 
   // The saga row becomes terminal only after every derived projection is durable.
   // A retry can therefore always repair a crash between post publication and projection writes.
@@ -373,7 +401,11 @@ type PostPublishFinalizeReconcileCommunityFailureSummary = {
 
 type PostPublishFinalizeReconcileSummary = {
   checked_communities: number
+  /** Selected communities left unscanned because the prelude deadline passed. */
+  deferred_communities: number
   failed_posts: number
+  /** Wall time spent scanning communities. */
+  reconcile_ms: number
   communities: PostPublishFinalizeReconcileCommunitySummary[]
   failed_communities: PostPublishFinalizeReconcileCommunityFailureSummary[]
 }
@@ -385,18 +417,40 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
   maxCommunities?: number
   maxPostsPerCommunity?: number
   now?: string
+  deadlineAtMs?: number | null
+  nowMs?: () => number
 }, dependencies: PostPublishFinalizeDependencies = postPublishFinalizeDependencies): Promise<PostPublishFinalizeReconcileSummary> {
-  const communityIds = (input.communityIds?.length
-    ? input.communityIds
-    : (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })).map((community) => community.community_id))
-    .slice(0, Math.max(1, Math.trunc(input.maxCommunities ?? 100)))
+  const nowMs = input.nowMs ?? (() => Date.now())
+  const startedAtMs = nowMs()
+  const maxCommunities = Math.max(1, Math.trunc(input.maxCommunities ?? 100))
+  const communityIds = input.communityIds?.length
+    ? input.communityIds.slice(0, maxCommunities)
+    // Rotate the fixed listActiveCommunities order so a deadline-truncated tick
+    // resumes where the last one stopped instead of starving the same tail.
+    : rotateCommunityJobTickIds(
+      (await input.communityRepository.listActiveCommunities({ requireReadyRouting: true }))
+        .map((community) => community.community_id)
+        .slice(0, maxCommunities),
+      startedAtMs,
+    )
   const maxPostsPerCommunity = Math.max(1, Math.trunc(input.maxPostsPerCommunity ?? 25))
   const now = input.now ?? nowIso()
   const cutoffUpdatedAt = new Date(Date.parse(now) - POST_PUBLISH_FINALIZE_STUCK_AGE_MS).toISOString()
   const communities: PostPublishFinalizeReconcileCommunitySummary[] = []
   const failedCommunities: PostPublishFinalizeReconcileCommunityFailureSummary[] = []
 
+  let checkedCommunities = 0
   for (const communityId of communityIds) {
+    // The prelude deadline stops this tick from scanning more communities; it
+    // never interrupts one already open.
+    if (input.deadlineAtMs != null && nowMs() >= input.deadlineAtMs) {
+      console.warn("[community-job] post publish finalize reconcile deadline reached", JSON.stringify({
+        checked_communities: checkedCommunities,
+        deferred_communities: communityIds.length - checkedCommunities,
+      }))
+      break
+    }
+    checkedCommunities += 1
     let db: Awaited<ReturnType<typeof openCommunityWriteClient>> | null = null
     try {
       db = await dependencies.openCommunityWriteClient(input.env, input.communityRepository, communityId)
@@ -412,6 +466,7 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
           await convergePublishedPostProjection({
             client: db.client,
             communityRepository: input.communityRepository,
+            env: input.env,
             post: current,
             now,
           })
@@ -460,8 +515,10 @@ export async function reconcileStuckPostPublishFinalizeJobs(input: {
   }
 
   return {
-    checked_communities: communityIds.length,
+    checked_communities: checkedCommunities,
+    deferred_communities: communityIds.length - checkedCommunities,
     failed_posts: communities.reduce((sum, community) => sum + community.failed_posts, 0),
+    reconcile_ms: Math.max(0, nowMs() - startedAtMs),
     communities,
     failed_communities: failedCommunities,
   }
@@ -565,6 +622,7 @@ export async function runPostPublishFinalize(
       await convergePublishedPostProjection({
         client: db.client,
         communityRepository: input.communityRepository,
+        env: input.env,
         post,
         now: convergedAt,
       })
@@ -712,6 +770,17 @@ export async function runPostPublishFinalize(
           updatedAt: nowIso(),
         })
       } catch (error) {
+        if (
+          error instanceof HttpError
+          && error.code === "provider_unavailable"
+          && error.retryable
+          && input.job.attempt_count < COMMUNITY_JOB_MAX_ATTEMPTS
+        ) {
+          // Transient analysis-provider failure: let the job runner retry with
+          // backoff; only the terminal attempt marks the post failed (and even
+          // then it stays user-retryable below).
+          throw error
+        }
         const failure = publishFailureFromError(error, {
           code: "provider_unavailable",
           message: "Song analysis failed",
@@ -915,6 +984,7 @@ export async function runPostPublishFinalize(
     await convergePublishedPostProjection({
       client: db.client,
       communityRepository: input.communityRepository,
+      env: input.env,
       post: published,
       now: projectionUpdatedAt,
     })

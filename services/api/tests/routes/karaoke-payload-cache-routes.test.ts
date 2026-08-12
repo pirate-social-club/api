@@ -25,6 +25,7 @@ const TEST_EXECUTION_CTX = {
 
 const state: {
   cacheable: boolean
+  cacheContextCalls: unknown[]
   cacheStore: Map<string, Response>
   payloadCalls: unknown[]
   postContext: object
@@ -33,6 +34,7 @@ const state: {
   resolveCommunityCalls: string[]
 } = {
   cacheable: true,
+  cacheContextCalls: [],
   cacheStore: new Map(),
   payloadCalls: [],
   postContext: {},
@@ -85,10 +87,13 @@ function installRouteDeps(): void {
     getProfileRepository: mock(() => ({ kind: "profile-repository" }) as never),
     getUserRepository: mock(() => ({ kind: "user-repository" }) as never),
     getWorkerCache: getTestWorkerCache,
-    loadPublicPostKaraokePayloadCacheContext: mock(async () => ({
-      cacheable: state.cacheable,
-      postContext: state.postContext as never,
-    })),
+    loadPublicPostKaraokePayloadCacheContext: mock(async (input: unknown) => {
+      state.cacheContextCalls.push(input)
+      return {
+        cacheable: state.cacheable,
+        postContext: state.postContext as never,
+      }
+    }),
     resolveCommunityIdentifier: mock(async (_repository, communityId: string) => {
       state.resolveCommunityCalls.push(communityId)
       return RESOLVED_COMMUNITY_ID
@@ -98,6 +103,10 @@ function installRouteDeps(): void {
 
 function buildApp(): Hono<AuthenticatedEnv> {
   const app = new Hono<AuthenticatedEnv>()
+  app.use("*", async (c, next) => {
+    c.set("actor", { authType: "user", userId: "usr_verified" })
+    await next()
+  })
   registerCommunityKaraokeSessionRoutes(app)
   return app
 }
@@ -111,6 +120,7 @@ function buildPublicApp(): Hono {
 describe("karaoke payload Worker cache", () => {
   beforeEach(() => {
     state.cacheable = true
+    state.cacheContextCalls = []
     state.cacheStore.clear()
     state.payloadCalls = []
     state.postContext = { id: crypto.randomUUID() }
@@ -132,6 +142,12 @@ describe("karaoke payload Worker cache", () => {
     expect(first.headers.get("X-Pirate-Worker-Cache")).toBe("MISS")
     expect(state.payloadCalls).toHaveLength(1)
     expect(state.payloadCalls[0]).toMatchObject({ postContext: state.postContext })
+    expect(state.cacheContextCalls[0]).toMatchObject({
+      actor: { authType: "user", userId: "usr_verified" },
+    })
+    expect(state.payloadCalls[0]).toMatchObject({
+      actor: { authType: "user", userId: "usr_verified" },
+    })
 
     const second = await app.request(PATH, { headers: { origin: "https://pirate.sc" } }, TEST_ENV, TEST_EXECUTION_CTX)
     expect(second.status).toBe(200)
@@ -147,6 +163,9 @@ describe("karaoke payload Worker cache", () => {
     const first = await app.request(PATH, undefined, TEST_ENV, TEST_EXECUTION_CTX)
     expect(first.status).toBe(200)
     expect(first.headers.get("X-Pirate-Worker-Cache")).toBe("BYPASS")
+    expect(first.headers.get("Cache-Control")).toBe("private, no-store")
+    expect(first.headers.get("CDN-Cache-Control")).toBe("no-store")
+    expect(first.headers.get("Vary")).toContain("Authorization")
 
     const second = await app.request(PATH, undefined, TEST_ENV, TEST_EXECUTION_CTX)
     expect(second.status).toBe(200)
@@ -168,6 +187,7 @@ describe("karaoke payload Worker cache", () => {
       postContext: state.postContext,
       postId: "pst_test",
     })
+    expect(state.cacheContextCalls[0]).toMatchObject({ actor: undefined })
 
     const second = await app.request(PUBLIC_POST_PATH, { headers: { origin: "https://pirate.sc" } }, TEST_ENV, TEST_EXECUTION_CTX)
     expect(second.status).toBe(200)

@@ -5,7 +5,7 @@ import type { Comment as ApiComment } from "../../types"
 import { computeCommentSourceHash } from "./content-source-hash"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale, sameLanguageLocale } from "./content-locale"
 import { requestContentTranslation } from "./content-translation-provider"
-import { getContentTranslation, upsertContentTranslation } from "./content-translation-store"
+import { getContentTranslation, isUsableContentTranslation, upsertContentTranslation } from "./content-translation-store"
 
 type Comment = ApiComment & {
   source_language?: string | null
@@ -49,7 +49,7 @@ export async function materializeCommentTranslation(input: {
     locale: resolvedLocale,
     sourceHash,
   })
-  if (existing) {
+  if (isUsableContentTranslation(existing, { body: input.comment.body })) {
     return `cached:${resolvedLocale}:${existing.outcome}`
   }
 

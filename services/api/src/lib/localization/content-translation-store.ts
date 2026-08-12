@@ -2,6 +2,7 @@ import type { DbExecutor } from "../db-helpers"
 import { executeFirst } from "../db-helpers"
 import { makeId } from "../helpers"
 import { requiredString, rowValue, stringOrNull } from "../sql-row"
+import { hasUsableTranslatedContentFields, type ContentTranslationFields } from "./content-translation-validation"
 
 export type LocalizedContentType = "post" | "comment" | "community_text"
 export type ContentTranslationOutcome = "translated" | "same_language"
@@ -25,6 +26,19 @@ export type ContentTranslationRecord = {
   updated_at: string
 }
 
+export function isUsableContentTranslation(
+  record: ContentTranslationRecord | null,
+  sourceText: ContentTranslationFields,
+): record is ContentTranslationRecord {
+  if (!record) return false
+  if (record.outcome === "same_language") return true
+  return hasUsableTranslatedContentFields(sourceText, {
+    translatedTitle: record.translated_title,
+    translatedBody: record.translated_body,
+    translatedCaption: record.translated_caption,
+  })
+}
+
 function toContentTranslationRecord(row: unknown): ContentTranslationRecord {
   return {
     content_translation_id: requiredString(row, "content_translation_id"),
@@ -44,6 +58,36 @@ function toContentTranslationRecord(row: unknown): ContentTranslationRecord {
     created_at: requiredString(row, "created_at"),
     updated_at: requiredString(row, "updated_at"),
   }
+}
+
+export function contentTranslationLookupKey(input: Pick<
+  ContentTranslationRecord,
+  "content_type" | "content_id" | "field_key" | "locale" | "source_hash"
+>): string {
+  return [input.content_type, input.content_id, input.field_key, input.locale, input.source_hash].join("\u0000")
+}
+
+export async function listContentTranslationsForContentIds(input: {
+  executor: DbExecutor
+  contentType: LocalizedContentType
+  contentIds: string[]
+  locale: string
+}): Promise<ContentTranslationRecord[]> {
+  if (input.contentIds.length === 0) return []
+  const placeholders = input.contentIds.map((_, index) => `?${index + 3}`).join(", ")
+  const result = await input.executor.execute({
+    sql: `
+      SELECT content_translation_id, content_type, content_id, field_key, locale, source_hash,
+             source_language, outcome, translated_title, translated_body, translated_caption, provider,
+             provider_model, provider_result_json, created_at, updated_at
+      FROM content_translations
+      WHERE content_type = ?1
+        AND locale = ?2
+        AND content_id IN (${placeholders})
+    `,
+    args: [input.contentType, input.locale, ...input.contentIds],
+  })
+  return result.rows.map(toContentTranslationRecord)
 }
 
 export async function getContentTranslation(input: {

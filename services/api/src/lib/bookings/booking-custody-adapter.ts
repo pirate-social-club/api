@@ -128,6 +128,9 @@ export async function executeGlobalBookingOperatorEffect(
   if (settled.state === "replaced" || settled.state === "failed_onchain") {
     throw settlementError(`Booking settlement terminal at coordinator (${settled.state}); reconciliation required`, "terminal");
   }
+  if (settled.state === "preparation_parked") {
+    throw settlementError("Booking settlement preparation parked; operator recovery required", "terminal");
+  }
   if (settled.state === "reserving" || settled.state === "failed_preparation") {
     throw settlementError("Booking settlement is not yet broadcast (retryable)", "pending");
   }
@@ -148,19 +151,44 @@ export async function executeGlobalBookingOperatorEffect(
 export async function executeGlobalBookingOrphanPaymentRefund(
   ctx: {
     env: Env;
+    executor: SettlementEffectSqlExecutor;
     paymentIntentId: string;
     recipientAddress: string;
-    amountCents: number;
+    amountCents?: number;
+    amountAtomic?: string;
     confirmPollMs?: number[];
+    nowUtc: string;
   },
 ): Promise<{ txRef: string }> {
-  if (ctx.amountCents <= 0) throw badRequestError("Booking settlement amount must be positive");
+  if ((ctx.amountCents == null) === (ctx.amountAtomic == null)) {
+    throw badRequestError("Booking payment refund requires exactly one amount");
+  }
+  if (ctx.amountCents != null && ctx.amountCents <= 0) {
+    throw badRequestError("Booking settlement amount must be positive");
+  }
   const recipient = normalizeRecipientAddress(ctx.recipientAddress);
+  const idempotencyKey = `booking:payment-intent-refund:${ctx.paymentIntentId}`;
+  const repo = createSettlementEffectWriteRepository(ctx.executor);
+  const begun = await repo.beginSettlementEffectAttempt({
+    paymentIntentId: ctx.paymentIntentId,
+    effectKind: "booking_refund",
+    idempotencyKey,
+    amountCents: ctx.amountCents,
+    amountAtomic: ctx.amountAtomic,
+    recipientAddress: recipient,
+    nowUtc: ctx.nowUtc,
+  });
+  if (!begun.ok) throw conflictError(`Booking payment refund could not be reserved: ${begun.reason}`);
+  if (begun.effect.status === "confirmed") {
+    if (!begun.effect.settlementRef) throw new Error("confirmed_booking_payment_refund_missing_settlement_ref");
+    return { txRef: begun.effect.settlementRef };
+  }
   const req: OperatorSettleRequest = {
     communityId: "global",
     bookingId: `payment_intent:${ctx.paymentIntentId}`,
     effectKind: "booking_refund",
     amountCents: ctx.amountCents,
+    amountAtomic: ctx.amountAtomic,
     recipientAddress: recipient,
   };
 
@@ -168,9 +196,19 @@ export async function executeGlobalBookingOrphanPaymentRefund(
   for (let i = 0; (settled.state === "prepared" || settled.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
     settled = await realCoordinator(ctx.env).reconcile(req);
   }
-  if (settled.state === "confirmed") return { txRef: settled.txHash! };
+  await mirrorPaymentIntentRefund(repo, idempotencyKey, settled, ctx.nowUtc);
+  if (settled.state === "confirmed") {
+    const txRef = settled.txHash!;
+    if (!await repo.confirmSettlementEffect(idempotencyKey, txRef, ctx.nowUtc)) {
+      throw conflictError("Booking payment refund ledger confirmation failed");
+    }
+    return { txRef };
+  }
   if (settled.state === "replaced" || settled.state === "failed_onchain") {
     throw settlementError(`Booking orphan payment refund terminal at coordinator (${settled.state}); reconciliation required`, "terminal");
+  }
+  if (settled.state === "preparation_parked") {
+    throw settlementError("Booking settlement preparation parked; operator recovery required", "terminal");
   }
   if (settled.state === "reserving" || settled.state === "failed_preparation") {
     throw settlementError("Booking orphan payment refund is not yet broadcast (retryable)", "pending");
@@ -178,11 +216,35 @@ export async function executeGlobalBookingOrphanPaymentRefund(
   if (!settled.txHash) throw conflictError("Booking orphan payment refund broadcast missing transaction hash");
 
   const confirmed = await pollConfirm(ctx, req, settled.txHash);
-  if (confirmed.state === "confirmed") return { txRef: confirmed.txHash ?? settled.txHash };
+  await mirrorPaymentIntentRefund(repo, idempotencyKey, confirmed, ctx.nowUtc);
+  if (confirmed.state === "confirmed") {
+    const txRef = confirmed.txHash ?? settled.txHash;
+    if (!await repo.confirmSettlementEffect(idempotencyKey, txRef, ctx.nowUtc)) {
+      throw conflictError("Booking payment refund ledger confirmation failed");
+    }
+    return { txRef };
+  }
   if (confirmed.state === "failed_onchain" || confirmed.state === "replaced") {
     throw settlementError(`Booking orphan payment refund terminal at coordinator (${confirmed.state}); reconciliation required`, "terminal");
   }
   throw settlementError("Booking orphan payment refund confirmation pending (retryable)", "pending");
+}
+
+async function mirrorPaymentIntentRefund(
+  repo: ReturnType<typeof createSettlementEffectWriteRepository>,
+  idempotencyKey: string,
+  result: OperatorSettleResult,
+  nowUtc: string,
+): Promise<void> {
+  const mirrored = await repo.mirrorSettlementCoordinatorEffect({
+    idempotencyKey,
+    coordinatorRef: result.idempotencyKey,
+    coordinatorState: result.state,
+    settlementRef: result.txHash,
+    broadcastNonce: result.nonce,
+    nowUtc,
+  });
+  if (!mirrored.ok) throw conflictError(`Booking payment refund coordinator mirror failed: ${mirrored.reason}`);
 }
 
 async function mirrorCoordinator(ctx: GlobalBookingOperatorEffectContext, effect: GlobalBookingOperatorEffect, result: OperatorSettleResult): Promise<void> {

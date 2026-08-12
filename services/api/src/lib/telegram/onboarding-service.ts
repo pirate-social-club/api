@@ -5,6 +5,7 @@ import { authError, badRequestError, conflictError, notFoundError, providerUnava
 import { makeId, nowIso } from "../helpers"
 import { withTransaction } from "../transactions"
 import { getProfileRepository, getSessionRepository, getUserRepository } from "../auth/repositories"
+import { resolveCanonicalUserId } from "../auth/account-alias-service"
 import { mintPirateAccessToken } from "../auth/pirate-session-token"
 import { getCommunityRepository } from "../communities/db-community-repository"
 import { getJoinEligibility } from "../communities/membership/eligibility-service"
@@ -675,7 +676,10 @@ export async function exchangeTelegramOnboardingSession(input: {
     selectedWallet: null,
   }
   const session = await getSessionRepository(input.env).exchangeIdentity(identity)
-  const userId = session.user.id.replace(/^usr_/, "")
+  const userId = await resolveCanonicalUserId({
+    env: input.env,
+    userId: session.user.id.replace(/^usr_/, ""),
+  })
   await upsertTelegramAccount({
     client: getControlPlaneClient(input.env),
     telegramUser,
@@ -741,8 +745,9 @@ export async function exchangeTelegramOnboardingSession(input: {
     object: "telegram_onboarding_exchange",
     community: publicCommunityId(intent.community_id),
     telegram_user_id: telegramUser.id,
-    access_token: accessToken,
     ...session,
+    access_token: accessToken,
+    user: { ...session.user, id: `usr_${userId}` },
     profile: syncedProfile ?? session.profile,
     eligibility,
     membership_result: membershipResult,

@@ -7,7 +7,8 @@ import type { Client } from "@libsql/client"
 import { resolveCoreRepoPath } from "../../../shared/core-repo-paths"
 import { splitSqlStatements } from "../../../shared/sql-migration"
 import { internalError } from "../errors"
-import { ensureRemoteCommentGuestAuthorship } from "./ensure-remote-comment-guest-authorship"
+import { repairCommentGuestAuthorship } from "./repair-comment-guest-authorship"
+import { normalizeStoredGatePolicy } from "./membership/gate-policy-validation"
 import type { GatePolicy } from "./membership/gate-types"
 
 const LOCAL_SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -332,20 +333,20 @@ export async function ensureCommunityDbSchema(client: Client): Promise<void> {
     .filter((entry) => entry.endsWith(".sql"))
     .sort()
 
-  let repairCommentGuestAuthorship: { migrationName: string; checksum: string } | undefined
+  let pendingGuestAuthorshipRepair: { migrationName: string; checksum: string } | undefined
   for (const entry of migrationEntries) {
     const result = await applyMigrationFile(client, join(migrationsDir, entry))
-    repairCommentGuestAuthorship ??= result.repairCommentGuestAuthorship
+    pendingGuestAuthorshipRepair ??= result.repairCommentGuestAuthorship
   }
-  if (repairCommentGuestAuthorship) {
-    await ensureRemoteCommentGuestAuthorship(client)
+  if (pendingGuestAuthorshipRepair) {
+    await repairCommentGuestAuthorship(client)
     await client.execute({
       sql: `
         UPDATE schema_migrations
         SET checksum = ?2
         WHERE migration_name = ?1
       `,
-      args: [repairCommentGuestAuthorship.migrationName, repairCommentGuestAuthorship.checksum],
+      args: [pendingGuestAuthorshipRepair.migrationName, pendingGuestAuthorshipRepair.checksum],
     })
   }
 }
@@ -533,6 +534,7 @@ export function buildCommunitySeedStatements(input: LocalCommunityBootstrapInput
   }
 
   if (input.gatePolicy) {
+    const gatePolicy = normalizeStoredGatePolicy(input.gatePolicy)
     statements.push({
       sql: `
         INSERT INTO community_gate_policies (
@@ -543,7 +545,7 @@ export function buildCommunitySeedStatements(input: LocalCommunityBootstrapInput
           expression_json = excluded.expression_json,
           updated_at = excluded.updated_at
       `,
-      args: [input.communityId, JSON.stringify(input.gatePolicy), now],
+      args: [input.communityId, JSON.stringify(gatePolicy), now],
     })
   }
 

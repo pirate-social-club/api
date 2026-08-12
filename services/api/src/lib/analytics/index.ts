@@ -9,10 +9,11 @@ export {
 export {
   enqueueAnalyticsEvent,
   flushAnalyticsOutbox,
+  pruneAnalyticsOutbox,
   trackServerEvent,
 } from "./outbox"
 
 export {
-  fetchTinybirdCommunityViewCounts,
+  isCommunityHealthSyncSaturationError,
   syncCommunityHealthCounts,
 } from "./community-analytics-sync"

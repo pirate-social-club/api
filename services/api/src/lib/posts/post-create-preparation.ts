@@ -15,6 +15,7 @@ import type {
 import { mergeAnalysisState, type PostAnalysisProvider } from "./post-analysis"
 import { prepareSongPostAsset, prepareVideoPostAsset } from "./post-create-asset-preparation"
 import { resolveCrosspostSource } from "./post-create-crosspost-source"
+import { moreRestrictive, resolveAdultContentPolicy } from "./openai-moderation"
 import type { PostWriteRequest } from "./post-create-validation"
 import { decodePublicSongArtifactBundleId } from "../public-ids"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -78,6 +79,33 @@ function mergeAgeGatePolicy(...policies: Array<Post["age_gate_policy"] | null | 
   return policies.includes("18_plus") ? "18_plus" : "none"
 }
 
+export function resolveCrosspostSafety(input: {
+  community: Community
+  sourceContentSafetyState: Post["content_safety_state"]
+  sourceAgeGatePolicy: Post["age_gate_policy"]
+}): Pick<Post, "analysis_state" | "content_safety_state" | "age_gate_policy"> {
+  if (input.sourceContentSafetyState !== "adult") {
+    return {
+      analysis_state: "allow",
+      content_safety_state: input.sourceContentSafetyState === "pending" ? "sensitive" : input.sourceContentSafetyState,
+      age_gate_policy: input.sourceAgeGatePolicy,
+    }
+  }
+
+  const policy = resolveAdultContentPolicy(input.community)
+  const decision = [
+    policy.artistic_nudity,
+    policy.explicit_nudity,
+    policy.explicit_sexual_content,
+    policy.fetish_content,
+  ].reduce(moreRestrictive)
+  return {
+    analysis_state: decision === "disallow" ? "blocked" : decision === "review" ? "review_required" : "allow",
+    content_safety_state: "adult",
+    age_gate_policy: "18_plus",
+  }
+}
+
 export async function preparePostCreate(input: {
   env: Env
   requestUrl: string
@@ -119,35 +147,36 @@ export async function preparePostCreate(input: {
       sourcePostRef: input.body.source_post,
       sourceCommunityRef: input.body.source_community,
     })
+    const crosspostSafety = resolveCrosspostSafety({
+      community: input.community,
+      sourceContentSafetyState: crosspostSource.source_content_safety_state ?? "sensitive",
+      sourceAgeGatePolicy: crosspostSource.source_age_gate_policy ?? "none",
+    })
     writeBody = {
       ...input.body,
       body: null,
       caption: null,
-      crosspost_source: crosspostSource,
+      crosspost_source: {
+        ...crosspostSource,
+        content_safety_state: crosspostSafety.content_safety_state,
+        age_gate_policy: crosspostSafety.age_gate_policy,
+      },
       link_url: null,
       media_refs: undefined,
     }
 
-    const postAnalysis = await input.postAnalysisProvider.analyze({
-      env: input.env,
-      community: input.community,
-      body: {
-        ...writeBody,
-        body: null,
-        caption: null,
-        crosspost_source: null,
-        link_url: null,
-        media_refs: undefined,
-      },
-    })
     return {
       writeBody,
-      analysisProviderResult: postAnalysis.providerResult,
+      analysisProviderResult: {
+        source: "crosspost_source_safety",
+        source_content_safety_state: crosspostSource.source_content_safety_state,
+        source_age_gate_policy: crosspostSource.source_age_gate_policy,
+      },
       analysisOverride: buildAnalysisOverride({
         community: input.community,
-        analysisState: postAnalysis.analysis_state,
-        contentSafetyState: postAnalysis.content_safety_state,
-        ageGatePolicy: mergeAgeGatePolicy(requestedAgeGatePolicy, postAnalysis.age_gate_policy),
+        analysisState: crosspostSafety.analysis_state,
+        contentSafetyState: crosspostSafety.content_safety_state,
+        ageGatePolicy: mergeAgeGatePolicy(requestedAgeGatePolicy, crosspostSafety.age_gate_policy),
       }),
       resolvedSongBundleForAsset,
       resolvedVideoAsset,

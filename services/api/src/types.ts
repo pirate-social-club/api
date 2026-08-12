@@ -18,6 +18,7 @@ export type {
   CommunityPurchaseSettlementFailureRequest,
   CommunityPurchaseSettlementRequest,
   CommunityHandle,
+  CommunityBranding,
   CommunityHandleClaimRequest,
   CommunityHandleListResponse,
   CommunityHandleMeResponse,
@@ -92,6 +93,7 @@ export type {
   VeryWidgetLaunch,
   WalletAttachmentSummary,
 } from "@pirate/api-contracts"
+import type { CommunityBranding } from "@pirate/api-contracts"
 
 export type DerivativeSourceKind = "song" | "video"
 
@@ -178,6 +180,51 @@ type RewardsCashoutSummary = {
   eligible: boolean
   min_cents: number
   verification_state: RewardVerificationState
+  verification_provider: "self" | "zkpassport" | "very" | null
+}
+
+type RewardPendingVerificationSummary = {
+  count: number
+  conditional_cents: number
+  earliest_expires_at: number | null
+  provider_requirements: Array<{
+    provider: "self" | "zkpassport" | "very"
+    count: number
+    conditional_cents: number
+    earliest_expires_at: number | null
+  }>
+}
+
+export type RewardQualificationStatus =
+  | "checking"
+  | "pending_verification"
+  | "credited"
+  | "expired"
+  | "unavailable"
+
+export type RewardQualificationOutcomeReason =
+  | "campaign_ended"
+  | "budget_unavailable"
+  | "identity_duplicate"
+  | "owner_blocked"
+  | "score"
+  | "verification_window_expired"
+
+export type RewardQualificationSummary = {
+  id: string
+  reward_qualification_event_id: string
+  reward_campaign_id: string
+  community_id: string
+  post_id: string
+  reward_period_key: string
+  qualification_basis: "study" | "karaoke" | "both"
+  amount_cents: number
+  status: RewardQualificationStatus
+  outcome_reason: RewardQualificationOutcomeReason | null
+  expires_at: number
+  credited_reward_event_id: string | null
+  created_at: number
+  updated_at: number
 }
 
 export type RewardsSummaryResponse = {
@@ -185,11 +232,21 @@ export type RewardsSummaryResponse = {
   balance_cents: number
   today_earned_cents: number
   recent_events: RewardEventSummary[]
+  recent_qualifications: RewardQualificationSummary[]
+  pending_verification: RewardPendingVerificationSummary
   cashout: RewardsCashoutSummary
   latest_in_flight_cashout: RewardPayoutSummary | null
 }
 
 export type RewardPayoutStatus = "submitted" | "confirmed" | "failed"
+
+export type RewardSettlementStage =
+  | "reserved"
+  | "signed"
+  | "broadcast"
+  | "needs_review"
+  | "confirmed"
+  | "failed"
 
 export type RewardPayoutSummary = {
   id: string
@@ -197,6 +254,7 @@ export type RewardPayoutSummary = {
   amount_cents: number
   recipient_address: string
   status: RewardPayoutStatus
+  settlement_stage: RewardSettlementStage
   settlement_ref: string | null
   failure_reason: string | null
 }
@@ -355,7 +413,7 @@ export type CommentListItem = {
   viewer_vote: -1 | 1 | null
   viewer_can_delete?: boolean
   resolved_locale: string
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked"
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked"
   machine_translated: boolean
   translated_body?: string | null
   source_hash: string
@@ -433,7 +491,7 @@ type SongPresentation = {
 export type SongKaraokeLine = {
   id: string
   index: number
-  kind: "lyric" | "section"
+  kind: "lyric" | "section" | "adlib"
   text: string
   start_ms: number
   end_ms: number
@@ -455,6 +513,7 @@ export type SongKaraokePayload = {
   artist_name?: string | null
   artwork_src?: string | null
   instrumental_audio_url?: string | null
+  duration_ms?: number | null
   karaoke_lines?: SongKaraokeLine[] | null
   raw_lines?: Array<Record<string, unknown>> | null
 }
@@ -473,6 +532,10 @@ type CrosspostSource = {
   author_user_id?: string | null
   author_label?: string | null
   thumbnail_ref?: string | null
+  source_content_safety_state?: Post["content_safety_state"] | null
+  source_age_gate_policy?: Post["age_gate_policy"] | null
+  content_safety_state?: Post["content_safety_state"] | null
+  age_gate_policy?: Post["age_gate_policy"] | null
 }
 
 export type PostEventStatus = "scheduled" | "canceled" | "postponed" | "ended"
@@ -544,6 +607,18 @@ export type Post = {
   creator_relation?: PostCreatorRelation | null
   promotion_disclosure?: PromotionDisclosure | null
   source_language?: string | null
+  /**
+   * Dominant language of `lyrics`. Null when the post has no lyrics, when detection
+   * abstained, or when the shard has not yet received migration 1143 (transitional).
+   * Never derived from title/body/caption and never used for translation provenance.
+   */
+  lyrics_language?: string | null
+  lyrics_language_confidence?: number | null
+  /** False when there is no detection evidence. Never defaults true. */
+  lyrics_language_reliable?: boolean
+  lyrics_language_detector?: string | null
+  lyrics_language_detected_at?: string | null
+  lyrics_language_source_hash?: string | null
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
@@ -679,7 +754,7 @@ export type LocalizedPostResponse = {
   viewer_reaction_kinds: Array<"like">
   age_gate_viewer_state?: "proof_required" | "verified_allowed" | null
   resolved_locale: string
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked"
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked"
   machine_translated: boolean
   translated_body?: string | null
   translated_title?: string | null
@@ -744,7 +819,7 @@ export type ProfileActivityResponse = {
 
 export type CommunityTextLocalizationItem = {
   field_key: string
-  translation_state: "ready" | "pending" | "same_language" | "policy_blocked"
+  translation_state: "ready" | "pending" | "failed" | "same_language" | "policy_blocked"
   machine_translated: boolean
   translated_value?: string | null
   source_hash: string
@@ -761,6 +836,9 @@ export type Community = {
   description?: string | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  branding_json?: string
+  default_surface?: "threads" | "videos"
+  video_feed_enabled?: boolean
   store_url?: string | null
   store_label?: string | null
   country_code?: string | null
@@ -776,6 +854,7 @@ export type Community = {
   allow_anonymous_identity: boolean
   anonymous_identity_scope?: "community_stable" | "thread_stable" | "post_ephemeral" | null
   human_verification_lane: HumanVerificationLane
+  preferred_verification_provider?: ContractCommunity["preferred_verification_provider"]
   human_verification_lane_origin: CommunityAgentResolutionOrigin
   allowed_disclosed_qualifiers?: Array<string> | null
   allow_qualifiers_on_anonymous_posts?: boolean | null
@@ -847,6 +926,9 @@ export type CommunityPreview = {
   localized_text?: CommunityTextLocalization | null
   avatar_ref?: string | null
   banner_ref?: string | null
+  branding: CommunityBranding
+  default_surface: "threads" | "videos"
+  video_feed_enabled: boolean
   store_url?: string | null
   store_label?: string | null
   country_code?: string | null
@@ -863,6 +945,7 @@ export type CommunityPreview = {
   allowed_disclosed_qualifiers?: Array<string> | null
   allow_qualifiers_on_anonymous_posts?: boolean | null
   human_verification_lane: HumanVerificationLane
+  preferred_verification_provider?: ContractCommunityPreview["preferred_verification_provider"]
   member_count?: number | null
   follower_count?: number | null
   donation_policy_mode?: "none" | "optional_creator_sidecar" | null

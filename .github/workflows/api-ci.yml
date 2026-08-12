@@ -3,32 +3,50 @@ name: api-ci
 on:
   pull_request:
     paths:
+      - "AGENTS.md"
       - ".github/workflows/api-ci.yml"
+      - ".github/workflows/dance-grader-staging-deploy.yml"
       - ".github/workflows/staging-contract-gate.yml"
+      - ".github/workflows/staging-telegram-channel-cadence.yml"
+      - ".github/workflows/staging-telegram-channel-smoke.yml"
       - ".github/ci-refs/core.sha"
+      - ".github/ci-refs/web.sha"
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
       - "services/contracts/**"
+      - "services/dance-grader/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
+      - "services/song-preview-runtime/**"
+      - "services/story-controlled-inclusion-harness/**"
       - "services/zkpassport-verifier-container/**"
+      - "services/zkpassport-verifier-runtime/**"
   merge_group:
     types: [checks_requested]
   push:
     branches:
       - main
     paths:
+      - "AGENTS.md"
       - ".github/workflows/api-ci.yml"
+      - ".github/workflows/dance-grader-staging-deploy.yml"
       - ".github/workflows/staging-contract-gate.yml"
+      - ".github/workflows/staging-telegram-channel-cadence.yml"
+      - ".github/workflows/staging-telegram-channel-smoke.yml"
       - ".github/ci-refs/core.sha"
+      - ".github/ci-refs/web.sha"
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
       - "services/contracts/**"
+      - "services/dance-grader/**"
       - "services/shared/**"
       - "services/song-preview-container/**"
+      - "services/song-preview-runtime/**"
+      - "services/story-controlled-inclusion-harness/**"
       - "services/zkpassport-verifier-container/**"
+      - "services/zkpassport-verifier-runtime/**"
   workflow_dispatch:
     inputs:
       core_sha:
@@ -37,18 +55,77 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
+  packages: read
 
 concurrency:
   group: api-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  ci-provenance:
+    name: Resolve CI provenance
+    runs-on: ubuntu-latest
+    outputs:
+      reuse_merge_group: ${{ steps.merge-group.outputs.reuse }}
+    steps:
+      - name: Reuse successful merge-queue verification for the exact main SHA
+        id: merge-group
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd
+        with:
+          script: |
+            core.setOutput("reuse", "false");
+
+            if (context.eventName !== "push" || context.ref !== "refs/heads/main") {
+              core.notice("Full CI required: this is not a push to main.");
+              return;
+            }
+
+            let data;
+            try {
+              ({ data } = await github.rest.actions.listWorkflowRuns({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                workflow_id: "api-ci.yml",
+                event: "merge_group",
+                head_sha: context.sha,
+                status: "success",
+                per_page: 20,
+              }));
+            } catch (error) {
+              core.warning(`Could not verify merge-group provenance; running full CI: ${error.message}`);
+              return;
+            }
+
+            const source = data.workflow_runs.find((run) =>
+              run.event === "merge_group" &&
+              run.conclusion === "success" &&
+              run.head_sha === context.sha &&
+              run.path === ".github/workflows/api-ci.yml" &&
+              run.head_branch?.startsWith("gh-readonly-queue/main/")
+            );
+
+            if (!source) {
+              core.notice(`Full CI required: no successful main merge-group run proves ${context.sha}.`);
+              return;
+            }
+
+            core.setOutput("reuse", "true");
+            core.notice(`Reusing exact-SHA merge-group verification from ${source.html_url}.`);
+            await core.summary
+              .addHeading("API CI provenance")
+              .addRaw(`Reused successful main merge-group run [${source.id}](${source.html_url}) for exact SHA \`${context.sha}\`.`)
+              .write();
+
   ci-inputs:
     name: Resolve CI inputs
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     outputs:
       core_sha: ${{ steps.core-ref.outputs.sha }}
+      web_sha: ${{ steps.web-ref.outputs.sha }}
     steps:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -78,7 +155,23 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Resolve Web commit
+        id: web-ref
+        shell: bash
+        run: |
+          pinned_web_sha="$(< .github/ci-refs/web.sha)"
+          if [[ ! "$pinned_web_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Web CI reference must be one full lowercase commit SHA"
+            exit 1
+          fi
+          echo "sha=$pinned_web_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "- Web: \`${pinned_web_sha}\` (committed .github/ci-refs/web.sha)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   community-d1-shard:
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -87,7 +180,7 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.21
+          bun-version: 1.3.10
 
       - name: Install shared service dependencies
         working-directory: services/shared
@@ -105,10 +198,77 @@ jobs:
         working-directory: services/community-d1-shard
         run: bun run test
 
+  dance-grader:
+    name: Dance grader Python
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --disable-pip-version-check uv==0.10.12
+
+      - name: Install dance grader development dependencies
+        working-directory: services/dance-grader
+        run: uv sync --frozen --extra dev
+
+      - name: Lint dance grader
+        working-directory: services/dance-grader
+        run: uv run ruff check .
+
+      - name: Check dance grader formatting
+        working-directory: services/dance-grader
+        run: uv run ruff format --check .
+
+      - name: Test dance grader
+        working-directory: services/dance-grader
+        run: uv run pytest -q
+
+  story-controlled-inclusion-harness:
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.3.10
+
+      - name: Install controlled-inclusion harness dependencies
+        working-directory: services/story-controlled-inclusion-harness
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck controlled-inclusion harness
+        working-directory: services/story-controlled-inclusion-harness
+        run: bun run check
+
+      - name: Test controlled-inclusion transaction model
+        working-directory: services/story-controlled-inclusion-harness
+        run: bun run test
+
+      - name: Test controlled-inclusion Durable Object
+        working-directory: services/story-controlled-inclusion-harness
+        run: bun run test:workerd
+
+      - name: Validate staging Worker bundle
+        working-directory: services/story-controlled-inclusion-harness
+        run: bunx wrangler deploy --dry-run --env staging
+
   bookings-repository:
     # Real-Postgres tests for the global bookings repositories: provisions
     # PostgreSQL 17 and applies the CANONICAL core b0001 before exercising the repository.
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -146,30 +306,23 @@ jobs:
           fi
           echo "Using Core commit $actual_core_sha"
 
-      - name: Check out web repo for cross-repo file deps
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
-          path: .cross-repo/web
-
       - name: Link cross-repo file deps
         run: |
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.21
+          bun-version: 1.3.10
 
       - name: Install shared dependencies
         working-directory: services/shared
         run: bun install --frozen-lockfile
 
       - name: Install API dependencies
-        id: install-api-dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
 
       - name: Run bookings repository real-Postgres tests
@@ -177,41 +330,69 @@ jobs:
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
+          BOOKINGS_PG_CI_REQUIRED: "true"
           REWARD_CAMPAIGN_PG_CI_REQUIRED: "true"
           REWARD_CAMPAIGN_PG_SENTINEL_PATH: "/tmp/reward-campaign-pg-suite-complete"
         run: |
           echo "::group::host-config repository PG"
-          timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts
+          rm -f "/tmp/host-config-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/host-config-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/host-config-repository.pg.test.ts
+          test "$(cat "/tmp/host-config-repository-pg-suite-complete")" = "host-config-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::hold repository PG"
-          timeout 120s bun test src/lib/bookings/hold-repository.pg.test.ts
+          rm -f "/tmp/hold-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/hold-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/hold-repository.pg.test.ts
+          test "$(cat "/tmp/hold-repository-pg-suite-complete")" = "hold-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking hold service PG"
-          timeout 120s bun test src/lib/bookings/booking-hold-service.pg.test.ts
+          rm -f "/tmp/booking-hold-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-hold-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-hold-service.pg.test.ts
+          test "$(cat "/tmp/booking-hold-service-pg-suite-complete")" = "booking-hold-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking read service PG"
-          timeout 120s bun test src/lib/bookings/booking-read-service.pg.test.ts
+          rm -f "/tmp/booking-read-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-read-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-read-service.pg.test.ts
+          test "$(cat "/tmp/booking-read-service-pg-suite-complete")" = "booking-read-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::payment-intent repository PG"
-          timeout 120s bun test src/lib/bookings/payment-intent-repository.pg.test.ts
+          rm -f "/tmp/payment-intent-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/payment-intent-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/payment-intent-repository.pg.test.ts
+          test "$(cat "/tmp/payment-intent-repository-pg-suite-complete")" = "payment-intent-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking finalization repository PG"
-          timeout 120s bun test src/lib/bookings/booking-finalization-repository.pg.test.ts
+          rm -f "/tmp/booking-finalization-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-finalization-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-finalization-repository.pg.test.ts
+          test "$(cat "/tmp/booking-finalization-repository-pg-suite-complete")" = "booking-finalization-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking lifecycle repository PG"
-          timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
+          rm -f "/tmp/booking-lifecycle-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-lifecycle-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-lifecycle-repository.pg.test.ts
+          test "$(cat "/tmp/booking-lifecycle-repository-pg-suite-complete")" = "booking-lifecycle-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking lifecycle service PG"
-          timeout 120s bun test src/lib/bookings/booking-lifecycle-service.pg.test.ts
+          rm -f "/tmp/booking-lifecycle-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-lifecycle-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-lifecycle-service.pg.test.ts
+          test "$(cat "/tmp/booking-lifecycle-service-pg-suite-complete")" = "booking-lifecycle-service-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking settlement cron PG"
-          timeout 120s bun test src/lib/bookings/booking-settlement-cron.pg.test.ts
+          rm -f "/tmp/booking-settlement-cron-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-settlement-cron-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-settlement-cron.pg.test.ts
+          test "$(cat "/tmp/booking-settlement-cron-pg-suite-complete")" = "booking-settlement-cron-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::settlement effect repository PG"
-          timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
+          rm -f "/tmp/settlement-effect-repository-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/settlement-effect-repository-pg-suite-complete" timeout 120s bun test src/lib/bookings/settlement-effect-repository.pg.test.ts
+          test "$(cat "/tmp/settlement-effect-repository-pg-suite-complete")" = "settlement-effect-repository-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::booking confirm service PG"
-          timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
+          rm -f "/tmp/booking-confirm-service-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/booking-confirm-service-pg-suite-complete" timeout 120s bun test src/lib/bookings/booking-confirm-service.pg.test.ts
+          test "$(cat "/tmp/booking-confirm-service-pg-suite-complete")" = "booking-confirm-service-postgres-suite-complete"
+          echo "::endgroup::"
+          echo "::group::feed booking discovery PG"
+          rm -f "/tmp/home-feed-booking-pg-suite-complete"
+          BOOKINGS_PG_SENTINEL_PATH="/tmp/home-feed-booking-pg-suite-complete" timeout 120s bun test src/lib/feed/home-feed-booking.pg.test.ts
+          test "$(cat "/tmp/home-feed-booking-pg-suite-complete")" = "home-feed-booking-postgres-suite-complete"
           echo "::endgroup::"
           echo "::group::reward campaign credit PG"
           rm -f "$REWARD_CAMPAIGN_PG_SENTINEL_PATH"
@@ -221,7 +402,8 @@ jobs:
 
   api-top-level-tests:
     name: top-level-tests (${{ matrix.shard }}/4)
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -240,17 +422,9 @@ jobs:
           ref: ${{ needs.ci-inputs.outputs.core_sha }}
           path: core
 
-      - name: Check out Web workspace dependency
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
-          path: .cross-repo/web
-
       - name: Link workspace dependencies and test fixtures
         run: |
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
           ln -sfn "$GITHUB_WORKSPACE/services/api/test-fixtures/db" "$GITHUB_WORKSPACE/../db"
 
       - name: Set up Bun
@@ -263,12 +437,11 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install API dependencies
+        id: install-api-dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
-
-      - name: Generate karaoke runtime build provenance
-        working-directory: .cross-repo/web/packages/karaoke-runtime
-        run: bun run build:provenance
 
       - name: Run top-level API tests
         shell: bash
@@ -295,7 +468,8 @@ jobs:
 
   api-core:
     name: api-core
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -336,7 +510,9 @@ jobs:
           bun-version: 1.3.10
 
       - name: Run repo hygiene checks
-        run: node scripts/check-repo-hygiene.mjs
+        run: |
+          node scripts/check-repo-hygiene.mjs
+          bun test scripts/check-repo-hygiene.dockerfiles.test.mjs
 
       - name: Install shared dependencies
         working-directory: services/shared
@@ -418,7 +594,10 @@ jobs:
 
       - name: Audit ZKPassport verifier container dependencies
         working-directory: services/zkpassport-verifier-container
-        run: bun audit --audit-level=high
+        # Temporary tooling-only exception. Miniflare pins sharp 0.34.5, while
+        # the verifier image installs its dedicated production runtime only.
+        # Expires 2026-08-05; remove via #699.
+        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
 
       - name: Typecheck ZKPassport verifier container
         working-directory: services/zkpassport-verifier-container
@@ -428,31 +607,23 @@ jobs:
         working-directory: services/zkpassport-verifier-container
         run: bun run test
 
-      - name: Check out web repo for cross-repo file deps
-        # services/api depends on @pirate-social-club/karaoke-runtime via
-        # file:../../../web/packages/karaoke-runtime — CI must mirror the
-        # workspace layout (web as a sibling) so the file: path resolves.
-        #
-        # PINNED to a SHA, not the mutable `release/karaoke-web` branch. That branch drifts
-        # independently of this repo: commit cd4b93fb added a required `uncertainLineCount` field to
-        # KaraokeSessionSummary, which breaks `tsgo` against the (un-updated) api karaoke test in
-        # tests/lib/karaoke/session-do.test.ts — a time-dependent failure with no change in this repo.
-        # de5eafa2 is the last commit on release/karaoke-web before cd4b93fb (last type-compatible
-        # with the current api karaoke test).
-        # UPDATE PROCEDURE: when the api karaoke test is updated to the newer karaoke-runtime type
-        # (uncertainLineCount), bump this SHA to the matching release/karaoke-web commit, ideally
-        # landing both changes together.
+      - name: Install ZKPassport verifier runtime dependencies
+        working-directory: services/zkpassport-verifier-runtime
+        run: bun install --frozen-lockfile --production
+
+      - name: Audit ZKPassport verifier runtime dependencies
+        working-directory: services/zkpassport-verifier-runtime
+        run: bun audit --audit-level=high
+
+      - name: Check out Web dependency-audit baseline
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
+          ref: ${{ needs.ci-inputs.outputs.web_sha }}
           path: .cross-repo/web
 
-      - name: Link web repo for cross-repo file deps
+      - name: Link Core repo for cross-repo file deps
         run: |
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
-          # @pirate/bookings-domain lives at file:../../../core/packages/bookings-domain; the
-          # core repo is checked out at $GITHUB_WORKSPACE/core, so link it as a sibling too.
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
 
       - name: Install song preview container dependencies
@@ -461,7 +632,9 @@ jobs:
 
       - name: Audit song preview container dependencies
         working-directory: services/song-preview-container
-        run: bun audit --audit-level=high
+        # Wrangler/Miniflare development-tool exception. Expires 2026-08-05;
+        # remove via #699 once Miniflare consumes sharp >=0.35.0.
+        run: bun audit --audit-level=high --ignore GHSA-f88m-g3jw-g9cj
 
       - name: Typecheck song preview container
         working-directory: services/song-preview-container
@@ -471,35 +644,54 @@ jobs:
         working-directory: services/song-preview-container
         run: bun run test
 
-      - name: Install API dependencies
-        working-directory: services/api
-        run: bun install --frozen-lockfile
+      - name: Install song preview runtime dependencies
+        working-directory: services/song-preview-runtime
+        run: bun install --frozen-lockfile --production
 
-      - name: Audit API dependencies
-        working-directory: services/api
+      - name: Audit song preview runtime dependencies
+        working-directory: services/song-preview-runtime
         run: bun audit --audit-level=high
 
+      - name: Install API dependencies
+        working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: bun install --frozen-lockfile
+
       - name: Typecheck API service
+        id: typecheck-api
         working-directory: services/api
         run: bun run check
 
       - name: Lint API service
+        id: lint-api
         working-directory: services/api
         run: bun run lint
 
       - name: Run API unit tests
+        id: test-api-unit
         working-directory: services/api
         run: bun run test:unit
 
       - name: Run bookings production-path real-Postgres test
+        id: test-bookings-production-path
         # Runs after install/core-checkout even if an earlier step (e.g. the pre-existing, unrelated
         # fetch-types typecheck drift) failed, so this bookings coverage is observed on its own merits.
-        if: always() && steps.install-api-dependencies.outcome == 'success'
+        # If dependency installation failed, this test also fails explicitly
+        # instead of disappearing from the required product signal.
+        if: always()
         working-directory: services/api
         env:
           PIRATE_CORE_REPO: ${{ github.workspace }}/core
           BOOKINGS_REPO_TEST_ADMIN_URL: "postgres://postgres:postgres@127.0.0.1:5432/postgres?sslmode=disable"
-        run: bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
+          BOOKINGS_PG_CI_REQUIRED: "true"
+          PUBLIC_ARTIFACT_GRANT_PG_CI_REQUIRED: "true"
+          BOOKINGS_PG_SENTINEL_PATH: "/tmp/host-config-repository-production-path-pg-suite-complete"
+        run: |
+          rm -f "$BOOKINGS_PG_SENTINEL_PATH"
+          bun test src/lib/bookings/host-config-repository.production-path.pg.test.ts
+          bun test src/lib/song-artifacts/public-song-artifact-grant-repository.pg.test.ts
+          test "$(cat "$BOOKINGS_PG_SENTINEL_PATH")" = "host-config-repository-production-path-postgres-suite-complete"
 
       - name: Run API coverage report
         # Report-only: this command enforces no threshold, and coverage instrumentation can be flaky/OOM-prone.
@@ -508,13 +700,44 @@ jobs:
         working-directory: services/api
         run: bun run coverage
 
+      - name: Audit API dependencies
+        id: audit-api-dependencies
+        continue-on-error: true
+        working-directory: services/api
+        # Run after product verification so an audit-client or advisory-service
+        # failure cannot erase typecheck, lint, and unit-test signal. The
+        # explicit required-step assertion below keeps this audit a hard merge
+        # gate.
+        #
+        run: |
+          bun run scripts/audit-bun-lock.ts \
+            --mode scheduled \
+            --lockfile bun.lock \
+            --baseline ../../.cross-repo/web/.github/dependency-audit-baseline.json
+
+      - name: Verify required API core steps
+        if: always()
+        env:
+          API_AUDIT_OUTCOME: ${{ steps.audit-api-dependencies.outcome }}
+          API_BOOKINGS_TEST_OUTCOME: ${{ steps.test-bookings-production-path.outcome }}
+          API_LINT_OUTCOME: ${{ steps.lint-api.outcome }}
+          API_TYPECHECK_OUTCOME: ${{ steps.typecheck-api.outcome }}
+          API_UNIT_TEST_OUTCOME: ${{ steps.test-api-unit.outcome }}
+        run: |
+          test "$API_TYPECHECK_OUTCOME" = "success"
+          test "$API_LINT_OUTCOME" = "success"
+          test "$API_UNIT_TEST_OUTCOME" = "success"
+          test "$API_BOOKINGS_TEST_OUTCOME" = "success"
+          test "$API_AUDIT_OUTCOME" = "success"
+
       - name: Show iron-proxy egress summary
         uses: ironsh/iron-proxy-action/summary@fa1fd82ec32396d044deba7040a6db576bec927a
         if: always()
 
   api-route-tests:
     name: route-tests (${{ matrix.shard }}/8)
-    needs: ci-inputs
+    needs: [ci-provenance, ci-inputs]
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     strategy:
@@ -554,17 +777,9 @@ jobs:
           ref: ${{ needs.ci-inputs.outputs.core_sha }}
           path: core
 
-      - name: Check out Web workspace dependency
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
-        with:
-          repository: pirate-social-club/web
-          ref: ecda035d00d1b134ad9ca129ba6db16a0ac9da22
-          path: .cross-repo/web
-
       - name: Link workspace dependencies and test fixtures
         run: |
           ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
-          ln -sfn "$GITHUB_WORKSPACE/.cross-repo/web" "$GITHUB_WORKSPACE/../web"
           ln -sfn "$GITHUB_WORKSPACE/services/api/test-fixtures/db" "$GITHUB_WORKSPACE/../db"
 
       - name: Set up Bun
@@ -578,11 +793,9 @@ jobs:
 
       - name: Install API dependencies
         working-directory: services/api
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
         run: bun install --frozen-lockfile
-
-      - name: Generate karaoke runtime build provenance
-        working-directory: .cross-repo/web/packages/karaoke-runtime
-        run: bun run build:provenance
 
       - name: Run route-test shard
         working-directory: services/api
@@ -601,17 +814,43 @@ jobs:
     needs:
       - api-core
       - api-route-tests
+      - api-top-level-tests
+      - bookings-repository
+      - ci-provenance
+      - dance-grader
+      - story-controlled-inclusion-harness
     runs-on: ubuntu-latest
     steps:
       - name: Verify API checks
         env:
           API_CORE_RESULT: ${{ needs.api-core.result }}
           API_ROUTE_TESTS_RESULT: ${{ needs.api-route-tests.result }}
+          API_TOP_LEVEL_TESTS_RESULT: ${{ needs.api-top-level-tests.result }}
+          BOOKINGS_REPOSITORY_RESULT: ${{ needs.bookings-repository.result }}
+          DANCE_GRADER_RESULT: ${{ needs.dance-grader.result }}
+          REUSE_MERGE_GROUP: ${{ needs.ci-provenance.outputs.reuse_merge_group }}
+          STORY_CONTROLLED_INCLUSION_HARNESS_RESULT: ${{ needs.story-controlled-inclusion-harness.result }}
         run: |
+          if [[ "$REUSE_MERGE_GROUP" == "true" ]]; then
+            test "$API_CORE_RESULT" = "skipped"
+            test "$API_ROUTE_TESTS_RESULT" = "skipped"
+            test "$API_TOP_LEVEL_TESTS_RESULT" = "skipped"
+            test "$BOOKINGS_REPOSITORY_RESULT" = "skipped"
+            test "$DANCE_GRADER_RESULT" = "skipped"
+            test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "skipped"
+            echo "Exact-SHA merge-group verification reused; duplicate main-push jobs stayed skipped."
+            exit 0
+          fi
           test "$API_CORE_RESULT" = "success"
           test "$API_ROUTE_TESTS_RESULT" = "success"
+          test "$API_TOP_LEVEL_TESTS_RESULT" = "success"
+          test "$BOOKINGS_REPOSITORY_RESULT" = "success"
+          test "$DANCE_GRADER_RESULT" = "success"
+          test "$STORY_CONTROLLED_INCLUSION_HARNESS_RESULT" = "success"
 
   cli:
+    needs: ci-provenance
+    if: needs.ci-provenance.outputs.reuse_merge_group != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -623,12 +862,12 @@ jobs:
         with:
           version: 0.41.0
           egress-rules: egress-rules.yaml
-          warn: true
+          warn: false
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
-          bun-version: 1.2.21
+          bun-version: 1.3.10
 
       - name: Install contracts dependencies
         working-directory: services/contracts

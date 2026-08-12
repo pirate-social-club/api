@@ -16,6 +16,11 @@ import {
   type CommunityMembershipRow,
 } from "../communities/membership/membership-state-store"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
+import {
+  allowsNonMemberPowParticipation,
+  followCommunityAfterParticipation,
+  type ParticipationFollowRepository,
+} from "../communities/membership/open-participation"
 import type {
   CommunityCommentProjectionRepository,
   CommunityDatabaseBindingRepository,
@@ -61,6 +66,7 @@ export {
 type CommentServiceCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
+  & ParticipationFollowRepository
   & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionMetrics">
   & CommunityCommentProjectionRepository
 
@@ -89,15 +95,25 @@ async function syncThreadRootPostProjectionMetrics(input: {
   if (typeof input.communityRepository.updateCommunityPostProjectionMetrics !== "function") {
     return
   }
-  const metrics = await getPostProjectionMetrics(input.client, input.threadRootPostId)
-  await input.communityRepository.updateCommunityPostProjectionMetrics({
-    postId: input.threadRootPostId,
-    upvoteCount: metrics.upvoteCount,
-    downvoteCount: metrics.downvoteCount,
-    commentCount: metrics.commentCount,
-    likeCount: metrics.likeCount,
-    updatedAt: input.updatedAt,
-  })
+  // Fail-soft: nonessential post-commit work. The comment row (and its
+  // projection-sync job) are already durable, so a metrics hiccup must not
+  // fail the request — the next comment/vote re-syncs these cached counters.
+  try {
+    const metrics = await getPostProjectionMetrics(input.client, input.threadRootPostId)
+    await input.communityRepository.updateCommunityPostProjectionMetrics({
+      postId: input.threadRootPostId,
+      upvoteCount: metrics.upvoteCount,
+      downvoteCount: metrics.downvoteCount,
+      commentCount: metrics.commentCount,
+      likeCount: metrics.likeCount,
+      updatedAt: input.updatedAt,
+    })
+  } catch (error) {
+    console.error("[comments] failed to sync thread root post projection metrics", {
+      threadRootPostId: input.threadRootPostId,
+      error,
+    })
+  }
 }
 
 function resolveAnonymousScope(input: {
@@ -444,6 +460,30 @@ export async function createComment(input: {
         dedupe: false, // inside write tx: INSERT-only prewarm jobs (fresh comment)
       })
 
+      // Durable backstop for the central comment projection: the synchronous
+      // recordCommunityCommentProjection below runs AFTER commit, so a worker
+      // crash in between would otherwise leave the comment without a projection
+      // (and no retry job) forever. The job is atomic with the comment insert
+      // and the handler is an idempotent upsert, so the common path just
+      // duplicates the projection write once.
+      await enqueueCommunityJob({
+        client: tx,
+        communityId: input.communityId,
+        jobType: "comment_projection_sync",
+        subjectType: "comment",
+        subjectId: draft.comment_id,
+        payloadJson: JSON.stringify({
+          comment_id: draft.comment_id,
+          thread_root_post_id: draft.thread_root_post_id,
+          parent_comment_id: draft.parent_comment_id,
+          depth: draft.depth,
+          status: draft.status,
+          source_created_at: draft.created_at,
+        }),
+        createdAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent projection backstop)
+      })
+
       await tx.commit()
 
       // Hydrate the full Comment AFTER commit — the buffered write tx can't read the
@@ -530,6 +570,23 @@ export async function createComment(input: {
         })
       }
 
+      if (
+        membership != null
+        && !canAccessCommunity(membership)
+        && await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: input.communityId,
+          membership,
+        })
+      ) {
+        await followCommunityAfterParticipation({
+          client: db.client,
+          communityRepository: input.communityRepository,
+          communityId: input.communityId,
+          userId: input.userId,
+        })
+      }
+
       return createdComment
     } catch (error) {
       await safeRollback(tx, "[comments] rollback failed while creating comment")
@@ -559,8 +616,24 @@ export async function castCommentVote(input: {
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
+    let nonMemberPowVoter = false
     if (!input.bypassVoterAccessChecks) {
-      await requireMemberAccess(db.client, projection.community_id, input.userId)
+      const membership = await getCommunityMembershipState(db.client, projection.community_id, input.userId)
+      if (!canAccessCommunity(membership)) {
+        // PoW-only communities admit non-member votes: the action gate below
+        // demands a vote-scoped ALTCHA proof, which is all joining would prove.
+        nonMemberPowVoter = await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: projection.community_id,
+          membership,
+        })
+        if (!nonMemberPowVoter) {
+          throw membershipRequired("Join this community to comment", {
+            reason: "membership_required",
+            community_id: projection.community_id,
+          })
+        }
+      }
       await enforceCommunityActionGate({
         env: input.env,
         client: db.client,
@@ -590,6 +663,14 @@ export async function castCommentVote(input: {
         now: nowIso(),
       })
       await tx.commit()
+      if (nonMemberPowVoter) {
+        await followCommunityAfterParticipation({
+          client: db.client,
+          communityRepository: input.communityRepository,
+          communityId: projection.community_id,
+          userId: input.userId,
+        })
+      }
       return result
     } catch (error) {
       await safeRollback(tx, "[comments] rollback failed while casting comment vote")
@@ -631,6 +712,9 @@ export async function deleteComment(input: {
     }
 
     const updatedAt = nowIso()
+    // Reconstruct deterministically from the pre-tx row: the write tx can't read
+    // the updated row back, and markCommentDeleted sets exactly these fields.
+    const deleted: Comment = { ...comment, status: "deleted", body: "[deleted]", media_refs: [], updated_at: updatedAt }
     const tx = await db.client.transaction("write")
     try {
       await markCommentDeleted({
@@ -638,11 +722,24 @@ export async function deleteComment(input: {
         commentId: input.commentId,
         now: updatedAt,
       })
+      await enqueueCommunityJob({
+        client: tx,
+        communityId: deleted.community_id,
+        jobType: "comment_projection_sync",
+        subjectType: "comment_status",
+        subjectId: `${deleted.comment_id}:deleted`,
+        payloadJson: JSON.stringify({
+          comment_id: deleted.comment_id,
+          thread_root_post_id: deleted.thread_root_post_id,
+          parent_comment_id: deleted.parent_comment_id,
+          depth: deleted.depth,
+          status: deleted.status,
+          source_created_at: deleted.created_at,
+        }),
+        createdAt: updatedAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent projection backstop)
+      })
       await tx.commit()
-
-      // Reconstruct deterministically from the pre-tx row: the write tx can't read
-      // the updated row back, and markCommentDeleted sets exactly these fields.
-      const deleted: Comment = { ...comment, status: "deleted", body: "[deleted]", media_refs: [], updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({
@@ -721,6 +818,9 @@ export async function removeCommentAsModerator(input: {
     }
 
     const updatedAt = nowIso()
+    // Reconstruct deterministically from the pre-tx row (buffered write tx can't
+    // read it back); setCommentStatus only changes status + updated_at.
+    const removed: Comment = { ...comment, status: "removed", updated_at: updatedAt }
     const tx = await db.client.transaction("write")
     try {
       await setCommentStatus({
@@ -729,11 +829,24 @@ export async function removeCommentAsModerator(input: {
         status: "removed",
         now: updatedAt,
       })
+      await enqueueCommunityJob({
+        client: tx,
+        communityId: removed.community_id,
+        jobType: "comment_projection_sync",
+        subjectType: "comment_status",
+        subjectId: `${removed.comment_id}:removed`,
+        payloadJson: JSON.stringify({
+          comment_id: removed.comment_id,
+          thread_root_post_id: removed.thread_root_post_id,
+          parent_comment_id: removed.parent_comment_id,
+          depth: removed.depth,
+          status: removed.status,
+          source_created_at: removed.created_at,
+        }),
+        createdAt: updatedAt,
+        dedupe: false, // inside write tx: INSERT-only (idempotent projection backstop)
+      })
       await tx.commit()
-
-      // Reconstruct deterministically from the pre-tx row (buffered write tx can't
-      // read it back); setCommentStatus only changes status + updated_at.
-      const removed: Comment = { ...comment, status: "removed", updated_at: updatedAt }
 
       try {
         await input.communityRepository.recordCommunityCommentProjection({

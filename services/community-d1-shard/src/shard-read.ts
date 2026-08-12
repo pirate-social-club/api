@@ -1,13 +1,22 @@
 import {
+  BOOTSTRAP_STATE_TABLE_DDL,
+  BOOTSTRAP_STATE_TABLE_NAME,
   isReadOnlyStatement,
   isWriteAllowedStatement,
   isBootstrapAllowedStatement,
   readOnlyVerb,
   SHARD_READ_ERROR,
+  shardSnapshotDigest,
   type ShardBatchReadRequest,
+  type ShardBulkReadRequest,
+  type ShardBulkReadResponse,
+  type ShardBulkWriteRequest,
+  type ShardBulkWriteResponse,
   type ShardBindRequest,
   type ShardLoadSnapshotRequest,
   type ShardLoadSnapshotResponse,
+  type ShardLookupBindingRequest,
+  type ShardLookupBindingResponse,
   type ShardBindResponse,
   type ShardError,
   type ShardQueryResult,
@@ -25,6 +34,8 @@ import {
   type ShardAdminResetResponse,
   type ShardAdminReleaseRequest,
   type ShardAdminReleaseResponse,
+  type ShardAdminDecommissionRequest,
+  type ShardAdminDecommissionResponse,
 } from "@pirate/api-shared"
 
 /**
@@ -79,7 +90,7 @@ export type ShardEnv = {
    * must never be reachable on a misconfigured shard.
    */
   SHARD_ADMIN_TOKEN?: string
-  [binding: string]: D1Database | string | undefined
+  [binding: string]: D1Database | WorkerVersionMetadata | string | undefined
 }
 
 /**
@@ -107,6 +118,21 @@ export const POOL_CACHE_SHORT_TTL_MS = 5_000
  * constants without the other.
  */
 export const QUARANTINE_WINDOW_MS = 5 * 60 * 1000
+
+/**
+ * Staging fixtures with stable external contracts are not pool capacity.
+ *
+ * DB_CMTY_FIXTURE predates the numeric provisioning pool and is the durable
+ * home of release-gate state. Keep the reservation in the shard's enforcement
+ * layer: a missing/corrupt pool mapping must never make this binding eligible
+ * for allocation or destructive reclamation.
+ */
+export const RESERVED_FIXTURE_BINDING = "DB_CMTY_FIXTURE"
+export const RESERVED_POOL_BINDINGS = new Set([RESERVED_FIXTURE_BINDING])
+
+export function isReservedPoolBinding(bindingName: string): boolean {
+  return RESERVED_POOL_BINDINGS.has(bindingName)
+}
 
 type PoolCacheEntry = {
   /** null = community is unknown to the pool (still cached as a negative result) */
@@ -322,6 +348,61 @@ export async function runShardBatch(
 }
 
 /**
+ * Fleet read surface.  This is intentionally one WorkerEntrypoint call with
+ * one independently authorized D1 batch per operation.  Keeping the
+ * authorization and binding resolution inside `runShardBatch` means the bulk
+ * method cannot turn a routing row into a cross-community capability.
+ */
+export async function runShardBulkRead(
+  env: ShardEnv,
+  input: ShardBulkReadRequest,
+): Promise<ShardBulkReadResponse> {
+  const operations: ShardBulkReadResponse["operations"] = []
+  for (let offset = 0; offset < input.operations.length; offset += 8) {
+    const batch = input.operations.slice(offset, offset + 8)
+    operations.push(...await Promise.all(batch.map(async (operation) => {
+    try {
+      return { communityId: operation.communityId, result: await runShardBatch(env, operation) }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const missing = operation.allowMissingTables?.filter((table) =>
+        new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(message),
+      ) ?? []
+      if (missing.length === 0) throw error
+
+      // Legacy shards may lack one explicitly named table (currently only
+      // `bookings`). Re-run the operation statement-by-statement so that the
+      // absent table contributes an empty result while every other failure is
+      // still fail-closed.
+      const values: ShardQueryResult[] = []
+      for (const statement of operation.statements) {
+        try {
+          const value = await runShardRead(env, {
+            communityId: operation.communityId,
+            bindingName: operation.bindingName,
+            statement,
+          })
+          if (!value.ok) return { communityId: operation.communityId, result: value }
+          values.push(value.value)
+        } catch (statementError) {
+          const statementMessage = statementError instanceof Error ? statementError.message : String(statementError)
+          if (operation.allowMissingTables?.some((table) =>
+            new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(statementMessage),
+          )) {
+            values.push({ rows: [] })
+            continue
+          }
+          throw statementError
+        }
+      }
+      return { communityId: operation.communityId, result: { ok: true as const, value: values } }
+    }
+    })))
+  }
+  return { operations }
+}
+
+/**
  * PR3 write path. Runs the buffered statements of one community write transaction
  * as a single ATOMIC D1 batch (all-or-nothing). Same (communityId, bindingName)
  * authorization as reads; DML/SELECT only (DDL/PRAGMA rejected). Empty batch is a
@@ -347,9 +428,142 @@ export async function runShardWrite(
 }
 
 /**
+ * Fleet write surface.  Each operation remains an atomic batch for one
+ * community; the bulk call only amortizes the Service Binding invocation.
+ * There is deliberately no cross-community transaction claim here.
+ */
+export async function runShardBulkWrite(
+  env: ShardEnv,
+  input: ShardBulkWriteRequest,
+): Promise<ShardBulkWriteResponse> {
+  const operations: ShardBulkWriteResponse["operations"] = []
+  for (let offset = 0; offset < input.operations.length; offset += 8) {
+    const batch = input.operations.slice(offset, offset + 8)
+    operations.push(...await Promise.all(batch.map(async (operation) => ({
+      communityId: operation.communityId,
+      result: await runShardWrite(env, operation),
+    }))))
+  }
+  return { operations }
+}
+
+/**
  * Maximum retries on optimistic-lock conflict during allocator UPDATE.
  */
 const MAX_BIND_ATTEMPTS = 5
+
+/**
+ * Upper bound on a stored attribution value. These strings come from a caller-
+ * supplied request header, so they are untrusted input on a hot provisioning
+ * path; cap them so a pathological header cannot bloat pool rows.
+ */
+const MAX_ATTRIBUTION_LENGTH = 200
+
+/** Target-D1 proof that the bootstrap batch committed before the pool CAS. */
+const BOOTSTRAP_STATE_TABLE = BOOTSTRAP_STATE_TABLE_NAME
+
+/**
+ * Attribution is DIAGNOSTIC and must never be able to fail an allocation, so this
+ * never throws: anything missing, blank, or non-string becomes NULL, and anything
+ * over the cap is truncated rather than rejected. A wrong or absent label costs us
+ * one unattributed row; a rejected allocation costs a release.
+ */
+function normalizeAttribution(value: string | null | undefined): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  return trimmed.slice(0, MAX_ATTRIBUTION_LENGTH)
+}
+
+/**
+ * The claim predicate, written once so the attributed and legacy statements
+ * cannot drift apart. Optimistic locking (`version = ?4`) and the binding
+ * identity are part of the CLAIM, not of attribution — the fallback must not
+ * weaken them.
+ */
+const CLAIM_PREDICATE = "WHERE binding_name = ?1 AND version = ?4"
+const CLAIM_SET_BASE =
+  "UPDATE d1_pool SET " +
+  "community_id = ?2, allocated_at = ?3, " +
+  "released_at = NULL, last_loaded_at = NULL, last_error = NULL, "
+
+/**
+ * Does this error mean the attribution columns are not present on this pool D1?
+ *
+ * Deliberately NARROW: it matches a missing-column schema error naming one of
+ * the attribution columns, and nothing else. A broad catch here would silently
+ * downgrade genuine write failures — including lock conflicts and corruption —
+ * into "allocated but unattributed", which is exactly the kind of masking that
+ * makes an incident undiagnosable.
+ */
+function isMissingAttributionColumn(e: unknown): boolean {
+  const message = e instanceof Error ? e.message : String(e ?? "")
+  if (!/no such column|has no column named/i.test(message)) return false
+  return /allocation_source|allocation_run_id/i.test(message)
+}
+
+/**
+ * Claim a free binding, recording attribution when the pool schema supports it.
+ *
+ * SCHEMA-SKEW SAFETY: attribution is diagnostic, so a pool D1 that predates
+ * migration 0002 must still ALLOCATE — it must not take provisioning down. The
+ * pool D1 has no automated migration runner, so a shard deployed ahead of its
+ * migration is a real operational state, not a hypothetical. On the specific
+ * missing-column error we retry the LEGACY claim, with the same predicate,
+ * version and binding, so concurrency behaviour is identical and only the
+ * diagnostic columns are lost.
+ *
+ * Any other error propagates untouched: unique-violation handling, lock
+ * conflicts and real failures all keep their existing behaviour.
+ */
+async function claimFreeBinding(
+  pool: D1Database,
+  claim: {
+    bindingName: string
+    communityId: string
+    now: string
+    version: number
+    source?: string | null
+    runId?: string | null
+  },
+): Promise<D1Response> {
+  try {
+    return await pool
+      .prepare(
+        CLAIM_SET_BASE +
+          "allocation_source = ?5, allocation_run_id = ?6, " +
+          "version = version + 1 " +
+          CLAIM_PREDICATE,
+      )
+      .bind(
+        claim.bindingName,
+        claim.communityId,
+        claim.now,
+        claim.version,
+        normalizeAttribution(claim.source),
+        normalizeAttribution(claim.runId),
+      )
+      .run()
+  } catch (e) {
+    if (!isMissingAttributionColumn(e)) throw e
+    // Loud on purpose: this is a config/deploy-order defect, and the whole point
+    // of attribution is that someone acts on the numbers. Silently unattributed
+    // rows would make the capacity data quietly wrong instead of visibly absent.
+    console.warn(
+      JSON.stringify({
+        event: "d1_pool_attribution_columns_missing",
+        message:
+          "d1_pool is missing allocation_source/allocation_run_id (migration 0002 not applied to this pool D1). " +
+          "Allocating WITHOUT attribution; capacity accounting will be incomplete until the migration is applied.",
+        binding_name: claim.bindingName,
+      }),
+    )
+    return await pool
+      .prepare(CLAIM_SET_BASE + "version = version + 1 " + CLAIM_PREDICATE)
+      .bind(claim.bindingName, claim.communityId, claim.now, claim.version)
+      .run()
+  }
+}
 
 /**
  * Detect a UNIQUE(community_id) violation on d1_pool.community_id. libsql
@@ -413,6 +627,7 @@ export async function runShardBind(
       .prepare(
         "SELECT binding_name, version FROM d1_pool " +
           "WHERE community_id IS NULL " +
+          `AND binding_name != '${RESERVED_FIXTURE_BINDING}' ` +
           "AND (released_at IS NULL OR released_at < ?1) " +
           "ORDER BY binding_name LIMIT 1",
       )
@@ -442,16 +657,14 @@ export async function runShardBind(
     }
 
     try {
-      const updateResult = await pool
-        .prepare(
-          "UPDATE d1_pool SET " +
-            "community_id = ?2, allocated_at = ?3, " +
-            "released_at = NULL, last_loaded_at = NULL, last_error = NULL, " +
-            "version = version + 1 " +
-            "WHERE binding_name = ?1 AND version = ?4",
-        )
-        .bind(freeBinding, input.communityId, input.now, freeVersion)
-        .run()
+      const updateResult = await claimFreeBinding(pool, {
+        bindingName: freeBinding,
+        communityId: input.communityId,
+        now: input.now,
+        version: freeVersion,
+        source: input.source,
+        runId: input.runId,
+      })
 
       if (updateResult.meta?.changes && updateResult.meta.changes > 0) {
         return {
@@ -487,6 +700,31 @@ export async function runShardBind(
   )
 }
 
+/** Read-only idempotency probe used by a multi-pool allocator before claiming capacity. */
+export async function runShardLookupBinding(
+  env: ShardEnv,
+  input: ShardLookupBindingRequest,
+): Promise<ShardResult<ShardLookupBindingResponse>> {
+  const pool = env.D1_POOL
+  if (!pool) {
+    return err(
+      SHARD_READ_ERROR.UNKNOWN_BINDING,
+      "D1_POOL binding is not configured on this shard",
+    )
+  }
+  const existing = await pool
+    .prepare("SELECT binding_name FROM d1_pool WHERE community_id = ?1")
+    .bind(input.communityId)
+    .first()
+  return {
+    ok: true,
+    value: {
+      bindingName: existing ? String((existing as { binding_name: string }).binding_name) : null,
+      shardWorkerId: String(env.COMMUNITY_D1_SHARD_WORKER_ID ?? "community-d1-shard-staging"),
+    },
+  }
+}
+
 /**
  * Step 3 of the D1-native workstream: load the community schema + snapshot
  * rows into the allocated D1 binding. Atomic `batchWrite` of DDL + rows.
@@ -506,8 +744,8 @@ export async function runShardBind(
  *     `resolveProvisioningRetryAction` calls this twice for the same community
  *     — the second call returns `loaded: false` with `rowsAffected: 0` and
  *     leaves `last_loaded_at` unchanged.
- *  3. **Bootstrap guard.** Schema DDL is allowed here (CREATE TABLE IF NOT
- *     EXISTS + INSERT only) via `isBootstrapAllowedStatement`; the existing
+ *  3. **Bootstrap guard.** Schema DDL is allowed here (CREATE TABLE/INDEX/
+ *     TRIGGER + INSERT only) via `isBootstrapAllowedStatement`; the existing
  *     `isWriteAllowedStatement` (used by `runShardWrite`) rejects DDL by
  *     design.
  *
@@ -536,7 +774,7 @@ export async function runShardLoadSnapshot(
   //    still allocated to this community at write time.
   const row = await pool
     .prepare(
-      "SELECT community_id, last_loaded_at FROM d1_pool WHERE binding_name = ?1",
+      "SELECT community_id, last_loaded_at, version FROM d1_pool WHERE binding_name = ?1",
     )
     .bind(input.bindingName)
     .first()
@@ -546,7 +784,7 @@ export async function runShardLoadSnapshot(
       `binding ${input.bindingName} has no d1_pool row — cannot load snapshot`,
     )
   }
-  const r = row as { community_id: string | null; last_loaded_at: string | null }
+  const r = row as { community_id: string | null; last_loaded_at: string | null; version: number }
   if (r.community_id !== input.communityId) {
     return err(
       SHARD_READ_ERROR.BINDING_NOT_ALLOCATED,
@@ -560,43 +798,104 @@ export async function runShardLoadSnapshot(
     return { ok: true, value: { rowsAffected: 0, loaded: false } }
   }
 
-  // 3. Bootstrap guard: DDL + INSERTs only, run as one atomic batch.
-  const dbOrError = resolveD1(env, input.bindingName)
-  if (!("prepare" in dbOrError)) return dbOrError
+  // The migration-provisioned path has no target statements to recover. Keep
+  // its historical behavior: fence only the pool row and do not create target
+  // metadata merely to prove an empty batch.
   if (input.statements.length === 0) {
-    // Empty statements + no prior load: still mark loaded (the schema is
-    // expected to already be in place via migration; this is a no-op seed).
-    await pool
+    const marked = await pool
       .prepare(
         "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
-          "WHERE binding_name = ?1 AND last_loaded_at IS NULL",
+          "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 AND last_loaded_at IS NULL",
       )
-      .bind(input.bindingName, new Date().toISOString())
+      .bind(input.bindingName, new Date().toISOString(), input.communityId, r.version)
       .run()
+    if ((marked.meta?.changes ?? 0) !== 1) {
+      return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while marking snapshot loaded")
+    }
     return { ok: true, value: { rowsAffected: 0, loaded: true } }
   }
+
+  // 3. A prior attempt may have committed the target batch and then lost the
+  //    pool CAS. Its target-side marker is in that same atomic batch, so a
+  //    retry can safely repair only last_loaded_at without replaying schema
+  //    statements that are not necessarily idempotent.
+  const dbOrError = resolveD1(env, input.bindingName)
+  if (!("prepare" in dbOrError)) return dbOrError
+  const expectedSnapshotDigest = await shardSnapshotDigest(input.statements)
+  const markerTable = await dbOrError
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1")
+    .bind(BOOTSTRAP_STATE_TABLE)
+    .first()
+  if (markerTable) {
+    const marker = await dbOrError
+      .prepare(
+        `SELECT community_id, snapshot_digest FROM ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} LIMIT 1`,
+      )
+      .first()
+    const markerCommunityId = marker == null ? null : String((marker as { community_id?: unknown }).community_id ?? "")
+    const markerSnapshotDigest = marker == null ? null : String((marker as { snapshot_digest?: unknown }).snapshot_digest ?? "")
+    if (markerCommunityId === input.communityId && markerSnapshotDigest === expectedSnapshotDigest) {
+      const marked = await pool
+        .prepare(
+          "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
+            "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 AND last_loaded_at IS NULL",
+        )
+        .bind(input.bindingName, new Date().toISOString(), input.communityId, r.version)
+        .run()
+      if ((marked.meta?.changes ?? 0) !== 1) {
+        return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while repairing snapshot load")
+      }
+      return { ok: true, value: { rowsAffected: 0, loaded: false } }
+    }
+    if (markerCommunityId === input.communityId) {
+      return err(
+        SHARD_READ_ERROR.SNAPSHOT_MISMATCH,
+        `binding ${input.bindingName} contains a committed bootstrap for a different snapshot revision`,
+      )
+    }
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOCATED,
+      `binding ${input.bindingName} contains a bootstrap marker for a different community`,
+    )
+  }
+
+  // 4. Bootstrap guard: DDL + INSERTs plus the completion marker, run as one
+  //    atomic target-D1 batch.
   const prepared: D1PreparedStatement[] = []
   for (const statement of input.statements) {
     const p = prepareBootstrap(dbOrError, statement)
     if (!("all" in p)) return p
     prepared.push(p)
   }
-  const results = await dbOrError.batch(prepared)
-  const rowsAffected = results.reduce(
+  const completedAt = new Date().toISOString()
+  const markerStatements = [
+    dbOrError.prepare(BOOTSTRAP_STATE_TABLE_DDL),
+    dbOrError
+      .prepare(
+        `INSERT INTO ${quoteSqlIdentifier(BOOTSTRAP_STATE_TABLE)} ` +
+          "(community_id, snapshot_digest, completed_at) VALUES (?1, ?2, ?3)",
+      )
+      .bind(input.communityId, expectedSnapshotDigest, completedAt),
+  ]
+  const results = await dbOrError.batch([...prepared, ...markerStatements])
+  const rowsAffected = results.slice(0, prepared.length).reduce(
     (sum, r) => sum + (r.meta?.changes ?? 0),
     0,
   )
 
-  // 4. Mark loaded on the pool row. Only set last_loaded_at if the batch
+  // 5. Mark loaded on the pool row. Only set last_loaded_at if the batch
   //    succeeded — a partial batch is an atomic D1 failure (all-or-nothing),
   //    so if we reach this point, everything committed.
-  await pool
+  const marked = await pool
     .prepare(
       "UPDATE d1_pool SET last_loaded_at = ?2, last_error = NULL, version = version + 1 " +
-        "WHERE binding_name = ?1",
+        "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 AND last_loaded_at IS NULL",
     )
-    .bind(input.bindingName, new Date().toISOString())
+    .bind(input.bindingName, completedAt, input.communityId, r.version)
     .run()
+  if ((marked.meta?.changes ?? 0) !== 1) {
+    return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while marking snapshot loaded")
+  }
 
   return { ok: true, value: { rowsAffected, loaded: true } }
 }
@@ -635,15 +934,58 @@ function requirePoolDb(env: ShardEnv): D1Database | ShardError {
 }
 
 function isResettableUserTable(name: string): boolean {
-  return !name.startsWith("sqlite_") && !name.startsWith("_cf_") && name !== "schema_migrations"
+  return !name.startsWith("sqlite_")
+    && !name.startsWith("_cf_")
+    && name !== "schema_migrations"
+    && name !== BOOTSTRAP_STATE_TABLE
 }
 
 function isResettableMetadataTable(name: string): boolean {
-  return name === "schema_migrations"
+  return name === "schema_migrations" || name === BOOTSTRAP_STATE_TABLE
 }
 
 function quoteSqlIdentifier(name: string): string {
   return `"${name.replaceAll('"', '""')}"`
+}
+
+type SqliteTableDefinition = { name: string; sql: string }
+
+/** Order child tables before the parents named by their FOREIGN KEY clauses. */
+export function orderTablesForDrop(definitions: SqliteTableDefinition[]): string[] {
+  const names = new Set(definitions.map((definition) => definition.name))
+  const references = new Map<string, Set<string>>()
+  const referencePattern = /\bREFERENCES\s+(?:"([^"]+)"|`([^`]+)`|\[([^\]]+)\]|([A-Za-z_][A-Za-z0-9_]*))/giu
+  for (const definition of definitions) {
+    const parents = new Set<string>()
+    for (const match of definition.sql.matchAll(referencePattern)) {
+      const parent = match[1] ?? match[2] ?? match[3] ?? match[4]
+      if (parent && parent !== definition.name && names.has(parent)) parents.add(parent)
+    }
+    references.set(definition.name, parents)
+  }
+
+  const remaining = new Set(names)
+  const ordered: string[] = []
+  while (remaining.size > 0) {
+    const referencedParents = new Set<string>()
+    for (const child of remaining) {
+      for (const parent of references.get(child) ?? []) {
+        if (remaining.has(parent)) referencedParents.add(parent)
+      }
+    }
+    const leaves = [...remaining].filter((name) => !referencedParents.has(name)).sort()
+    if (leaves.length === 0) {
+      // Mutual cycles have no child-first order. The surrounding batch enables
+      // deferred FK checks, so deterministic ordering is the safest fallback.
+      ordered.push(...[...remaining].sort())
+      break
+    }
+    for (const leaf of leaves) {
+      ordered.push(leaf)
+      remaining.delete(leaf)
+    }
+  }
+  return ordered
 }
 
 /** Admin: read a single pool row (reconciler introspection — keys off last_loaded_at). */
@@ -703,6 +1045,7 @@ export async function runShardListStaleUnloadedPoolRows(
         "AND allocated_at IS NOT NULL " +
         "AND allocated_at < ?1 " +
         "AND last_loaded_at IS NULL " +
+        "AND (last_error IS NULL OR last_error != 'decommissioning') " +
         "ORDER BY allocated_at ASC, binding_name ASC " +
         "LIMIT ?2",
     )
@@ -746,6 +1089,12 @@ export async function runShardReset(
 ): Promise<ShardResult<ShardAdminResetResponse>> {
   const authErr = requireAdminToken(env, input.adminToken)
   if (authErr) return authErr
+  if (isReservedPoolBinding(input.bindingName)) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to reset reserved fixture binding ${input.bindingName}`,
+    )
+  }
 
   const pool = requirePoolDb(env)
   if ("ok" in pool) return pool
@@ -783,6 +1132,161 @@ export async function runShardReset(
   return { ok: true, value: { tablesDropped: metadataTableNames.length } }
 }
 
+/**
+ * Admin: irreversibly empty and release an explicitly identified staging binding.
+ *
+ * This is intentionally separate from runShardReset: reset protects unfinished
+ * provisioning and must continue refusing loaded databases. Decommission is
+ * guarded by a staging-only kill switch and re-checks the exact community-to-
+ * binding mapping in the shard-owned pool before touching the target database.
+ */
+export async function runShardDecommission(
+  env: ShardEnv,
+  input: ShardAdminDecommissionRequest,
+): Promise<ShardResult<ShardAdminDecommissionResponse>> {
+  const authErr = requireAdminToken(env, input.adminToken)
+  if (authErr) return authErr
+  if (env.STAGING_RECLAIM_ENABLED !== "true") {
+    return err(SHARD_READ_ERROR.ADMIN_UNAUTHORIZED, "staging reclaim is disabled")
+  }
+  if (isReservedPoolBinding(input.bindingName)) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to decommission reserved fixture binding ${input.bindingName}`,
+    )
+  }
+
+  const pool = requirePoolDb(env)
+  if ("ok" in pool) return pool
+  const poolRow = await pool
+    .prepare("SELECT community_id, version, last_error FROM d1_pool WHERE binding_name = ?1")
+    .bind(input.bindingName)
+    .first()
+  const mappedCommunityId = String((poolRow as { community_id?: unknown } | null)?.community_id ?? "")
+  const poolVersion = Number((poolRow as { version?: unknown } | null)?.version)
+  const poolLastError = (poolRow as { last_error?: unknown } | null)?.last_error
+  if (!poolRow || (mappedCommunityId !== input.communityId && mappedCommunityId !== "")) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to decommission ${input.bindingName}: community mapping does not match`,
+    )
+  }
+  const decommissionMarker = "decommissioning"
+  const isClaimedRetry = mappedCommunityId === input.communityId
+    && poolVersion === input.expectedPoolVersion + 1
+    && poolLastError === decommissionMarker
+  const isReleasedRetry = mappedCommunityId === "" && poolVersion === input.expectedPoolVersion + 2
+  if ((!isClaimedRetry && !isReleasedRetry && poolVersion !== input.expectedPoolVersion) || (mappedCommunityId === "" && !isReleasedRetry)) {
+    return err(
+      SHARD_READ_ERROR.POOL_WRITE_CONFLICT,
+      `refusing to decommission ${input.bindingName}: allocation generation changed`,
+    )
+  }
+
+  // Fence the allocation in D1_POOL before touching the target database. A
+  // crash leaves an allocated row marked decommissioning; a retry with the
+  // original generation may resume, while release refuses the marker.
+  if (!isClaimedRetry && !isReleasedRetry) {
+    const claimed = await pool
+      .prepare(
+        "UPDATE d1_pool SET last_error = ?4, version = version + 1 " +
+          "WHERE binding_name = ?1 AND community_id = ?2 AND version = ?3",
+      )
+      .bind(input.bindingName, input.communityId, input.expectedPoolVersion, decommissionMarker)
+      .run()
+    if ((claimed.meta?.changes ?? 0) !== 1) {
+      return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed before decommissioning")
+    }
+  }
+
+  const db = resolveD1(env, input.bindingName)
+  if ("ok" in db) return db
+  const tables = await db.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table'").all()
+  const definitions = (tables.results ?? [])
+    .map((row) => ({
+      name: String((row as { name: unknown }).name),
+      sql: String((row as { sql?: unknown }).sql ?? ""),
+    }))
+    .filter(({ name }) => !name.startsWith("sqlite_") && !name.startsWith("_cf_"))
+  const tableNames = orderTablesForDrop(definitions)
+  // The target D1 and pool metadata are separate databases, and a Service RPC
+  // response can be lost after both commits. Permit a retry to report success
+  // only when the pool row has no current tenant and the target is demonstrably
+  // empty. This branch performs no shard mutation; any non-empty target still
+  // fails closed, while a row mapped to another community was rejected above.
+  if (isReleasedRetry) {
+    if (tableNames.length > 0) {
+      return err(
+        SHARD_READ_ERROR.BINDING_NOT_EMPTY,
+        `refusing to finalize ${input.bindingName}: released target still contains user tables`,
+      )
+    }
+    await clearReleasedAttestationBestEffort(
+      pool,
+      input.bindingName,
+      input.communityId,
+      input.expectedPoolVersion,
+    )
+    return { ok: true, value: { tablesDropped: 0, released: false } }
+  }
+  if (tableNames.length > 0) {
+    await db.batch([
+      db.prepare("PRAGMA defer_foreign_keys = ON"),
+      ...tableNames.map((name) => db.prepare(`DROP TABLE IF EXISTS ${quoteSqlIdentifier(name)}`)),
+    ])
+  }
+
+  const released = await pool
+    .prepare(
+      "UPDATE d1_pool SET community_id = NULL, allocated_at = NULL, last_loaded_at = NULL, " +
+        "last_error = NULL, released_at = ?3, version = version + 1 " +
+        "WHERE binding_name = ?1 AND community_id = ?2 AND version = ?4 AND last_error = 'decommissioning'",
+    )
+    .bind(input.bindingName, input.communityId, input.now, input.expectedPoolVersion + 1)
+    .run()
+  if ((released.meta?.changes ?? 0) !== 1) {
+    return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while decommissioning")
+  }
+  await clearReleasedAttestationBestEffort(
+    pool,
+    input.bindingName,
+    input.communityId,
+    input.expectedPoolVersion,
+  )
+  return {
+    ok: true,
+    value: { tablesDropped: tableNames.length, released: true },
+  }
+}
+
+async function clearReleasedAttestationBestEffort(
+  pool: D1Database,
+  bindingName: string,
+  communityId: string,
+  poolVersion: number,
+): Promise<void> {
+  try {
+    await pool
+      .prepare(
+        "DELETE FROM d1_pool_schema_attestations " +
+          "WHERE binding_name = ?1 AND community_id = ?2 AND pool_version = ?3",
+      )
+      .bind(bindingName, communityId, poolVersion)
+      .run()
+  } catch (error) {
+    // Cleanup is hygiene only. Generation-bound joins already make stale rows
+    // unreachable, so failure here must not reverse a successful release.
+    console.warn(JSON.stringify({
+      event: "community_schema_attestation_cleanup",
+      binding_name: bindingName,
+      community_id: communityId,
+      pool_version: poolVersion,
+      status: "error",
+      detail: error instanceof Error ? error.message : String(error),
+    }))
+  }
+}
+
 /** Admin: free a pool binding (sets community_id NULL + released_at for the §5 quarantine). */
 export async function runShardRelease(
   env: ShardEnv,
@@ -790,6 +1294,12 @@ export async function runShardRelease(
 ): Promise<ShardResult<ShardAdminReleaseResponse>> {
   const authErr = requireAdminToken(env, input.adminToken)
   if (authErr) return authErr
+  if (isReservedPoolBinding(input.bindingName)) {
+    return err(
+      SHARD_READ_ERROR.BINDING_NOT_ALLOWED,
+      `refusing to release reserved fixture binding ${input.bindingName}`,
+    )
+  }
   const pool = requirePoolDb(env)
   if ("ok" in pool) return pool
 
@@ -797,12 +1307,23 @@ export async function runShardRelease(
     .prepare(
       "UPDATE d1_pool SET community_id = NULL, allocated_at = NULL, last_loaded_at = NULL, " +
         "last_error = NULL, released_at = ?2, version = version + 1 " +
-        "WHERE binding_name = ?1 AND community_id IS NOT NULL",
+        "WHERE binding_name = ?1 AND community_id = ?3 AND version = ?4 " +
+          "AND (last_error IS NULL OR last_error != 'decommissioning')",
     )
-    .bind(input.bindingName, input.now)
+    .bind(input.bindingName, input.now, input.expectedCommunityId, input.expectedPoolVersion)
     .run()
+  if ((result.meta?.changes ?? 0) !== 1) {
+    return err(SHARD_READ_ERROR.POOL_WRITE_CONFLICT, "binding allocation changed while releasing")
+  }
 
-  return { ok: true, value: { released: (result.meta?.changes ?? 0) > 0 } }
+  await clearReleasedAttestationBestEffort(
+    pool,
+    input.bindingName,
+    input.expectedCommunityId,
+    input.expectedPoolVersion,
+  )
+
+  return { ok: true, value: { released: true } }
 }
 
 /** Admin: aggregate pool capacity using the allocator's exact free/quarantine predicate. */
@@ -816,16 +1337,20 @@ export async function runShardPoolStats(
   if ("ok" in pool) return pool
 
   const quarantineThreshold = new Date(Date.now() - QUARANTINE_WINDOW_MS).toISOString()
+  const allocated24HoursThreshold = new Date(Date.now() - 24 * 60 * 60 * 1_000).toISOString()
+  const allocated7DaysThreshold = new Date(Date.now() - 7 * 24 * 60 * 60 * 1_000).toISOString()
   const row = await pool
     .prepare(
       "SELECT " +
         "COUNT(*) AS total, " +
         "SUM(CASE WHEN community_id IS NOT NULL THEN 1 ELSE 0 END) AS allocated, " +
         "SUM(CASE WHEN community_id IS NULL AND (released_at IS NULL OR released_at < ?1) THEN 1 ELSE 0 END) AS free, " +
-        "SUM(CASE WHEN community_id IS NULL AND released_at IS NOT NULL AND released_at >= ?1 THEN 1 ELSE 0 END) AS quarantined " +
-        "FROM d1_pool",
+        "SUM(CASE WHEN community_id IS NULL AND released_at IS NOT NULL AND released_at >= ?1 THEN 1 ELSE 0 END) AS quarantined, " +
+        "SUM(CASE WHEN community_id IS NOT NULL AND allocated_at >= ?2 THEN 1 ELSE 0 END) AS allocated_last_24_hours, " +
+        "SUM(CASE WHEN community_id IS NOT NULL AND allocated_at >= ?3 THEN 1 ELSE 0 END) AS allocated_last_7_days " +
+        `FROM d1_pool WHERE binding_name != '${RESERVED_FIXTURE_BINDING}'`,
     )
-    .bind(quarantineThreshold)
+    .bind(quarantineThreshold, allocated24HoursThreshold, allocated7DaysThreshold)
     .first()
   const r = row as Record<string, unknown> | null
 
@@ -836,6 +1361,8 @@ export async function runShardPoolStats(
       allocated: Number(r?.["allocated"] ?? 0),
       free: Number(r?.["free"] ?? 0),
       quarantined: Number(r?.["quarantined"] ?? 0),
+      allocatedLast24Hours: Number(r?.["allocated_last_24_hours"] ?? 0),
+      allocatedLast7Days: Number(r?.["allocated_last_7_days"] ?? 0),
     },
   }
 }

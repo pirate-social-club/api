@@ -56,6 +56,10 @@ export function setPublicReadCacheHeaders(c: Context, options?: {
 }
 
 export function isPublicReadCacheRequest(request: Request): boolean {
+  // SECURITY BOUNDARY: every path accepted here bypasses the outer
+  // credential-bearing response no-store policy. Additions must be proven
+  // authentication-invariant (the same body with and without credentials),
+  // not merely described as "public".
   if (request.method !== "GET") {
     return false
   }
@@ -64,7 +68,7 @@ export function isPublicReadCacheRequest(request: Request): boolean {
   if (url.pathname === "/feed/home") {
     return !request.headers.has("authorization")
   }
-  if (url.pathname === "/feed/home/public") {
+  if (url.pathname === "/feed/home/public" || url.pathname === "/feed/home/videos/public") {
     return true
   }
 
@@ -79,7 +83,12 @@ export function isPublicReadCacheRequest(request: Request): boolean {
 
 function publicReadVaryHeaders(request: Request): string[] {
   const url = new URL(request.url)
-  if (url.pathname === "/feed/home" || url.pathname === "/feed/home/public") {
+  if (
+    url.pathname === "/feed/home"
+    || url.pathname === "/feed/home/public"
+    || url.pathname === "/feed/home/videos/public"
+    || /^\/public-communities\/[^/]+\/feed\/videos$/u.test(url.pathname)
+  ) {
     return []
   }
   return DEFAULT_PUBLIC_READ_VARY_HEADER_NAMES

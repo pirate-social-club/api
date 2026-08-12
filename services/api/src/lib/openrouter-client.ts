@@ -2,6 +2,22 @@ import { trimEnv } from "./env-strings"
 
 const DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
+/**
+ * Fallback model for every OpenRouter-backed provider that has no explicit env override.
+ *
+ * ONE constant on purpose. When each provider carried its own literal they drifted:
+ * content translation was moved to this stable id while labelling, study generation,
+ * link summaries, and link translation were left on the dated preview alias
+ * `google/gemini-2.5-flash-lite-preview-09-2025`. OpenRouter retired that alias, which
+ * returns `http_404 No endpoints found` — a non-transient error that still burns all
+ * eight retry attempts before the job dies. Prod shard community-d1-pool-0073 holds 15
+ * translation jobs killed exactly that way.
+ *
+ * Prefer an unversioned model id here: dated preview aliases are removed upstream without
+ * notice, and this value is the one used when nobody configured anything.
+ */
+export const DEFAULT_OPENROUTER_MODEL = "google/gemini-2.5-flash-lite"
+
 export type OpenRouterChatCompletionResponse = Record<string, unknown> & {
   choices?: Array<{
     finish_reason?: unknown
@@ -72,6 +88,70 @@ function responseBodyPreview(value: string): string {
   return trimmed ? trimmed.slice(0, 500) : "<empty>"
 }
 
+export type OpenRouterHttpFailure = {
+  category: "client_error" | "rate_limited" | "server_error"
+  status: number
+}
+
+function openRouterHttpDetails(status: number): OpenRouterHttpFailure {
+  return {
+    category: status === 429 ? "rate_limited" : status >= 500 ? "server_error" : "client_error",
+    status,
+  }
+}
+
+export function isOpenRouterHttpFailure(error: unknown): error is { openRouterHttp: OpenRouterHttpFailure } {
+  if (!error || typeof error !== "object" || !("openRouterHttp" in error)) return false
+  const detail = (error as { openRouterHttp: unknown }).openRouterHttp
+  return Boolean(detail) && typeof detail === "object" && typeof (detail as { status?: unknown }).status === "number"
+}
+
+export type OpenRouterDiagnostics = {
+  completionTokens: number | null
+  finishReason: string | null
+  nativeFinishReason: string | null
+  promptTokens: number | null
+  reasoningTokens: number | null
+  totalTokens: number | null
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Allowlisted, provider-agnostic completion metadata. Only known enum-like
+ * reason strings and numeric token counts survive; provider-authored prose
+ * never reaches logs, so a diagnostic can never leak model output or a
+ * learner's question back out.
+ */
+const OPEN_ROUTER_FINISH_REASONS = new Set([
+  "content_filter",
+  "error",
+  "function_call",
+  "length",
+  "stop",
+  "tool_calls",
+])
+
+function finishReasonOrNull(value: unknown): string | null {
+  return typeof value === "string" && OPEN_ROUTER_FINISH_REASONS.has(value) ? value : null
+}
+
+export function openRouterDiagnosticsFrom(body: OpenRouterChatCompletionResponse): OpenRouterDiagnostics {
+  const choice = body.choices?.[0] as Record<string, unknown> | undefined
+  const usage = body.usage as Record<string, unknown> | undefined
+  const details = usage?.completion_tokens_details as Record<string, unknown> | undefined
+  return {
+    completionTokens: finiteNumberOrNull(usage?.completion_tokens),
+    finishReason: finishReasonOrNull(choice?.finish_reason),
+    nativeFinishReason: finishReasonOrNull(choice?.native_finish_reason),
+    promptTokens: finiteNumberOrNull(usage?.prompt_tokens),
+    reasoningTokens: finiteNumberOrNull(details?.reasoning_tokens),
+    totalTokens: finiteNumberOrNull(usage?.total_tokens),
+  }
+}
+
 function isRetryableOpenRouterResponseError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.message.includes("response was not valid JSON")
@@ -109,7 +189,13 @@ async function requestOpenRouterChatCompletionOnce(input: {
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "")
       const suffix = errorBody.trim() ? `: ${errorBody.trim().slice(0, 500)}` : ""
-      throw new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}${suffix}`)
+      // The message keeps the body for callers that debug against it, but the
+      // status and category are attached structurally so privacy-sensitive
+      // callers can classify a failure without touching provider-authored text.
+      throw Object.assign(
+        new Error(`OpenRouter ${input.errorLabel} request failed with http_${response.status}${suffix}`),
+        { openRouterHttp: openRouterHttpDetails(response.status) },
+      )
     }
 
     const responseText = await response.text().catch(() => "")
@@ -130,7 +216,13 @@ async function requestOpenRouterChatCompletionOnce(input: {
     const content = normalizeOpenRouterMessageContent(body.choices?.[0]?.message?.content)
     const toolCalls = body.choices?.[0]?.message?.tool_calls
     if (!content.trim() && !Array.isArray(toolCalls)) {
-      throw new Error(`OpenRouter ${input.errorLabel} response was empty`)
+      // Carry the provider's own account of why nothing came back. Without it an
+      // empty response is indistinguishable from a truncation caused by our own
+      // completion-token ceiling, which is a very different fix. Sanitized here
+      // so no provider-authored text can escape into logs.
+      throw Object.assign(new Error(`OpenRouter ${input.errorLabel} response was empty`), {
+        openRouterDiagnostics: openRouterDiagnosticsFrom(body),
+      })
     }
 
     return { body, content }

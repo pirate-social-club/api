@@ -55,6 +55,7 @@ export function serializeHandleQuote(row: QueryResultRow, input: {
   protocolIssuanceRequired?: boolean
   protocolIssuanceEligible?: boolean
   protocolIssuanceReason?: string | null
+  claimGate?: CommunityHandleQuote["claim_gate"]
 }): CommunityHandleQuote {
   const priceCents = requiredNumber(row, "price_cents")
   return {
@@ -68,6 +69,7 @@ export function serializeHandleQuote(row: QueryResultRow, input: {
     eligible: input.eligible,
     availability: input.availability,
     reason: input.reason,
+    claim_gate: input.claimGate ?? null,
     price_cents: priceCents,
     currency: "USD",
     pricing_model: stringOrNull(rowValue(row, "pricing_model")) as CommunityHandleQuote["pricing_model"],

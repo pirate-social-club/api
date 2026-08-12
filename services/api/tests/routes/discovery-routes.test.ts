@@ -59,6 +59,7 @@ describe("discovery routes", () => {
     expect(response.headers.get("content-type")).toContain("text/plain")
 
     const body = await response.text()
+    expect(body).toContain("Disallow: /public-communities/*/song-artifact-uploads/*/content")
     expect(body).toContain("Allow: /public-communities")
     expect(body).toContain("Allow: /public-posts")
     expect(body).toContain("Sitemap: https://api.pirate.test/sitemap.xml")
@@ -91,6 +92,7 @@ describe("discovery routes", () => {
     expect(body.paths["/public-communities/{community_id}"]).toBeTruthy()
     expect(body.paths["/public-communities/{community_id}/capabilities"]).toBeTruthy()
     expect(body.paths["/public-communities/{community_id}/posts"]).toBeTruthy()
+    expect(body.paths["/public-communities/{community_id}/feed/videos"]).toBeTruthy()
     expect(body.paths["/public-posts/{post_id}"]).toBeTruthy()
     expect(body.paths["/public-posts/{post_id}/top-comments"]).toBeTruthy()
   })

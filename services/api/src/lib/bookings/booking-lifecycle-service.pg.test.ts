@@ -3,6 +3,7 @@
 // BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core booking migrations.
 import { SQL } from "bun";
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import type { Env } from "../../env";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import type { BookingLifecycleSqlExecutor } from "./booking-lifecycle-repository";
@@ -22,6 +23,9 @@ import {
 import { createSettlementEffectWriteRepository } from "./settlement-effect-repository";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking lifecycle service PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_lifecycle_service_test";
 
@@ -175,6 +179,10 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-lifecycle-service-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("starts confirmed bookings for either party, enforces window, and supports live replay", async () => {
@@ -274,6 +282,94 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
     expect(String(heartbeats[0].seen_at)).toBe("2026-07-01 10:00:20+00");
   });
 
+  test("rejects attendance writes outside the session window before minting credentials", async () => {
+    await seedBooking({ bookingId: "bkg_lifecycle_service_attach_early", status: "confirmed" });
+    await seedBooking({ bookingId: "bkg_lifecycle_service_attach_late", status: "live" });
+    let credentialBuilds = 0;
+    setGlobalBookingAgoraBuilderForTests(({ channel, uid }) => {
+      credentialBuilds += 1;
+      return {
+        app_id: "app_test",
+        channel,
+        uid,
+        token: "must-not-be-minted",
+        token_expires_at: 1_783_000_000,
+        configured: true,
+      };
+    });
+
+    expect(await attachGlobalBookingSession({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_early",
+      actorUserId: "booker_bkg_lifecycle_service_attach_early",
+      nowUtc: "2026-07-01T09:54:59Z",
+    })).toEqual({ ok: false, reason: "not_attachable" });
+    expect(await attachGlobalBookingSession({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_late",
+      actorUserId: "host_bkg_lifecycle_service_attach_late",
+      nowUtc: "2026-07-01T11:00:00Z",
+    })).toEqual({ ok: false, reason: "not_attachable" });
+    expect(credentialBuilds).toBe(0);
+
+    const attendance = await repoDb.unsafe(
+      `SELECT count(*)::int AS count
+         FROM bookings.attendance_sessions
+        WHERE booking_id IN ($1, $2)`,
+      ["bkg_lifecycle_service_attach_early", "bkg_lifecycle_service_attach_late"],
+    ) as Record<string, unknown>[];
+    expect(attendance[0]?.count).toBe(0);
+
+    const attached = await attachGlobalBookingSession({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_late",
+      actorUserId: "host_bkg_lifecycle_service_attach_late",
+      nowUtc: "2026-07-01T10:00:00Z",
+    });
+    expect(attached.ok).toBe(true);
+    if (!attached.ok) throw new Error("expected in-window attach");
+    expect(await heartbeatGlobalBookingSession({
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_attach_late",
+      actorUserId: "host_bkg_lifecycle_service_attach_late",
+      sessionId: attached.sessionId,
+      nowUtc: "2026-07-01T11:00:00Z",
+    })).toEqual({ ok: false, reason: "not_found" });
+
+    const heartbeats = await repoDb.unsafe(
+      "SELECT count(*)::int AS count FROM bookings.attendance_heartbeats WHERE session_id = $1",
+      [attached.sessionId],
+    ) as Record<string, unknown>[];
+    expect(heartbeats[0]?.count).toBe(0);
+  });
+
+  test("rejects cancellation when the previewed refund no longer matches", async () => {
+    await seedBooking({ bookingId: "bkg_lifecycle_service_cancel_terms", status: "confirmed", lock: true });
+
+    const cancelled = await cancelGlobalBooking({
+      env: {} as Env,
+      executor: makeExecutor(repoDb),
+      bookingId: "bkg_lifecycle_service_cancel_terms",
+      actorUserId: "host_bkg_lifecycle_service_cancel_terms",
+      nowUtc: "2026-06-11T10:00:00Z",
+      expectedRefundCents: 0,
+    });
+
+    expect(cancelled).toMatchObject({
+      ok: false,
+      reason: "cancellation_terms_changed",
+      preview: { refund_cents: 5000 },
+    });
+    const rows = await repoDb.unsafe(
+      "SELECT status FROM bookings.bookings WHERE booking_id = $1",
+      ["bkg_lifecycle_service_cancel_terms"],
+    ) as Record<string, unknown>[];
+    expect(rows).toEqual([{ status: "confirmed" }]);
+  });
+
   test("settles global complete, cancel, and no-show with effects and lock release", async () => {
     installSettlementFakes();
     await seedBooking({ bookingId: "bkg_lifecycle_service_complete", status: "live", lock: true });
@@ -303,6 +399,7 @@ describe.skipIf(!RUN)("global booking lifecycle service (real Postgres)", () => 
       bookingId: "bkg_lifecycle_service_cancel",
       actorUserId: "host_bkg_lifecycle_service_cancel",
       nowUtc: "2026-06-11T10:00:00Z",
+      expectedRefundCents: 5000,
     });
     expect(cancelled).toMatchObject({
       ok: true,

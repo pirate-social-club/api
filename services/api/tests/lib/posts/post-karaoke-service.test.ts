@@ -1,8 +1,114 @@
 import { describe, expect, test } from "bun:test"
 
-import { buildSongKaraokeLines } from "../../../src/lib/posts/post-karaoke-service"
+import {
+  buildSongKaraokeLines,
+  isSharedKaraokePayloadCacheable,
+  requireKaraokeAgeGateAccess,
+  shouldFallbackToPublicPostRead,
+} from "../../../src/lib/posts/post-karaoke-service"
+import { HttpError } from "../../../src/lib/errors"
+import { buildDefaultVerificationCapabilities } from "../../../src/lib/verification/verification-capabilities"
+
+describe("requireKaraokeAgeGateAccess", () => {
+  test("uses the authenticated actor through public-read fallback", async () => {
+    const capabilities = buildDefaultVerificationCapabilities()
+    capabilities.age_over_18 = {
+      mechanism: null,
+      proof_type: "age_over_18",
+      provider: "self",
+      state: "verified",
+      verified_at: null,
+    }
+    const userRepository = {
+      getUserById: async (userId: string) => ({
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        user_id: userId,
+        verification_capabilities: capabilities,
+        verification_state: "verified",
+      }),
+    }
+
+    await expect(requireKaraokeAgeGateAccess({
+      actor: { authType: "user", userId: "usr_verified" },
+      postAgeGatePolicy: "18_plus",
+      userRepository: userRepository as never,
+    })).resolves.toBeUndefined()
+  })
+})
+
+describe("shouldFallbackToPublicPostRead", () => {
+  test("never retries an age-verification denial as anonymous", () => {
+    expect(shouldFallbackToPublicPostRead(
+      new HttpError(403, "verification_required", "Age verification is required"),
+    )).toBe(false)
+  })
+
+  test("still permits the intended public fallback for membership-shaped misses", () => {
+    expect(shouldFallbackToPublicPostRead(
+      new HttpError(404, "not_found", "Community not found"),
+    )).toBe(true)
+  })
+})
+
+describe("isSharedKaraokePayloadCacheable", () => {
+  test("never shares an age-gated viewer response", () => {
+    expect(isSharedKaraokePayloadCacheable({
+      access_mode: "public",
+      age_gate_policy: "18_plus",
+    })).toBe(false)
+  })
+
+  test("keeps ordinary public karaoke payloads cacheable", () => {
+    expect(isSharedKaraokePayloadCacheable({
+      access_mode: "public",
+      age_gate_policy: "none",
+    })).toBe(true)
+  })
+})
 
 describe("buildSongKaraokeLines", () => {
+  test("classifies whole-line parentheticals as timed ad-libs", () => {
+    const source = [
+      "(Hoo-ooh)",
+      "(Ha)",
+      "(Ooh) (ooh)",
+      "[Chorus]",
+      "I'm in town girl for just one night",
+      "body down (tonight)",
+      "  (Oh baby)  ",
+      "(a) and (b)",
+      "()",
+    ]
+    const lines = buildSongKaraokeLines({
+      lyrics: source.join("\n"),
+      timedLyrics: {
+        segments: source.map((text, index) => ({
+          end_ms: (index + 1) * 1_000,
+          start_ms: index * 1_000,
+          text,
+        })),
+      },
+    })
+
+    expect(lines.map((line) => [line.text, line.kind])).toEqual([
+      ["(Hoo-ooh)", "adlib"],
+      ["(Ha)", "adlib"],
+      ["(Ooh) (ooh)", "adlib"],
+      ["[Chorus]", "section"],
+      ["I'm in town girl for just one night", "lyric"],
+      ["body down (tonight)", "lyric"],
+      ["(Oh baby)", "adlib"],
+      ["(a) and (b)", "lyric"],
+      ["()", "adlib"],
+    ])
+    expect(lines[0]?.words).toEqual([{
+      end_ms: 1_000,
+      start_ms: 0,
+      text: "(Hoo-ooh)",
+    }])
+  })
+
   test("groups token-stream alignment output using submitted lyric line breaks", () => {
     const lines = buildSongKaraokeLines({
       lyrics: [
@@ -71,5 +177,34 @@ describe("buildSongKaraokeLines", () => {
       { kind: "lyric", text: "Line one", words: ["Line one"] },
       { kind: "lyric", text: "Line two", words: ["Line two"] },
     ])
+  })
+
+  test("clamps overlong lyric timestamps to the supplied audio duration", () => {
+    const lines = buildSongKaraokeLines({
+      durationMs: 182_086,
+      lyrics: "Just play all night and day",
+      timedLyrics: {
+        segments: [
+          { text: "Just", start_ms: 169_740, end_ms: 169_900 },
+          { text: " ", start_ms: 169_900, end_ms: 169_940 },
+          { text: "play", start_ms: 169_940, end_ms: 170_160 },
+          { text: " ", start_ms: 170_160, end_ms: 170_200 },
+          { text: "all", start_ms: 173_500, end_ms: 173_840 },
+          { text: " ", start_ms: 173_840, end_ms: 173_960 },
+          { text: "night", start_ms: 173_960, end_ms: 174_220 },
+          { text: " ", start_ms: 174_220, end_ms: 174_280 },
+          { text: "and", start_ms: 174_280, end_ms: 174_460 },
+          { text: " ", start_ms: 174_460, end_ms: 174_580 },
+          { text: "day", start_ms: 174_580, end_ms: 185_940 },
+        ],
+      },
+    })
+
+    expect(lines[0]?.end_ms).toBe(182_086)
+    expect(lines[0]?.words.at(-1)).toEqual({
+      end_ms: 182_086,
+      start_ms: 174_580,
+      text: "day",
+    })
   })
 })

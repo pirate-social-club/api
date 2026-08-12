@@ -3,7 +3,10 @@ import { createClient, type Client } from "@libsql/client"
 
 import type { Env } from "../../../env"
 import type { AssetRow } from "./row-types"
-import { coordinateStorySettlement } from "./story-settlement-coordinator-service"
+import {
+  coordinateStorySettlement,
+  setEntitlementMinterVerifierForTests,
+} from "./story-settlement-coordinator-service"
 
 const clients: Client[] = []
 const PRIVATE_KEY = `0x${"05".padStart(64, "0")}`
@@ -35,6 +38,7 @@ async function database(): Promise<Client> {
 }
 
 afterEach(() => {
+  setEntitlementMinterVerifierForTests(null)
   for (const client of clients.splice(0)) client.close()
 })
 
@@ -72,6 +76,7 @@ function env(admissionEnabled: boolean, calls?: { lookup: number; reconcile: num
 
 describe("Story settlement coordinator admission fence", () => {
   test("an uncertain admission stays pending after every effect durably claims the plan", async () => {
+    setEntitlementMinterVerifierForTests(async () => true)
     const client = await database()
     const result = await coordinateStorySettlement({
       env: env(true),
@@ -96,6 +101,11 @@ describe("Story settlement coordinator admission fence", () => {
   })
 
   test("disabling new admission cannot release an already claimed effect to legacy execution", async () => {
+    let authorizationChecks = 0
+    setEntitlementMinterVerifierForTests(async () => {
+      authorizationChecks += 1
+      return authorizationChecks === 1
+    })
     const client = await database()
     const request = {
       client,
@@ -113,6 +123,7 @@ describe("Story settlement coordinator admission fence", () => {
     const retry = await coordinateStorySettlement({ ...request, env: env(false, calls), now: "2026-07-16T12:01:00.000Z" })
     expect(retry.kind).toBe("pending")
     expect(calls).toEqual({ lookup: 0, reconcile: 1, admit: 0 })
+    expect(authorizationChecks).toBe(1)
     const effects = await client.execute("SELECT status, coordinator_plan_ref FROM purchase_settlement_effects")
     expect(effects.rows.every((row) => row.status === "submitted" && Boolean(row.coordinator_plan_ref))).toBe(true)
   })
@@ -132,6 +143,25 @@ describe("Story settlement coordinator admission fence", () => {
       now: "2026-07-16T12:00:00.000Z",
     })
     expect(result.kind).toBe("not_coordinator_owned")
+    const effects = await client.execute("SELECT coordinator_plan_ref FROM purchase_settlement_effects")
+    expect(effects.rows).toHaveLength(0)
+  })
+
+  test("a locked asset fails closed before writing effects when the coordinator is not an entitlement minter", async () => {
+    const client = await database()
+    setEntitlementMinterVerifierForTests(async () => false)
+    await expect(coordinateStorySettlement({
+      env: env(true),
+      client,
+      communityId: "community_1",
+      quoteId: "quote_1",
+      purchaseId: "purchase_1",
+      asset: asset(),
+      buyerAddress: "0x0000000000000000000000000000000000000022",
+      purchaseRef: `0x${"66".repeat(32)}`,
+      amount: 100n,
+      now: "2026-07-16T12:00:00.000Z",
+    })).rejects.toThrow("story_settlement_coordinator_entitlement_minter_unauthorized")
     const effects = await client.execute("SELECT coordinator_plan_ref FROM purchase_settlement_effects")
     expect(effects.rows).toHaveLength(0)
   })

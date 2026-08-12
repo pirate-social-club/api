@@ -24,7 +24,12 @@ afterEach(async () => {
   }
 })
 
-function fakeProvisioningShard(bindingName: string, calls: Array<{ m: string; input: unknown }>): ShardRpc {
+function fakeProvisioningShard(
+  bindingName: string,
+  calls: Array<{ m: string; input: unknown }>,
+  displayName = "D1 Native Route Club",
+  snapshotError?: Error,
+): ShardRpc {
   return {
     async communityD1Bind(input: { communityId: string; now: string }) {
       calls.push({ m: "communityD1Bind", input })
@@ -40,6 +45,43 @@ function fakeProvisioningShard(bindingName: string, calls: Array<{ m: string; in
     async communityD1LoadSnapshot(input: { communityId: string; bindingName: string; statements: unknown[] }) {
       calls.push({ m: "communityD1LoadSnapshot", input })
       return { ok: true, value: { rowsAffected: 0, loaded: true } }
+    },
+    async execute(input: { communityId: string; statement: string | { sql: string } }) {
+      calls.push({ m: "execute", input })
+      if (snapshotError) throw snapshotError
+      const sql = typeof input.statement === "string" ? input.statement : input.statement.sql
+      if (sql.includes("FROM communities")) {
+        return {
+          ok: true,
+          value: {
+            rows: [{
+              community_id: input.communityId,
+              display_name: displayName,
+              description: null,
+              avatar_ref: null,
+              banner_ref: null,
+              status: "active",
+              membership_mode: "request",
+              default_age_gate_policy: "none",
+              allow_anonymous_identity: 0,
+              anonymous_identity_scope: null,
+              donation_policy_mode: "none",
+              donation_partner_id: null,
+              donation_partner_status: "unconfigured",
+              settings_json: null,
+              karaoke_enabled: 0,
+              governance_mode: "centralized",
+              created_by_user_id: "usr_fixture",
+              created_at: "2026-08-11T00:00:00.000Z",
+              updated_at: "2026-08-11T00:00:00.000Z",
+            }],
+          },
+        }
+      }
+      if (sql.includes("FROM community_rules") || sql.includes("FROM community_gate_policies")) {
+        return { ok: true, value: { rows: [] } }
+      }
+      throw new Error(`unexpected snapshot query: ${sql}`)
     },
   } as unknown as ShardRpc
 }
@@ -122,6 +164,7 @@ describe("d1_native community provisioning", () => {
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "",
       COMMUNITY_D1_SHARD: fakeProvisioningShard("DB_CMTY_ROUTE_TEST", calls),
+      COMMUNITY_D1_SHARD_ROUTES: '{"community-d1-shard-staging":"COMMUNITY_D1_SHARD"}',
       COMMUNITY_D1_SHARD_REGION: "weur",
     })
     cleanup = ctx.cleanup
@@ -144,7 +187,13 @@ describe("d1_native community provisioning", () => {
     expect(body.community.display_name).toBe("D1 Native Route Club")
     expect(body.community.provisioning_state).toBe("active")
     expect(body.job.status).toBe("succeeded")
-    expect(calls.map((c) => c.m)).toEqual(["communityD1Bind", "communityD1LoadSnapshot"])
+    expect(calls.map((c) => c.m)).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+      "execute",
+      "execute",
+      "execute",
+    ])
 
     const communityIdBare = body.community.id.replace(/^com_/, "")
     const routingRow = (await ctx.client.execute({
@@ -159,6 +208,54 @@ describe("d1_native community provisioning", () => {
       region: "weur",
     })
 
+  }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
+
+  testWithTimeout("snapshot read failure marks the prepared community and job failed", async () => {
+    const calls: Array<{ m: string; input: unknown }> = []
+    const ctx = await createRouteTestContext({
+      LOCAL_COMMUNITY_DB_ROOT: "",
+      COMMUNITY_D1_SHARD: fakeProvisioningShard(
+        "DB_CMTY_ROUTE_SNAPSHOT_FAILURE",
+        calls,
+        "Snapshot Failure Club",
+        new Error("no such column: karaoke_enabled"),
+      ),
+      COMMUNITY_D1_SHARD_ROUTES: '{"community-d1-shard-staging":"COMMUNITY_D1_SHARD"}',
+      COMMUNITY_D1_SHARD_REGION: "weur",
+    })
+    cleanup = ctx.cleanup
+
+    const session = await exchangeJwt(ctx.env, "community-d1-native-snapshot-failure")
+    const response = await requestJson("http://pirate.test/communities", {
+      display_name: "Snapshot Failure Club",
+      membership_mode: "request",
+    }, ctx.env, session.accessToken)
+
+    expect(response.status).toBe(500)
+    const body = await json(response) as {
+      code: string
+      details?: { community_id?: string; job_id?: string; cause?: string }
+    }
+    expect(body.code).toBe("internal_error")
+    expect(body.details?.cause).toContain("karaoke_enabled")
+    expect(body.details?.community_id).toMatch(/^cmt_/)
+    expect(body.details?.job_id).toMatch(/^job_/)
+
+    const community = await ctx.client.execute({
+      sql: "SELECT provisioning_state FROM communities WHERE community_id = ?1",
+      args: [body.details?.community_id ?? ""],
+    })
+    const job = await ctx.client.execute({
+      sql: "SELECT status, error_code FROM jobs WHERE job_id = ?1",
+      args: [body.details?.job_id ?? ""],
+    })
+    expect(community.rows[0]).toMatchObject({ provisioning_state: "error" })
+    expect(job.rows[0]).toMatchObject({ status: "failed", error_code: "d1_native_provision_failed" })
+    expect(calls.map((call) => call.m)).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+      "execute",
+    ])
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 
   testWithTimeout("namespaceless create preserves retryable pool exhaustion as 503", async () => {
@@ -205,7 +302,8 @@ describe("d1_native community provisioning", () => {
     const calls: Array<{ m: string; input: unknown }> = []
     const ctx = await createRouteTestContext({
       LOCAL_COMMUNITY_DB_ROOT: "",
-      COMMUNITY_D1_SHARD: fakeProvisioningShard("DB_CMTY_ROUTE_NS_TEST", calls),
+      COMMUNITY_D1_SHARD: fakeProvisioningShard("DB_CMTY_ROUTE_NS_TEST", calls, "D1 Native Namespace Club"),
+      COMMUNITY_D1_SHARD_ROUTES: '{"community-d1-shard-staging":"COMMUNITY_D1_SHARD"}',
       COMMUNITY_D1_SHARD_REGION: "weur",
     })
     cleanup = ctx.cleanup
@@ -233,7 +331,13 @@ describe("d1_native community provisioning", () => {
     expect(body.community.provisioning_state).toBe("active")
     expect(body.community.namespace_verification).toBe(namespaceVerificationId)
     expect(body.job.status).toBe("succeeded")
-    expect(calls.map((c) => c.m)).toEqual(["communityD1Bind", "communityD1LoadSnapshot"])
+    expect(calls.map((c) => c.m)).toEqual([
+      "communityD1Bind",
+      "communityD1LoadSnapshot",
+      "execute",
+      "execute",
+      "execute",
+    ])
 
     const load = calls[1]!.input as { statements: Array<{ args?: unknown[] }> }
     expect(load.statements.some((statement) =>

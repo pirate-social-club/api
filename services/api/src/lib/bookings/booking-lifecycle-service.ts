@@ -16,6 +16,12 @@ const UNFINISHED_INTENT_STATES = new Set<string>([
   "cancelled_by_booker",
 ]);
 
+function isWithinAttendanceWindow(booking: Booking, nowUtc: string): boolean {
+  const now = epochMs(nowUtc);
+  return now >= epochMs(booking.slotStartUtc) - SESSION_START_LEAD_MS
+    && now < epochMs(booking.slotEndUtc);
+}
+
 interface BookingLifecycleSnapshot {
   booking_id: string;
   status: string;
@@ -501,7 +507,7 @@ export async function cancelGlobalBooking(input: {
   bookingId: string;
   actorUserId: string;
   nowUtc: string;
-  expectedRefundCents?: number;
+  expectedRefundCents: number;
   confirmPollMs?: number[];
 }): Promise<CancelGlobalBookingResult> {
   const repo = createBookingLifecycleWriteRepository(input.executor);
@@ -527,7 +533,7 @@ export async function cancelGlobalBooking(input: {
     if (!await transitionAllowed(booking.status, event)) return { ok: false, reason: "illegal_transition" };
     intentState = await transition(booking.status, event) as SettlementIntentState;
     const preview = await cancellationPreviewFor(booking, cancelledBy, input.nowUtc);
-    if (input.expectedRefundCents !== undefined && input.expectedRefundCents !== preview.refund_cents) {
+    if (input.expectedRefundCents !== preview.refund_cents) {
       return { ok: false, reason: "cancellation_terms_changed", preview };
     }
     refundCents = preview.refund_cents;
@@ -669,6 +675,7 @@ export async function attachGlobalBookingSession(input: {
   const party = booking ? actorParty(booking, input.actorUserId) : null;
   if (!booking || !party) return { ok: false, reason: "not_found" };
   if (!ATTACHABLE_STATES.has(booking.status)) return { ok: false, reason: "not_attachable" };
+  if (!isWithinAttendanceWindow(booking, input.nowUtc)) return { ok: false, reason: "not_attachable" };
 
   const channel = deriveBookingChannel(input.bookingId);
   const uid = randomAgoraUid();
@@ -696,7 +703,17 @@ export async function heartbeatGlobalBookingSession(input: {
   sessionId: string;
   nowUtc: string;
 }): Promise<GlobalHeartbeatResult> {
-  const result = await createBookingLifecycleWriteRepository(input.executor).heartbeatAttendanceSession({
+  const repo = createBookingLifecycleWriteRepository(input.executor);
+  const booking = await repo.getBooking(input.bookingId);
+  if (
+    !booking
+    || !actorParty(booking, input.actorUserId)
+    || !ATTACHABLE_STATES.has(booking.status)
+    || !isWithinAttendanceWindow(booking, input.nowUtc)
+  ) {
+    return { ok: false, reason: "not_found" };
+  }
+  const result = await repo.heartbeatAttendanceSession({
     heartbeatId: `bah_${crypto.randomUUID()}`,
     sessionId: input.sessionId,
     bookingId: input.bookingId,

@@ -1,10 +1,10 @@
 import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
 import { enqueueCommunityJob } from "../communities/jobs/store"
 import { processCommunityJobById } from "../communities/jobs/runner"
-import type { CommunityJobRepository } from "../communities/jobs/runner-types"
+import { getBackgroundCommunityJobRepository } from "../communities/jobs/background-job-repository"
 import { analysisBlocked, badRequestError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
-import { getControlPlaneClient, withRequestControlPlaneClients } from "../runtime-deps"
+import { getControlPlaneClient, withBackgroundControlPlaneClients } from "../runtime-deps"
 import { sha256Hex } from "../crypto"
 import { analyzeSongBundle } from "./song-artifact-analysis"
 import { shouldSkipSongAcr } from "./song-acr-bypass"
@@ -233,7 +233,13 @@ export async function createSongArtifactBundle(input: {
         lyrics,
         preview_window: previewWindow,
       },
-      primaryAudio: descriptorFromUpload(input.env, primaryAudioUpload),
+      primaryAudio: {
+        ...descriptorFromUpload(input.env, primaryAudioUpload),
+        duration_ms: Number.isFinite(input.body.primary_audio.duration_ms)
+          && Number(input.body.primary_audio.duration_ms) > 0
+          ? Math.round(Number(input.body.primary_audio.duration_ms))
+          : null,
+      },
       coverArt: coverArtUpload ? imageDescriptorFromUpload(coverArtUpload) : null,
       previewAudio: null,
       canvasVideo: canvasVideoUpload ? videoDescriptorFromUpload(canvasVideoUpload) : null,
@@ -328,13 +334,13 @@ export async function createSongArtifactBundle(input: {
         }),
         createdAt: nowIso(),
       }))
-      input.waitUntil?.(withRequestControlPlaneClients(async () => {
+      input.waitUntil?.(withBackgroundControlPlaneClients(async () => {
         try {
           await processCommunityJobById({
             env: input.env,
             communityId: input.communityId,
             jobId: job.job_id,
-            communityRepository: input.communityRepository as unknown as CommunityJobRepository,
+            communityRepository: getBackgroundCommunityJobRepository(input.env),
           })
         } catch (error) {
           console.error("[song-artifacts] immediate preview job processing failed", {

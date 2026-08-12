@@ -19,7 +19,7 @@ import type {
 type CommunityDb = Awaited<ReturnType<typeof openCommunityReadClient>>
 
 export async function syncCommunityFollowProjection(input: {
-  communityRepository: CommunityMembershipRepository
+  communityRepository: Pick<CommunityMembershipRepository, "upsertCommunityFollowProjection" | "incrementCommunityFollowerCount">
   communityId: string
   userId: string
   followState: "active" | "inactive"

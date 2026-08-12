@@ -1,7 +1,8 @@
 import { openCommunityReadClient, openCommunityWriteClient } from "../communities/community-read-access"
+import { hasStartedStoryRoyaltyRegistration } from "../communities/commerce/story-registration-state"
 import type { CommunityDatabaseBindingRepository } from "../communities/db-community-repository"
 import type { Env } from "../../env"
-import { badRequestError, internalError, notFoundError } from "../errors"
+import { badRequestError, codedConflictError, internalError, notFoundError } from "../errors"
 import { makeId, nowIso } from "../helpers"
 import { getPostById } from "../posts/community-post-query-store"
 import { requireAnyCommunityRole } from "../moderation/moderation-access"
@@ -182,6 +183,45 @@ function actionPlan(actionType: RightsReviewActionType): {
   }
 }
 
+async function assertStoryLineageCanBeCleared(input: {
+  dbClient: Parameters<typeof getPostById>[0]
+  caseRow: RightsReviewCase
+}): Promise<void> {
+  const analysis = input.caseRow.analysis_result_ref
+    ? await getMediaAnalysisResultById({
+        executor: input.dbClient,
+        mediaAnalysisResultId: input.caseRow.analysis_result_ref,
+      })
+    : null
+  const postId = input.caseRow.subject_type === "post" ? input.caseRow.subject_id : analysis?.source_post_id
+  const post = postId ? await getPostById(input.dbClient, postId) : null
+  const subjectAssetId = input.caseRow.subject_type === "asset" ? input.caseRow.subject_id : post?.asset_id
+  if (!subjectAssetId) return
+
+  const result = await input.dbClient.execute({
+    sql: `
+      SELECT story_royalty_registration_status, story_ip_id, story_license_terms_id
+      FROM assets
+      WHERE community_id = ?1 AND asset_id = ?2
+      LIMIT 1
+    `,
+    args: [input.caseRow.community_id, subjectAssetId],
+  })
+  const asset = result.rows[0]
+  if (!asset) return
+  if (hasStartedStoryRoyaltyRegistration({
+    story_royalty_registration_status: String(asset.story_royalty_registration_status) as "none" | "pending" | "registered" | "failed",
+    story_ip_id: typeof asset.story_ip_id === "string" ? asset.story_ip_id : null,
+    story_license_terms_id: typeof asset.story_license_terms_id === "string" ? asset.story_license_terms_id : null,
+  })) {
+    throw codedConflictError(
+      "story_lineage_correction_required",
+      "Story lineage registration has started; resolve attribution through the lineage correction workflow.",
+      { asset_id: subjectAssetId },
+    )
+  }
+}
+
 async function attachUpstreamRefsForRightsReviewResolution(input: {
   env: Env
   communityRepository: CommunityDatabaseBindingRepository
@@ -209,6 +249,7 @@ async function attachUpstreamRefsForRightsReviewResolution(input: {
   const post = await getPostById(input.dbClient, postId)
   if (!post) return
 
+  const subjectAssetId = input.caseRow.subject_type === "asset" ? input.caseRow.subject_id : post.asset_id
   const upstreamRefs = Array.from(new Set([
     ...(post.upstream_asset_refs ?? []),
     ...refs.map((ref) => ref.upstreamRef),
@@ -223,7 +264,6 @@ async function attachUpstreamRefsForRightsReviewResolution(input: {
     args: [postId, JSON.stringify(upstreamRefs), input.now],
   })
 
-  const subjectAssetId = input.caseRow.subject_type === "asset" ? input.caseRow.subject_id : post.asset_id
   if (!subjectAssetId) return
   const localAssetIds = refs
     .map((ref) => ref.localAssetId)
@@ -353,6 +393,13 @@ export async function applyRightsReviewCaseAction(input: {
     }
     if (caseRow.status === "resolved" || caseRow.status === "blocked") {
       throw badRequestError("Rights review case is already closed")
+    }
+
+    if (actionType === "clear" || actionType === "clear_with_upstream_refs") {
+      await assertStoryLineageCanBeCleared({
+        dbClient: db.client,
+        caseRow,
+      })
     }
 
     const now = nowIso()

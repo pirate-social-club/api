@@ -3,8 +3,10 @@ import {
   firstTrimmedEnv,
   parsePositiveIntegerEnv,
   requestOpenRouterChatCompletion,
+  DEFAULT_OPENROUTER_MODEL,
 } from "../openrouter-client"
 import { normalizeContentLocale } from "./content-locale"
+import { missingTranslatedContentField } from "./content-translation-validation"
 
 export type ContentTranslationProviderResult = {
   provider: "openrouter"
@@ -82,7 +84,11 @@ function targetLocaleMatchesRequested(parsedTargetLocale: string, requestedTarge
   return Boolean(parsedLanguage && requestedLanguage && parsedLanguage === requestedLanguage && parsed === parsedLanguage)
 }
 
-function validateParsedContentTranslation(value: unknown, requestedTargetLocale: string): ParsedContentTranslation {
+function validateParsedContentTranslation(
+  value: unknown,
+  requestedTargetLocale: string,
+  sourceText: { title?: string | null; body?: string | null; caption?: string | null },
+): ParsedContentTranslation {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("OpenRouter translation response schema mismatch: expected object")
   }
@@ -105,6 +111,17 @@ function validateParsedContentTranslation(value: unknown, requestedTargetLocale:
   }
   if (!isNullableString(parsed.translated_caption)) {
     throw new Error("OpenRouter translation response schema mismatch: invalid translated_caption")
+  }
+
+  if (parsed.outcome === "translated") {
+    const missingField = missingTranslatedContentField(sourceText, {
+      translatedTitle: parsed.translated_title,
+      translatedBody: parsed.translated_body,
+      translatedCaption: parsed.translated_caption,
+    })
+    if (missingField) {
+      throw new Error(`OpenRouter translation response semantic mismatch: ${missingField} is required for translated outcome`)
+    }
   }
 
   return {
@@ -133,7 +150,7 @@ export async function requestContentTranslation(input: {
   }
 
   const model = firstTrimmedEnv(input.env.OPENROUTER_TRANSLATION_MODEL)
-    || "google/gemini-2.5-flash-lite-preview-09-2025"
+    || DEFAULT_OPENROUTER_MODEL
   const timeoutMs = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_TIMEOUT_MS)
     ?? parsePositiveIntegerEnv(input.env.OPENROUTER_TIMEOUT_MS)
   const initialMaxCompletionTokens = parsePositiveIntegerEnv(input.env.OPENROUTER_TRANSLATION_MAX_COMPLETION_TOKENS)
@@ -205,7 +222,7 @@ export async function requestContentTranslation(input: {
     })
 
     try {
-      const parsed = validateParsedContentTranslation(parseTranslationJson(content), input.targetLocale)
+      const parsed = validateParsedContentTranslation(parseTranslationJson(content), input.targetLocale, input.sourceText)
 
       return {
         provider: "openrouter",

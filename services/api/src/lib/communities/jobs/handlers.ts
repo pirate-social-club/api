@@ -27,7 +27,8 @@ import { runPostPublishFinalize } from "./post-publish-finalize-handler"
 import { runSongArtifactSessionReaper } from "./song-artifact-session-reaper-handler"
 import { runSongPreviewGenerate } from "./song-preview-handler"
 import { runSongStudyGenerate } from "../../posts/post-study-service"
-import { runVideoMediaAnalysis } from "./video-media-analysis-handler"
+import { runVideoAudioCatalogUnenroll, runVideoMediaAnalysis } from "./video-media-analysis-handler"
+import { runTelegramPostPublish } from "./telegram-post-publish-handler"
 import type { CommunityJobHandlerInput } from "./handler-types"
 
 export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -71,6 +72,10 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runLiveRoomViewerSessionsPrune(input)
     case "video_media_analysis":
       return runVideoMediaAnalysis(input)
+    case "video_audio_catalog_unenroll":
+      return runVideoAudioCatalogUnenroll(input)
+    case "telegram_post_publish":
+      return runTelegramPostPublish(input)
     default:
       throw internalError(`Unsupported community job type: ${input.job.job_type}`)
   }

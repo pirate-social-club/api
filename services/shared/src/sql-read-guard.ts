@@ -113,25 +113,58 @@ export function isWriteAllowedStatement(sql: string): boolean {
 // Destructive DDL — never allowed on the bootstrap path. CREATE TABLE IF NOT
 // EXISTS is allowed (it's the schema bootstrap); everything else (DROP/ALTER/
 // ATTACH/DETACH/VACUUM/ANALYZE/REINDEX/TRUNCATE/GRANT/REVOKE/PRAGMA) is not.
+// This runs over the WHOLE statement text, trigger bodies included.
 const FORBIDDEN_BOOTSTRAP_VERB =
   /\b(DROP|ALTER|ATTACH|DETACH|VACUUM|ANALYZE|REINDEX|TRUNCATE|GRANT|REVOKE|PRAGMA)\b/i
 
 const DML_OR_DDL_VERB = /\b(INSERT|UPDATE|DELETE|REPLACE|CREATE)\b/i
 
 /**
+ * A single `CREATE TRIGGER ... BEGIN ... END` statement. SQLite trigger bodies
+ * hold their own `;`-terminated statements, so the flat batching rule rejects
+ * every real trigger — including the integrity triggers in the generated
+ * community schema snapshot (migration 1147), whose rejection took down
+ * d1_native provisioning in production. Internal semicolons are tolerated only
+ * inside this exact shape: a CREATE TRIGGER whose text closes with END (one
+ * trailing `;` is fine). A second statement smuggled after END means either
+ * the text no longer ends with END, or an `END;` terminator appears mid-text —
+ * both fail below; and FORBIDDEN_BOOTSTRAP_VERB still runs over the whole
+ * text, so a trigger body cannot smuggle DROP/ALTER/PRAGMA either. What
+ * remains (INSERT/UPDATE/DELETE/CREATE inside the body) is already allowed on
+ * this path.
+ *
+ * Known fail-closed false positive, consistent with this module's lexical
+ * posture: a body whose own statements end with the `END` keyword (e.g. a
+ * `CASE ... END;` expression) trips the mid-text `END;` check and is rejected.
+ */
+function isSingleCreateTrigger(stripped: string): boolean {
+  if (!/^CREATE\s+TRIGGER\b/i.test(stripped)) return false
+  if (!/\bBEGIN\b/i.test(stripped)) return false
+  const body = stripped.replace(/;\s*$/, "")
+  if (!/\bEND\s*$/i.test(body)) return false
+  // Exactly one trigger: an `END;` terminator anywhere earlier means a second
+  // statement follows the first trigger's body.
+  return !/\bEND\s*;/i.test(body)
+}
+
+/**
  * Guard for the bootstrap path (shard `communityD1LoadSnapshot`, step 3 of the
  * D1-native workstream). A POSITIVE ALLOWLIST, slightly wider than
  * `isWriteAllowedStatement` — it permits `CREATE TABLE IF NOT EXISTS` (DDL)
  * because the bootstrap path applies the community schema to a fresh D1
- * binding. It still rejects destructive DDL (DROP/ALTER/...), PRAGMA, SELECT
- * (reads use `execute`/`batch`), and statement batching. Same fail-closed
- * lexical posture: a guardrail for our own schema-bootstrap builder, not a SQL
+ * binding, plus single `CREATE TRIGGER ... BEGIN ... END` statements whose
+ * body semicolons are confined to the trigger (see isSingleCreateTrigger). It
+ * still rejects destructive DDL (DROP/ALTER/...), PRAGMA, SELECT (reads use
+ * `execute`/`batch`), and statement batching. Same fail-closed lexical
+ * posture: a guardrail for our own schema-bootstrap builder, not a SQL
  * authorizer for untrusted input.
  */
 export function isBootstrapAllowedStatement(sql: string): boolean {
   const stripped = stripLeadingNoise(sql)
-  if (hasStatementBatch(stripped)) return false
+  // Forbidden verbs first, over the whole text: they apply inside trigger
+  // bodies too, which is what makes tolerating trigger-body semicolons safe.
   if (FORBIDDEN_BOOTSTRAP_VERB.test(stripped)) return false
+  if (hasStatementBatch(stripped) && !isSingleCreateTrigger(stripped)) return false
   if (/^(INSERT|UPDATE|DELETE|REPLACE|CREATE)\b/i.test(stripped)) return true
   // A CTE is bootstrap only if it wraps a DML or DDL verb.
   if (/^WITH\b/i.test(stripped)) return DML_OR_DDL_VERB.test(stripped)

@@ -2,18 +2,18 @@
  * Runs named async tasks with a bounded concurrency limit and an optional batch
  * deadline.
  *
- * Used by the scheduled (cron) handler to cap how many control-plane connections
- * the per-minute job fan-out opens at once: each job opens its own connection, so
- * firing all of them concurrently can burst the control-plane Postgres primary's
- * small `max_connections`.
+ * Used by the scheduled (cron) handler to cap concurrent work and control-plane
+ * sessions. Callers may provide `workerScope` to allocate one resource scope per
+ * worker lane; sequential tasks in that lane reuse it while concurrent lanes
+ * remain isolated.
  *
- * - `limit`: at most this many tasks run concurrently (peak connections per
- *   invocation ≤ limit).
+ * - `limit`: at most this many tasks run concurrently. With `workerScope`, no
+ *   more than this many scopes are created per invocation.
  * - `deadlineMs`: stop STARTING new tasks once this much wall-time has elapsed;
  *   already-running tasks (≤ limit) finish. Bounds when new connections stop
- *   opening. NOTE: this does NOT cancel an in-flight task — a task that already
+ *   starting. NOTE: this does NOT cancel an in-flight task — a task that already
  *   started may still run past the deadline (and past the next cron boundary).
- *   It is a connection-burst mitigation, not a hard overlap guard.
+ *   It is a resource-pressure mitigation, not a hard overlap guard.
  * - `minimumStartsBeforeDeadline`: ordered prefix that must start even after the
  *   deadline. Use sparingly for recovery paths that cannot safely be deferred.
  *
@@ -32,6 +32,7 @@ export interface RunWithConcurrencyOptions {
   deadlineMs?: number
   minimumStartsBeforeDeadline?: number
   now?: () => number
+  workerScope?: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
 export interface RunResult {
@@ -51,13 +52,14 @@ export async function runWithConcurrencyLimit(
     deadlineMs,
     minimumStartsBeforeDeadline = 0,
     now = () => Date.now(),
+    workerScope,
   } = options
   const protectedStartCount = Math.max(0, Math.min(tasks.length, Math.trunc(minimumStartsBeforeDeadline)))
   const start = now()
   const pastDeadline = (): boolean => deadlineMs != null && now() - start >= deadlineMs
 
   let next = 0
-  const worker = async (): Promise<void> => {
+  const runWorker = async (): Promise<void> => {
     while (next < tasks.length) {
       if (next >= protectedStartCount && pastDeadline()) return
       const task = tasks[next]!
@@ -69,6 +71,9 @@ export async function runWithConcurrencyLimit(
       }
     }
   }
+  const worker = (): Promise<void> => workerScope
+    ? workerScope(runWorker)
+    : runWorker()
 
   const workerCount = Math.max(1, Math.min(Math.floor(limit) || 1, tasks.length))
   await Promise.all(Array.from({ length: workerCount }, () => worker()))
@@ -103,6 +108,7 @@ export interface RunScheduledBatchInput {
   onError?: (error: unknown, name: string) => void
   onSkipped?: (skipped: string[]) => void
   onLeaseHeld?: () => void
+  workerScope?: <T>(operation: () => Promise<T>) => Promise<T>
 }
 
 /**
@@ -124,6 +130,7 @@ export async function runScheduledBatch(input: RunScheduledBatchInput): Promise<
       minimumStartsBeforeDeadline: input.minimumStartsBeforeDeadline,
       now: input.now,
       onError: input.onError,
+      workerScope: input.workerScope,
     })
     if (result.skipped.length > 0) input.onSkipped?.(result.skipped)
     return { acquired: true, result }

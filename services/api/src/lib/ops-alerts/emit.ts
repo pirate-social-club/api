@@ -20,12 +20,21 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
   let staleLockedDeliveryAssets = 0
   const staleLockedDeliveryCommunities = new Set<string>()
   const staleLockedDeliverySamples: Array<Record<string, unknown>> = []
+  let failedStoryDeliveryAssets = 0
+  const failedStoryDeliveryCommunities = new Set<string>()
+  const failedStoryDeliverySamples: Array<Record<string, unknown>> = []
   let retriedLockedDeliveryJobs = 0
   const retriedLockedDeliveryCommunities = new Set<string>()
   const retriedLockedDeliverySamples: Array<Record<string, unknown>> = []
   let storyRegistrationReconciliationRequired = 0
   const storyRegistrationReconciliationCommunities = new Set<string>()
   const storyRegistrationReconciliationSamples: Array<Record<string, unknown>> = []
+  const staleReadyJobLanes = new Map<string, {
+    count: number
+    communities: Set<string>
+    oldestReadyAt: string
+    oldestReadyAgeMs: number
+  }>()
 
   for (const signal of signals) {
     for (const { code, count } of signal.failure_codes) {
@@ -55,6 +64,14 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
         staleLockedDeliverySamples.push({ community_id: signal.community_id, ...sample })
       }
     }
+    if (signal.failed_story_delivery_assets > 0) {
+      failedStoryDeliveryAssets += signal.failed_story_delivery_assets
+      failedStoryDeliveryCommunities.add(signal.community_id)
+      for (const sample of signal.failed_story_delivery_asset_samples) {
+        if (failedStoryDeliverySamples.length >= 10) break
+        failedStoryDeliverySamples.push({ community_id: signal.community_id, ...sample })
+      }
+    }
     if (signal.retried_locked_delivery_jobs > 0) {
       retriedLockedDeliveryJobs += signal.retried_locked_delivery_jobs
       retriedLockedDeliveryCommunities.add(signal.community_id)
@@ -70,6 +87,21 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
         if (storyRegistrationReconciliationSamples.length >= 10) break
         storyRegistrationReconciliationSamples.push({ community_id: signal.community_id, ...sample })
       }
+    }
+    for (const lane of signal.stale_ready_job_lanes) {
+      const aggregate = staleReadyJobLanes.get(lane.job_type) ?? {
+        count: 0,
+        communities: new Set<string>(),
+        oldestReadyAt: lane.oldest_ready_at,
+        oldestReadyAgeMs: 0,
+      }
+      aggregate.count += lane.ready_jobs
+      aggregate.communities.add(signal.community_id)
+      if (lane.oldest_ready_age_ms > aggregate.oldestReadyAgeMs) {
+        aggregate.oldestReadyAgeMs = lane.oldest_ready_age_ms
+        aggregate.oldestReadyAt = lane.oldest_ready_at
+      }
+      staleReadyJobLanes.set(lane.job_type, aggregate)
     }
   }
 
@@ -113,6 +145,16 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       details: { samples: staleLockedDeliverySamples },
     })
   }
+  if (failedStoryDeliveryAssets > 0) {
+    alerts.push({
+      key: "failed_story_or_locked_delivery_assets",
+      severity: "high",
+      title: "Story/locked-delivery assets in failed state",
+      count: failedStoryDeliveryAssets,
+      community_ids: [...failedStoryDeliveryCommunities].sort(),
+      details: { samples: failedStoryDeliverySamples },
+    })
+  }
   if (retriedLockedDeliveryJobs > 0) {
     alerts.push({
       key: "retried_locked_asset_delivery_jobs",
@@ -133,6 +175,21 @@ export function buildOpsAlerts(signals: CommunityPublishAlertSignals[]): OpsAler
       details: { samples: storyRegistrationReconciliationSamples },
     })
   }
+  for (const [jobType, lane] of staleReadyJobLanes) {
+    alerts.push({
+      key: `community_job_pickup_stale:${jobType}`,
+      severity: "high",
+      title: `Community job lane pickup is stale: ${jobType}`,
+      count: lane.count,
+      community_ids: [...lane.communities].sort(),
+      details: {
+        job_type: jobType,
+        ready_jobs: lane.count,
+        oldest_ready_at: lane.oldestReadyAt,
+        oldest_ready_age_ms: lane.oldestReadyAgeMs,
+      },
+    })
+  }
   return alerts
 }
 
@@ -144,11 +201,12 @@ export async function dedupeOpsAlerts(input: {
   alerts: OpsAlert[]
   deduper: AlertDeduper
   nowMs: number
-  bucketMs: number
+  bucketMs: number | ((alert: OpsAlert) => number)
 }): Promise<OpsAlert[]> {
   const out: OpsAlert[] = []
-  const bucket = bucketStartMs(input.nowMs, input.bucketMs)
   for (const alert of input.alerts) {
+    const bucketMs = typeof input.bucketMs === "function" ? input.bucketMs(alert) : input.bucketMs
+    const bucket = bucketStartMs(input.nowMs, bucketMs)
     if (!(await input.deduper.hasSent(alert.key, bucket))) {
       out.push(alert)
     }
@@ -160,10 +218,11 @@ export async function markOpsAlertsSent(input: {
   alerts: OpsAlert[]
   deduper: AlertDeduper
   nowMs: number
-  bucketMs: number
+  bucketMs: number | ((alert: OpsAlert) => number)
 }): Promise<void> {
-  const bucket = bucketStartMs(input.nowMs, input.bucketMs)
   for (const alert of input.alerts) {
+    const bucketMs = typeof input.bucketMs === "function" ? input.bucketMs(alert) : input.bucketMs
+    const bucket = bucketStartMs(input.nowMs, bucketMs)
     await input.deduper.markSent(alert.key, bucket)
   }
 }

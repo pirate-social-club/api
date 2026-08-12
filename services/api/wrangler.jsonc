@@ -3,7 +3,7 @@
   "name": "pirate-api-core",
   "main": "src/index.ts",
   "compatibility_date": "2026-04-09",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "rules": [
     {
       "type": "CompiledWasm",
@@ -12,7 +12,7 @@
     }
   ],
   "triggers": {
-    "crons": ["*/1 * * * *"]
+    "crons": []
   },
   "observability": {
     "enabled": true
@@ -42,18 +42,6 @@
       "simple": { "limit": 20, "period": 60 }
     }
   ],
-  "send_email": [
-    {
-      "name": "OPS_ALERT_EMAIL",
-      "allowed_sender_addresses": ["alerts@pirate.sc"]
-    }
-  ],
-  "kv_namespaces": [
-    {
-      "binding": "OPS_ALERT_DEDUPE",
-      "id": "7cb7dbe8e5cc48d394e3e19b3d51150f"
-    }
-  ],
   "durable_objects": {
     "bindings": [
       {
@@ -79,6 +67,10 @@
       {
         "name": "COMMENT_CREATE_RATE_LIMITER",
         "class_name": "CommentCreateRateLimiterDO"
+      },
+      {
+        "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+        "class_name": "HnsWalletOriginAuthorityDO"
       }
     ]
   },
@@ -106,25 +98,30 @@
     {
       "tag": "v1_story_settlement_wallet_coordinator",
       "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+    },
+    {
+      "tag": "v1_hns_wallet_origin_authority",
+      "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
     }
   ],
   "vars": {
     // Set PASSPORT_API_KEY with `wrangler secret put PASSPORT_API_KEY`.
     "ENVIRONMENT": "development",
-    "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
-    "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
-    "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
+    "EFP_FOLLOW_ACCOUNT_HOURLY_LIMIT": "20",
+    "EFP_FOLLOW_INTENT_TTL_SECONDS": "600",
+    "EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT": "100",
+    "EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION": "800",
     "JWT_BASED_AUTH_ENABLED": "true",
-    "JWT_BASED_AUTH_ISSUERS": "pirate-dev",
-    "JWT_BASED_AUTH_AUDIENCE": "pirate-api",
+    "AUTH_UPSTREAM_JWT_ISSUER": "pirate-dev",
+    "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api",
     "PIRATE_APP_JWT_ISSUER": "pirate-api",
     "PIRATE_APP_JWT_AUDIENCE": "pirate-app",
     "PIRATE_APP_JWT_TTL_SECONDS": "3600",
     "CORS_ALLOWED_ORIGINS": "http://localhost:5173,http://127.0.0.1:5173",
     "DEV_MEMORY_STORE_ENABLED": "false",
     "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
-    "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
-    "FILEBASE_S3_REGION": "us-east-1",
+    "FILEBASE_S3_ENDPOINT": "https://s3.filebase.io",
+    "FILEBASE_S3_REGION": "auto",
     "AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT": "https://s3.filebase.com",
     "AGORA_CLOUD_RECORDING_STORAGE_VENDOR": "11",
     "AGORA_CLOUD_RECORDING_STORAGE_REGION": "0",
@@ -147,6 +144,7 @@
     "STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI": "500000000",
     "STORY_COORDINATOR_GAS_LIMIT_MAX": "1500000",
     "STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS": "12000",
+    "STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS": "1000",
     "STORY_COORDINATOR_FINALITY_CONFIRMATIONS": "20",
     "STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK": "true",
     "STORY_COORDINATOR_BACKLOG_ALERT_MS": "600000",
@@ -173,6 +171,9 @@
       // hits this worker; it's a deploy-and-verify surface for step 1-7 of
       // the D1-native workstream.
       "name": "pirate-api-d1-staging",
+      "triggers": {
+        "crons": ["*/1 * * * *"]
+      },
       "ratelimits": [
         {
           "name": "LINK_PREVIEW_RATE_LIMITER",
@@ -220,6 +221,10 @@
           {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
+          },
+          {
+            "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+            "class_name": "HnsWalletOriginAuthorityDO"
           }
         ]
       },
@@ -247,6 +252,10 @@
         {
           "tag": "v1_story_settlement_wallet_coordinator",
           "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+        },
+        {
+          "tag": "v1_hns_wallet_origin_authority",
+          "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
         }
       ],
       "services": [
@@ -274,18 +283,23 @@
       ],
       "vars": {
         "ENVIRONMENT": "staging",
+        "EFP_FOLLOW_ACCOUNT_HOURLY_LIMIT": "20",
+        "EFP_FOLLOW_INTENT_TTL_SECONDS": "600",
+        "EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT": "1000",
+        "EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION": "800",
         "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
         "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
         "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
-        "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
-        "JWT_BASED_AUTH_AUDIENCE": "pirate-api-staging",
         "AUTH_UPSTREAM_JWT_ISSUER": "pirate-staging-upstream",
         "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api-staging",
         "PIRATE_APP_JWT_ISSUER": "pirate-api-d1-staging",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
+        "COMMUNITY_D1_SHARD_ROUTES": "{\"community-d1-shard-staging\":\"COMMUNITY_D1_SHARD\"}",
+        "COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID": "community-d1-shard-staging",
         "COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD": "8",
+        "COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS": "72",
         "STAGING_TEST_AUTH_ENABLED": "true",
         "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
         "PIRATE_APP_JWT_TTL_SECONDS": "3600",
@@ -293,8 +307,8 @@
         "PIRATE_WEB_PUBLIC_ORIGIN": "https://staging.pirate.sc",
         "CORS_ALLOWED_ORIGINS": "https://staging.pirate.sc",
         "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
-        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
-        "FILEBASE_S3_REGION": "us-east-1",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.io",
+        "FILEBASE_S3_REGION": "auto",
         "AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT": "https://s3.filebase.com",
         "AGORA_CLOUD_RECORDING_STORAGE_VENDOR": "11",
         "AGORA_CLOUD_RECORDING_STORAGE_REGION": "0",
@@ -317,6 +331,7 @@
         "STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI": "500000000",
         "STORY_COORDINATOR_GAS_LIMIT_MAX": "1500000",
         "STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS": "12000",
+        "STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS": "1000",
         "STORY_COORDINATOR_FINALITY_CONFIRMATIONS": "20",
         "STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK": "true",
         "STORY_COORDINATOR_BACKLOG_ALERT_MS": "600000",
@@ -334,6 +349,9 @@
         "HNS_NAMESPACE_REVALIDATION_INTERVAL_SECONDS": "86400",
         "HNS_NAMESPACE_REVALIDATION_VALIDITY_SECONDS": "2592000",
         "HNS_NAMESPACE_REVALIDATION_BATCH_SIZE": "25",
+        "HNS_ROOT_OBSERVER_ENABLED": "false",
+        "HNS_ROOT_OBSERVER_INTERVAL_SECONDS": "300",
+        "HNS_ROOT_OBSERVER_BATCH_SIZE": "4",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "CREDENTIAL_WRAP_KEY_VERSION": "2",
         "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
@@ -343,8 +361,35 @@
     },
     "staging": {
       "name": "pirate-api-staging",
+      "r2_buckets": [
+        {
+          "binding": "TELEGRAM_STUDY_TTS_CACHE",
+          "bucket_name": "telegram-study-tts-cache-staging"
+        }
+      ],
       "triggers": {
         "crons": ["*/1 * * * *"]
+      },
+      // Provisioned dormant: the enqueue/consumer flags and canary allowlist
+      // remain absent until a separately reviewed staging rollout.
+      "queues": {
+        "producers": [
+          {
+            "binding": "REWARD_QUALIFICATION_WAKEUPS",
+            "queue": "reward-wakeup-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "reward-wakeup-staging",
+            "max_batch_size": 5,
+            "max_batch_timeout": 1,
+            "max_retries": 6,
+            "dead_letter_queue": "reward-wakeup-staging-dlq",
+            "max_concurrency": 1,
+            "retry_delay": 300
+          }
+        ]
       },
       "cache": {
         "enabled": true
@@ -410,6 +455,10 @@
           {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
+          },
+          {
+            "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+            "class_name": "HnsWalletOriginAuthorityDO"
           }
         ]
       },
@@ -437,9 +486,18 @@
         {
           "tag": "v1_story_settlement_wallet_coordinator",
           "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+        },
+        {
+          "tag": "v1_hns_wallet_origin_authority",
+          "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
         }
       ],
       "services": [
+        {
+          "binding": "PUBLIC_READ_CACHE",
+          "service": "pirate-api-staging",
+          "entrypoint": "CachedPublicReads"
+        },
         {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-staging",
@@ -464,18 +522,25 @@
       ],
       "vars": {
         "ENVIRONMENT": "staging",
+        "EFP_FOLLOW_ACCOUNT_HOURLY_LIMIT": "20",
+        "EFP_FOLLOW_INTENT_TTL_SECONDS": "600",
+        "EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT": "1000",
+        "EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION": "800",
+        "PUBLIC_READ_CACHE_CANARY_ENABLED": "true",
+        "PUBLIC_READ_CACHE_CANARY_INTERVAL_MINUTES": "15",
         "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
         "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
         "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
-        "JWT_BASED_AUTH_ISSUERS": "pirate-staging-upstream",
-        "JWT_BASED_AUTH_AUDIENCE": "pirate-api-staging",
         "AUTH_UPSTREAM_JWT_ISSUER": "pirate-staging-upstream",
         "AUTH_UPSTREAM_JWT_AUDIENCE": "pirate-api-staging",
         "PIRATE_APP_JWT_ISSUER": "pirate-api-staging",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
+        "COMMUNITY_D1_SHARD_ROUTES": "{\"community-d1-shard-staging\":\"COMMUNITY_D1_SHARD\"}",
+        "COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID": "community-d1-shard-staging",
         "COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD": "8",
+        "COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS": "72",
         "PIRATE_APP_JWT_AUDIENCE": "pirate-app-staging",
         "PIRATE_APP_JWT_TTL_SECONDS": "3600",
         "PIRATE_API_PUBLIC_ORIGIN": "https://api-staging.pirate.sc",
@@ -485,21 +550,37 @@
         "SONG_STUDY_ATTEMPT_TIMING_LOGS": "true",
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
+        "TELEGRAM_STUDY_VOICE_ENABLED": "false",
+        "TELEGRAM_STUDY_VOICE_COMMUNITY_IDS": "",
+        "TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET": "50000",
         "REWARDS_ACCRUAL_ENABLED": "true",
         "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED": "false",
         "REWARDS_READS_ENABLED": "true",
         "REWARDS_PAYOUTS_ENABLED": "true",
+        "REWARDS_MIN_CASHOUT_CENTS": "50",
         "REWARDS_CAMPAIGNS_ENABLED": "true",
+        "REWARDS_REFUNDS_ENABLED": "true",
         "REWARDS_IDENTITY_PROVIDER": "very",
+        "REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED": "true",
+        "REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER": "self",
         "REWARDS_CAMPAIGN_CHAIN_ID": "84532",
         "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        "REWARDS_CAMPAIGN_TREASURY_ADDRESS": "0x053228674F055FBb94d1B8118638F61a4a6ee512",
-        "REWARDS_CAMPAIGN_RPC_URL": "https://sepolia.base.org",
-        "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS": "0x47FfE9baBf7b64636298185dBf63Db9561334956",
-        "PIRATE_REWARDS_SETTLEMENT_RPC_URL": "https://sepolia.base.org",
+        "REWARDS_CAMPAIGN_TREASURY_ADDRESS": "0x01c84e513CC823255A9651885Fb59E363B47d55a",
+        "PIRATE_REWARDS_SETTLEMENT_BACKEND": "lit_vault",
+        "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS": "0xf536b0DAfD04AE1E5ADB8C170880c7996Fa26c5C",
         "PIRATE_REWARDS_SETTLEMENT_CHAIN_ID": "84532",
+        "PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL": "https://sepolia.base.org",
         "PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         "PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE": "false",
+        "REWARDS_TREASURY_VAULT_ADDRESS": "0x01c84e513CC823255A9651885Fb59E363B47d55a",
+        "REWARDS_TREASURY_VAULT_POLICY_VERSION": "2",
+        "LIT_REWARDS_ACTION_IPFS_ID": "QmQ7mBbjbd4KgGfiKbYRv1p4kbcs8ebSz6ruAYfLeN8v9d",
+        "LIT_REWARDS_ACTION_POLICY_VERSION": "2",
+        "LIT_REWARDS_REQUEST_MAX_ATTEMPTS": "1",
+        "LIT_REWARDS_SIGNING_DEADLINE_SECONDS": "300",
+        "LIT_REWARDS_MAX_FEE_PER_GAS_WEI": "50000000000",
+        "LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI": "25000000000",
+        "LIT_REWARDS_MAX_GAS_LIMIT": "300000",
         "REWARDS_CAMPAIGN_ALERT_OWNER": "habitant_barber905@simplelogin.com",
         "REWARDS_CAMPAIGN_ALERT_DESTINATION": "piratesocialclub@proton.me",
         "REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS": "900",
@@ -510,8 +591,8 @@
         "REWARDS_CAMPAIGN_MAX_DURATION_SECONDS": "7776000",
         "SONG_ACR_BYPASS_COMMUNITY_IDS": "com_cmt_304e8a0f7ed84b268b05abdca364f5bf",
         "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
-        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
-        "FILEBASE_S3_REGION": "us-east-1",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.io",
+        "FILEBASE_S3_REGION": "auto",
         "AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT": "https://s3.filebase.com",
         "AGORA_CLOUD_RECORDING_STORAGE_VENDOR": "11",
         "AGORA_CLOUD_RECORDING_STORAGE_REGION": "0",
@@ -534,6 +615,7 @@
         "STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI": "500000000",
         "STORY_COORDINATOR_GAS_LIMIT_MAX": "1500000",
         "STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS": "12000",
+        "STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS": "1000",
         "STORY_COORDINATOR_FINALITY_CONFIRMATIONS": "20",
         "STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK": "true",
         "STORY_COORDINATOR_BACKLOG_ALERT_MS": "600000",
@@ -551,6 +633,9 @@
         "HNS_NAMESPACE_REVALIDATION_INTERVAL_SECONDS": "86400",
         "HNS_NAMESPACE_REVALIDATION_VALIDITY_SECONDS": "2592000",
         "HNS_NAMESPACE_REVALIDATION_BATCH_SIZE": "25",
+        "HNS_ROOT_OBSERVER_ENABLED": "true",
+        "HNS_ROOT_OBSERVER_INTERVAL_SECONDS": "300",
+        "HNS_ROOT_OBSERVER_BATCH_SIZE": "4",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "20000",
         "CREDENTIAL_WRAP_KEY_VERSION": "2",
 	        "STAGING_TEST_AUTH_ENABLED": "true",
@@ -561,6 +646,36 @@
     },
     "production": {
       "name": "api-core",
+      "r2_buckets": [
+        {
+          "binding": "TELEGRAM_STUDY_TTS_CACHE",
+          "bucket_name": "telegram-study-tts-cache"
+        }
+      ],
+      "triggers": {
+        "crons": ["*/1 * * * *"]
+      },
+      // Provisioned dormant: the enqueue/consumer flags and canary allowlist
+      // remain absent until a separately reviewed production rollout.
+      "queues": {
+        "producers": [
+          {
+            "binding": "REWARD_QUALIFICATION_WAKEUPS",
+            "queue": "reward-wakeup-production"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "reward-wakeup-production",
+            "max_batch_size": 5,
+            "max_batch_timeout": 1,
+            "max_retries": 6,
+            "dead_letter_queue": "reward-wakeup-production-dlq",
+            "max_concurrency": 1,
+            "retry_delay": 300
+          }
+        ]
+      },
       "hyperdrive": [
         {
           "binding": "CONTROL_PLANE_HYPERDRIVE",
@@ -631,6 +746,10 @@
           {
             "name": "COMMENT_CREATE_RATE_LIMITER",
             "class_name": "CommentCreateRateLimiterDO"
+          },
+          {
+            "name": "HNS_WALLET_ORIGIN_AUTHORITY",
+            "class_name": "HnsWalletOriginAuthorityDO"
           }
         ]
       },
@@ -658,9 +777,18 @@
         {
           "tag": "v1_story_settlement_wallet_coordinator",
           "new_sqlite_classes": ["StorySettlementWalletCoordinatorDO"]
+        },
+        {
+          "tag": "v1_hns_wallet_origin_authority",
+          "new_sqlite_classes": ["HnsWalletOriginAuthorityDO"]
         }
       ],
       "services": [
+        {
+          "binding": "PUBLIC_READ_CACHE",
+          "service": "api-core",
+          "entrypoint": "CachedPublicReads"
+        },
         {
           "binding": "COMMUNITY_D1_SHARD",
           "service": "community-d1-shard-prod",
@@ -685,13 +813,17 @@
       ],
       "vars": {
         "ENVIRONMENT": "production",
+        "EFP_FOLLOW_ACCOUNT_HOURLY_LIMIT": "20",
+        "EFP_FOLLOW_INTENT_TTL_SECONDS": "600",
+        "EFP_FOLLOW_SPONSOR_DAILY_TRANSACTION_LIMIT": "300",
+        "EFP_FOLLOW_SPONSOR_ESTIMATED_USD_MICROS_PER_TRANSACTION": "800",
+        "PUBLIC_READ_CACHE_CANARY_ENABLED": "true",
+        "PUBLIC_READ_CACHE_CANARY_INTERVAL_MINUTES": "15",
         "OPS_ALERT_EMAIL_FROM": "alerts@pirate.sc",
         "OPS_ALERT_EMAIL_FROM_NAME": "Pirate Ops",
         "OPS_ALERT_EMAIL_TO": "piratesocialclub@proton.me",
         "DEV_MEMORY_STORE_ENABLED": "false",
         "JWT_BASED_AUTH_ENABLED": "true",
-        "JWT_BASED_AUTH_ISSUERS": "pirate-production-upstream",
-        "JWT_BASED_AUTH_AUDIENCE": "api-core",
         "AUTH_UPSTREAM_JWT_ISSUER": "pirate-production-upstream",
         "AUTH_UPSTREAM_JWT_AUDIENCE": "api-core",
         "PIRATE_APP_JWT_ISSUER": "api-core",
@@ -702,21 +834,34 @@
         "CORS_ALLOWED_ORIGINS": "https://pirate.sc,https://www.pirate.sc",
         "PRIVY_APP_ID": "cmnbdx9xk00ty0clapn2q8pdj",
         "VERY_APP_ID": "4d87383a-1f3e-486d-8df4-38a8ead86d10",
-        "REWARDS_ACCRUAL_ENABLED": "false",
+        "REWARDS_ACCRUAL_ENABLED": "true",
         "REWARDS_LEGACY_STREAK_ACCRUAL_ENABLED": "false",
         "REWARDS_READS_ENABLED": "true",
-        "REWARDS_PAYOUTS_ENABLED": "false",
+        "REWARDS_PAYOUTS_ENABLED": "true",
+        "REWARDS_MIN_CASHOUT_CENTS": "100",
         "REWARDS_CAMPAIGNS_ENABLED": "true",
-        "REWARDS_IDENTITY_PROVIDER": "very",
-        "REWARDS_CAMPAIGN_CHAIN_ID": "84532",
-        "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-        "REWARDS_CAMPAIGN_TREASURY_ADDRESS": "0x053228674F055FBb94d1B8118638F61a4a6ee512",
-        "REWARDS_CAMPAIGN_RPC_URL": "https://sepolia.base.org",
-        "REWARDS_CAMPAIGN_POST_ALLOWLIST": "pst_66644f58a5824bff85de4a723a57aa47",
-        "PIRATE_REWARDS_SETTLEMENT_RPC_URL": "https://sepolia.base.org",
-        "PIRATE_REWARDS_SETTLEMENT_CHAIN_ID": "84532",
-        "PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "REWARDS_REFUNDS_ENABLED": "true",
+        "REWARDS_IDENTITY_PROVIDER": "self",
+        "REWARDS_NATIONALITY_SHADOW_WRITES_ENABLED": "false",
+        "REWARDS_NATIONALITY_SHADOW_IDENTITY_PROVIDER": "self",
+        "REWARDS_CAMPAIGN_CHAIN_ID": "8453",
+        "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "REWARDS_CAMPAIGN_TREASURY_ADDRESS": "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
+        "PIRATE_REWARDS_SETTLEMENT_BACKEND": "eoa_vault",
+        "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS": "0x43bbA97370B00E9930994EA427DAEE400846617B",
+        "PIRATE_REWARDS_SETTLEMENT_CHAIN_ID": "8453",
+        "PIRATE_REWARDS_SETTLEMENT_BROADCAST_RPC_URL": "https://mainnet.base.org",
+        "PIRATE_REWARDS_SETTLEMENT_USDC_TOKEN_ADDRESS": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
         "PIRATE_REWARDS_SETTLEMENT_ALLOW_TOKEN_OVERRIDE": "false",
+        "REWARDS_TREASURY_VAULT_ADDRESS": "0xe2d03cB0678449e0cc1f1eD33E5c46102EC5AB86",
+        "REWARDS_TREASURY_VAULT_POLICY_VERSION": "1",
+        "REWARDS_SETTLEMENT_SIGNER_MIN_ETH_WEI": "500000000000000",
+        "LIT_REWARDS_ACTION_POLICY_VERSION": "1",
+        "LIT_REWARDS_REQUEST_MAX_ATTEMPTS": "1",
+        "LIT_REWARDS_SIGNING_DEADLINE_SECONDS": "300",
+        "LIT_REWARDS_MAX_FEE_PER_GAS_WEI": "50000000000",
+        "LIT_REWARDS_MAX_PRIORITY_FEE_PER_GAS_WEI": "25000000000",
+        "LIT_REWARDS_MAX_GAS_LIMIT": "300000",
         "REWARDS_CAMPAIGN_ALERT_OWNER": "habitant_barber905@simplelogin.com",
         "REWARDS_CAMPAIGN_ALERT_DESTINATION": "piratesocialclub@proton.me",
         "REWARDS_CAMPAIGN_QUOTE_TTL_SECONDS": "900",
@@ -726,8 +871,8 @@
         "REWARDS_CAMPAIGN_MIN_DURATION_SECONDS": "3600",
         "REWARDS_CAMPAIGN_MAX_DURATION_SECONDS": "7776000",
         "FILEBASE_MEDIA_BUCKET": "psc-media-bucket",
-        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.com",
-        "FILEBASE_S3_REGION": "us-east-1",
+        "FILEBASE_S3_ENDPOINT": "https://s3.filebase.io",
+        "FILEBASE_S3_REGION": "auto",
         "AGORA_CLOUD_RECORDING_STORAGE_ENDPOINT": "https://s3.filebase.com",
         "AGORA_CLOUD_RECORDING_STORAGE_VENDOR": "11",
         "AGORA_CLOUD_RECORDING_STORAGE_REGION": "0",
@@ -750,6 +895,7 @@
         "STORY_COORDINATOR_MAX_PRIORITY_FEE_PER_GAS_WEI": "500000000",
         "STORY_COORDINATOR_GAS_LIMIT_MAX": "1500000",
         "STORY_COORDINATOR_GAS_ESTIMATE_BUFFER_BPS": "12000",
+        "STORY_COORDINATOR_REPLACEMENT_MIN_BUMP_BPS": "1000",
         "STORY_COORDINATOR_FINALITY_CONFIRMATIONS": "20",
         "STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK": "true",
         "STORY_COORDINATOR_BACKLOG_ALERT_MS": "600000",
@@ -757,6 +903,7 @@
         "PIRATE_CHECKOUT_SOURCE_CHAIN_ID": "84532",
         "PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
         "PIRATE_BOOKING_SETTLEMENT_CHAIN_ID": "84532",
+        "BOOKINGS_PAYMENT_REVERIFICATION_CRON_ENABLED": "true",
         "BASE_SEPOLIA_RPC_URL": "https://sepolia.base.org",
         "PIRATE_CHECKOUT_TX_WAIT_TIMEOUT_MS": "30000",
         "ACRCLOUD_BUCKET_ID": "30358",
@@ -772,11 +919,21 @@
         "HNS_NAMESPACE_REVALIDATION_INTERVAL_SECONDS": "86400",
         "HNS_NAMESPACE_REVALIDATION_VALIDITY_SECONDS": "2592000",
         "HNS_NAMESPACE_REVALIDATION_BATCH_SIZE": "25",
+        "HNS_ROOT_OBSERVER_ENABLED": "true",
+        "HNS_ROOT_OBSERVER_INTERVAL_SECONDS": "300",
+        "HNS_ROOT_OBSERVER_BATCH_SIZE": "4",
         "CREDENTIAL_WRAP_KEY_VERSION": "2",
         "COMMUNITY_D1_SHARD_REGION": "eeur",
+        "HNS_ROOT_DELEGATION_ROUTING_ENABLED": "true",
+        "COMMUNITY_D1_SHARD_ROUTES": "{\"community-d1-shard-prod\":\"COMMUNITY_D1_SHARD\"}",
+        "COMMUNITY_D1_ALLOCATION_SHARD_WORKER_ID": "community-d1-shard-prod",
         "COMMUNITY_D1_POOL_FREE_ALERT_THRESHOLD": "15",
+        "COMMUNITY_D1_POOL_EXHAUSTION_ALERT_HOURS": "72",
         "SONG_STUDY_DUE_REVIEW_SERVING_ENABLED": "true",
         "SONG_STUDY_STREAK_WRITES_ENABLED": "true",
+        "TELEGRAM_STUDY_VOICE_ENABLED": "true",
+        "TELEGRAM_STUDY_VOICE_COMMUNITY_IDS": "cmt_fb2bacac74b144eaa58802b476eb9f3b",
+        "TELEGRAM_STUDY_TTS_DAILY_CHAR_BUDGET": "50000",
 	        "COMMUNITY_PROVISION_ALLOWED_GROUP_LOCATIONS": "aws-us-east-1,aws-us-east-2,aws-us-west-2,aws-eu-west-1,aws-ap-south-1,aws-ap-northeast-1",
 	        "PASSPORT_API_URL": "https://api.passport.xyz",
 	        "PASSPORT_SCORER_ID": "12028"

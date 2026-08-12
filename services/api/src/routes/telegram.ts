@@ -8,8 +8,10 @@ import {
   type TelegramBotAdminStatus,
   type TelegramChatType,
   type CompleteTelegramSetupIntentInput,
+  type TelegramSetupKind,
 } from "../lib/telegram/community-chat-service"
 import {
+  answerTelegramCallbackQuery,
   approveTelegramChatJoinRequest,
   getTelegramChat,
   getTelegramChatMember,
@@ -43,13 +45,14 @@ import { joinCommunity } from "../lib/communities/membership/request-service"
 import { sendCommunityAssistantTelegramDirectMessage } from "../lib/communities/assistant-policy/chat-service"
 import { answerTelegramGroupAssistantPrompt, telegramText } from "../lib/telegram/assistant-service"
 import { getProfileRepository, getSessionRepository, getUserRepository } from "../lib/auth/repositories"
+import { resolveCanonicalUserId } from "../lib/auth/account-alias-service"
 import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import {
   configuredTelegramInitDataMaxAgeSeconds,
   verifyTelegramMiniAppInitData,
 } from "../lib/telegram/mini-app-auth"
 import { trackApiEvent } from "../lib/analytics/track"
-import { authError, badRequestError, HttpError } from "../lib/errors"
+import { authError, badRequestError, HttpError, notFoundError, telegramStudyUnavailable } from "../lib/errors"
 import { publicCommunityId } from "../lib/public-ids"
 import { getTelegramCopy } from "../lib/telegram/telegram-copy"
 import {
@@ -68,13 +71,30 @@ import {
   parseStartToken,
   telegramIdentifier,
   telegramLanguageCode,
+  type TelegramWebhookCallbackQuery,
   type TelegramWebhookChatJoinRequest,
   type TelegramWebhookMessage,
   type TelegramWebhookUpdate,
 } from "../lib/telegram/webhook-parsing"
 import {
+  handleTelegramStudyVoiceMessage,
+} from "../lib/telegram/study-voice-service"
+import { isTelegramStudyVoiceEnabled } from "../lib/telegram/study-voice-admission"
+import {
+  answerPrivateStudyTutorQuestion,
+  releaseTutorDisclosureReceipt,
+} from "../lib/telegram/private-study-tutor-service"
+import { telegramStudyContinueTutorButton } from "../lib/telegram/chat-study-playback-service"
+import {
+  continueTelegramChatStudyAfterVoice,
+  getTelegramStudyRewardOpportunityCount,
+  handleTelegramChatStudyCallback,
+  startTelegramChatStudy,
+} from "../lib/telegram/chat-study-service"
+import { withBackgroundControlPlaneClients } from "../lib/runtime-deps"
+import {
   directAssistantFailureMessage,
-  getTelegramDirectAssistantPolicy,
+  getTelegramCommunityAssistantPolicy,
   maybeSendTelegramAssistantVoiceReply,
   maybeSendTelegramAssistantVoiceReplyForCommunity,
   safeSendTelegramMessage,
@@ -86,8 +106,15 @@ import {
   transcribeTelegramAssistantVoiceForCommunity,
   transcribeTelegramGroupAssistantVoice,
 } from "./telegram-assistant-workflow"
+import { completeTelegramChannelSetupByRequest } from "../lib/telegram/channel-destination-service"
+import { getWaitUntil } from "./execution-context"
+import { getRewardsSummaryForUser } from "../lib/rewards/reward-read-service"
 
 const telegram = new Hono<{ Bindings: Env }>()
+
+const TELEGRAM_START_MENU_STUDY = "menu:study"
+const TELEGRAM_START_MENU_REWARDS = "menu:rewards"
+const TELEGRAM_START_MENU_SETTINGS = "menu:settings"
 
 function timingSafeSecretEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
@@ -139,6 +166,17 @@ async function telegramAutoExchangeMiniAppVerificationTokens(env: Env, community
   return telegramPlatformMiniAppVerificationTokens(env)
 }
 
+async function telegramStudyMiniAppVerificationTokens(env: Env, communityId: string): Promise<string[]> {
+  const communityBot = await decryptActiveCommunityTelegramBotOrNull({
+    env,
+    communityId,
+  })
+  if (!communityBot) {
+    throw telegramStudyUnavailable()
+  }
+  return [communityBot.token]
+}
+
 function summarizeTelegramJoinGrantApprovalResults(
   results: Array<{ status: "approved" | "failed" | "ignored" | "pending" }>,
 ): "approved" | "failed" | "ignored" | "none" | "pending" {
@@ -157,7 +195,7 @@ function summarizeTelegramJoinGrantApprovalResults(
   return "ignored"
 }
 
-function chatPickerAdminRights() {
+function groupPickerAdminRights() {
   return {
     is_anonymous: false,
     can_manage_chat: true,
@@ -173,16 +211,36 @@ function chatPickerAdminRights() {
   }
 }
 
-function chatPickerMarkup(requestId: number) {
+function channelPickerAdminRights() {
+  return {
+    is_anonymous: false,
+    can_manage_chat: true,
+    can_delete_messages: false,
+    can_manage_video_chats: false,
+    can_restrict_members: false,
+    can_promote_members: false,
+    can_change_info: false,
+    can_invite_users: false,
+    can_post_messages: true,
+    can_edit_messages: false,
+    can_post_stories: false,
+    can_edit_stories: false,
+    can_delete_stories: false,
+  }
+}
+
+function chatPickerMarkup(requestId: number, setupKind: TelegramSetupKind) {
+  const isChannel = setupKind === "channel"
+  const rights = isChannel ? channelPickerAdminRights() : groupPickerAdminRights()
   return {
     keyboard: [[{
-      text: "Select group",
+      text: isChannel ? "Select channel" : "Select group",
       request_chat: {
         request_id: requestId,
-        chat_is_channel: false,
+        chat_is_channel: isChannel,
         bot_is_member: true,
-        user_administrator_rights: chatPickerAdminRights(),
-        bot_administrator_rights: chatPickerAdminRights(),
+        user_administrator_rights: rights,
+        bot_administrator_rights: rights,
         request_title: true,
         request_username: true,
       },
@@ -192,8 +250,13 @@ function chatPickerMarkup(requestId: number) {
   }
 }
 
-function setupInstructions(bot: Env | TelegramBotCredential): string {
+function setupInstructions(bot: Env | TelegramBotCredential, setupKind: TelegramSetupKind): string {
   const username = telegramBotUsername(bot)
+  if (setupKind === "channel") {
+    return username
+      ? `Add @${username} to the channel as an admin with permission to post messages, then tap Select channel.`
+      : "Add this bot to the channel as an admin with permission to post messages, then tap Select channel."
+  }
   return username
     ? `Add @${username} to the group as an admin with invite-user permission, then tap Select group.`
     : "Add this bot to the group as an admin with invite-user permission, then tap Select group."
@@ -236,6 +299,22 @@ function telegramCommunityParticipationUrl(env: Env, communityId: string): strin
   return origin ? `${origin}/tg/c/${encodeURIComponent(publicCommunityId(communityId))}` : null
 }
 
+function telegramRewardsUrl(env: Env): string | null {
+  const origin = telegramWebPublicOrigin(env)
+  return origin ? `${origin}/wallet` : null
+}
+
+function telegramRewardDeadline(locale: RuntimeUiLocaleCode, value: number | string | null): string | null {
+  if (value === null || value === "") return null
+  const date = new Date(value)
+  if (!Number.isFinite(date.getTime())) return null
+  return new Intl.DateTimeFormat(locale, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: "UTC",
+  }).format(date)
+}
+
 function telegramCommunityVerificationUrl(env: Env, communityId: string): string | null {
   const origin = telegramWebPublicOrigin(env)
   return origin ? `${origin}/tg/verify/${encodeURIComponent(publicCommunityId(communityId))}` : null
@@ -251,15 +330,111 @@ function telegramMiniAppLauncherMarkup(url: string): unknown {
 }
 
 function telegramCommunityStartMarkup(input: {
-  text: string
-  url: string
+  copy: ReturnType<typeof getTelegramCopy>
+  studyEnabled: boolean
 }): unknown {
-  return {
-    inline_keyboard: [[{
-      text: input.text,
-      web_app: { url: input.url },
-    }]],
+  const rows: Array<Array<Record<string, unknown>>> = []
+  if (input.studyEnabled) {
+    rows.push([{ text: input.copy.menu.study, callback_data: TELEGRAM_START_MENU_STUDY }])
   }
+  rows.push([{ text: input.copy.menu.rewards, callback_data: TELEGRAM_START_MENU_REWARDS }])
+  if (input.studyEnabled) {
+    rows.push([{ text: input.copy.menu.settings, callback_data: TELEGRAM_START_MENU_SETTINGS }])
+  }
+  return {
+    inline_keyboard: rows,
+  }
+}
+
+function telegramCommunityActionMarkup(text: string, url: string): unknown {
+  return {
+    inline_keyboard: [[{ text, web_app: { url } }]],
+  }
+}
+
+async function handleTelegramStartMenuCallback(input: {
+  bot: TelegramCommunityBotCredential
+  callback: TelegramWebhookCallbackQuery
+  env: Env
+}): Promise<boolean> {
+  if (input.callback.data !== TELEGRAM_START_MENU_STUDY
+    && input.callback.data !== TELEGRAM_START_MENU_REWARDS) {
+    if (input.callback.data !== TELEGRAM_START_MENU_SETTINGS) return false
+  }
+  const callbackQueryId = telegramIdentifier(input.callback.id)
+  const chatId = telegramIdentifier(input.callback.message?.chat?.id)
+  const telegramUserId = telegramIdentifier(input.callback.from?.id)
+  if (!callbackQueryId || !chatId || !telegramUserId) return true
+  console.info("[telegram-start-menu] callback", {
+    callbackData: input.callback.data,
+    communityId: input.bot.communityId,
+    messageId: input.callback.message?.message_id ?? null,
+    telegramUserId,
+  })
+
+  if (input.callback.data === TELEGRAM_START_MENU_REWARDS) {
+    const account = await resolveTelegramAccount({ env: input.env, telegramUserId })
+    const profile = account
+      ? await getProfileRepository(input.env).getProfileByUserId(account.userId).catch(() => null)
+      : null
+    const locale = resolveTelegramStartLocale({
+      profilePreferredLocale: profile?.preferred_locale,
+      telegramLanguageCode: input.callback.from?.language_code ?? null,
+    })
+    const copy = getTelegramCopy(locale)
+    const rewardsUrl = telegramRewardsUrl(input.env)
+    const [summary, opportunityCount] = account
+      ? await Promise.all([
+          getRewardsSummaryForUser({ env: input.env, userId: account.userId }).catch(() => null),
+          getTelegramStudyRewardOpportunityCount({ communityId: input.bot.communityId, env: input.env, userId: account.userId }).catch(() => 0),
+        ])
+      : [null, 0] as const
+    const pendingCents = summary?.pending_verification.conditional_cents ?? 0
+    const balanceCents = summary?.balance_cents ?? 0
+    const money = (cents: number) => `${(cents / 100).toFixed(2)} USDC`
+    const rewardSummary = !summary || (balanceCents <= 0 && pendingCents <= 0)
+      ? copy.rewards.empty
+      : pendingCents > 0
+        ? copy.rewards.pending({
+            balance: money(balanceCents),
+            expiresAt: telegramRewardDeadline(locale, summary.pending_verification.earliest_expires_at),
+            pending: money(pendingCents),
+          })
+        : copy.rewards.balance({ balance: money(balanceCents) })
+    const text = `${rewardSummary}\n\n${copy.rewards.opportunities({ count: opportunityCount })}`
+    await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => false)
+    await safeSendTelegramMessage(input.bot, {
+      chat_id: chatId,
+      text,
+      ...(rewardsUrl && (balanceCents > 0 || pendingCents > 0) ? {
+        reply_markup: {
+          inline_keyboard: [[{ text: copy.rewards.claim, web_app: { url: rewardsUrl } }]],
+        },
+      } : {}),
+    })
+    return true
+  }
+
+  if (!isTelegramStudyVoiceEnabled(input.env, input.bot.communityId)) {
+    await answerTelegramCallbackQuery(input.bot, {
+      callback_query_id: callbackQueryId,
+      text: "Study is not available here yet.",
+    }).catch(() => false)
+    return true
+  }
+  await answerTelegramCallbackQuery(input.bot, { callback_query_id: callbackQueryId }).catch(() => false)
+  await startTelegramChatStudy({
+    bot: input.bot,
+    chatId,
+    env: input.env,
+    forcePreferences: input.callback.data === TELEGRAM_START_MENU_SETTINGS,
+    requestMessageId: input.callback.data === TELEGRAM_START_MENU_SETTINGS
+      ? null
+      : input.callback.message?.message_id ?? null,
+    targetLanguage: telegramLanguageCode(input.callback.from?.language_code),
+    telegramUserId,
+  })
+  return true
 }
 
 async function safeApproveTelegramChatJoinRequest(
@@ -331,8 +506,8 @@ async function handleCommunityBotStartMessage(env: Env, input: {
       })
       await safeSendTelegramMessage(input.bot, {
         chat_id: input.chatId,
-        text: setupInstructions(input.bot),
-        reply_markup: chatPickerMarkup(setupRequest.request_id),
+        text: setupInstructions(input.bot, setupRequest.setup_kind),
+        reply_markup: chatPickerMarkup(setupRequest.request_id, setupRequest.setup_kind),
       })
     } catch (error) {
       await safeSendTelegramMessage(input.bot, {
@@ -342,29 +517,23 @@ async function handleCommunityBotStartMessage(env: Env, input: {
     }
     return
   }
-
   const joinCommunityId = parseCommunityJoinPayload(startPayload)
   const legacyCommunityId = joinCommunityId ? null : parseCommunityStartPayload(startPayload)
   const requestedCommunityId = joinCommunityId ?? legacyCommunityId
   if (!startPayload) {
-    const policy = await getTelegramDirectAssistantPolicy({
+    // Start presentation is independent of the private study tutor toggle, and
+    // always shows the community welcome plus menu. The assistant remains
+    // reachable through its menu button rather than replacing the welcome.
+    const policy = await getTelegramCommunityAssistantPolicy({
       env,
       communityId: input.bot.communityId,
     }).catch(() => null)
-    if (policy?.telegramPreviewEnabled && policy.telegramPreviewDailyCap > 0) {
-      const locale = resolveTelegramStartLocale({
-        telegramLanguageCode: input.telegramLanguageCode,
-      })
-      await safeSendTelegramMessage(input.bot, {
-        chat_id: input.chatId,
-        text: getTelegramCopy(locale).privateAssistant.intro,
-      })
-      return
-    }
     await handleCommunityStartMessage(env, {
       bot: input.bot,
       chatId: input.chatId,
       communityId: input.bot.communityId,
+      assistantEnabled: Boolean(policy?.enabled),
+      showStartMenu: true,
       telegramLanguageCode: input.telegramLanguageCode,
       telegramUserId: input.telegramUserId,
     })
@@ -470,8 +639,8 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
     })
     await safeSendTelegramMessage(bot, {
       chat_id: chatId,
-      text: setupInstructions(bot),
-      reply_markup: chatPickerMarkup(setupRequest.request_id),
+      text: setupInstructions(bot, setupRequest.setup_kind),
+      reply_markup: chatPickerMarkup(setupRequest.request_id, setupRequest.setup_kind),
     })
   } catch (error) {
     await safeSendTelegramMessage(bot, {
@@ -482,9 +651,11 @@ async function handleStartMessage(env: Env, message: TelegramWebhookMessage, bot
 }
 
 async function handleCommunityStartMessage(env: Env, input: {
+  assistantEnabled?: boolean
   bot: Env | TelegramCommunityBotCredential
   chatId: string
   communityId: string
+  showStartMenu?: boolean
   telegramLanguageCode: string | null
   telegramUserId: string | null
 }): Promise<void> {
@@ -501,7 +672,8 @@ async function handleCommunityStartMessage(env: Env, input: {
 
   const boardUrl = telegramCommunityParticipationUrl(env, community.community_id)
   const verifyUrl = telegramCommunityVerificationUrl(env, community.community_id)
-  if (!boardUrl || !verifyUrl) {
+  const rewardsUrl = telegramRewardsUrl(env)
+  if (!boardUrl || !verifyUrl || !rewardsUrl) {
     await safeSendTelegramMessage(input.bot, {
       chat_id: input.chatId,
       text: "Pirate links are not configured for this bot.",
@@ -544,11 +716,19 @@ async function handleCommunityStartMessage(env: Env, input: {
   })
   await safeSendTelegramMessage(input.bot, {
     chat_id: input.chatId,
-    text: presentation.messageText,
-    reply_markup: telegramCommunityStartMarkup({
-      text: presentation.actionText,
-      url: presentation.actionUrl,
-    }),
+    text: input.showStartMenu
+      ? [
+          copy.start.overview({ community: community.display_name }),
+          input.assistantEnabled === true ? copy.start.assistantHint : null,
+        ].filter((value): value is string => Boolean(value)).join("\n\n")
+      : presentation.messageText,
+    reply_markup: input.showStartMenu
+      ? telegramCommunityStartMarkup({
+          copy,
+          studyEnabled: isCommunityBot(input.bot)
+            && isTelegramStudyVoiceEnabled(env, input.bot.communityId),
+        })
+      : telegramCommunityActionMarkup(presentation.actionText, presentation.actionUrl),
   })
 }
 
@@ -695,6 +875,34 @@ async function handleChatSharedMessage(env: Env, message: TelegramWebhookMessage
 
   try {
     const telegramChat = await getTelegramChat(bot, sharedChatId)
+    if (telegramChat.type === "channel") {
+      if (!isCommunityBot(bot)) {
+        throw badRequestError("A community bot is required to connect a channel")
+      }
+      const member = await getTelegramChatMember(bot, sharedChatId, telegramBotUserId(bot))
+      if (
+        member.status !== "administrator"
+        && member.status !== "creator"
+        || member.can_post_messages === false
+      ) {
+        throw badRequestError("The community bot must be a channel administrator with permission to post messages")
+      }
+      await completeTelegramChannelSetupByRequest({
+        env,
+        telegramCommunityBotId: bot.id,
+        requestId: shared.request_id,
+        telegramUserId,
+        privateChatId: chatId,
+        telegramChatId: sharedChatId,
+        channelTitle: telegramChat.title ?? shared.title ?? "Telegram channel",
+        channelUsername: telegramChat.username ?? shared.username ?? null,
+      })
+      await safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        text: "Telegram channel connected. New public Pirate posts can now be published there.",
+      })
+      return
+    }
     const chatType = mapTelegramChatType(telegramChat.type)
     if (!chatType) {
       throw badRequestError("telegram_chat.type must be group or supergroup")
@@ -724,6 +932,82 @@ async function handleChatSharedMessage(env: Env, message: TelegramWebhookMessage
   }
 }
 
+/**
+ * Answers a question asked during an active study session. Returns false only
+ * when the learner has no active exercise, which is the single case where
+ * falling back to the community board assistant is appropriate. While an
+ * exercise is open every outcome is terminal, so a learner asking about the
+ * line in front of them is never answered with a join prompt.
+ */
+async function respondToPrivateStudyTutorQuestion(input: {
+  bot: TelegramCommunityBotCredential
+  chatId: string
+  env: Env
+  question: string | null
+  telegramMessageId: number
+  telegramUserId: string
+}): Promise<boolean> {
+  const { bot, chatId, env } = input
+  const question = input.question?.trim()
+  if (!question) {
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: "I could not make out that question. Send it as text and I will explain.",
+      reply_parameters: { message_id: input.telegramMessageId },
+    })
+    return true
+  }
+  try {
+    const tutor = await answerPrivateStudyTutorQuestion({
+      bot,
+      env,
+      question,
+      telegramChatId: chatId,
+      telegramMessageId: input.telegramMessageId,
+      telegramUserId: input.telegramUserId,
+    })
+    if (tutor.kind === "no_session") {
+      return false
+    }
+    if (tutor.kind !== "answered") {
+      await safeSendTelegramMessage(bot, {
+        chat_id: chatId,
+        text: "The study tutor is not available in this community yet. Your exercise is still waiting for your answer.",
+        reply_parameters: { message_id: input.telegramMessageId },
+      })
+      return true
+    }
+    const delivered = await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: telegramText(tutor.disclosure ? `${tutor.disclosure}\n\n${tutor.answer}` : tutor.answer),
+      reply_parameters: { message_id: input.telegramMessageId },
+      reply_markup: {
+        inline_keyboard: [[telegramStudyContinueTutorButton(tutor.sessionId, tutor.language)]],
+      },
+    })
+    if (!delivered && tutor.disclosureReceipt) {
+      await releaseTutorDisclosureReceipt({ env, receipt: tutor.disclosureReceipt }).catch(() => undefined)
+    }
+    return true
+  } catch (error) {
+    console.warn("[private-study-tutor] prompt failed", {
+      ...telegramRouteErrorLogFields(error),
+      communityId: bot.communityId,
+      telegramChatId: chatId,
+      telegramCommunityBotId: bot.id,
+      telegramUserId: input.telegramUserId,
+    })
+    await safeSendTelegramMessage(bot, {
+      chat_id: chatId,
+      text: error instanceof HttpError && error.status === 429
+        ? "The study tutor is rate limited right now. Try again in a minute."
+        : "The study tutor is unavailable right now. Your exercise is still waiting for your answer.",
+      reply_parameters: { message_id: input.telegramMessageId },
+    })
+    return true
+  }
+}
+
 async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMessage, bot: TelegramCommunityBotCredential): Promise<void> {
   const chatId = telegramIdentifier(message.chat?.id)
   const telegramUserId = telegramIdentifier(message.from?.id)
@@ -750,7 +1034,7 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   })
   if (!account) {
     const previewPolicy = textPrompt
-      ? await getTelegramDirectAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
+      ? await getTelegramCommunityAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
       : null
     if (
       !textPrompt
@@ -786,7 +1070,7 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   })
   if (!canAccess) {
     const previewPolicy = textPrompt
-      ? await getTelegramDirectAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
+      ? await getTelegramCommunityAssistantPolicy({ env, communityId: bot.communityId }).catch(() => null)
       : null
     if (
       !textPrompt
@@ -816,10 +1100,15 @@ async function handleDirectAssistantMessage(env: Env, message: TelegramWebhookMe
   }
 
   try {
-    await getTelegramDirectAssistantPolicy({
+    // The board assistant depends on the community assistant being enabled, not
+    // on the private study tutor toggle.
+    const boardPolicy = await getTelegramCommunityAssistantPolicy({
       env,
       communityId: bot.communityId,
     })
+    if (!boardPolicy.enabled) {
+      throw notFoundError("Community assistant is not enabled")
+    }
     const prompt = textPrompt ?? await transcribeTelegramAssistantVoiceForCommunity({
       env,
       bot,
@@ -1031,7 +1320,28 @@ async function handleChatJoinRequest(env: Env, joinRequest: TelegramWebhookChatJ
   }
 }
 
-async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpdate, bot: Env | TelegramCommunityBotCredential = env): Promise<void> {
+async function handleTelegramWebhookUpdate(
+  env: Env,
+  update: TelegramWebhookUpdate,
+  bot: Env | TelegramCommunityBotCredential = env,
+  waitUntil?: (promise: Promise<void>) => void,
+): Promise<void> {
+  if (update.callback_query && isCommunityBot(bot)) {
+    const handle = async () => {
+      if (await handleTelegramStartMenuCallback({ bot, callback: update.callback_query!, env })) return
+      await handleTelegramChatStudyCallback({
+        bot,
+        callback: update.callback_query!,
+        env,
+      })
+    }
+    if (waitUntil) {
+      waitUntil(withBackgroundControlPlaneClients(handle))
+    } else {
+      await handle()
+    }
+    return
+  }
   if (update.chat_join_request) {
     await handleChatJoinRequest(env, update.chat_join_request, bot)
     return
@@ -1050,6 +1360,83 @@ async function handleTelegramWebhookUpdate(env: Env, update: TelegramWebhookUpda
   }
   if (isPrivateChat(message.chat?.type)) {
     if (isCommunityBot(bot)) {
+      const chatId = telegramIdentifier(message.chat?.id)
+      const telegramUserId = telegramIdentifier(message.from?.id)
+      if (
+        message.text?.trim().match(/^\/(?:study|preferences)(?:@[A-Za-z0-9_]{5,32})?$/u)
+        && chatId
+        && telegramUserId
+      ) {
+        if (isTelegramStudyVoiceEnabled(env, bot.communityId)) {
+          const handle = () => startTelegramChatStudy({
+            bot,
+            chatId,
+            env,
+            forcePreferences: message.text?.trim().startsWith("/preferences") ?? false,
+            requestMessageId: message.message_id ?? null,
+            targetLanguage: telegramLanguageCode(message.from?.language_code),
+            telegramUserId,
+          }).then(() => undefined)
+          if (waitUntil) {
+            waitUntil(withBackgroundControlPlaneClients(handle))
+          } else {
+            await handle()
+          }
+          return
+        }
+      }
+      if (await handleTelegramStudyVoiceMessage({
+        bot,
+        env,
+        message,
+        onChatStudyAttemptComplete: ({
+          chatId: completionChatId,
+          chatStudySessionId,
+          result,
+          telegramMessageId: voiceMessageId,
+          transcript,
+        }) =>
+          continueTelegramChatStudyAfterVoice({
+            bot,
+            chatId: completionChatId,
+            chatStudySessionId,
+            env,
+            replyToMessageId: voiceMessageId,
+            result,
+            transcript,
+          }),
+        onChatStudyAttemptConflict: ({
+          chatId: conflictChatId,
+          chatStudySessionId,
+          lesson,
+          telegramMessageId: conflictMessageId,
+        }) =>
+          continueTelegramChatStudyAfterVoice({
+            bot,
+            chatId: conflictChatId,
+            chatStudySessionId,
+            env,
+            lesson,
+            replyToMessageId: conflictMessageId,
+          }),
+        waitUntil,
+      })) {
+        return
+      }
+      const tutorQuestion = typeof message.text === "string" ? message.text.trim() : ""
+      if (tutorQuestion && chatId && telegramUserId && typeof message.message_id === "number") {
+        const handled = await respondToPrivateStudyTutorQuestion({
+          bot,
+          chatId,
+          env,
+          question: tutorQuestion,
+          telegramMessageId: message.message_id,
+          telegramUserId,
+        })
+        if (handled) {
+          return
+        }
+      }
       await handleDirectAssistantMessage(env, message, bot)
     } else {
       await handleStartMessage(env, message, bot)
@@ -1081,11 +1468,19 @@ telegram.post("/session/exchange", async (c) => {
 })
 
 telegram.post("/session/auto-exchange", async (c) => {
-  const body = await c.req.json<{ community_id?: unknown; init_data?: unknown }>().catch(() => null)
+  const body = await c.req.json<{
+    community_id?: unknown
+    context?: unknown
+    init_data?: unknown
+  }>().catch(() => null)
   const communityIdentifier = typeof body?.community_id === "string" ? body.community_id.trim() : ""
+  const context = body?.context === undefined ? "default" : body.context
   const initData = typeof body?.init_data === "string" ? body.init_data.trim() : ""
   if (!communityIdentifier || !initData) {
     throw badRequestError("community_id and init_data are required")
+  }
+  if (context !== "default" && context !== "study") {
+    throw badRequestError("context must be default or study")
   }
 
   const communityRepository = getCommunityRepository(c.env)
@@ -1095,7 +1490,9 @@ telegram.post("/session/auto-exchange", async (c) => {
   }
 
   const telegramUser = verifyTelegramMiniAppInitData({
-    botTokens: await telegramAutoExchangeMiniAppVerificationTokens(c.env, communityId),
+    botTokens: context === "study"
+      ? await telegramStudyMiniAppVerificationTokens(c.env, communityId)
+      : await telegramAutoExchangeMiniAppVerificationTokens(c.env, communityId),
     initData,
     maxAgeSeconds: configuredTelegramInitDataMaxAgeSeconds(c.env),
   })
@@ -1108,7 +1505,10 @@ telegram.post("/session/auto-exchange", async (c) => {
     selectedWallet: null,
     wallets: [],
   })
-  const userId = session.user.id.replace(/^usr_/, "")
+  const userId = await resolveCanonicalUserId({
+    env: c.env,
+    userId: session.user.id.replace(/^usr_/, ""),
+  })
 
   await syncTelegramAccountForUser({
     env: c.env,
@@ -1142,12 +1542,16 @@ telegram.post("/session/auto-exchange", async (c) => {
   await trackApiEvent(c.env, c.req, {
     eventName: "auth_session_exchanged",
     userId,
-    properties: { provider: "telegram", mode: "mini_app_auto" },
+    properties: {
+      provider: "telegram",
+      mode: context === "study" ? "mini_app_study" : "mini_app_auto",
+    },
   })
 
   return c.json({
-    access_token: accessToken,
     ...session,
+    access_token: accessToken,
+    user: { ...session.user, id: `usr_${userId}` },
     profile: syncedProfile ?? session.profile,
     community: publicCommunityId(communityId),
     eligibility,
@@ -1197,7 +1601,7 @@ telegram.post("/community-bots/:webhookId/webhook", async (c) => {
     return c.json({ ok: true }, 200)
   }
   try {
-    await handleTelegramWebhookUpdate(c.env, body, bot)
+    await handleTelegramWebhookUpdate(c.env, body, bot, getWaitUntil(c))
   } catch (error) {
     console.warn("[telegram-community-webhook] update handling failed", {
       error: error instanceof Error ? error.message : String(error),

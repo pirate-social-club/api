@@ -13,6 +13,7 @@
  */
 import { SignJWT } from "jose"
 import { Wallet } from "ethers"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 
 function readArg(name: string): string | undefined {
   const i = process.argv.indexOf(name)
@@ -24,21 +25,18 @@ const RUN_ID = `${Math.floor(Date.now() / 1000)}-${Wallet.createRandom().address
 
 function jwtConfig() {
   const issuer = process.env.AUTH_UPSTREAM_JWT_ISSUER?.trim()
-    || process.env.JWT_BASED_AUTH_ISSUERS?.split(",")[0]?.trim()
     || "pirate-staging-upstream"
   const audience = process.env.AUTH_UPSTREAM_JWT_AUDIENCE?.trim()
-    || process.env.JWT_BASED_AUTH_AUDIENCE?.trim()
     || "pirate-api-staging"
   const secret = process.env.AUTH_UPSTREAM_JWT_SHARED_SECRET?.trim()
-    || process.env.JWT_BASED_AUTH_SHARED_SECRET?.trim()
     || ""
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET / JWT_BASED_AUTH_SHARED_SECRET required (inject via Infisical staging)")
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET required (inject via the staging secret manager)")
   return { issuer, audience, secret }
 }
 
 type ApiResult<T> = { status: number; body: T }
 
-async function apiResult<T>(input: { path: string; method?: string; body?: unknown; token?: string | null; noCache?: boolean }): Promise<ApiResult<T>> {
+async function apiResult<T>(input: { path: string; method?: string; body?: unknown; token?: string | null; noCache?: boolean; headers?: Record<string, string> }): Promise<ApiResult<T>> {
   const method = input.method ?? (input.body == null ? "GET" : "POST")
   // Cache-bust GET reads so we observe live control-plane state, not a CDN-cached preview.
   const path = input.noCache ? `${input.path}${input.path.includes("?") ? "&" : "?"}_cb=${Date.now()}-${Math.random().toString(36).slice(2)}` : input.path
@@ -48,6 +46,7 @@ async function apiResult<T>(input: { path: string; method?: string; body?: unkno
       ...(input.token ? { authorization: `Bearer ${input.token}` } : {}),
       ...(input.body == null ? {} : { "content-type": "application/json" }),
       ...(input.noCache ? { "cache-control": "no-cache", "pragma": "no-cache" } : {}),
+      ...input.headers,
     },
     body: input.body == null ? undefined : JSON.stringify(input.body),
   })
@@ -57,7 +56,7 @@ async function apiResult<T>(input: { path: string; method?: string; body?: unkno
   return { status: res.status, body: body as T }
 }
 
-async function api<T>(input: { path: string; method?: string; body?: unknown; token?: string | null; ok?: number[] }): Promise<T> {
+async function api<T>(input: { path: string; method?: string; body?: unknown; token?: string | null; ok?: number[]; headers?: Record<string, string> }): Promise<T> {
   const r = await apiResult<T>(input)
   const ok = input.ok ?? [200, 201, 202]
   if (!ok.includes(r.status)) {
@@ -94,6 +93,7 @@ async function createCommunity(token: string): Promise<string> {
       membership_mode: "request",
     },
     token,
+    headers: allocationAttributionHeaders("api-script:smoke-community-archive"),
   })
   if (created.job.status !== "succeeded") {
     const start = Date.now()

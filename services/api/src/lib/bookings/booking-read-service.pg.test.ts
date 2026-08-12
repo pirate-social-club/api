@@ -2,6 +2,7 @@
 // BOOKINGS_REPO_TEST_ADMIN_URL is set and applies canonical core booking migrations.
 import { SQL } from "bun";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { writeFile } from "node:fs/promises";
 import { applyCanonicalBookingMigrations } from "./test-migrations";
 import {
   getGlobalBookingForParty,
@@ -12,6 +13,9 @@ import {
 } from "./booking-read-service";
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL;
+if (process.env.BOOKINGS_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("BOOKINGS_REPO_TEST_ADMIN_URL is required for booking read service PostgreSQL CI");
+}
 const RUN = Boolean(ADMIN_URL);
 const TEST_DB = "bookings_read_service_test";
 
@@ -112,6 +116,10 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       await root.unsafe(`DROP ROLE IF EXISTS ${r}`).catch(() => {});
     }
     await root.end();
+    const sentinelPath = process.env.BOOKINGS_PG_SENTINEL_PATH;
+    if (sentinelPath) {
+      await writeFile(sentinelPath, "booking-read-service-postgres-suite-complete\n", "utf8");
+    }
   });
 
   test("getGlobalBookingForParty returns party-authorized booking views only", async () => {
@@ -172,7 +180,9 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       role: "host",
       sourceCommunityId: "community_read_a",
     });
-    expect(allForCommunity.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new", "bkg_read_list_old"]);
+    expect(allForCommunity.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new", "bkg_read_list_old"]);
+    expect(allForCommunity.has_more).toBe(false);
+    expect(allForCommunity.next_cursor).toBeNull();
 
     const confirmedOnly = await listGlobalBookingsForUser({
       executor: makeExecutor(repoDb),
@@ -181,7 +191,7 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       sourceCommunityId: "community_read_a",
       statuses: ["confirmed"],
     });
-    expect(confirmedOnly.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new"]);
+    expect(confirmedOnly.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new"]);
 
     const asBooker = await listGlobalBookingsForUser({
       executor: makeExecutor(repoDb),
@@ -189,7 +199,69 @@ describe.skipIf(!RUN)("global booking read service (real Postgres)", () => {
       role: "booker",
       sourceCommunityId: "community_read_a",
     });
-    expect(asBooker.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new"]);
+    expect(asBooker.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new"]);
+
+    const firstPage = await listGlobalBookingsForUser({
+      executor: makeExecutor(repoDb),
+      actorUserId: "host_read_list",
+      role: "host",
+      sourceCommunityId: "community_read_a",
+      limit: 1,
+    });
+    expect(firstPage.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_new"]);
+    expect(firstPage.has_more).toBe(true);
+    expect(typeof firstPage.next_cursor).toBe("string");
+
+    const secondPage = await listGlobalBookingsForUser({
+      executor: makeExecutor(repoDb),
+      actorUserId: "host_read_list",
+      role: "host",
+      sourceCommunityId: "community_read_a",
+      limit: 1,
+      cursor: firstPage.next_cursor,
+    });
+    expect(secondPage.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_list_old"]);
+    expect(secondPage.has_more).toBe(false);
+    expect(secondPage.next_cursor).toBeNull();
+  });
+
+  test("listGlobalBookingsForUser paginates equal slot timestamps by booking id", async () => {
+    await seedBooking({
+      bookingId: "bkg_read_tie_a",
+      hostUserId: "host_read_tie_a",
+      bookerUserId: "booker_read_tie",
+      sourceCommunityId: "community_read_tie",
+      status: "confirmed",
+      slotStartUtc: "2026-07-07T10:00:00Z",
+    });
+    await seedBooking({
+      bookingId: "bkg_read_tie_b",
+      hostUserId: "host_read_tie_b",
+      bookerUserId: "booker_read_tie",
+      sourceCommunityId: "community_read_tie",
+      status: "confirmed",
+      slotStartUtc: "2026-07-07T10:00:00Z",
+    });
+
+    const firstPage = await listGlobalBookingsForUser({
+      executor: makeExecutor(repoDb),
+      actorUserId: "booker_read_tie",
+      role: "booker",
+      limit: 1,
+    });
+    expect(firstPage.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_tie_a"]);
+    expect(firstPage.has_more).toBe(true);
+
+    const secondPage = await listGlobalBookingsForUser({
+      executor: makeExecutor(repoDb),
+      actorUserId: "booker_read_tie",
+      role: "booker",
+      limit: 1,
+      cursor: firstPage.next_cursor,
+    });
+    expect(secondPage.data.map((booking) => booking.booking_id)).toEqual(["bkg_read_tie_b"]);
+    expect(secondPage.has_more).toBe(false);
+    expect(secondPage.next_cursor).toBeNull();
   });
 
   test("lists and gets pending settlement reviews with source filter and cursor pagination", async () => {

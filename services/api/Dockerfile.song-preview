@@ -8,15 +8,16 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini \
   && rm -rf /var/lib/apt/lists/*
 
-COPY api/package.json api/bun.lock ./
-COPY contracts /app/services/contracts
+# The shared local package resolves @neondatabase/serverless from its own
+# node_modules, so it gets its own frozen production install first.
 COPY shared /app/services/shared
-# The full API package has file: dependencies on sibling web/core repos that
-# are not part of this image build context. The song preview service does not
-# import those runtime packages, so remove them from the image-local manifest.
-RUN bun -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync("package.json", "utf8")); delete pkg.dependencies["@pirate-social-club/karaoke-runtime"]; delete pkg.dependencies["@pirate/bookings-domain"]; fs.writeFileSync("package.json", `${JSON.stringify(pkg, null, 2)}\n`);' \
-  && rm bun.lock
-RUN bun install --production
+RUN cd /app/services/shared && bun install --frozen-lockfile --production
+
+# Production dependencies install from the dedicated song-preview runtime
+# package and its committed lockfile. The full API manifest is never installed
+# in this image, so the sibling web/core local packages need no removal step.
+COPY song-preview-runtime/package.json song-preview-runtime/bun.lock song-preview-runtime/bunfig.toml ./
+RUN bun install --frozen-lockfile --production
 
 COPY api/scripts ./scripts
 COPY api/src ./src
@@ -24,6 +25,7 @@ COPY api/src ./src
 ENV HOST=0.0.0.0
 ENV SONG_PREVIEW_PORT=8795
 ENV SONG_PREVIEW_FFMPEG_BIN=ffmpeg
+ENV SONG_DURATION_PROBE_VERSION=1
 EXPOSE 8795
 
 ENTRYPOINT ["/usr/bin/tini", "--"]

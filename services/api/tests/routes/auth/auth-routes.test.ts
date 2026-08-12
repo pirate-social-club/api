@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test"
 import { app } from "../../../src/index"
 import { setPrivyAccessProofVerifierForTests } from "../../../src/lib/auth/privy-auth"
 import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
+import { setEnsResolutionTimeoutForTests } from "../../../src/lib/auth/db-profile-repository"
 import { mintPirateAccessToken } from "../../../src/lib/auth/pirate-session-token"
 import type { Env } from "../../../src/types"
 import { buildTestEnv, createRouteTestContext, json, mintUpstreamJwt, resetMemoryStore } from "../../helpers"
@@ -51,6 +52,7 @@ beforeEach(() => {
   resetMemoryStore()
   setPrivyAccessProofVerifierForTests(null)
   setEnsResolverForTests(null)
+  setEnsResolutionTimeoutForTests(null)
 })
 
 describe("auth routes", () => {
@@ -568,6 +570,64 @@ describe("auth routes", () => {
       expect(body.profile.bio).toBe("ENS imported during auth.")
       expect(body.profile.bio_source).toBe("ens")
     } finally {
+      await ctx.cleanup()
+    }
+  })
+
+  test("session exchange preserves the existing ENS profile when resolution times out or errors", async () => {
+    const ctx = await createRouteTestContext()
+    const walletAddress = "0x4444444444444444444444444444444444444444"
+    const exchange = () => makeJsonRequest("http://pirate.test/auth/session/exchange", {
+      proof: {
+        type: "privy_access_token",
+        privy_access_token: "test-privy-token",
+        wallet_address: walletAddress,
+      },
+    }, ctx.env)
+
+    try {
+      setPrivyAccessProofVerifierForTests(async () => ({
+        provider: "privy",
+        providerSubject: "did:privy:slow-ens-user",
+        providerUserRef: "did:privy:slow-ens-user",
+        walletAddresses: [walletAddress],
+        selectedWalletAddress: walletAddress,
+      }))
+      setEnsResolverForTests(async () => ({ name: "kept.eth", metadata: {} }))
+      expect((await exchange()).status).toBe(200)
+
+      setEnsResolutionTimeoutForTests(20)
+      setEnsResolverForTests(async () => await new Promise(() => undefined))
+      const startedAt = Date.now()
+      const response = await exchange()
+      expect(Date.now() - startedAt).toBeLessThan(1_000)
+      expect(response.status).toBe(200)
+      const body = await json(response) as {
+        profile: { linked_handles: Array<{ kind: string; label: string; verification_state: string }> }
+      }
+      expect(body.profile.linked_handles).toContainEqual(expect.objectContaining({
+        kind: "ens",
+        label: "kept.eth",
+        verification_state: "verified",
+      }))
+
+      setEnsResolutionTimeoutForTests(null)
+      setEnsResolverForTests(async () => {
+        throw new Error("RPC rate limited")
+      })
+      const errorResponse = await exchange()
+      expect(errorResponse.status).toBe(200)
+      const errorBody = await json(errorResponse) as {
+        profile: { linked_handles: Array<{ kind: string; label: string; verification_state: string }> }
+      }
+      expect(errorBody.profile.linked_handles).toContainEqual(expect.objectContaining({
+        kind: "ens",
+        label: "kept.eth",
+        verification_state: "verified",
+      }))
+    } finally {
+      setEnsResolutionTimeoutForTests(null)
+      setEnsResolverForTests(null)
       await ctx.cleanup()
     }
   })

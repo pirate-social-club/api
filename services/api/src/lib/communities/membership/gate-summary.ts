@@ -133,12 +133,16 @@ export function getGatePolicyMatchMode(policy: GatePolicy | null): "all" | "any"
 
 function buildMembershipGateSummaryFromAtom(atom: GateAtom): MembershipGateSummary {
   const summary: MembershipGateSummary = {
+    ...(atom.gate_id ? { gate_id: atom.gate_id } : {}),
     gate_type: atom.type as MembershipGateSummary["gate_type"],
   }
 
   if ("accepted_providers" in atom && atom.accepted_providers?.length) {
     summary.accepted_providers = atom.accepted_providers as MembershipGateSummary["accepted_providers"]
-  } else if ("provider" in atom && (atom.provider === "self" || atom.provider === "very" || atom.provider === "passport")) {
+  } else if (
+    "provider" in atom
+    && (atom.provider === "self" || atom.provider === "zkpassport" || atom.provider === "very" || atom.provider === "passport")
+  ) {
     summary.accepted_providers = [atom.provider] as MembershipGateSummary["accepted_providers"]
   }
 

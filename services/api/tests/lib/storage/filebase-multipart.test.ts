@@ -108,6 +108,42 @@ describe("filebase multipart helpers", () => {
     })
   })
 
+  test("falls back to a one-byte range GET when HEAD is forbidden", async () => {
+    let requestNumber = 0
+    const requests = installFetch(() => {
+      requestNumber += 1
+      if (requestNumber === 1) {
+        return new Response(null, { status: 403 })
+      }
+      return new Response(new Uint8Array([0]), {
+        status: 206,
+        headers: {
+          "content-range": "bytes 0-0/6291456",
+          "content-type": "video/mp4",
+          etag: "\"multipart-etag\"",
+          "x-amz-meta-cid": "QmHeadCid",
+        },
+      })
+    })
+
+    const result = await headObject({
+      env,
+      objectKey: "song-artifacts/com_test/primary_video/sau_test.mp4",
+    })
+
+    expect(result).toEqual({
+      contentLength: 6291456,
+      contentType: "video/mp4",
+      etag: "\"multipart-etag\"",
+      cid: "QmHeadCid",
+    })
+    expect(requests.map((request) => request.method)).toEqual(["HEAD", "GET"])
+    const rangeUrl = new URL(requests[1]!.url)
+    expect(rangeUrl.searchParams.get("X-Amz-Algorithm")).toBe("AWS4-HMAC-SHA256")
+    expect(rangeUrl.searchParams.get("X-Amz-SignedHeaders")).toBe("host;range")
+    expect(requests[1]!.headers.get("range")).toBe("bytes=0-0")
+  })
+
   test("maps missing objects to not_found", async () => {
     installFetch(() => new Response(null, { status: 404 }))
 

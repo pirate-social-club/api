@@ -8,11 +8,11 @@ import type { Env } from "../../env"
 import type { RequestedVerificationCapability, VerificationIntent, VerificationRequirement, VerificationSessionLaunch } from "../../types"
 
 const ZKPASSPORT_REF_PREFIX = "zkpassport-sdk"
-const ZKPASSPORT_DOCUMENT_CAPABILITIES: readonly RequestedVerificationCapability[] = ["minimum_age", "nationality", "gender"]
+const ZKPASSPORT_CAPABILITIES: readonly RequestedVerificationCapability[] = ["unique_human", "minimum_age", "nationality", "gender"]
 const DEFAULT_ZKPASSPORT_VALIDITY_SECONDS = 60 * 60
 const DEFAULT_ZKPASSPORT_VERIFIER_TIMEOUT_MS = 30_000
 
-type ZkPassportDocumentCapability = typeof ZKPASSPORT_DOCUMENT_CAPABILITIES[number]
+type ZkPassportCapability = typeof ZKPASSPORT_CAPABILITIES[number]
 type ZkPassportProofPayload = { proofs: ProofResult[]; queryResult: QueryResult }
 type ZkPassportProofVerificationResult = {
   verified: boolean
@@ -32,7 +32,7 @@ type ZkPassportSessionRef = {
   domain: string
   scope: string
   binding: string
-  requestedCapabilities: ZkPassportDocumentCapability[]
+  requestedCapabilities: ZkPassportCapability[]
   verificationRequirements: VerificationRequirement[]
   devMode: boolean
   validitySeconds: number
@@ -155,13 +155,13 @@ function zkPassportLocalVerifyWritingDirectory(env: Env): string {
 function normalizeZkPassportRequestedCapabilities(
   requested: readonly RequestedVerificationCapability[],
   verificationRequirements: readonly VerificationRequirement[],
-): ZkPassportDocumentCapability[] {
-  const set = new Set<ZkPassportDocumentCapability>()
+): ZkPassportCapability[] {
+  const set = new Set<ZkPassportCapability>()
   for (const capability of requested) {
-    if (!ZKPASSPORT_DOCUMENT_CAPABILITIES.includes(capability as ZkPassportDocumentCapability)) {
-      throw badRequestError("ZKPassport verification sessions only support minimum_age, nationality, and gender")
+    if (!ZKPASSPORT_CAPABILITIES.includes(capability as ZkPassportCapability)) {
+      throw badRequestError("ZKPassport verification sessions only support unique_human, minimum_age, nationality, and gender")
     }
-    set.add(capability as ZkPassportDocumentCapability)
+    set.add(capability as ZkPassportCapability)
   }
   if (verificationRequirements.some((requirement) => requirement.proof_type === "minimum_age")) {
     set.add("minimum_age")
@@ -169,9 +169,9 @@ function normalizeZkPassportRequestedCapabilities(
   if (verificationRequirements.some((requirement) => requirement.proof_type === "nationality")) {
     set.add("nationality")
   }
-  const normalized = ZKPASSPORT_DOCUMENT_CAPABILITIES.filter((capability) => set.has(capability))
+  const normalized = ZKPASSPORT_CAPABILITIES.filter((capability) => set.has(capability))
   if (normalized.length === 0) {
-    throw badRequestError("ZKPassport verification sessions require at least one document capability")
+    throw badRequestError("ZKPassport verification sessions require at least one supported capability")
   }
   return normalized
 }
@@ -260,7 +260,7 @@ function decodeSessionRef(value: string): ZkPassportSessionRef | null {
 function buildOriginalQuery(input: {
   domain: string
   binding: string
-  requestedCapabilities: readonly ZkPassportDocumentCapability[]
+  requestedCapabilities: readonly ZkPassportCapability[]
   verificationRequirements: readonly VerificationRequirement[]
 }): Query {
   const zkPassport = new ZKPassport(input.domain)
@@ -307,7 +307,7 @@ function customDataFromQueryResult(queryResult: QueryResult): string | null {
 
 function extractClaims(input: {
   queryResult: QueryResult
-  requestedCapabilities: readonly ZkPassportDocumentCapability[]
+  requestedCapabilities: readonly ZkPassportCapability[]
   verificationRequirements: readonly VerificationRequirement[]
   uniqueIdentifier: string
   proofHash: string | null

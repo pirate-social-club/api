@@ -4,7 +4,10 @@ import type {
   CommunityReadRepository,
 } from "../communities/db-community-repository"
 import type { ProfileRepository } from "../auth/repositories"
-import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
+import {
+  hydratePublicHumanAuthorHandles,
+  type AuthorHandleSurface,
+} from "../identity/author-handle-hydration"
 import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
 import { getLatestThreadSnapshotForRead } from "../comments/community-comment-store"
 import { buildLocalizedPostResponse } from "../localization/post-localization-service"
@@ -56,7 +59,6 @@ export async function buildLocalizedPostFeedResponses(input: {
   locale?: string | null
   viewerUserId: string | null
   ageGateState: AgeGateViewerState | null
-  studyTimezone?: string
   studyElevenLabsCredentialResolver?: StudyElevenLabsCredentialResolver
 }): Promise<LocalizedPostResponse[]> {
   const studyEnabledCache = new Map<string, Promise<boolean>>()
@@ -82,6 +84,7 @@ export async function buildLocalizedPostFeedResponses(input: {
       threadSnapshot,
       ageGateViewerState,
       studyElevenLabsCredentialResolver,
+      studyArtifactWriteClient: input.client,
       studyEnabledCache,
       karaokeEnabledCache,
       viewerUserId: input.viewerUserId,
@@ -97,7 +100,6 @@ export async function buildLocalizedPostReadResponse(input: {
   locale?: string | null
   viewerUserId: string | null
   ageGateViewerState: AgeGateViewerState | null
-  studyTimezone?: string
 }): Promise<LocalizedPostResponse> {
   const threadSnapshot = await getLatestThreadSnapshotForRead(input.client, input.post.post_id)
   const metrics = await getPostReadMetrics({
@@ -115,6 +117,7 @@ export async function buildLocalizedPostReadResponse(input: {
     threadSnapshot,
     ageGateViewerState: input.ageGateViewerState,
     studyElevenLabsCredentialResolver: createStudyElevenLabsCredentialResolver({ env: input.env }),
+    studyArtifactWriteClient: input.client,
     viewerUserId: input.viewerUserId,
   })
 }
@@ -129,41 +132,19 @@ export async function buildLocalizedPostReadResponse(input: {
 export async function hydrateAuthorPublicHandlesForResponses(input: {
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
+  surface?: AuthorHandleSurface
 }): Promise<void> {
-  if (!input.profileRepository) return
-
-  const eligiblePosts = input.responses
-    .map((response) => response.post)
-    .filter((post): post is Post & { author_user_id: string } =>
-      post.identity_mode === "public"
-      && post.authorship_mode === "human_direct"
-      && Boolean(post.author_user_id))
-
-  const authorUserIds = [...new Set(eligiblePosts.map((post) => post.author_user_id))]
-  if (authorUserIds.length === 0) return
-
-  const profileRepository = input.profileRepository
-  const profilesByUserId = profileRepository.listProfilesByUserIds
-    ? await profileRepository.listProfilesByUserIds(authorUserIds).catch(() => new Map())
-    : new Map(await Promise.all(authorUserIds.map(async (userId): Promise<[
-        string,
-        Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>,
-      ]> => [
-        userId,
-        await profileRepository.getProfileByUserId(userId).catch(() => null),
-      ])))
-
-  for (const post of eligiblePosts) {
-    const profile = profilesByUserId.get(post.author_user_id) ?? null
-    post.author_public_handle = profile ? getProfilePublicHandleLabel(profile) : null
-  }
+  await hydratePublicHumanAuthorHandles({
+    authors: input.responses.map((response) => response.post),
+    profileRepository: input.profileRepository,
+    surface: input.surface,
+  })
 }
 
 export async function hydrateSongStreakSummariesForResponses(input: {
   client: Client
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
-  studyTimezone?: string
   viewerUserId?: string | null
 }): Promise<void> {
   if (!input.profileRepository || !input.viewerUserId) return
@@ -198,7 +179,6 @@ export async function hydrateSongStreakSummariesForResponses(input: {
         limit: 3,
         postIds: responses.map((response) => response.post.post_id),
         profileRepository: input.profileRepository,
-        studyTimezone: input.studyTimezone,
         userId: input.viewerUserId,
       })
       for (const response of responses) {
@@ -206,7 +186,8 @@ export async function hydrateSongStreakSummariesForResponses(input: {
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      if (/no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)) {
+      if (/no such table:\s*(song_streaks|song_engagement_days)/iu.test(message)
+        || /no such column:\s*(timezone|timezone_updated_at|active_until_at)/iu.test(message)) {
         for (const response of eligibleResponses.filter((candidate) => candidate.post.community_id === communityId)) {
           response.streak_summary = null
         }
@@ -220,10 +201,10 @@ export async function hydrateSongStreakSummariesForResponses(input: {
 export async function hydrateAndEnqueuePostReadResponses(input: {
   client: Client
   communityId: string
+  env?: Env | null
   responses: LocalizedPostResponse[]
   communityRepository?: PostReadResponseCommunityRepository | null
   profileRepository?: ProfileRepository | null
-  studyTimezone?: string
   viewerUserId?: string | null
   enqueueOnRead?: boolean
 }): Promise<void> {
@@ -238,19 +219,20 @@ export async function hydrateAndEnqueuePostReadResponses(input: {
   await hydrateAuthorPublicHandlesForResponses({
     responses: input.responses,
     profileRepository: input.profileRepository,
+    surface: { kind: "community", client: input.client, communityId: input.communityId },
   })
 
   await hydrateSongStreakSummariesForResponses({
     client: input.client,
     responses: input.responses,
     profileRepository: input.profileRepository,
-    studyTimezone: input.studyTimezone,
     viewerUserId: input.viewerUserId,
   })
 
   await hydrateDerivativeSourcesForResponses({
     client: input.client,
     communityId: input.communityId,
+    env: input.env,
     responses: input.responses,
     profileRepository: input.profileRepository,
   })

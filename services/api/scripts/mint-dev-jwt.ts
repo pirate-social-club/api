@@ -15,9 +15,9 @@ function readArg(name: string): string | null {
 async function main(): Promise<void> {
   const sub = readArg("--sub") || "dev-user"
   const wallet = readArg("--wallet")
-  const issuer = (resolveEnv("AUTH_UPSTREAM_JWT_ISSUER") || resolveEnv("JWT_BASED_AUTH_ISSUERS", "pirate-dev")).split(",")[0].trim()
-  const audience = resolveEnv("AUTH_UPSTREAM_JWT_AUDIENCE") || resolveEnv("JWT_BASED_AUTH_AUDIENCE", "pirate-api")
-  const secret = resolveEnv("AUTH_UPSTREAM_JWT_SHARED_SECRET") || resolveEnv("JWT_BASED_AUTH_SHARED_SECRET")
+  const issuer = resolveEnv("AUTH_UPSTREAM_JWT_ISSUER", "pirate-dev").split(",")[0].trim()
+  const audience = resolveEnv("AUTH_UPSTREAM_JWT_AUDIENCE", "pirate-api")
+  const secret = resolveEnv("AUTH_UPSTREAM_JWT_SHARED_SECRET")
   if (!secret) {
     throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is not configured")
   }

@@ -83,7 +83,7 @@ function jwtConfig(baseUrl: string): { audience: string; issuer: string; secret:
   return {
     issuer: env("AUTH_UPSTREAM_JWT_ISSUER", staging ? "pirate-staging-upstream" : ""),
     audience: env("AUTH_UPSTREAM_JWT_AUDIENCE", staging ? "pirate-api-staging" : ""),
-    secret: requireEnv("AUTH_UPSTREAM_JWT_SHARED_SECRET", env("JWT_BASED_AUTH_SHARED_SECRET")),
+    secret: requireEnv("AUTH_UPSTREAM_JWT_SHARED_SECRET"),
   }
 }
 

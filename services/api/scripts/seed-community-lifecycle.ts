@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { SignJWT } from "jose"
+import { allocationAttributionHeaders } from "./_lib/allocation-attribution"
 import { readDevVarsFromCwd } from "./_lib/dev-vars"
 
 type SeedMode = "local-smoke" | "dev-seed" | "staging-seed" | "prod-launch-seed"
@@ -466,10 +467,10 @@ function validateComments(input: {
 }
 
 async function mintJwt(subject: string, walletAddress?: string): Promise<string> {
-  const issuer = (envValue("AUTH_UPSTREAM_JWT_ISSUER") || envValue("JWT_BASED_AUTH_ISSUERS") || "pirate-dev").split(",")[0]!.trim()
-  const audience = envValue("AUTH_UPSTREAM_JWT_AUDIENCE") || envValue("JWT_BASED_AUTH_AUDIENCE") || "pirate-api"
-  const secret = envValue("AUTH_UPSTREAM_JWT_SHARED_SECRET") || envValue("JWT_BASED_AUTH_SHARED_SECRET")
-  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET or JWT_BASED_AUTH_SHARED_SECRET is required")
+  const issuer = (envValue("AUTH_UPSTREAM_JWT_ISSUER") || "pirate-dev").split(",")[0]!.trim()
+  const audience = envValue("AUTH_UPSTREAM_JWT_AUDIENCE") || "pirate-api"
+  const secret = envValue("AUTH_UPSTREAM_JWT_SHARED_SECRET")
+  if (!secret) throw new Error("AUTH_UPSTREAM_JWT_SHARED_SECRET is required")
   return await new SignJWT(walletAddress ? { wallet_address: walletAddress } : {})
     .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuer(issuer)
@@ -486,11 +487,13 @@ async function requestJson<T>(input: {
   path: string
   token?: string
   body?: unknown
+  headers?: Record<string, string>
   ok?: number[]
 }): Promise<{ body: T; response: Response }> {
   const headers = new Headers()
   if (input.token) headers.set("authorization", `Bearer ${input.token}`)
   if (input.body !== undefined) headers.set("content-type", "application/json")
+  for (const [key, value] of Object.entries(input.headers ?? {})) headers.set(key, value)
   const response = await fetch(new URL(input.path, input.apiUrl), {
     method: input.method,
     headers,
@@ -837,6 +840,7 @@ async function seedCommunities(ctx: SeedContext, manifest: SeedManifest): Promis
         method: "POST",
         path: "/communities",
         token: owner.accessToken,
+        headers: allocationAttributionHeaders("api-script:seed-community-lifecycle"),
         body,
         ok: [202],
       })

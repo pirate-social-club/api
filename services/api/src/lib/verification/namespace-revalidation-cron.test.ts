@@ -229,6 +229,7 @@ describe("HNS namespace revalidation sweep", () => {
 
     const summary = await withInspection({
       root_exists: true,
+      pirate_dns_authority_verified: true,
       expiry_root_exists: true,
       expiry_horizon_sufficient: true,
       expiry_observation_provider: "hsd_json_rpc",
@@ -241,6 +242,12 @@ describe("HNS namespace revalidation sweep", () => {
     expect(verification?.status).toBe("verified")
     expect(verification?.expires_at).toBe("2026-08-12T12:00:00.000Z")
     expect(Number(verification?.expiry_horizon_sufficient)).toBe(1)
+    expect(verification).toMatchObject({
+      routing_enabled: 1,
+      pirate_dns_authority_verified: 1,
+      pirate_web_routing_allowed: 0,
+      pirate_subdomain_issuance_allowed: 0,
+    })
 
     const assertion = await client.execute({
       sql: `
@@ -339,7 +346,7 @@ describe("HNS namespace revalidation sweep", () => {
       expires_at: FUTURE_EXPIRY,
       expiry_horizon_sufficient: 0,
       club_attach_allowed: 0,
-      pirate_web_routing_allowed: 1,
+      pirate_web_routing_allowed: 0,
       pirate_subdomain_issuance_allowed: 0,
     })
 
@@ -355,7 +362,7 @@ describe("HNS namespace revalidation sweep", () => {
     expect(capabilities.rows).toEqual([
       { capability_name: "club_attach_allowed", capability_value: 0, status: "stale" },
       { capability_name: "pirate_subdomain_issuance_allowed", capability_value: 0, status: "stale" },
-      { capability_name: "pirate_web_routing_allowed", capability_value: 1, status: "accepted" },
+      { capability_name: "pirate_web_routing_allowed", capability_value: 0, status: "stale" },
     ])
   })
 
@@ -401,6 +408,25 @@ describe("HNS namespace revalidation sweep", () => {
     expect(await readVerification(client, live.namespaceVerificationId)).toMatchObject({
       status: "verified",
       expires_at: FUTURE_EXPIRY,
+      pirate_dns_authority_verified: 1,
+      pirate_web_routing_allowed: 1,
+    })
+  })
+
+  test("preserves legacy availability claims during a transient verifier outage", async () => {
+    const client = await setup()
+    const live = await seedAcceptedHnsVerification({ client, suffix: "outage" })
+
+    const summary = await withMockedFetch(
+      () => async () => { throw new Error("verifier unavailable") },
+      () => sweepHnsNamespaceRevalidations({ client, env: testEnv(), now: NOW, config: CONFIG }),
+    )
+
+    expect(summary.deferred).toBe(1)
+    expect(await readVerification(client, live.namespaceVerificationId)).toMatchObject({
+      status: "verified",
+      pirate_dns_authority_verified: 1,
+      pirate_web_routing_allowed: 1,
     })
   })
 

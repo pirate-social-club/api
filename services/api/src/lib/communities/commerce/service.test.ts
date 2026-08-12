@@ -5,6 +5,18 @@ import type { AssetRow } from "./row-types"
 
 let registrationMode: "success" | "failure" = "success"
 let registrationLicenseTermsId: string | null = "42"
+const buildStoryVideoMetadataMedia = mock((input: {
+  post: Post
+  storageRef: string
+  mimeType: string | null
+  contentHash: string | null
+}) => input.post.post_type === "video" ? {
+  mediaUrl: input.post.media_refs?.[0]?.storage_ref ?? null,
+  verificationStorageRef: input.storageRef,
+  mediaType: input.mimeType,
+  mediaHash: input.contentHash,
+  imageUrl: input.post.media_refs?.[0]?.poster_ref ?? null,
+} : null)
 const maybeRegisterStoryRoyaltyForAsset = mock(async () => {
   if (registrationMode === "failure") {
     throw new Error("story_rpc_unavailable")
@@ -29,6 +41,7 @@ const maybeRegisterStoryRoyaltyForAsset = mock(async () => {
 })
 
 mock.module("../../story/story-royalty-registration-service", () => ({
+  buildStoryVideoMetadataMedia,
   isStoryRoyaltyRegistrationConfigured: mock(() => true),
   maybeRegisterStoryRoyaltyForAsset,
 }))
@@ -44,7 +57,10 @@ mock.module("./royalty-allocation-projection", () => ({
 }))
 
 mock.module("./derivative-source-projection", () => ({
+  findEligibleStoryParentProjectionByRef: mock(async () => null),
+  findZeroRevenueShareStoryParentIpIds: mock(async () => []),
   listStoryRegisteredAssetProjectionRows: mock(async () => []),
+  resolveEligibleStoryParentProjectionByAssetId: mock(async () => ({ status: "not_found" })),
   upsertStoryRegisteredAssetProjection,
 }))
 
@@ -331,6 +347,60 @@ function fakeCreateClient() {
 }
 
 describe("createAssetForPost existing asset resume", () => {
+  test("passes canonical video media into a resumed Story registration", async () => {
+    registrationMode = "success"
+    maybeRegisterStoryRoyaltyForAsset.mockClear()
+    buildStoryVideoMetadataMedia.mockClear()
+    const existing = assetRow({
+      asset_kind: "video_file",
+      song_artifact_bundle_id: null,
+      primary_content_ref: "https://dweb.link/ipfs/video",
+      primary_content_hash: `0x${"a".repeat(64)}`,
+    })
+    const { client } = fakeClient(existing)
+    const videoPost = {
+      ...post(),
+      post_type: "video",
+      media_refs: [{
+        storage_ref: "https://api.pirate.test/video/content",
+        mime_type: "video/mp4",
+        poster_ref: "https://dweb.link/ipfs/poster",
+      }],
+      song_artifact_bundle_id: null,
+    } as Post
+
+    await createAssetForPost({
+      assetKind: "video_file",
+      artifactKind: "primary_video",
+      bundleId: null,
+      client,
+      commercialRevSharePct: null,
+      communityId: COMMUNITY_ID,
+      contentHash: existing.primary_content_hash,
+      env: {} as never,
+      licensePreset: null,
+      mimeType: "video/mp4",
+      post: videoPost,
+      requireStoryRoyaltyRegistration: true,
+      royaltyAllocations: null,
+      storageRef: existing.primary_content_ref,
+      userRepository: userRepository() as never,
+    })
+
+    expect(buildStoryVideoMetadataMedia).toHaveBeenCalledWith({
+      post: videoPost,
+      storageRef: existing.primary_content_ref,
+      mimeType: "video/mp4",
+      contentHash: existing.primary_content_hash,
+    })
+    expect(maybeRegisterStoryRoyaltyForAsset).toHaveBeenCalledWith(expect.objectContaining({
+      media: expect.objectContaining({
+        mediaUrl: "https://api.pirate.test/video/content",
+        imageUrl: "https://dweb.link/ipfs/poster",
+      }),
+    }))
+  })
+
   test("retries Story registration for an existing failed asset and returns the registered asset", async () => {
     registrationMode = "success"
     maybeRegisterStoryRoyaltyForAsset.mockClear()
@@ -404,6 +474,51 @@ describe("createAssetForPost existing asset resume", () => {
 })
 
 describe("createAssetForPost allocation projection state", () => {
+  test("passes canonical video media into a new Story registration", async () => {
+    registrationMode = "success"
+    maybeRegisterStoryRoyaltyForAsset.mockClear()
+    buildStoryVideoMetadataMedia.mockClear()
+    const fake = fakeCreateClient()
+    const videoPost = {
+      ...post(),
+      post_type: "video",
+      media_refs: [{
+        storage_ref: "https://api.pirate.test/video/content",
+        mime_type: "video/mp4",
+        poster_ref: "https://dweb.link/ipfs/poster",
+      }],
+      song_artifact_bundle_id: null,
+    } as Post
+
+    await createAssetForPost({
+      assetKind: "video_file",
+      artifactKind: "primary_video",
+      bundleId: null,
+      client: fake.client,
+      commercialRevSharePct: null,
+      communityId: COMMUNITY_ID,
+      contentHash: `0x${"a".repeat(64)}`,
+      env: {} as never,
+      licensePreset: null,
+      mimeType: "video/mp4",
+      post: videoPost,
+      requireStoryRoyaltyRegistration: true,
+      royaltyAllocations: null,
+      storageRef: "https://dweb.link/ipfs/video",
+      userRepository: userRepository() as never,
+    })
+
+    expect(buildStoryVideoMetadataMedia).toHaveBeenCalledWith({
+      post: videoPost,
+      storageRef: "https://dweb.link/ipfs/video",
+      mimeType: "video/mp4",
+      contentHash: `0x${"a".repeat(64)}`,
+    })
+    expect(maybeRegisterStoryRoyaltyForAsset).toHaveBeenCalledWith(expect.objectContaining({
+      media: expect.objectContaining({ imageUrl: "https://dweb.link/ipfs/poster" }),
+    }))
+  })
+
   test("creates allocation-backed assets as projection-unsynced until control-plane sync succeeds", async () => {
     registrationMode = "success"
     maybeRegisterStoryRoyaltyForAsset.mockClear()

@@ -9,12 +9,18 @@ import type { HomeFeedCommunitySummary } from "../../types"
 export type HomeFeedProjectionRow = {
   community_id: string
   source_post_id: string
+  author_user_id?: string | null
+  identity_mode?: "public" | "anonymous"
   source_created_at: string
   visibility: "public" | "members_only"
+  projected_payload_json?: unknown
   upvote_count: number
   downvote_count: number
   comment_count: number
   like_count: number
+  /** SQL-computed ordering key carried only far enough to build an exact keyset cursor. */
+  feed_sort_key?: number | null
+  post_type?: "text" | "image" | "video" | "link" | "song" | "crosspost"
 }
 
 export type InternalHomeFeedCommunitySummary = HomeFeedCommunitySummary & {

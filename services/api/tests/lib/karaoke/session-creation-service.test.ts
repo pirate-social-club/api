@@ -23,9 +23,10 @@ const PAYLOAD: SongKaraokePayload = {
   object: "song_karaoke_payload",
   karaoke_lines: [
     { id: "section-1", index: 0, kind: "section", text: "Verse", start_ms: 0, end_ms: 1, words: [] },
+    { id: "adlib-1", index: 1, kind: "adlib", text: "(ooh)", start_ms: 1, end_ms: 99, words: [{ text: "(ooh)", start_ms: 1, end_ms: 99 }] },
     {
       id: "line-1",
-      index: 1,
+      index: 2,
       kind: "lyric",
       text: "hold on",
       start_ms: 100,
@@ -120,7 +121,7 @@ async function create(deps: KaraokeSessionCreationDependencies) {
 }
 
 describe("karaoke session creation service", () => {
-  test("filters section cues and signs before initializing the runtime", async () => {
+  test("filters section cues and ad-libs while keeping scored indexes dense", async () => {
     const { calls, deps, initialized } = dependencies()
     const result = await create(deps)
 
@@ -128,7 +129,7 @@ describe("karaoke session creation service", () => {
     expect(initialized[0]?.lines).toEqual([{
       endMs: 1000,
       lineId: "line-1",
-      lineIndex: 1,
+      lineIndex: 2,
       scoredLineIndex: 0,
       startMs: 100,
       text: "hold on",
@@ -139,6 +140,33 @@ describe("karaoke session creation service", () => {
     }])
     expect(result).toMatchObject({ id: "uuid-1", attempt: "uuid-2", object: "karaoke_session" })
     expect(result.websocket_url).toContain("token=token-uuid-3")
+  })
+
+  test("reports lyrics containing only ad-libs distinctly", async () => {
+    const { calls, deps } = dependencies({
+      async loadPayload() {
+        calls.push("payload")
+        return {
+          id: "bundle-adlibs",
+          object: "song_karaoke_payload",
+          karaoke_lines: Array.from({ length: 9 }, (_, index) => ({
+            end_ms: (index + 1) * 1_000,
+            id: `adlib-${index}`,
+            index,
+            kind: "adlib" as const,
+            start_ms: index * 1_000,
+            text: "(ooh)",
+            words: [{ end_ms: (index + 1) * 1_000, start_ms: index * 1_000, text: "(ooh)" }],
+          })),
+        }
+      },
+    })
+
+    await expect(create(deps)).rejects.toMatchObject({
+      code: "karaoke_all_lines_adlib",
+      status: 409,
+    } satisfies Partial<HttpError>)
+    expect(calls).toEqual(["claim", "payload", "fail"])
   })
 
   test("claims idempotency and fails the pending record when scoring is disabled", async () => {

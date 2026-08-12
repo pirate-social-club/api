@@ -29,6 +29,7 @@ import {
   resolveModerationCase,
   setCommentModerationStatus,
   setPostAgeGatePolicy,
+  setPostContentRating,
   setPostModerationStatus,
   approveReviewHeldPost,
   updateModerationCaseOpenedBy,
@@ -50,7 +51,7 @@ import {
 
 type ModerationCommunityRepository =
   & CommunityDatabaseBindingRepository
-  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionStatus">
+  & Pick<CommunityPostProjectionRepository, "updateCommunityPostProjectionPayload" | "updateCommunityPostProjectionStatus">
 
 async function updateDerivativeSourceProjectionStatus(input: {
   env: Env
@@ -103,6 +104,17 @@ function assertCreateUserReportRequest(body: CreateUserReportRequest): void {
 function assertCreateModerationActionRequest(body: CreateModerationActionRequest): void {
   if (!body.action_type) {
     throw badRequestError("action_type is required")
+  }
+  if (body.action_type === "set_content_rating") {
+    if (!body.content_safety_state || !["safe", "sensitive", "adult"].includes(body.content_safety_state)) {
+      throw badRequestError("content_safety_state is required for set_content_rating")
+    }
+    if (!body.note?.trim()) {
+      throw badRequestError("note is required for set_content_rating")
+    }
+    if (!body.evidence_ref?.trim()) {
+      throw badRequestError("evidence_ref is required for set_content_rating")
+    }
   }
 }
 
@@ -356,6 +368,9 @@ type ModerationActionMutation = {
   nextStatus?: string | null
   previousAgeGatePolicy?: "none" | "18_plus" | null
   nextAgeGatePolicy?: "none" | "18_plus" | null
+  previousContentSafetyState?: "pending" | "safe" | "sensitive" | "adult" | null
+  nextContentSafetyState?: "safe" | "sensitive" | "adult" | null
+  evidenceRef?: string | null
   publicReadPostId?: string | null
 }
 
@@ -414,6 +429,33 @@ async function planModerationAction(input: {
           mutation: { previousAgeGatePolicy: post.age_gate_policy, nextAgeGatePolicy: "18_plus", publicReadPostId: postId },
           applyWrites: (executor) => setPostAgeGatePolicy({ executor, postId, ageGatePolicy: "18_plus", now: input.now }),
         }
+      case "set_content_rating": {
+        const nextContentSafetyState = input.body.content_safety_state
+        if (!nextContentSafetyState) {
+          throw badRequestError("content_safety_state is required for set_content_rating")
+        }
+        if (post.content_safety_state === nextContentSafetyState) {
+          throw badRequestError("Post already has that content rating")
+        }
+        const nextAgeGatePolicy = nextContentSafetyState === "adult" ? "18_plus" : "none"
+        return {
+          mutation: {
+            previousAgeGatePolicy: post.age_gate_policy,
+            nextAgeGatePolicy,
+            previousContentSafetyState: post.content_safety_state,
+            nextContentSafetyState,
+            evidenceRef: input.body.evidence_ref?.trim() ?? null,
+            publicReadPostId: postId,
+          },
+          applyWrites: (executor) => setPostContentRating({
+            executor,
+            postId,
+            contentSafetyState: nextContentSafetyState,
+            ageGatePolicy: nextAgeGatePolicy,
+            now: input.now,
+          }),
+        }
+      }
       default:
         throw badRequestError("Unsupported moderation action")
     }
@@ -449,6 +491,8 @@ async function planModerationAction(input: {
       }
     case "age_gate":
       throw badRequestError("age_gate is only supported for posts")
+    case "set_content_rating":
+      throw badRequestError("set_content_rating is only supported for posts")
     default:
       throw badRequestError("Unsupported moderation action")
   }
@@ -508,6 +552,9 @@ export async function resolveModerationCaseWithAction(input: {
         nextStatus: mutation.nextStatus,
         previousAgeGatePolicy: mutation.previousAgeGatePolicy,
         nextAgeGatePolicy: mutation.nextAgeGatePolicy,
+        previousContentSafetyState: mutation.previousContentSafetyState,
+        nextContentSafetyState: mutation.nextContentSafetyState,
+        evidenceRef: mutation.evidenceRef,
       })
       await resolveModerationCase({
         executor: tx,
@@ -528,6 +575,20 @@ export async function resolveModerationCaseWithAction(input: {
         communityId: input.communityId,
         postId: caseRow.post_id,
         status: nextStatus,
+        updatedAt: now,
+      })
+    }
+    if (
+      caseRow.post_id
+      && (mutation.nextAgeGatePolicy || mutation.nextContentSafetyState)
+    ) {
+      const updatedPost = await getPostById(db.client, caseRow.post_id)
+      if (!updatedPost) {
+        throw internalError("Post is missing after moderation action")
+      }
+      await input.communityRepository.updateCommunityPostProjectionPayload({
+        postId: caseRow.post_id,
+        projectedPayloadJson: JSON.stringify(updatedPost),
         updatedAt: now,
       })
     }

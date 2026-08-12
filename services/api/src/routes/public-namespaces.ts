@@ -1,4 +1,10 @@
 import { Hono } from "hono"
+import {
+  evaluateJoinedRoot,
+  ROOT_DELEGATION_JOIN_SQL,
+  ROOT_DELEGATION_SELECT_SQL,
+  type RootDelegationJoinRow,
+} from "@pirate/hns-delegation"
 import { decodePublicNamespaceVerificationId, publicCommunityId, publicId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { notFoundError } from "../lib/errors"
@@ -8,6 +14,22 @@ import type { Env } from "../env"
 const publicNamespaces = new Hono<{ Bindings: Env }>()
 
 type PublicNamespaceRow = Record<string, unknown>
+
+function rootDelegationRoutingEnabled(env: Env): boolean {
+  return env.HNS_ROOT_DELEGATION_ROUTING_ENABLED?.trim().toLowerCase() === "true"
+}
+
+function rootDelegationAllowsRouting(row: PublicNamespaceRow, nowMs: number): boolean {
+  if (typeof row.delegation_root_label !== "string") {
+    const evaluation = evaluateJoinedRoot(null, nowMs)
+    return evaluation.authenticatedRoutingAllowed && evaluation.canonicalRoutingEligible
+  }
+  const evaluation = evaluateJoinedRoot(
+    row as unknown as RootDelegationJoinRow,
+    nowMs,
+  )
+  return evaluation.authenticatedRoutingAllowed && evaluation.canonicalRoutingEligible
+}
 
 function normalizePublicHnsRoot(value: string): string | null {
   const normalized = normalizeRootLabel(value)
@@ -28,6 +50,10 @@ function serializePublicNamespaceRow(row: PublicNamespaceRow, fallbackRootLabel:
 
   return {
     root_label: rootLabel,
+    wallet_interactive:
+      row.wallet_registration_status === "registered"
+      && Number(row.wallet_canonical_routing_eligible) === 1
+      && Number(row.wallet_routing_hard_denied) === 0,
     namespace_role: row.namespace_role === "mirror" ? "mirror" : "primary",
     namespace_verification: typeof row.namespace_verification_id === "string"
       ? row.namespace_verification_id.startsWith("nv_")
@@ -44,7 +70,10 @@ function serializePublicNamespaceRow(row: PublicNamespaceRow, fallbackRootLabel:
   }
 }
 
-function publicNamespaceSelectSql(whereClause: string): string {
+function publicNamespaceSelectSql(
+  whereClause: string,
+  useRootDelegationState: boolean,
+): string {
   return `
     SELECT
       nv.normalized_root_label,
@@ -52,7 +81,11 @@ function publicNamespaceSelectSql(whereClause: string): string {
       COALESCE(cnb.namespace_role, 'primary') AS namespace_role,
       c.community_id,
       c.display_name,
-      c.route_slug
+      c.route_slug,
+      wallet.registration_status AS wallet_registration_status,
+      wallet_state.canonical_routing_eligible AS wallet_canonical_routing_eligible,
+      wallet_state.routing_hard_denied AS wallet_routing_hard_denied
+      ${useRootDelegationState ? `, ${ROOT_DELEGATION_SELECT_SQL}` : ""}
     FROM namespace_verifications AS nv
     JOIN communities AS c
       ON c.namespace_verification_id = nv.namespace_verification_id
@@ -67,10 +100,16 @@ function publicNamespaceSelectSql(whereClause: string): string {
       ON cnb.community_id = c.community_id
      AND cnb.namespace_verification_id = nv.namespace_verification_id
      AND cnb.status = 'active'
+    LEFT JOIN hns_wallet_origin_authority AS wallet
+      ON wallet.normalized_root_label = nv.normalized_root_label
+    LEFT JOIN hns_root_delegation_state AS wallet_state
+      ON wallet_state.normalized_root_label = nv.normalized_root_label
+    ${useRootDelegationState ? ROOT_DELEGATION_JOIN_SQL : ""}
     WHERE nv.family = 'hns'
       AND nv.status = 'verified'
-      AND nv.pirate_dns_authority_verified = 1
-      AND nv.pirate_web_routing_allowed = 1
+      ${useRootDelegationState
+        ? ""
+        : "AND nv.pirate_dns_authority_verified = 1 AND nv.pirate_web_routing_allowed = 1"}
       AND nv.expires_at > ?1
       AND c.status = 'active'
       AND c.provisioning_state = 'active'
@@ -81,8 +120,10 @@ function publicNamespaceSelectSql(whereClause: string): string {
 publicNamespaces.get("/", async (c) => {
   const client = getControlPlaneClient(c.env)
   const now = new Date().toISOString()
+  const nowMs = Date.parse(now)
+  const useRootDelegationState = rootDelegationRoutingEnabled(c.env)
   const result = await client.execute({
-    sql: `${publicNamespaceSelectSql("")}
+    sql: `${publicNamespaceSelectSql("", useRootDelegationState)}
       ORDER BY nv.normalized_root_label ASC
       LIMIT 500
     `,
@@ -91,6 +132,9 @@ publicNamespaces.get("/", async (c) => {
 
   return c.json({
     namespaces: result.rows
+      .filter((row) =>
+        !useRootDelegationState || rootDelegationAllowsRouting(row, nowMs)
+      )
       .map((row) => serializePublicNamespaceRow(row, ""))
       .filter((row) => row !== null),
   }, 200, {
@@ -106,21 +150,31 @@ publicNamespaces.get("/:rootLabel", async (c) => {
 
   const client = getControlPlaneClient(c.env)
   const now = new Date().toISOString()
+  const nowMs = Date.parse(now)
+  const useRootDelegationState = rootDelegationRoutingEnabled(c.env)
   const result = await client.execute({
-    sql: `${publicNamespaceSelectSql("AND nv.normalized_root_label = ?2")}
+    sql: `${publicNamespaceSelectSql(
+      "AND nv.normalized_root_label = ?2",
+      useRootDelegationState,
+    )}
       LIMIT 1
     `,
     args: [now, rootLabel],
   })
 
   const row = result.rows[0]
+  if (row && useRootDelegationState && !rootDelegationAllowsRouting(row, nowMs)) {
+    throw notFoundError("Namespace not found")
+  }
   const body = row ? serializePublicNamespaceRow(row, rootLabel) : null
   if (!body) {
     throw notFoundError("Namespace not found")
   }
 
   return c.json(body, 200, {
-    "cache-control": "public, max-age=60",
+    // The gateway consumes this endpoint as the wallet-interactivity authority.
+    // Do not let a CDN or browser retain an enabled answer after hard denial.
+    "cache-control": "no-store",
   })
 })
 

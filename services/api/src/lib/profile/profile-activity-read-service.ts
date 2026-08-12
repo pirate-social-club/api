@@ -7,6 +7,7 @@ import type {
 } from "../communities/db-community-repository"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError } from "../errors"
+import { parseListLimit } from "../list-limit"
 import { getCommentById } from "../comments/community-comment-store"
 import { hydrateCommentAuthorPublicHandles } from "../comments/comment-author-hydration"
 import { buildLocalizedCommentListItem } from "../localization/comment-localization-service"
@@ -17,6 +18,7 @@ import { isPubliclyReadablePost } from "../posts/post-access"
 import { createStudyElevenLabsCredentialResolver, hydrateAuthorPublicHandlesForResponses, type StudyElevenLabsCredentialResolver } from "../posts/post-read-response"
 import { getControlPlaneClient } from "../runtime-deps"
 import { requiredString } from "../sql-row"
+import type { Client } from "../sql-client"
 import type { ProfileRepository } from "../auth/repositories"
 import type { Env } from "../../env"
 import type {
@@ -97,11 +99,7 @@ export function parseProfileActivityTab(value: string | null | undefined): Profi
 }
 
 export function parseProfileActivityLimit(value: string | null | undefined): number {
-  const parsed = Number(value ?? "")
-  if (!Number.isFinite(parsed)) {
-    return 20
-  }
-  return Math.min(50, Math.max(1, Math.trunc(parsed)))
+  return parseListLimit(value, { fallback: 20, max: 50 })
 }
 
 function cursorClause(
@@ -325,6 +323,7 @@ async function hydratePostRows(input: {
           threadSnapshot: null,
           ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
           studyElevenLabsCredentialResolver,
+          studyArtifactWriteClient: db.client,
           studyEnabledCache,
           viewerUserId: input.viewerUserId,
         })
@@ -349,7 +348,7 @@ async function hydratePostRows(input: {
 }
 
 async function buildThreadRootPost(input: {
-  client: DbExecutor
+  client: Client
   env: Env
   profileRepository?: ProfileRepository | null
   postId: string
@@ -376,6 +375,7 @@ async function buildThreadRootPost(input: {
     threadSnapshot: null,
     ageGateViewerState: post.age_gate_policy === "18_plus" ? "proof_required" : null,
     studyElevenLabsCredentialResolver: input.studyElevenLabsCredentialResolver,
+    studyArtifactWriteClient: input.client,
     studyEnabledCache: input.studyEnabledCache,
     viewerUserId: input.viewerUserId,
   })

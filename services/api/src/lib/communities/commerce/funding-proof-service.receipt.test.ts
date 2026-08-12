@@ -3,6 +3,7 @@ import { Interface } from "ethers"
 
 import type { Env } from "../../../env"
 import {
+  evaluateBookingPaymentReceipt,
   setBuyerFundingProviderFactoryForTests,
   verifyPirateCheckoutUsdcFunding,
 } from "./funding-proof-service"
@@ -41,7 +42,7 @@ function verify() {
   return verifyPirateCheckoutUsdcFunding({
     env,
     quoteId: "quote_1",
-    amountUsd: 5,
+    amountCents: 500,
     buyerAddress: BUYER,
     fundingTxRef: TX,
   })
@@ -71,5 +72,80 @@ describe("Pirate checkout raw funding receipt parser", () => {
       amountAtomic: "5000000",
       observation: { chainId: 84532, logIndex: 7, blockNumber: 123, blockHash: BLOCK },
     })
+  })
+})
+
+describe("booking and reward custody receipt classification", () => {
+  const expected = {
+    chainId: 84532,
+    tokenAddress: TOKEN,
+    recipientAddress: OPERATOR,
+    amountAtomic: 5_000_000n,
+    senderAddress: BUYER,
+  }
+  const receipt = (...logs: ReturnType<typeof log>[]) => ({ status: 1, logs })
+
+  test("verifies exactly one exact transfer from the expected sender", () => {
+    expect(evaluateBookingPaymentReceipt(receipt(log({ index: 1 })), expected, TX)).toEqual({
+      kind: "verified",
+      senderAddress: BUYER,
+      txRef: TX,
+    })
+  })
+
+  test("records a wrong amount from the expected sender as refundable custody", () => {
+    expect(evaluateBookingPaymentReceipt(
+      receipt(log({ amount: 4_000_000n, index: 1 })),
+      expected,
+      TX,
+    )).toMatchObject({
+      kind: "custody_mismatch",
+      reason: "wrong_transfer_amount",
+      senderAddress: BUYER,
+      observedAmountAtomic: "4000000",
+    })
+  })
+
+  test("records a single unexpected sender as refundable custody", () => {
+    expect(evaluateBookingPaymentReceipt(
+      receipt(log({ from: OTHER, index: 1 })),
+      expected,
+      TX,
+    )).toMatchObject({
+      kind: "custody_mismatch",
+      reason: "unexpected_sender",
+      senderAddress: OTHER,
+      observedAmountAtomic: "5000000",
+    })
+  })
+
+  test("retains every sender when operator custody is ambiguous", () => {
+    expect(evaluateBookingPaymentReceipt(
+      receipt(
+        log({ index: 1 }),
+        log({ from: OTHER, amount: 1n, index: 2 }),
+      ),
+      expected,
+      TX,
+    )).toEqual({
+      kind: "custody_incident",
+      reason: "multiple_senders",
+      txRef: TX,
+      transfers: [
+        { senderAddress: BUYER, observedAmountAtomic: "5000000", transferCount: 1 },
+        { senderAddress: OTHER, observedAmountAtomic: "1", transferCount: 1 },
+      ],
+    })
+  })
+
+  test("ignores unrelated token or recipient transfers and zero-value grief logs", () => {
+    expect(evaluateBookingPaymentReceipt(
+      receipt(
+        log({ to: OTHER, index: 1 }),
+        log({ amount: 0n, index: 2 }),
+      ),
+      expected,
+      TX,
+    )).toEqual({ kind: "rejected", reason: "no_matching_transfer" })
   })
 })

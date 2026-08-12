@@ -1,5 +1,6 @@
 import { Hono } from "hono"
 import { badRequestError, notFoundError } from "../lib/errors"
+import { parseListLimit } from "../lib/list-limit"
 import { trackApiEvent } from "../lib/analytics/track"
 import { authenticate, type AuthenticatedEnv } from "../lib/auth-middleware"
 import {
@@ -35,8 +36,7 @@ notifications.get("/tasks", async (c) => {
 notifications.get("/feed", async (c) => {
   const actor = c.get("actor")
   const cursor = c.req.query("cursor") ?? null
-  const limitRaw = Number(c.req.query("limit") ?? "")
-  const limit = Number.isFinite(limitRaw) ? Math.min(100, Math.max(1, Math.trunc(limitRaw))) : 25
+  const limit = parseListLimit(c.req.query("limit"), { fallback: 25, max: 100 })
 
   const feed = await getNotificationsFeed({
     env: c.env,

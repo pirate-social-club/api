@@ -1,5 +1,6 @@
 import type { Env } from "../../env"
 import { logPipelineError, logPipelineInfo } from "../observability/pipeline-log"
+import { opsAlertGuidance } from "./guidance"
 import type { OpsAlert } from "./types"
 
 const OPS_ALERT_WEBHOOK_TIMEOUT_MS = 5_000
@@ -10,6 +11,7 @@ export type OpsAlertSendResult = {
   delivered: boolean
   sent: number
   sink: "none" | "log" | "email" | "webhook"
+  providerMessageId: string | null
 }
 
 function shortSha(value: unknown): string | null {
@@ -97,6 +99,14 @@ function alertDetailsLines(alert: OpsAlert): string[] {
     "processed_jobs",
     "failed",
     "errors",
+    "free",
+    "threshold",
+    "allocatedLast24Hours",
+    "allocatedLast7Days",
+    "burnRatePerHour",
+    "forecastCapacity",
+    "hoursToExhaustion",
+    "exhaustionAlertHours",
   ]
   const lines: string[] = []
   for (const key of summaryKeys) {
@@ -121,6 +131,7 @@ function alertText(input: {
   buildSha: string | null
 }): string {
   const { alert, environment, timestamp, buildSha } = input
+  const guidance = opsAlertGuidance(alert)
   const lines = [
     `[${alert.severity.toUpperCase()}][${environment}] ${alert.title}`,
     `Count: ${alert.count}`,
@@ -128,6 +139,9 @@ function alertText(input: {
     `Time: ${timestamp}`,
     ...(buildSha ? [`Deploy: ${buildSha}`] : []),
     `Key: ${alert.key}`,
+    `Owner: ${guidance.owner}`,
+    ...(guidance.runbookUrl ? [`Runbook: ${guidance.runbookUrl}`] : []),
+    `Recommended action: ${guidance.recommendedAction}`,
   ]
   const details = alertDetailsLines(alert)
   if (details.length > 0) {
@@ -137,8 +151,15 @@ function alertText(input: {
 }
 
 export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAlertSendResult> {
-  if (alerts.length === 0) return { delivered: true, sent: 0, sink: "none" }
+  if (alerts.length === 0) return { delivered: true, sent: 0, sink: "none", providerMessageId: null }
   const environment = env.ENVIRONMENT || "development"
+  if (environment === "development") {
+    logPipelineInfo("[ops-alerts] development alert kept in logs", {
+      count: alerts.length,
+      keys: alerts.map((alert) => alert.key),
+    })
+    return { delivered: true, sent: 0, sink: "log", providerMessageId: null }
+  }
   const timestamp = new Date().toISOString()
   const buildSha = shortSha(env.BUILD_GIT_SHA)
   const text = alerts
@@ -169,12 +190,27 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
         to: emailTo,
         from: emailFrom,
       })
-      return { delivered: true, sent: alerts.length, sink: "email" }
+      const pagingUrl = alerts.some((alert) => alert.severity === "high")
+        ? env.OPS_ALERT_WEBHOOK_URL?.trim()
+        : null
+      if (pagingUrl) {
+        const pagingResponse = await fetch(pagingUrl, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(OPS_ALERT_WEBHOOK_TIMEOUT_MS),
+        })
+        if (!pagingResponse.ok) {
+          logPipelineError("[ops-alerts] paging webhook post failed", { status: pagingResponse.status })
+          return { delivered: false, sent: 0, sink: "webhook", providerMessageId: response.messageId }
+        }
+      }
+      return { delivered: true, sent: alerts.length, sink: "email", providerMessageId: response.messageId }
     } catch (error) {
       logPipelineError("[ops-alerts] email send threw", {
         error: error instanceof Error ? error.message : String(error),
       })
-      return { delivered: false, sent: 0, sink: "email" }
+      return { delivered: false, sent: 0, sink: "email", providerMessageId: null }
     }
   }
 
@@ -185,7 +221,7 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
       keys: alerts.map((alert) => alert.key),
       alerts,
     })
-    return { delivered: true, sent: 0, sink: "log" }
+    return { delivered: false, sent: 0, sink: "log", providerMessageId: null }
   }
 
   try {
@@ -197,14 +233,14 @@ export async function sendOpsAlerts(env: Env, alerts: OpsAlert[]): Promise<OpsAl
     })
     if (!response.ok) {
       logPipelineError("[ops-alerts] webhook post failed", { status: response.status })
-      return { delivered: false, sent: 0, sink: "webhook" }
+      return { delivered: false, sent: 0, sink: "webhook", providerMessageId: null }
     }
-    return { delivered: true, sent: alerts.length, sink: "webhook" }
+    return { delivered: true, sent: alerts.length, sink: "webhook", providerMessageId: null }
   } catch (error) {
     logPipelineError("[ops-alerts] webhook post threw", {
       error: error instanceof Error ? error.message : String(error),
     })
-    return { delivered: false, sent: 0, sink: "webhook" }
+    return { delivered: false, sent: 0, sink: "webhook", providerMessageId: null }
   }
 }
 

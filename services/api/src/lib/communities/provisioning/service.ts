@@ -39,10 +39,15 @@ import {
   type CreateCommunityAuth,
   type CreateCommunityRequestBody,
   resolveCreateCommunityAuth,
+  withPersistedCommunityCreatedAt,
 } from "../create/validation"
 import { assertGatePolicyContractsValid } from "../membership/gate-policy-contract-validation"
 import type { GatePolicy } from "../membership/gate-types"
 import { HttpError } from "../../errors"
+import {
+  reconcileCommittedLocalNamespaceAttachment,
+  writeLocalNamespaceAttachment,
+} from "./namespace-local-repository"
 
 type CommunityProvisioningServiceRepository =
   & CommunityReadRepository
@@ -132,84 +137,15 @@ async function upsertLocalNamespaceAttachment(input: {
   now: string
 }): Promise<void> {
   const db = await openCommunityWriteClient(input.env, input.repo, input.communityId)
-  const namespaceKey = input.namespaceRole === "primary"
-    ? input.communityId
-    : input.namespaceVerificationId
-  const namespaceId = `ns_${namespaceKey}`
-  const namespaceHandlePolicyId = `nhp_${namespaceKey}`
-
   try {
     await withTransaction(db.client, "write", async (tx) => {
-      await tx.execute({
-        sql: `
-          INSERT INTO namespace_bindings (
-            namespace_id, community_id, namespace_verification_id, display_label, normalized_label,
-            resolver_label, route_family, status, created_at, updated_at, namespace_role
-          ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, NULL, NULL, 'active', ?6, ?6, ?7
-          )
-          ON CONFLICT(namespace_id) DO UPDATE SET
-            namespace_verification_id = excluded.namespace_verification_id,
-            display_label = excluded.display_label,
-            normalized_label = excluded.normalized_label,
-            namespace_role = excluded.namespace_role,
-            status = excluded.status,
-            updated_at = excluded.updated_at
-        `,
-        args: [
-          namespaceId,
-          input.communityId,
-          input.namespaceVerificationId,
-          input.namespaceLabel,
-          input.namespaceLabel.toLowerCase(),
-          input.now,
-          input.namespaceRole,
-        ],
+      await writeLocalNamespaceAttachment(tx, {
+        communityId: input.communityId,
+        namespaceVerificationId: input.namespaceVerificationId,
+        namespaceRole: input.namespaceRole,
+        namespaceLabel: input.namespaceLabel,
+        now: input.now,
       })
-
-      await tx.execute({
-        sql: `
-          INSERT INTO namespace_handle_policies (
-            namespace_handle_policy_id, community_id, namespace_id, policy_template, pricing_model,
-            membership_required_for_claim, claims_enabled, settings_json, created_at, updated_at
-          ) VALUES (
-            ?1, ?2, ?3, 'premium', 'flat_by_length', 1, ?4, ?5, ?6, ?6
-          )
-          ON CONFLICT(namespace_handle_policy_id) DO UPDATE SET
-            namespace_id = excluded.namespace_id,
-            membership_required_for_claim = excluded.membership_required_for_claim,
-            updated_at = excluded.updated_at
-        `,
-        args: [
-          namespaceHandlePolicyId,
-          input.communityId,
-          namespaceId,
-          0,
-          JSON.stringify({
-            flat_price_cents: 500,
-            premium_price_cents: 2500,
-            premium_max_length: 4,
-            min_length: 3,
-            max_length: 32,
-            special_price_cents_by_label: {
-              crown: 100000,
-              "xn--2p8h": 100000,
-              prince: 50000,
-              "xn--tq9h": 50000,
-              princess: 50000,
-              "xn--6q8h": 50000,
-              diamond: 75000,
-              "xn--tr8h": 75000,
-              ring: 50000,
-              "xn--sr8h": 50000,
-              "xn--cs8h": 50000,
-              "xn--cz8h": 25000,
-            },
-          }),
-          input.now,
-        ],
-      })
-
     })
   } finally {
     db.close()
@@ -221,6 +157,8 @@ async function createNamespacelessCommunity(input: {
   body: CreateCommunityRequestBody
   auth: CreateCommunityAuth
   communityRepository: CommunityProvisioningServiceRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }): Promise<CommunityCreateAcceptedResponse> {
   const communityId = makeId("cmt")
   const bindingId = makeId("cdb")
@@ -256,6 +194,7 @@ async function createNamespacelessCommunity(input: {
       namespaceVerificationId: null,
       routeSlug: null,
       communityRepository: input.communityRepository,
+      allocationAttribution: input.allocationAttribution,
     })
     const localSnapshot = provisioned.localSnapshot
       ?? await loadCommunityLocalSnapshot(input.env, input.communityRepository, communityId)
@@ -341,6 +280,8 @@ async function provisionNamespacedCommunity(input: {
   namespaceVerificationId: string
   namespaceVerification: Pick<NamespaceVerification, "family" | "normalized_root_label">
   communityRepository: CommunityProvisioningServiceRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }): Promise<CommunityCreateAcceptedResponse> {
   const { env, body, auth, existingCommunity, namespaceVerificationId, namespaceVerification, communityRepository: repo } = input
   const routeSlug = namespaceRouteSlug(namespaceVerification)
@@ -390,11 +331,15 @@ async function provisionNamespacedCommunity(input: {
     const provisioned = await backend.provision({
       env,
       body,
-      auth,
+      // A retry is a new HTTP request, but the target snapshot must remain
+      // byte-identical to the first attempt. Reuse the persisted community
+      // creation timestamp instead of the request-local nowIso().
+      auth: withPersistedCommunityCreatedAt(auth, existingCommunity?.created_at),
       communityId,
       namespaceVerificationId,
       routeSlug,
       communityRepository: repo,
+      allocationAttribution: input.allocationAttribution,
     })
     localSnapshot = provisioned.localSnapshot ?? await loadCommunityLocalSnapshot(env, repo, communityId)
     const databaseUrl = provisioned.binding.databaseUrl
@@ -471,6 +416,8 @@ export async function createCommunity(input: {
   userRepository: UserRepository
   verificationRepository: VerificationRepository
   communityRepository: CommunityProvisioningServiceRepository
+  /** DIAGNOSTIC-ONLY pool attribution; forwarded to the shard allocator. */
+  allocationAttribution?: { source?: string | null; runId?: string | null }
 }): Promise<CommunityCreateAcceptedResponse> {
   const auth = await resolveCreateCommunityAuth(input)
   await assertGatePolicyContractsValid({
@@ -484,6 +431,7 @@ export async function createCommunity(input: {
       body: input.body,
       auth,
       communityRepository: input.communityRepository,
+      allocationAttribution: input.allocationAttribution,
     })
   }
 
@@ -526,6 +474,7 @@ export async function createCommunity(input: {
     namespaceVerificationId: auth.namespaceVerificationId,
     namespaceVerification,
     communityRepository: input.communityRepository,
+    allocationAttribution: input.allocationAttribution,
   })
 }
 
@@ -582,19 +531,16 @@ export async function attachNamespaceToCommunity(input: {
     if (!existingNamespaceVerification || !isSameNamespaceRoot(existingNamespaceVerification, namespaceVerification)) {
       throw eligibilityFailed("Community already has a different namespace attached")
     }
-    effectiveNamespaceVerification = existingNamespaceVerification
-    if (community.pending_namespace_verification_session_id) {
-      await input.communityRepository.setPendingNamespaceVerificationSession({
-        communityId: input.communityId,
-        sessionId: null,
-        updatedAt: createdAt,
-      })
-      attachedCommunity = {
-        ...community,
-        pending_namespace_verification_session_id: null,
-        updated_at: createdAt,
-      }
-    }
+    const routeSlug = namespaceRouteSlug(namespaceVerification)
+    attachedCommunity = await input.communityRepository.attachNamespaceToCommunity({
+      communityNamespaceBindingId: makeId("cnb"),
+      communityId: input.communityId,
+      namespaceVerificationId: input.namespaceVerificationId,
+      namespaceRole,
+      replacesNamespaceVerificationId: community.namespace_verification_id,
+      routeSlug,
+      updatedAt: createdAt,
+    })
   } else {
     const routeSlug = namespaceRouteSlug(namespaceVerification)
     attachedCommunity = await input.communityRepository.attachNamespaceToCommunity({
@@ -607,17 +553,31 @@ export async function attachNamespaceToCommunity(input: {
       })
   }
 
-  await upsertLocalNamespaceAttachment({
-    env: input.env,
-    repo: input.communityRepository,
-    communityId: input.communityId,
-    namespaceVerificationId: namespaceRole === "mirror"
-      ? input.namespaceVerificationId
-      : attachedCommunity.namespace_verification_id ?? input.namespaceVerificationId,
-    namespaceRole,
-    namespaceLabel: namespaceRouteSlug(effectiveNamespaceVerification),
-    now: createdAt,
-  })
+  // The control-plane binding above is already committed. A local projection
+  // failure must not turn that successful mutation into a retryable HTTP 500;
+  // retries can repeat user-visible work while the source of truth is correct.
+  // Log the divergence for reconciliation and return the committed state.
+  await reconcileCommittedLocalNamespaceAttachment(
+    () => upsertLocalNamespaceAttachment({
+      env: input.env,
+      repo: input.communityRepository,
+      communityId: input.communityId,
+      namespaceVerificationId: namespaceRole === "mirror"
+        ? input.namespaceVerificationId
+        : attachedCommunity.namespace_verification_id ?? input.namespaceVerificationId,
+      namespaceRole,
+      namespaceLabel: namespaceRouteSlug(effectiveNamespaceVerification),
+      now: createdAt,
+    }),
+    (error) => {
+      console.error("[community-provisioning] namespace local projection reconciliation failed", {
+        communityId: input.communityId,
+        namespaceVerificationId: input.namespaceVerificationId,
+        namespaceRole,
+        error,
+      })
+    },
+  )
 
   try {
     await resolveNamespaceVerificationTask({

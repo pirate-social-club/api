@@ -13,6 +13,14 @@ import {
   toPostRow,
 } from "./community-post-serialization"
 
+const discoverableLiveRoomAnchorFilterSql = `
+        AND NOT EXISTS (
+          SELECT 1
+          FROM live_rooms
+          WHERE live_rooms.anchor_post_id = posts.post_id
+            AND live_rooms.visibility <> 'public'
+        )`
+
 export type PublishedLocalizedPostFeedItem = {
   post: Post
   upvote_count: number
@@ -161,6 +169,7 @@ export async function listPublishedLocalizedPosts(input: {
         AND status = 'published'
         AND (?3 IS NULL OR label_id = ?3)
         AND (?4 IS NULL OR visibility = ?4)
+        ${discoverableLiveRoomAnchorFilterSql}
         ${requiredAssetRowFilterForSchema(projectionSchema)}
         ${activeRightsHoldFilterSql(projectionSchema, "posts")}
         ${eventFilterSql}
@@ -318,6 +327,7 @@ export async function listPublishedLocalizedEventPosts(input: {
       JOIN posts ON posts.post_id = event_posts.event_post_id
       ${postAssetStoryJoinForSchema(projectionSchema)}
       WHERE posts.status = 'published'
+        ${discoverableLiveRoomAnchorFilterSql}
         ${requiredAssetRowFilterForSchema(projectionSchema)}
         ${activeRightsHoldFilterSql(projectionSchema, "posts")}
       ORDER BY event_posts.event_sort_start ASC, event_posts.event_post_id ASC

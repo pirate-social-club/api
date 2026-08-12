@@ -15,6 +15,10 @@ the complete IP catalog, vaults, royalty-token allocations, and lineage on chain
 
 Status: approved configuration baseline; admission remains disabled.
 
+The decision gates for real-money pricing, treasury solvency, catalog scope, provisioning, and a
+mainnet canary are defined in `story-mainnet-pricing-treasury-design.md`. This Aeneid policy does not
+satisfy or bypass any of those gates.
+
 ## Aeneid
 
 The deployed development, staging, staging-d1, and production API environments

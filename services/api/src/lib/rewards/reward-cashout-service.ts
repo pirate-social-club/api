@@ -12,7 +12,7 @@ import {
   initializePrimaryWalletIfNeeded,
   reconcileWalletAttachments,
 } from "../auth/auth-db-user-queries"
-import { hasActiveUniqueHumanNullifier, resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
+import { resolveActiveSupportedRewardIdentity } from "../verification/unique-human-eligibility"
 import {
   operatorSigningCoordinatorName,
   type OperatorSettleRequest,
@@ -26,11 +26,22 @@ import {
   resolveRewardsSettlementOperatorAddress,
 } from "../communities/bookings/booking-chain-config"
 import type { RewardCashoutResponse, RewardPayoutStatus, UpstreamIdentity } from "../../types"
+import { rewardPayoutPublicStage } from "./reward-payout-public-stage"
+import { captureScheduledWarning } from "../ops-alerts/scheduled"
+import {
+  fitsPayoutCapacity,
+  listFairPayoutCandidates,
+  markSongSelected,
+  payoutMaxWaitSeconds,
+  payoutWaitSeconds,
+  readFreshPayoutCapacity,
+} from "./reward-payout-fairness"
 
 const DEFAULT_CONFIRM_POLL_MS = [500, 1000, 2000, 2000, 2000, 3000]
 const DEFAULT_REWARDS_MIN_CASHOUT_CENTS = 100
 const MAX_RECONCILE_ATTEMPTS = 3
 const DEFAULT_PAYOUT_RECONCILE_LIMIT = 50
+const MAX_SCHEDULED_PREPARATION_ATTEMPTS = 12
 const IDEMPOTENCY_KEY_RE = /^[a-zA-Z0-9:_-]{8,160}$/
 
 export interface RewardSettlementCoordinator {
@@ -69,6 +80,18 @@ interface ReservedCashout {
   availableBalanceCents: number
 }
 
+type RewardEventBalance = {
+  rewardEventId: string
+  rewardCampaignId: string | null
+  availableCents: number
+}
+
+type RewardPayoutAllocation = {
+  rewardEventId: string
+  rewardCampaignId: string | null
+  amountCents: number
+}
+
 export interface RewardPayoutReconciliationSummary {
   enabled: boolean
   scanned: number
@@ -76,6 +99,9 @@ export interface RewardPayoutReconciliationSummary {
   failed: number
   pending: number
   errors: number
+  capacityDeferred: number
+  capacityObservationStale: boolean
+  overdueSongs: number
 }
 
 function normalizeIdempotencyKey(raw: unknown): string {
@@ -103,6 +129,22 @@ function parseConfiguredCents(raw: string | undefined, fallback: number): number
 
 function rewardPayoutsEnabled(env: Pick<Env, "REWARDS_PAYOUTS_ENABLED">): boolean {
   return String(env.REWARDS_PAYOUTS_ENABLED ?? "").trim().toLowerCase() === "true"
+}
+
+async function warnPayoutScheduler(
+  env: Env,
+  message: string,
+  task: string,
+  extra: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await captureScheduledWarning(env, message, task, extra, { urgency: "high" })
+  } catch (error) {
+    console.error("[rewards] payout scheduler alert delivery failed", {
+      task,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
 }
 
 function normalizeRecipientAddress(raw: string): string {
@@ -248,13 +290,176 @@ async function currentBalanceCents(exec: Pick<Client | Transaction, "execute">, 
   const result = await exec.execute({
     sql: `
       SELECT
-        COALESCE((SELECT SUM(amount_cents) FROM reward_events WHERE user_id = ?1), 0)
-        - COALESCE((SELECT SUM(amount_cents) FROM reward_payout_effects WHERE user_id = ?1 AND status IN ('submitted', 'confirmed')), 0)
+        COALESCE((
+          SELECT SUM(event.amount_cents)
+          FROM reward_events event
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = event.user_id
+          WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
+        ), 0)
+        - COALESCE((
+          SELECT SUM(payout.amount_cents)
+          FROM reward_payout_effects payout
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = payout.user_id
+          WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
+            AND payout.status IN ('submitted', 'confirmed')
+        ), 0)
         AS balance_cents
     `,
     args: [userId],
   })
   return Math.max(0, Number(rowValue(result.rows[0], "balance_cents") ?? 0))
+}
+
+export function planRewardPayoutAllocations(
+  events: ReadonlyArray<RewardEventBalance>,
+  amountCents: number,
+  legacyConfirmedUnallocatedCents = 0,
+): RewardPayoutAllocation[] {
+  let remaining = amountCents
+  let legacyPaidRemaining = legacyConfirmedUnallocatedCents
+  const allocations: RewardPayoutAllocation[] = []
+  for (const event of events) {
+    if (remaining <= 0) break
+    let available = Math.max(0, Math.trunc(event.availableCents))
+    if (available === 0) continue
+    const legacyPaid = Math.min(available, legacyPaidRemaining)
+    available -= legacyPaid
+    legacyPaidRemaining -= legacyPaid
+    if (available === 0) continue
+    const allocated = Math.min(available, remaining)
+    allocations.push({
+      rewardEventId: event.rewardEventId,
+      rewardCampaignId: event.rewardCampaignId,
+      amountCents: allocated,
+    })
+    remaining -= allocated
+  }
+  if (legacyPaidRemaining !== 0 || remaining !== 0) {
+    throw conflictError("Rewards cashout allocation does not match the available balance")
+  }
+  return allocations
+}
+
+async function reservePayoutAllocations(input: {
+  tx: Transaction
+  effectId: string
+  userId: string
+  amountCents: number
+  nowUtc: string
+}): Promise<void> {
+  // Migration 0150 deliberately left ambiguous historical confirmed payouts
+  // without allocation rows. They still consumed the user's oldest credits.
+  // Carry that legacy paid amount across the same FIFO stream before assigning
+  // a new payout, otherwise a new cashout reuses old events and advances the
+  // wrong campaign's paid projection.
+  const legacy = await input.tx.execute({
+    sql: `
+      SELECT
+        COALESCE((
+          SELECT SUM(amount_cents)
+          FROM reward_payout_effects payout
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = payout.user_id
+          WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
+            AND payout.status = 'confirmed'
+        ), 0) AS confirmed_payout_cents,
+        COALESCE((
+          SELECT SUM(allocation.amount_cents)
+          FROM reward_payout_allocations allocation
+          JOIN reward_payout_effects payout
+            ON payout.reward_payout_effect_id = allocation.reward_payout_effect_id
+          LEFT JOIN reward_ownership_transfers transfer
+            ON transfer.source_user_id = payout.user_id
+          WHERE COALESCE(transfer.canonical_user_id, payout.user_id) = ?1
+            AND allocation.status = 'confirmed'
+        ), 0) AS confirmed_allocated_cents
+    `,
+    args: [input.userId],
+  })
+  const legacyConfirmedUnallocatedCents = Math.max(
+    0,
+    requiredNumber(legacy.rows[0], "confirmed_payout_cents")
+      - requiredNumber(legacy.rows[0], "confirmed_allocated_cents"),
+  )
+  const result = await input.tx.execute({
+    sql: `
+      SELECT
+        event.reward_event_id,
+        event.reward_campaign_id,
+        event.amount_cents - COALESCE(SUM(
+          CASE WHEN allocation.status IN ('submitted', 'confirmed') THEN allocation.amount_cents ELSE 0 END
+        ), 0) AS available_cents
+      FROM reward_events event
+      LEFT JOIN reward_ownership_transfers transfer
+        ON transfer.source_user_id = event.user_id
+      LEFT JOIN reward_payout_allocations allocation
+        ON allocation.reward_event_id = event.reward_event_id
+      WHERE COALESCE(transfer.canonical_user_id, event.user_id) = ?1
+      GROUP BY event.reward_event_id, event.reward_campaign_id, event.amount_cents, event.created_at
+      HAVING event.amount_cents - COALESCE(SUM(
+        CASE WHEN allocation.status IN ('submitted', 'confirmed') THEN allocation.amount_cents ELSE 0 END
+      ), 0) > 0
+      ORDER BY event.created_at ASC, event.reward_event_id ASC
+    `,
+    args: [input.userId],
+  })
+  const allocations = planRewardPayoutAllocations(
+    result.rows.map((row) => ({
+      rewardEventId: requiredString(row, "reward_event_id"),
+      rewardCampaignId: stringOrNull(rowValue(row, "reward_campaign_id")),
+      availableCents: requiredNumber(row, "available_cents"),
+    })),
+    input.amountCents,
+    legacyConfirmedUnallocatedCents,
+  )
+  for (const allocation of allocations) {
+    await input.tx.execute({
+      sql: `
+        INSERT INTO reward_payout_allocations (
+          reward_payout_allocation_id, reward_payout_effect_id, reward_event_id,
+          reward_campaign_id, amount_cents, status, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, 'submitted', ?6, ?6)
+      `,
+      args: [
+        `rpa_${crypto.randomUUID().replace(/-/g, "")}`,
+        input.effectId,
+        allocation.rewardEventId,
+        allocation.rewardCampaignId,
+        allocation.amountCents,
+        input.nowUtc,
+      ],
+    })
+  }
+}
+
+async function ensurePayoutAllocations(input: {
+  env: Env
+  client: Client
+  effect: RewardPayoutEffect
+  nowUtc: string
+}): Promise<void> {
+  await withTransaction(input.client, "write", async (tx) => {
+    await lockUserForCashout({ env: input.env, tx, userId: input.effect.userId })
+    const existing = await tx.execute({
+      sql: `
+        SELECT 1
+        FROM reward_payout_allocations
+        WHERE reward_payout_effect_id = ?1
+        LIMIT 1
+      `,
+      args: [input.effect.rewardPayoutEffectId],
+    })
+    if (existing.rows[0]) return
+    await reservePayoutAllocations({
+      tx,
+      effectId: input.effect.rewardPayoutEffectId,
+      userId: input.effect.userId,
+      amountCents: input.effect.amountCents,
+      nowUtc: input.nowUtc,
+    })
+  })
 }
 
 async function lockUserForCashout(input: { env: Env; tx: Transaction; userId: string }): Promise<void> {
@@ -299,7 +504,7 @@ async function reserveCashoutEffect(input: {
       return { effect: submitted, availableBalanceCents: await currentBalanceCents(tx, input.userId) }
     }
 
-    if (!(await hasActiveUniqueHumanNullifier(tx, input.userId, resolveRewardIdentityProvider(input.env.REWARDS_IDENTITY_PROVIDER)))) {
+    if (!(await resolveActiveSupportedRewardIdentity(tx, input.userId, Date.parse(input.nowUtc)))) {
       throw eligibilityFailed("Verify you are a unique human before cashing out rewards", {
         verification_state: "unverified",
       })
@@ -334,6 +539,13 @@ async function reserveCashoutEffect(input: {
         RETURNING ${PAYOUT_COLUMNS}
       `,
       args: [effectId, input.userId, input.amountCents, recipientAddress, input.idempotencyKey, input.nowUtc],
+    })
+    await reservePayoutAllocations({
+      tx,
+      effectId,
+      userId: input.userId,
+      amountCents: input.amountCents,
+      nowUtc: input.nowUtc,
     })
     return { effect: decodePayoutEffect(inserted.rows[0]), availableBalanceCents: balanceCents - input.amountCents }
   })
@@ -401,47 +613,86 @@ async function updateCoordinatorMirror(input: {
 }
 
 async function markPayoutConfirmed(input: { client: Client; effect: RewardPayoutEffect; txHash: string; nowUtc: string }): Promise<RewardPayoutEffect> {
-  const updated = await input.client.execute({
-    sql: `
-      UPDATE reward_payout_effects
-      SET status = 'confirmed',
-          settlement_ref = ?2,
-          failure_reason = NULL,
-          confirmed_at = ?3,
-          failed_at = NULL,
-          updated_at = ?3
-      WHERE idempotency_key = ?1
-        AND user_id = ?4
-        AND (settlement_ref IS NULL OR settlement_ref = ?2)
-      RETURNING ${PAYOUT_COLUMNS}
-    `,
-    args: [input.effect.idempotencyKey, input.txHash, input.nowUtc, input.effect.userId],
+  return await withTransaction(input.client, "write", async (tx) => {
+    const updated = await tx.execute({
+      sql: `
+        UPDATE reward_payout_effects
+        SET status = 'confirmed',
+            settlement_ref = ?2,
+            failure_reason = NULL,
+            confirmed_at = ?3,
+            failed_at = NULL,
+            updated_at = ?3
+        WHERE idempotency_key = ?1
+          AND user_id = ?4
+          AND status = 'submitted'
+          AND (settlement_ref IS NULL OR settlement_ref = ?2)
+        RETURNING ${PAYOUT_COLUMNS}
+      `,
+      args: [input.effect.idempotencyKey, input.txHash, input.nowUtc, input.effect.userId],
+    })
+    if (!updated.rows[0]) {
+      const current = await getPayoutByUserIdAndIdempotencyKey(tx, input.effect.userId, input.effect.idempotencyKey)
+      if (current) return current
+      throw conflictError("Rewards payout confirmation transaction reference mismatch")
+    }
+
+    const allocations = await tx.execute({
+      sql: `
+        UPDATE reward_payout_allocations
+        SET status = 'confirmed', confirmed_at = ?2, updated_at = ?2
+        WHERE reward_payout_effect_id = ?1 AND status = 'submitted'
+        RETURNING reward_campaign_id, amount_cents
+      `,
+      args: [input.effect.rewardPayoutEffectId, input.nowUtc],
+    })
+    for (const allocation of allocations.rows) {
+      const campaignId = stringOrNull(rowValue(allocation, "reward_campaign_id"))
+      if (!campaignId) continue
+      await tx.execute({
+        sql: `
+          UPDATE reward_campaigns
+          SET paid_cents = paid_cents + ?2, updated_at = ?3
+          WHERE reward_campaign_id = ?1
+        `,
+        args: [campaignId, requiredNumber(allocation, "amount_cents"), input.nowUtc],
+      })
+    }
+    return decodePayoutEffect(updated.rows[0])
   })
-  if (!updated.rows[0]) throw conflictError("Rewards payout confirmation transaction reference mismatch")
-  return decodePayoutEffect(updated.rows[0])
 }
 
 async function markPayoutFailed(input: { client: Client; effect: RewardPayoutEffect; reason: string; nowUtc: string }): Promise<RewardPayoutEffect> {
-  const updated = await input.client.execute({
-    sql: `
-      UPDATE reward_payout_effects
-      SET status = 'failed',
-          failure_reason = ?2,
-          failed_at = ?3,
-          updated_at = ?3
-      WHERE idempotency_key = ?1
-        AND user_id = ?4
-        AND status = 'submitted'
-      RETURNING ${PAYOUT_COLUMNS}
-    `,
-    args: [input.effect.idempotencyKey, input.reason, input.nowUtc, input.effect.userId],
+  return await withTransaction(input.client, "write", async (tx) => {
+    const updated = await tx.execute({
+      sql: `
+        UPDATE reward_payout_effects
+        SET status = 'failed',
+            failure_reason = ?2,
+            failed_at = ?3,
+            updated_at = ?3
+        WHERE idempotency_key = ?1
+          AND user_id = ?4
+          AND status = 'submitted'
+        RETURNING ${PAYOUT_COLUMNS}
+      `,
+      args: [input.effect.idempotencyKey, input.reason, input.nowUtc, input.effect.userId],
+    })
+    if (!updated.rows[0]) {
+      const current = await getPayoutByUserIdAndIdempotencyKey(tx, input.effect.userId, input.effect.idempotencyKey)
+      if (current) return current
+      throw conflictError("Rewards payout effect not found")
+    }
+    await tx.execute({
+      sql: `
+        UPDATE reward_payout_allocations
+        SET status = 'released', released_at = ?2, updated_at = ?2
+        WHERE reward_payout_effect_id = ?1 AND status = 'submitted'
+      `,
+      args: [input.effect.rewardPayoutEffectId, input.nowUtc],
+    })
+    return decodePayoutEffect(updated.rows[0])
   })
-  if (!updated.rows[0]) {
-    const current = await getPayoutByUserIdAndIdempotencyKey(input.client, input.effect.userId, input.effect.idempotencyKey)
-    if (current) return current
-    throw conflictError("Rewards payout effect not found")
-  }
-  return decodePayoutEffect(updated.rows[0])
 }
 
 async function recordPayoutAttempt(input: { client: Client; effect: RewardPayoutEffect; nowUtc: string }): Promise<RewardPayoutEffect> {
@@ -483,6 +734,10 @@ function serializeCashout(effect: RewardPayoutEffect, balanceCents: number, chai
       amount_cents: effect.amountCents,
       recipient_address: effect.recipientAddress,
       status: effect.status,
+      settlement_stage: rewardPayoutPublicStage({
+        coordinatorState: effect.coordinatorState,
+        status: effect.status,
+      }),
       settlement_ref: effect.settlementRef,
       failure_reason: effect.failureReason,
     },
@@ -497,6 +752,12 @@ async function advanceSubmittedPayout(input: {
   nowUtc: string
   confirmPollMs?: number[]
 }): Promise<RewardPayoutEffect> {
+  await ensurePayoutAllocations({
+    env: input.env,
+    client: input.client,
+    effect: input.effect,
+    nowUtc: input.nowUtc,
+  })
   const attempted = await recordPayoutAttempt({
     client: input.client,
     effect: input.effect,
@@ -504,7 +765,10 @@ async function advanceSubmittedPayout(input: {
   })
   const req = coordinatorRequest(attempted)
   let settled = await rewardsCoordinator(input.env).settle(req)
-  for (let i = 0; (settled.state === "prepared" || settled.state === "reconciliation_required") && i < MAX_RECONCILE_ATTEMPTS; i++) {
+  // A prepared transaction has not been broadcast. Its Durable Object alarm
+  // owns the retry schedule; calling reconcile() here expedites the row and
+  // defeats its persisted exponential backoff on every payout cron pass.
+  for (let i = 0; settled.state === "reconciliation_required" && i < MAX_RECONCILE_ATTEMPTS; i++) {
     settled = await rewardsCoordinator(input.env).reconcile(req)
   }
   let effect = await updateCoordinatorMirror({
@@ -530,7 +794,12 @@ async function advanceSubmittedPayout(input: {
       nowUtc: input.nowUtc,
     })
   }
-  if (!settled.txHash || settled.state === "reserving" || settled.state === "failed_preparation") {
+  if (
+    !settled.txHash
+    || settled.state === "reserving"
+    || settled.state === "prepared"
+    || settled.state === "failed_preparation"
+  ) {
     return effect
   }
 
@@ -645,34 +914,119 @@ export async function reconcileSubmittedRewardPayouts(input: {
     failed: 0,
     pending: 0,
     errors: 0,
+    capacityDeferred: 0,
+    capacityObservationStale: false,
+    overdueSongs: 0,
   }
   if (!summary.enabled) return summary
 
   const client = input.client ?? getControlPlaneClient(input.env)
   const nowUtc = input.nowUtc ?? new Date().toISOString()
   const limit = Math.max(1, Math.min(250, Math.trunc(input.limit ?? DEFAULT_PAYOUT_RECONCILE_LIMIT)))
-  const rows = await client.execute({
+  const inFlight = await client.execute({
     sql: `
       SELECT ${PAYOUT_COLUMNS}
       FROM reward_payout_effects
-      WHERE status = 'submitted'
+      WHERE status = 'submitted' AND settlement_ref IS NOT NULL
       ORDER BY updated_at ASC, reward_payout_effect_id ASC
       LIMIT ?1
     `,
     args: [limit],
   })
-
-  for (const row of rows.rows) {
-    summary.scanned += 1
-    const effect = decodePayoutEffect(row)
+  const effects: RewardPayoutEffect[] = inFlight.rows.map(decodePayoutEffect)
+  const selectedCandidates = new Map<string, Awaited<ReturnType<typeof listFairPayoutCandidates>>[number]>()
+  const remainingSlots = Math.max(0, limit - effects.length)
+  const nowMs = Date.parse(nowUtc)
+  if (remainingSlots > 0) {
+    let capacityRemaining: bigint | null = null
+    let capacityAvailable = true
     try {
-      const advanced = await advanceSubmittedPayout({
-        env: input.env,
-        client,
-        effect,
-        nowUtc,
-        confirmPollMs: input.confirmPollMs ?? [],
+      capacityRemaining = (await readFreshPayoutCapacity({ env: input.env, client, nowMs }))?.remainingAtomic ?? null
+    } catch (error) {
+      capacityAvailable = false
+      summary.capacityObservationStale = true
+      console.warn("[rewards] payout admission paused by missing or stale vault capacity", {
+        error: error instanceof Error ? error.message : String(error),
       })
+      await warnPayoutScheduler(
+        input.env,
+        "Reward payout admission is paused by missing or stale vault capacity",
+        "reward_payout_capacity_stale",
+        { capacity_observation_stale: true },
+      )
+    }
+    const candidates = await listFairPayoutCandidates({ client, scanLimit: Math.max(remainingSlots * 20, 250) })
+    const maxWaitSeconds = payoutMaxWaitSeconds(input.env)
+    const overdue = candidates
+      .map((candidate) => ({ candidate, waitSeconds: payoutWaitSeconds(candidate, nowMs) }))
+      .filter(({ waitSeconds }) => waitSeconds > maxWaitSeconds)
+      .sort((left, right) => right.waitSeconds - left.waitSeconds)
+    summary.overdueSongs = overdue.length
+    for (const { candidate, waitSeconds } of overdue.slice(0, 10)) {
+      await warnPayoutScheduler(
+        input.env,
+        "Reward payout song exceeded the fairness wait SLO",
+        `reward_payout_fairness:${candidate.communityId ?? "legacy"}:${candidate.postId ?? candidate.effectId}`,
+        {
+          community_id: candidate.communityId,
+          post_id: candidate.postId,
+          reward_payout_effect_id: candidate.effectId,
+          wait_seconds: waitSeconds,
+          max_wait_seconds: maxWaitSeconds,
+        },
+      )
+    }
+    if (capacityAvailable) {
+      for (const candidate of candidates) {
+        if (effects.length >= limit) break
+        if (capacityRemaining !== null && !fitsPayoutCapacity(candidate, capacityRemaining)) {
+          summary.capacityDeferred += 1
+          continue
+        }
+        const selected = await client.execute({
+          sql: `
+            SELECT ${PAYOUT_COLUMNS}
+            FROM reward_payout_effects
+            WHERE reward_payout_effect_id = ?1
+              AND status = 'submitted'
+              AND settlement_ref IS NULL
+              AND attempt_count < ?2
+            LIMIT 1
+          `,
+          // Receipt reconciliation above remains unbounded: once a transaction
+          // exists, the scheduler must keep observing it. Only pre-broadcast
+          // preparation is capped; an explicit idempotent user/operator replay
+          // can still retry the same effect after diagnosing the outage.
+          args: [candidate.effectId, MAX_SCHEDULED_PREPARATION_ATTEMPTS],
+        })
+        if (!selected.rows[0]) continue
+        effects.push(decodePayoutEffect(selected.rows[0]))
+        selectedCandidates.set(candidate.effectId, candidate)
+        if (capacityRemaining !== null) {
+          capacityRemaining -= BigInt(candidate.amountCents) * 10_000n
+        }
+      }
+    }
+  }
+
+  for (const effect of effects) {
+    summary.scanned += 1
+    try {
+      const selectedCandidate = selectedCandidates.get(effect.rewardPayoutEffectId)
+      let advanced: RewardPayoutEffect
+      try {
+        advanced = await advanceSubmittedPayout({
+          env: input.env,
+          client,
+          effect,
+          nowUtc,
+          confirmPollMs: input.confirmPollMs ?? [],
+        })
+      } finally {
+        if (selectedCandidate) {
+          await markSongSelected({ client, candidate: selectedCandidate, selectedAt: nowUtc })
+        }
+      }
       if (advanced.status === "confirmed") {
         summary.confirmed += 1
       } else if (advanced.status === "failed") {

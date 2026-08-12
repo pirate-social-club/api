@@ -5,6 +5,12 @@ import { openCommunityReadClient, openCommunityWriteClient } from "../lib/commun
 import { recycleCommunityJobForRetry } from "../lib/communities/jobs/store"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { getPostById } from "../lib/posts/community-post-query-store"
+import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
+import { HOME_FEED_SERVER_TIMING, listHomeFeed } from "../lib/feed/home-feed-service"
+import {
+  HOME_FEED_BENCHMARK_MAX_COMMUNITIES,
+  parseHomeFeedBenchmarkCommunityIds,
+} from "./debug-home-feed-benchmark"
 import {
   getStoryRegistrationEffect,
   type StoryRegistrationEffect,
@@ -23,8 +29,19 @@ import {
 import { getLinkEnrichmentByNormalizedUrl, listLinkEnrichmentUsages } from "../lib/posts/link-enrichment/repository"
 import { normalizeLinkUrl } from "../lib/posts/link-enrichment/url-normalization"
 import { decodePublicAssetId, decodePublicCommunityId, decodePublicJobId, decodePublicPostId } from "../lib/public-ids"
+import { isMissingRelationError } from "../lib/db-helpers"
+import { archiveCommunity } from "../lib/communities/community-lifecycle-service"
+import {
+  isMachineGeneratedStagingSmokeName,
+  isRecognizedStagingSmoke,
+} from "../lib/communities/staging-smoke-signatures"
+import { resolveCommunityShardRpc } from "../lib/communities/community-shard-registry"
 
 const debugPipeline = new Hono<AuthenticatedEnv>()
+
+const STAGING_RECLAIM_CONFIRMATION = "RECLAIM STAGING SMOKE COMMUNITIES"
+const STAGING_ARCHIVE_CONFIRMATION = "ARCHIVE STAGING SMOKE COMMUNITIES"
+const STAGING_ARCHIVE_MIN_AGE_MS = 24 * 60 * 60 * 1000
 
 function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
   const admin = authenticateAdminTokenOnly({
@@ -36,6 +53,256 @@ function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
   }
   return admin
 }
+
+debugPipeline.post("/home-feed-benchmark", async (c) => {
+  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+
+  // This operator-only staging route deliberately impersonates `user_id` so
+  // benchmarks exercise the authenticated viewer path over a fixed candidate
+  // scope. It must never be mounted as a public or production capability.
+  const body = await c.req.json().catch(() => null) as {
+    community_ids?: unknown
+    cursor?: unknown
+    locale?: unknown
+    sort?: unknown
+    user_id?: unknown
+  } | null
+  const communityIds = parseHomeFeedBenchmarkCommunityIds(body?.community_ids)
+  const userId = typeof body?.user_id === "string" ? body.user_id.trim() : ""
+  if (!communityIds || !/^usr_[A-Za-z0-9]+$/u.test(userId)) {
+    return c.json({
+      error: "invalid_home_feed_benchmark_request",
+      max_community_ids: HOME_FEED_BENCHMARK_MAX_COMMUNITIES,
+    }, 400)
+  }
+
+  const result = await listHomeFeed({
+    env: c.env,
+    userId,
+    communityIdsOverride: communityIds,
+    locale: typeof body?.locale === "string" ? body.locale : null,
+    sort: typeof body?.sort === "string" ? body.sort : null,
+    cursor: typeof body?.cursor === "string" ? body.cursor : null,
+    contentKind: "video",
+    communityRepository: getCommunityRepository(c.env),
+    userRepository: getUserRepository(c.env),
+    profileRepository: getProfileRepository(c.env),
+  })
+  const serverTiming = result[HOME_FEED_SERVER_TIMING]
+  if (serverTiming) c.header("Server-Timing", serverTiming)
+  return c.json(result, 200)
+})
+
+debugPipeline.post("/staging-d1/archive-smoke", async (c) => {
+  const adminOverride = requireDebugAdmin(c)
+  if (!adminOverride) return c.json({ error: "unauthorized" }, 401)
+  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+
+  const body = await c.req.json().catch(() => null) as {
+    community_ids?: unknown
+    confirmation?: unknown
+    apply?: unknown
+  } | null
+  const apply = body?.apply === true
+  const communityIds = Array.isArray(body?.community_ids)
+    ? [...new Set(body.community_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))]
+    : []
+  if ((apply && body?.confirmation !== STAGING_ARCHIVE_CONFIRMATION) || communityIds.length === 0 || communityIds.length > 50) {
+    return c.json({
+      error: "invalid_archive_request",
+      required_confirmation: STAGING_ARCHIVE_CONFIRMATION,
+      max_community_ids: 50,
+    }, 400)
+  }
+
+  const client = getControlPlaneClient(c.env)
+  const repository = getCommunityRepository(c.env)
+  const results: Array<Record<string, unknown>> = []
+  for (const communityId of communityIds) {
+    const selected = await client.execute({
+      sql: `
+        SELECT c.community_id, c.creator_user_id, c.display_name, c.description,
+               c.status, c.provisioning_state, c.created_at,
+               (SELECT COUNT(*) FROM community_post_projections p WHERE p.community_id = c.community_id) AS post_count,
+               (SELECT COUNT(*) FROM comment_projections p WHERE p.community_id = c.community_id) AS comment_count,
+               (SELECT COUNT(*) FROM community_membership_projections m
+                 WHERE m.community_id = c.community_id AND m.membership_state = 'member'
+                   AND m.user_id <> c.creator_user_id) AS non_owner_member_count,
+               (SELECT COUNT(*) FROM jobs j WHERE j.community_id = c.community_id
+                 AND j.status IN ('queued', 'running')) AS active_jobs
+        FROM communities c
+        WHERE c.community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    })
+    const row = selected.rows?.[0] as Record<string, unknown> | undefined
+    if (!row) {
+      results.push({ community_id: communityId, ok: false, error: "candidate_not_found" })
+      continue
+    }
+    const createdAtMs = Date.parse(String(row.created_at ?? ""))
+    const eligible = isMachineGeneratedStagingSmokeName(String(row.display_name ?? ""))
+      && row.status === "active"
+      && row.provisioning_state === "active"
+      && Number(row.post_count ?? 0) === 0
+      && Number(row.comment_count ?? 0) === 0
+      && Number(row.non_owner_member_count ?? 0) === 0
+      && Number(row.active_jobs ?? 0) === 0
+      && Number.isFinite(createdAtMs)
+      && Date.now() - createdAtMs >= STAGING_ARCHIVE_MIN_AGE_MS
+    if (!eligible) {
+      results.push({ community_id: communityId, ok: false, error: "candidate_not_inactive_machine_smoke" })
+      continue
+    }
+    if (!apply) {
+      results.push({ community_id: communityId, display_name: row.display_name, ok: true, would_archive: true })
+      continue
+    }
+    const archived = await archiveCommunity({
+      env: c.env,
+      communityRepository: repository,
+      communityId,
+      actor: {
+        authType: "admin",
+        userId: String(row.creator_user_id),
+        adminOverride,
+      },
+    })
+    results.push({ community_id: communityId, display_name: row.display_name, ok: true, status: archived.status })
+  }
+
+  const failed = results.filter((result) => result.ok !== true).length
+  return c.json({
+    ok: failed === 0,
+    dry_run: !apply,
+    archived: apply ? results.length - failed : 0,
+    eligible: results.filter((result) => result.ok === true).length,
+    failed,
+    results,
+  }, failed > 0 ? 409 : 200)
+})
+
+debugPipeline.post("/staging-d1/reclaim", async (c) => {
+  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+  if (!c.env.SHARD_ADMIN_TOKEN) {
+    return c.json({ error: "staging_reclaim_not_configured" }, 503)
+  }
+
+  const body = await c.req.json().catch(() => null) as {
+    community_ids?: unknown
+    confirmation?: unknown
+    apply?: unknown
+  } | null
+  const apply = body?.apply === true
+  const communityIds = Array.isArray(body?.community_ids)
+    ? [...new Set(body.community_ids.filter((value): value is string => typeof value === "string" && value.trim().length > 0))]
+    : []
+  if ((apply && body?.confirmation !== STAGING_RECLAIM_CONFIRMATION) || communityIds.length === 0 || communityIds.length > 50) {
+    return c.json({
+      error: "invalid_reclaim_request",
+      required_confirmation: STAGING_RECLAIM_CONFIRMATION,
+      max_community_ids: 50,
+    }, 400)
+  }
+
+  const client = getControlPlaneClient(c.env)
+  const results: Array<Record<string, unknown>> = []
+  for (const communityId of communityIds) {
+    const selected = await client.execute({
+      sql: `
+        SELECT c.community_id, c.display_name, c.description, c.status,
+               r.binding_name, r.shard_worker_id, r.provisioning_state, r.decommissioned_at
+        FROM communities c
+        INNER JOIN community_database_routing r ON r.community_id = c.community_id
+        WHERE c.community_id = ?1
+        LIMIT 1
+      `,
+      args: [communityId],
+    })
+    const row = selected.rows?.[0] as Record<string, unknown> | undefined
+    if (!row) {
+      results.push({ community_id: communityId, ok: false, error: "candidate_not_found" })
+      continue
+    }
+    if (!isRecognizedStagingSmoke(row) || !["archived", "deleted"].includes(String(row.status))) {
+      results.push({ community_id: communityId, ok: false, error: "candidate_not_archived_smoke" })
+      continue
+    }
+    const bindingName = String(row.binding_name ?? "")
+    const shard = resolveCommunityShardRpc(c.env, String(row.shard_worker_id ?? "") || null)
+    if (!apply) {
+      results.push({ community_id: communityId, binding_name: bindingName, ok: true, would_reclaim: true })
+      continue
+    }
+    const now = new Date().toISOString()
+    const poolRow = await shard.communityD1GetPoolRow({
+      adminToken: c.env.SHARD_ADMIN_TOKEN,
+      bindingName,
+    })
+    if (!poolRow.ok || poolRow.value.row?.communityId !== communityId) {
+      results.push({
+        community_id: communityId,
+        binding_name: bindingName,
+        ok: false,
+        error: poolRow.ok ? "pool_allocation_changed" : poolRow.code,
+      })
+      continue
+    }
+    const expectedPoolVersion = poolRow.value.row.version
+    await client.execute({
+      sql: `
+        UPDATE community_database_routing
+        SET provisioning_state = 'decommissioned', decommissioned_at = COALESCE(decommissioned_at, ?2),
+            updated_at = ?2
+        WHERE community_id = ?1 AND binding_name = ?3
+      `,
+      args: [communityId, now, bindingName],
+    })
+    const reclaimed = await shard.communityD1Decommission({
+      adminToken: c.env.SHARD_ADMIN_TOKEN,
+      communityId,
+      bindingName,
+      expectedPoolVersion,
+      now,
+    })
+    if (!reclaimed.ok) {
+      results.push({ community_id: communityId, binding_name: bindingName, ok: false, error: reclaimed.code })
+      continue
+    }
+    try {
+      await client.execute({
+        sql: "UPDATE community_database_bindings SET status = 'inactive', updated_at = ?2 WHERE community_id = ?1 AND status = 'active'",
+        args: [communityId, now],
+      })
+    } catch (error) {
+      if (!isMissingRelationError(error, "community_database_bindings")) throw error
+    }
+    await client.execute({
+      sql: "UPDATE communities SET status = 'deleted', updated_at = ?2 WHERE community_id = ?1",
+      args: [communityId, now],
+    })
+    results.push({
+      community_id: communityId,
+      binding_name: bindingName,
+      ok: true,
+      tables_dropped: reclaimed.value.tablesDropped,
+      released: reclaimed.value.released,
+    })
+  }
+
+  const failed = results.filter((result) => result.ok !== true).length
+  return c.json({
+    ok: failed === 0,
+    dry_run: !apply,
+    reclaimed: apply ? results.length - failed : 0,
+    eligible: results.filter((result) => result.ok === true).length,
+    failed,
+    results,
+  }, failed > 0 ? 409 : 200)
+})
 
 debugPipeline.get("/post-pipeline", async (c) => {
   if (!requireDebugAdmin(c)) {

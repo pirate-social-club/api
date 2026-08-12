@@ -14,6 +14,7 @@ import { decodePublicSongArtifactBundleId, publicCommunityId, publicPostId } fro
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { getActiveEntitlementForBuyer } from "../communities/commerce/shared"
 import { executeFirst, type DbExecutor } from "../db-helpers"
+import { requireAgeGateAccess } from "./age-gate-viewer-state"
 import type {
   Env,
   Post,
@@ -144,6 +145,19 @@ function isSectionMarker(text: string): boolean {
   return /^\[[^\]]+\]$/u.test(normalizeText(text))
 }
 
+const AD_LIB_LINE = /^(?:\([^()]*\)[\s,]*)+$/u
+
+/**
+ * Keep ad-libs in forced alignment so they continue to anchor surrounding
+ * lyric timings. Classification only controls presentation and scoring.
+ */
+function classifyLine(text: string): SongKaraokeLine["kind"] {
+  const trimmed = text.trim()
+  if (isSectionMarker(trimmed)) return "section"
+  if (AD_LIB_LINE.test(trimmed)) return "adlib"
+  return "lyric"
+}
+
 type PlayableArtifactDescriptor = {
   decentralized_storage?: unknown
   gateway_url?: unknown
@@ -266,7 +280,7 @@ function createKaraokeLine(input: {
     kind: input.kind,
     start_ms: input.startMs,
     text: input.text,
-    words: input.kind === "lyric"
+    words: input.kind !== "section"
       ? input.words?.length
         ? input.words
         : [{ end_ms: input.endMs, start_ms: input.startMs, text: input.text }]
@@ -279,7 +293,7 @@ function lineFromTimedEntry(entry: TimedTextEntry, index: number): SongKaraokeLi
     return null
   }
 
-  const kind: SongKaraokeLine["kind"] = isSectionMarker(entry.text) ? "section" : "lyric"
+  const kind = classifyLine(entry.text)
   return createKaraokeLine({
     endMs: entry.endMs,
     index,
@@ -316,7 +330,7 @@ function buildTokenStreamKaraokeLines(input: {
   const lines: SongKaraokeLine[] = []
 
   for (const sourceLine of sourceLines) {
-    const kind: SongKaraokeLine["kind"] = isSectionMarker(sourceLine) ? "section" : "lyric"
+    const kind = classifyLine(sourceLine)
 
     if (kind === "section") {
       const sectionEntry = input.entries.find((entry) => (
@@ -374,6 +388,7 @@ function buildTokenStreamKaraokeLines(input: {
 }
 
 export function buildSongKaraokeLines(input: {
+  durationMs?: number | null
   lyrics?: string | null
   timedLyrics: unknown
 }): SongKaraokeLine[] {
@@ -382,17 +397,38 @@ export function buildSongKaraokeLines(input: {
     return []
   }
 
+  let lines: SongKaraokeLine[]
   if (looksLikeTokenStream(entries)) {
     const groupedLines = buildTokenStreamKaraokeLines({
       entries,
       lyrics: input.lyrics,
     })
     if (groupedLines.length) {
-      return groupedLines
+      lines = groupedLines
+    } else {
+      lines = buildLineShapedKaraokeLines(entries)
     }
+  } else {
+    lines = buildLineShapedKaraokeLines(entries)
   }
 
-  return buildLineShapedKaraokeLines(entries)
+  const durationMs = input.durationMs
+  if (durationMs == null || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return lines
+  }
+
+  return lines
+    .filter((line) => line.start_ms < durationMs)
+    .map((line) => ({
+      ...line,
+      end_ms: Math.min(line.end_ms, durationMs),
+      words: line.words
+        .filter((word) => word.start_ms < durationMs)
+        .map((word) => ({
+          ...word,
+          end_ms: Math.max(word.start_ms, Math.min(word.end_ms, durationMs)),
+        })),
+    }))
 }
 
 async function fetchJsonRef(ref: string): Promise<unknown | null> {
@@ -431,8 +467,10 @@ async function resolveTimedLyrics(input: {
   return ref ? await fetchJsonRef(ref) : null
 }
 
-function shouldFallbackToPublicPostRead(error: unknown): boolean {
-  return error instanceof HttpError && (error.status === 401 || error.status === 403 || error.status === 404)
+export function shouldFallbackToPublicPostRead(error: unknown): boolean {
+  return error instanceof HttpError
+    && error.code !== "verification_required"
+    && (error.status === 401 || error.status === 403 || error.status === 404)
 }
 
 type KaraokePostContext = {
@@ -443,6 +481,7 @@ type KaraokePostContext = {
 
 type KaraokePost = Pick<Post,
   | "access_mode"
+  | "age_gate_policy"
   | "asset_id"
   | "author_user_id"
   | "community_id"
@@ -459,12 +498,30 @@ type KaraokePost = Pick<Post,
   karaoke_enabled: number
 }
 
+export function isSharedKaraokePayloadCacheable(
+  post: Pick<KaraokePost, "access_mode" | "age_gate_policy">,
+): boolean {
+  return post.access_mode !== "locked" && post.age_gate_policy !== "18_plus"
+}
+
+export async function requireKaraokeAgeGateAccess(input: {
+  actor?: ActorContext | AdminActorContext | null
+  postAgeGatePolicy: Post["age_gate_policy"]
+  userRepository: UserRepository
+}): Promise<void> {
+  await requireAgeGateAccess({
+    postAgeGatePolicy: input.postAgeGatePolicy,
+    userId: input.actor?.userId,
+    userRepository: input.userRepository,
+  })
+}
+
 async function getKaraokePostById(executor: DbExecutor, postId: string): Promise<KaraokePost | null> {
   const row = await executeFirst(executor, {
     sql: `
       SELECT post_id, community_id, author_user_id, post_type, status,
              visibility, title, lyrics, song_artifact_bundle_id, song_cover_art_ref, song_title,
-             access_mode, asset_id,
+             access_mode, age_gate_policy, asset_id,
              (
                SELECT karaoke_enabled
                FROM communities
@@ -481,6 +538,7 @@ async function getKaraokePostById(executor: DbExecutor, postId: string): Promise
   return row
     ? {
         access_mode: stringValue(row.access_mode) as Post["access_mode"],
+        age_gate_policy: stringValue(row.age_gate_policy) as Post["age_gate_policy"],
         asset_id: stringValue(row.asset_id),
         author_user_id: stringValue(row.author_user_id),
         community_id: stringValue(row.community_id) ?? "",
@@ -529,6 +587,11 @@ async function loadAccessibleKaraokePost(input: {
         if (post.status !== "published" && !canReadNonPublishedPost(post, membership, actor.userId)) {
           throw notFoundError("Post not found")
         }
+        await requireKaraokeAgeGateAccess({
+          actor,
+          postAgeGatePolicy: post.age_gate_policy,
+          userRepository: input.userRepository,
+        })
         return {
           karaokeEnabled: post.karaoke_enabled === 1,
           post,
@@ -545,6 +608,11 @@ async function loadAccessibleKaraokePost(input: {
     if (!isPubliclyReadablePost(post)) {
       throw notFoundError("Post not found")
     }
+    await requireKaraokeAgeGateAccess({
+      actor,
+      postAgeGatePolicy: post.age_gate_policy,
+      userRepository: input.userRepository,
+    })
 
     return {
       karaokeEnabled: post.karaoke_enabled === 1,
@@ -682,7 +750,12 @@ export async function getPostKaraokePayload(input: {
   if (!rawLines.length) {
     throw notFoundError("Karaoke is not available")
   }
+  const durationMs = Number.isFinite(bundle.primary_audio.duration_ms)
+    && Number(bundle.primary_audio.duration_ms) > 0
+    ? Math.round(Number(bundle.primary_audio.duration_ms))
+    : null
   const karaokeLines = timedKaraokeSyncStep(input, "karaoke_lines", () => buildSongKaraokeLines({
+      durationMs,
       lyrics: post.lyrics,
       timedLyrics,
     }))
@@ -700,6 +773,7 @@ export async function getPostKaraokePayload(input: {
     title: bundle.title || post.song_title || post.title || null,
     artwork_src: artworkSrc,
     instrumental_audio_url: instrumentalAudioUrl,
+    duration_ms: durationMs,
     karaoke_lines: karaokeLines,
     raw_lines: rawLines,
   }
@@ -734,6 +808,7 @@ export async function inspectKaraokeRewardEligibility(input: {
 }
 
 export async function loadPublicPostKaraokePayloadCacheContext(input: {
+  actor?: ActorContext | AdminActorContext | null
   communityId: string
   communityRepository: PostReadCommunityRepository
   env: Env
@@ -743,7 +818,6 @@ export async function loadPublicPostKaraokePayloadCacheContext(input: {
 }): Promise<{ cacheable: boolean; postContext: KaraokePostContext }> {
   const postContext = await timedKaraokeStep(input, "cache_post", () => loadAccessiblePost({
     ...input,
-    actor: null,
   }))
   const post = postContext.post
   if (post.community_id !== input.communityId) {
@@ -759,7 +833,7 @@ export async function loadPublicPostKaraokePayloadCacheContext(input: {
     throw notFoundError("Karaoke is not available")
   }
   return {
-    cacheable: post.access_mode !== "locked",
+    cacheable: isSharedKaraokePayloadCacheable(post),
     postContext,
   }
 }

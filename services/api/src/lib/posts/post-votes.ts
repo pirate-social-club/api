@@ -6,6 +6,11 @@ import type {
 } from "../communities/db-community-repository"
 import { enforceCommunityActionGate } from "../communities/membership/eligibility-service"
 import { canAccessCommunity, getCommunityMembershipState } from "../communities/membership/membership-state-store"
+import {
+  allowsNonMemberPowParticipation,
+  followCommunityAfterParticipation,
+  type ParticipationFollowRepository,
+} from "../communities/membership/open-participation"
 import { badRequestError, membershipRequired, notFoundError } from "../errors"
 import { nowIso } from "../helpers"
 import type { Env } from "../../env"
@@ -13,27 +18,32 @@ import type { UserRepository } from "../auth/repositories"
 import { publicPostId } from "../public-ids"
 import type { AltchaProofInput } from "../verification/altcha-provider"
 import { getPostById } from "./community-post-query-store"
-import { upsertPostVote } from "./community-post-vote-store"
+import { deletePostVote, upsertPostVote } from "./community-post-vote-store"
 import { syncPostProjectionMetrics } from "./post-projection-sync"
 
 type PostVoteCommunityRepository =
   & CommunityReadRepository
   & CommunityDatabaseBindingRepository
+  & ParticipationFollowRepository
   & Pick<
     CommunityPostProjectionRepository,
     "getCommunityPostProjectionByPostId" | "updateCommunityPostProjectionMetrics"
   >
 
-export async function castPostVote(input: {
+type MutatePostVoteInput = {
   env: Env
   userId: string
   postId: string
-  value: -1 | 1
+  value: -1 | 1 | null
   bypassVoterAccessChecks?: boolean
   altchaProof?: AltchaProofInput
   userRepository: UserRepository
   communityRepository: PostVoteCommunityRepository
-}): Promise<{ post: string; value: -1 | 1 }> {
+}
+
+async function mutatePostVote<const Value extends -1 | 1 | null>(
+  input: Omit<MutatePostVoteInput, "value"> & { value: Value },
+): Promise<{ post: string; value: Value }> {
   const projection = await input.communityRepository.getCommunityPostProjectionByPostId(input.postId)
   if (!projection) {
     throw notFoundError("Post not found")
@@ -41,6 +51,7 @@ export async function castPostVote(input: {
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, projection.community_id)
   try {
+    let nonMemberPowVoter = false
     if (!input.bypassVoterAccessChecks) {
       const membership = await getCommunityMembershipState(
         db.client,
@@ -48,9 +59,18 @@ export async function castPostVote(input: {
         input.userId,
       )
       if (!canAccessCommunity(membership)) {
-        throw membershipRequired("Join this community to vote", {
-          reason: "membership_required",
+        // PoW-only communities admit non-member votes: the action gate below
+        // demands a vote-scoped ALTCHA proof, which is all joining would prove.
+        nonMemberPowVoter = await allowsNonMemberPowParticipation({
+          client: db.client,
+          communityId: projection.community_id,
+          membership,
         })
+        if (!nonMemberPowVoter) {
+          throw membershipRequired("Join this community to vote", {
+            reason: "membership_required",
+          })
+        }
       }
       await enforceCommunityActionGate({
         env: input.env,
@@ -71,25 +91,53 @@ export async function castPostVote(input: {
     }
 
     const now = nowIso()
-    const vote = await upsertPostVote({
-      client: db.client,
-      postId: input.postId,
-      communityId: projection.community_id,
-      userId: input.userId,
-      value: input.value,
-      now,
-    })
+    if (input.value === null) {
+      await deletePostVote({
+        client: db.client,
+        postId: input.postId,
+        userId: input.userId,
+      })
+    } else {
+      await upsertPostVote({
+        client: db.client,
+        postId: input.postId,
+        communityId: projection.community_id,
+        userId: input.userId,
+        value: input.value,
+        now,
+      })
+    }
     await syncPostProjectionMetrics({
       executor: db.client,
       communityRepository: input.communityRepository,
       postId: input.postId,
       updatedAt: now,
     })
+    if (nonMemberPowVoter && input.value !== null) {
+      await followCommunityAfterParticipation({
+        client: db.client,
+        communityRepository: input.communityRepository,
+        communityId: projection.community_id,
+        userId: input.userId,
+      })
+    }
     return {
-      post: publicPostId(vote.post_id),
-      value: vote.value,
+      post: publicPostId(input.postId),
+      value: input.value,
     }
   } finally {
     db.close()
   }
+}
+
+export function castPostVote(
+  input: Omit<MutatePostVoteInput, "value"> & { value: -1 | 1 },
+): Promise<{ post: string; value: -1 | 1 }> {
+  return mutatePostVote(input)
+}
+
+export function clearPostVote(
+  input: Omit<MutatePostVoteInput, "value">,
+): Promise<{ post: string; value: null }> {
+  return mutatePostVote({ ...input, value: null })
 }

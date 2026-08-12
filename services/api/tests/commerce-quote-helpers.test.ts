@@ -47,8 +47,8 @@ describe("resolveBestVerifiedRegionalPrice", () => {
       listing: createListing(),
       pricingPolicy: createPricingPolicy(),
     })).toEqual({
-      bestVerifiedPriceUsd: 5,
-      maxSelfDiscountPercent: 50,
+      bestVerifiedPriceCents: 500,
+      maxSelfDiscountBps: 5000,
       verificationRequiredProvider: "self",
     })
   })
@@ -58,8 +58,8 @@ describe("resolveBestVerifiedRegionalPrice", () => {
       listing: createListing({ regional_pricing_enabled: false }),
       pricingPolicy: createPricingPolicy(),
     })).toEqual({
-      bestVerifiedPriceUsd: null,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: null,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: null,
     })
   })
@@ -75,8 +75,8 @@ describe("resolveBestVerifiedRegionalPrice", () => {
         country_assignments: [],
       }),
     })).toEqual({
-      bestVerifiedPriceUsd: 10,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: 1000,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: "self",
     })
   })
@@ -89,8 +89,8 @@ describe("resolveBestVerifiedRegionalPrice", () => {
         country_assignments: [],
       }),
     })).toEqual({
-      bestVerifiedPriceUsd: null,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: null,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: null,
     })
   })
@@ -100,8 +100,8 @@ describe("resolveBestVerifiedRegionalPrice", () => {
       listing: createListing({ price_cents: 0 }),
       pricingPolicy: createPricingPolicy(),
     })).toEqual({
-      bestVerifiedPriceUsd: null,
-      maxSelfDiscountPercent: null,
+      bestVerifiedPriceCents: null,
+      maxSelfDiscountBps: null,
       verificationRequiredProvider: null,
     })
   })
@@ -111,8 +111,8 @@ describe("resolveBestVerifiedRegionalPrice", () => {
       listing: createListing(),
       pricingPolicy: createPricingPolicy({ verification_provider_requirement: null }),
     })).toEqual({
-      bestVerifiedPriceUsd: 5,
-      maxSelfDiscountPercent: 50,
+      bestVerifiedPriceCents: 500,
+      maxSelfDiscountBps: 5000,
       verificationRequiredProvider: "self",
     })
   })

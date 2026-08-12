@@ -3,6 +3,7 @@ import { Hono } from "hono"
 
 import type { Env } from "../../src/env"
 import type { AuthenticatedEnv } from "../../src/lib/auth-middleware"
+import { InvalidBookingListCursorError } from "../../src/lib/bookings/booking-read-service"
 import { errorResponse } from "../../src/lib/errors"
 import bookings, {
   setGlobalBookingRouteServicesForTests,
@@ -75,6 +76,8 @@ let availabilityResult: unknown
 let createHoldResult: unknown
 let quoteResult: unknown
 let confirmResult: unknown
+let paymentSubmittedResult: unknown
+let pendingPaymentIntentsResult: unknown
 let getBookingResult: unknown
 let cancelResult: unknown
 let cancellationPreviewResult: unknown
@@ -91,6 +94,8 @@ const calls: Record<string, unknown[]> = {
   createHold: [],
   quote: [],
   confirm: [],
+  paymentSubmitted: [],
+  pendingPaymentIntents: [],
   getBooking: [],
   cancel: [],
   cancellationPreview: [],
@@ -155,6 +160,22 @@ function resetMocks(): void {
     },
   }
   confirmResult = { ok: true, already: false, booking: bookingSnapshot }
+  paymentSubmittedResult = { ok: true, paymentIntentId: "bpi_hld_route", normalizedTxRef: "0xfunding" }
+  pendingPaymentIntentsResult = [{
+    hold_id: "hld_route",
+    payment_intent_id: "bpi_hld_route",
+    intent_status: "verifying",
+    resume_state: "confirmable",
+    claimed_tx_ref: "0xfunding",
+    wallet_attachment_id: "wal_route",
+    payment: quoteResult && (quoteResult as { quote: { payment: unknown } }).quote.payment,
+    quote_expires_at: "2026-07-01T09:10:00.000Z",
+    hold_expires_at: "2026-07-01T09:10:00.000Z",
+    host_user_id: "host_route",
+    slot_start_utc: "2026-07-01T10:00:00.000Z",
+    slot_end_utc: "2026-07-01T10:30:00.000Z",
+    booking_id: null,
+  }]
   getBookingResult = bookingView
   cancelResult = { ok: true, already: false, cancelledBy: "booker", booking: lifecycleSnapshot }
   cancellationPreviewResult = {
@@ -204,7 +225,8 @@ function routeServices(): GlobalBookingRouteServices {
     },
     listGlobalBookingsForUser: async (input: unknown) => {
       calls.listBookings.push(input)
-      return [bookingView]
+      if ((input as { cursor?: string | null }).cursor === "invalid") throw new InvalidBookingListCursorError()
+      return { object: "list", data: [bookingView], has_more: true, next_cursor: "next_route" }
     },
     createGlobalBookingHold: async (input: unknown) => {
       calls.createHold.push(input)
@@ -217,6 +239,14 @@ function routeServices(): GlobalBookingRouteServices {
     confirmGlobalBookingHold: async (input: unknown) => {
       calls.confirm.push(input)
       return confirmResult
+    },
+    recordBookingPaymentSubmitted: async (input: unknown) => {
+      calls.paymentSubmitted.push(input)
+      return paymentSubmittedResult
+    },
+    listPendingBookingPaymentIntents: async (input: unknown) => {
+      calls.pendingPaymentIntents.push(input)
+      return pendingPaymentIntentsResult
     },
     quoteGlobalBookingHold: async (input: unknown) => {
       calls.quote.push(input)
@@ -305,13 +335,13 @@ describe("/bookings routes", () => {
   test("lists bookings with normalized role, statuses, and source community filters", async () => {
     const app = loadApp()
     const res = await app.request(
-      "http://pirate.test/bookings?role=host&status=confirmed, live,,&source_community_id=cmt_source",
+      "http://pirate.test/bookings?role=host&status=confirmed, live,,&source_community_id=cmt_source&limit=25&cursor=cursor_route",
       { headers: adminHeaders() },
       env(),
     )
 
     expect(res.status).toBe(200)
-    expect(await json(res)).toMatchObject({ object: "list", data: [bookingView], has_more: false })
+    expect(await json(res)).toMatchObject({ object: "list", data: [bookingView], has_more: true, next_cursor: "next_route" })
     expect(calls.listBookings).toHaveLength(1)
     expect(calls.listBookings[0]).toMatchObject({
       executor: dummyExecutor,
@@ -319,25 +349,37 @@ describe("/bookings routes", () => {
       role: "host",
       sourceCommunityId: "cmt_source",
       statuses: ["confirmed", "live"],
+      limit: 25,
+      cursor: "cursor_route",
     })
   })
 
-  test("resolves slots through the canonical host route and compatibility alias", async () => {
+  test("rejects an invalid booking list limit", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings?limit=101", { headers: adminHeaders() }, env())
+
+    expect(res.status).toBe(400)
+    expect(await json(res)).toEqual({ error: "invalid_limit" })
+    expect(calls.listBookings).toHaveLength(0)
+  })
+
+  test("rejects an invalid booking list cursor", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings?cursor=invalid", { headers: adminHeaders() }, env())
+
+    expect(res.status).toBe(400)
+    expect(await json(res)).toEqual({ error: "invalid_cursor" })
+  })
+
+  test("resolves slots through the canonical host route", async () => {
     const app = loadApp()
     const first = await app.request(
       "http://pirate.test/bookings/hosts/host_route/slots?from=2026-07-01T10:00:00.000Z&to=2026-07-01T12:00:00.000Z&tz=America/New_York",
       { headers: adminHeaders() },
       env(),
     )
-    const alias = await app.request(
-      "http://pirate.test/bookings/booking-hosts/host_route/slots?from=2026-07-01T10:00:00.000Z&to=2026-07-01T12:00:00.000Z&tz=America/New_York",
-      { headers: adminHeaders() },
-      env(),
-    )
-
     expect(first.status).toBe(200)
-    expect(alias.status).toBe(200)
-    expect(calls.availability).toHaveLength(2)
+    expect(calls.availability).toHaveLength(1)
     expect(calls.availability[0]).toMatchObject({
       executor: dummyExecutor,
       hostUserId: "host_route",
@@ -452,7 +494,7 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "hold_not_found" })
 
     quoteResult = { ok: false, reason: "hold_expired" }
-    const expired = await app.request("http://pirate.test/bookings/booking-holds/hld_route/quote", {
+    const expired = await app.request("http://pirate.test/bookings/holds/hld_route/quote", {
       method: "POST",
       headers: adminHeaders({ "content-type": "application/json" }),
       body: "{}",
@@ -485,6 +527,61 @@ describe("/bookings routes", () => {
     })
   })
 
+  test("records submitted payment claims and preserves hidden-hold authorization", async () => {
+    const app = loadApp()
+    const unauth = await app.request("http://pirate.test/bookings/holds/hld_route/payment-submitted", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tx_ref: "0xfunding", wallet_attachment_id: "wal_route" }),
+    }, env())
+    expect(unauth.status).toBe(401)
+
+    const recorded = await app.request("http://pirate.test/bookings/holds/hld_route/payment-submitted", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ tx_ref: " 0xFUNDING ", wallet_attachment_id: "wal_route" }),
+    }, env())
+    expect(recorded.status).toBe(200)
+    expect(await json(recorded)).toMatchObject({
+      payment_intent_id: "bpi_hld_route",
+      status: "recorded",
+      claimed_tx_ref: "0xfunding",
+    })
+    expect(calls.paymentSubmitted[0]).toMatchObject({
+      executor: dummyExecutor,
+      userRepository: dummyUserRepository,
+      holdId: "hld_route",
+      bookerUserId: "actor_route",
+      txRef: " 0xFUNDING ",
+      walletAttachmentId: "wal_route",
+    })
+
+    paymentSubmittedResult = { ok: false, reason: "hold_not_found" }
+    const hidden = await app.request("http://pirate.test/bookings/holds/hld_foreign/payment-submitted", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify({ tx_ref: "0xother", wallet_attachment_id: "wal_route" }),
+    }, env())
+    expect(hidden.status).toBe(404)
+  })
+
+  test("lists only the authenticated booker's server-computed resume views", async () => {
+    const app = loadApp()
+    const res = await app.request("http://pirate.test/bookings/payment-intents/pending", {
+      headers: adminHeaders(),
+    }, env())
+    expect(res.status).toBe(200)
+    expect(await json(res)).toMatchObject({
+      object: "list",
+      data: [{ hold_id: "hld_route", resume_state: "confirmable", claimed_tx_ref: "0xfunding" }],
+      has_more: false,
+    })
+    expect(calls.pendingPaymentIntents[0]).toMatchObject({
+      executor: dummyExecutor,
+      bookerUserId: "actor_route",
+    })
+  })
+
   test("reads booking details and maps hidden bookings to 404", async () => {
     const app = loadApp()
     const found = await app.request("http://pirate.test/bookings/bkg_route", {
@@ -501,7 +598,7 @@ describe("/bookings routes", () => {
     expect(await json(missing)).toMatchObject({ error: "not_found" })
   })
 
-  test("returns authoritative cancellation terms and accepts protected or legacy cancellation", async () => {
+  test("returns authoritative cancellation terms and requires the previewed refund to cancel", async () => {
     const app = loadApp()
     const preview = await app.request("http://pirate.test/bookings/bkg_route/cancellation-preview", {
       headers: adminHeaders(),
@@ -509,13 +606,20 @@ describe("/bookings routes", () => {
     expect(preview.status).toBe(200)
     expect(await json(preview)).toMatchObject({ refund_cents: 5000, host_payout_cents: 0 })
 
-    const legacy = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+    const missing = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
       method: "POST",
       headers: adminHeaders({ "content-type": "application/json" }),
       body: "{}",
     }, env())
-    expect(legacy.status).toBe(200)
-    expect(calls.cancel[0]).toMatchObject({ expectedRefundCents: undefined })
+    expect(missing.status).toBe(400)
+    expect(calls.cancel).toEqual([])
+
+    const bodyless = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
+      method: "POST",
+      headers: adminHeaders({ "content-type": "application/json" }),
+    }, env())
+    expect(bodyless.status).toBe(400)
+    expect(calls.cancel).toEqual([])
 
     const cancelled = await app.request("http://pirate.test/bookings/bkg_route/cancel", {
       method: "POST",
@@ -523,7 +627,7 @@ describe("/bookings routes", () => {
       body: JSON.stringify({ expected_refund_cents: 5000 }),
     }, env())
     expect(cancelled.status).toBe(200)
-    expect(calls.cancel[1]).toMatchObject({
+    expect(calls.cancel[0]).toMatchObject({
       executor: dummyExecutor,
       bookingId: "bkg_route",
       actorUserId: "actor_route",
@@ -543,6 +647,34 @@ describe("/bookings routes", () => {
       body: "{",
     }, env())
     expect(invalidJson.status).toBe(400)
+  })
+
+  test("does not mount retired booking-hosts and booking-holds aliases", async () => {
+    const app = loadApp()
+    const requests = [
+      app.request("http://pirate.test/bookings/booking-hosts/host_route/slots", {
+        headers: adminHeaders(),
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-hosts/host_route/holds", {
+        method: "POST",
+        headers: adminHeaders({ "content-type": "application/json" }),
+        body: "{}",
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-holds/hld_route/quote", {
+        method: "POST",
+        headers: adminHeaders(),
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-holds/hld_route/confirm", {
+        method: "POST",
+        headers: adminHeaders(),
+      }, env()),
+      app.request("http://pirate.test/bookings/booking-holds/hld_route/payment-submitted", {
+        method: "POST",
+        headers: adminHeaders(),
+      }, env()),
+    ]
+
+    expect((await Promise.all(requests)).map((response) => response.status)).toEqual([404, 404, 404, 404, 404])
   })
 
   test("returns refreshed cancellation terms when the policy boundary changed", async () => {
