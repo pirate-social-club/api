@@ -1,7 +1,8 @@
 import { Hono, type Context } from "hono"
 
 import type { Env } from "../env"
-import { authenticateAdminTokenOnly } from "../lib/auth-middleware"
+import { authenticateAdminAccessOnly } from "../lib/auth-middleware"
+import { ADMIN_OPERATIONS_MANAGE_SCOPE } from "../lib/operator-credential-auth"
 import { authError, badRequestError, providerUnavailable } from "../lib/errors"
 import {
   hnsWalletOriginAuthorityStub,
@@ -43,10 +44,12 @@ async function body(c: HnsWalletOriginOpsContext): Promise<Record<string, unknow
   }
 }
 
-function requireOpsAdmin(c: HnsWalletOriginOpsContext): void {
-  const actor = authenticateAdminTokenOnly({
+async function requireOpsAdmin(c: HnsWalletOriginOpsContext): Promise<void> {
+  const actor = await authenticateAdminAccessOnly({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
+    requiredScope: ADMIN_OPERATIONS_MANAGE_SCOPE,
   })
   if (!actor) throw authError("Authentication failed")
 }
@@ -96,7 +99,7 @@ async function prepareDisabledProjection(input: {
 }
 
 routes.get("/:rootLabel", async (c) => {
-  requireOpsAdmin(c)
+  await requireOpsAdmin(c)
   const state = await readHnsWalletOriginAuthority(
     getControlPlaneClient(c.env),
     c.req.param("rootLabel"),
@@ -105,7 +108,7 @@ routes.get("/:rootLabel", async (c) => {
 })
 
 routes.post("/:rootLabel/registrations", async (c) => {
-  requireOpsAdmin(c)
+  await requireOpsAdmin(c)
   const request = await body(c)
   const state = await registerHnsWalletOrigin({
     executor: getControlPlaneClient(c.env),
@@ -119,7 +122,7 @@ routes.post("/:rootLabel/registrations", async (c) => {
 })
 
 routes.post("/:rootLabel/revocations", async (c) => {
-  requireOpsAdmin(c)
+  await requireOpsAdmin(c)
   const request = await body(c)
   const operatorActorId = actorId(request)
   const client = getControlPlaneClient(c.env)
@@ -160,7 +163,7 @@ routes.post("/:rootLabel/revocations", async (c) => {
 })
 
 routes.post("/:rootLabel/hard-denials", async (c) => {
-  requireOpsAdmin(c)
+  await requireOpsAdmin(c)
   const request = await body(c)
   const client = getControlPlaneClient(c.env)
   const rootLabel = c.req.param("rootLabel")

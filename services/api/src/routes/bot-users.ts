@@ -1,5 +1,6 @@
 import { Hono } from "hono"
-import { authenticateAdminTokenOnly } from "../lib/auth-middleware"
+import { authenticateAdminAccessOnly } from "../lib/auth-middleware"
+import { ADMIN_USERS_MANAGE_SCOPE } from "../lib/operator-credential-auth"
 import { loadSnapshot } from "../lib/auth/auth-db-user-queries"
 import { normalizeDesiredGlobalHandleLabel, isReservedGlobalHandleLabel } from "../lib/auth/global-handle-policy"
 import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
@@ -21,10 +22,12 @@ const botUsers = new Hono<{ Bindings: Env }>()
 
 const EVM_ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/
 
-function requireAdmin(c: { env: Env; req: { header: (name: string) => string | undefined } }) {
-  const admin = authenticateAdminTokenOnly({
+async function requireAdmin(c: { env: Env; req: { header: (name: string) => string | undefined } }) {
+  const admin = await authenticateAdminAccessOnly({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
+    requiredScope: ADMIN_USERS_MANAGE_SCOPE,
   })
   if (!admin) {
     throw authError("Authentication failed")
@@ -40,7 +43,7 @@ function requireWalletAddress(value: unknown): `0x${string}` {
 }
 
 botUsers.post("/provision", async (c) => {
-  const admin = requireAdmin(c)
+  const admin = await requireAdmin(c)
   const body = await c.req.json<{
     handle?: unknown
     display_name?: unknown
@@ -322,7 +325,7 @@ async function mintBotTokenResponse(input: {
 }
 
 botUsers.post("/handle/:handle/token", async (c) => {
-  const admin = requireAdmin(c)
+  const admin = await requireAdmin(c)
   const requestedHandle = normalizeDesiredGlobalHandleLabel(c.req.param("handle"))
   const client = getControlPlaneClient(c.env)
   const result = await client.execute({
@@ -352,7 +355,7 @@ botUsers.post("/handle/:handle/token", async (c) => {
 })
 
 botUsers.post("/:userId/token", async (c) => {
-  const admin = requireAdmin(c)
+  const admin = await requireAdmin(c)
   const userId = c.req.param("userId").trim()
   if (!userId) {
     throw badRequestError("Invalid user id")

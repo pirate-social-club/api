@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import {
   authenticateOperatorCredential,
+  ADMIN_USERS_ACT_AS_SCOPE,
+  ADMIN_USERS_MANAGE_SCOPE,
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   hashOperatorCredentialSecret,
   requireOperatorScope,
@@ -9,7 +11,7 @@ import {
   REWARD_SETTLEMENT_RESOLVE_SCOPE,
   type OperatorActorContext,
 } from "./operator-credential-auth"
-import { authenticateAdminToken } from "./auth-middleware"
+import { authenticateAdminAccess, authenticateAdminAccessOnly, authenticateAdminToken } from "./auth-middleware"
 import { createControlPlaneTestClient, resetRuntimeCaches } from "../../tests/helpers"
 import type { Client } from "./sql-client"
 import type { Env } from "../env"
@@ -137,6 +139,47 @@ describe("authenticateOperatorCredential", () => {
       scopes: [BOOKING_SETTLEMENT_RESOLVE_SCOPE],
     })
     expect(await lastUsedAt(client)).toBe("2026-06-29T00:00:00.000Z")
+  })
+
+  test("accepts explicit admin scopes and attributes impersonation to the operator actor", async () => {
+    const { client, env } = await setup()
+    await seedCredential(client, {
+      scopesJson: JSON.stringify([ADMIN_USERS_ACT_AS_SCOPE, ADMIN_USERS_MANAGE_SCOPE]),
+      expiresAt: "2027-07-28T00:00:00.000Z",
+    })
+
+    const actor = await authenticateAdminAccess({
+      env,
+      authorization: `Operator opc_seed.${SECRET}`,
+      legacyToken: undefined,
+      asUserId: "usr_target",
+    })
+    expect(actor).toEqual({
+      userId: "usr_target",
+      authType: "admin",
+      adminOverride: {
+        adminActorId: "svc_settlement_operator",
+        scope: ADMIN_USERS_ACT_AS_SCOPE,
+      },
+    })
+
+    await expect(authenticateAdminAccessOnly({
+      env,
+      authorization: `Operator opc_seed.${SECRET}`,
+      legacyToken: undefined,
+      requiredScope: ADMIN_USERS_MANAGE_SCOPE,
+    })).resolves.toMatchObject({ adminActorId: "svc_settlement_operator" })
+  })
+
+  test("rejects an operator credential without the requested admin scope", async () => {
+    const { client, env } = await setup()
+    await seedCredential(client, { expiresAt: "2027-07-28T00:00:00.000Z" })
+    await expect(authenticateAdminAccessOnly({
+      env,
+      authorization: `Operator opc_seed.${SECRET}`,
+      legacyToken: undefined,
+      requiredScope: ADMIN_USERS_MANAGE_SCOPE,
+    })).rejects.toMatchObject({ status: 403, code: "eligibility_failed" })
   })
 
   test("authenticates when the best-effort last_used_at touch fails", async () => {

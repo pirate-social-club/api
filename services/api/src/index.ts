@@ -177,7 +177,8 @@ import { realChain as operatorRealChain } from "./lib/communities/bookings/opera
 import type { Env } from "./env"
 import publicReadApp from "./routes/public-read-app"
 import { apiErrorHandler } from "./routes/api-error-handler"
-import { authenticateAdminTokenOnly } from "./lib/auth-middleware"
+import { authenticateAdminAccessOnly } from "./lib/auth-middleware"
+import { ADMIN_DEBUG_ACCESS_SCOPE } from "./lib/operator-credential-auth"
 import {
   REQUEST_ID_HEADER,
   requestCorrelationMiddleware,
@@ -855,9 +856,11 @@ app.post("/__debug/ops-alert", async (c) => {
   if (c.env.ENVIRONMENT === "production") {
     return c.json({ error: "not_found" }, 404)
   }
-  const admin = authenticateAdminTokenOnly({
+  const admin = await authenticateAdminAccessOnly({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
+    requiredScope: ADMIN_DEBUG_ACCESS_SCOPE,
   })
   if (!admin) {
     return c.json({ error: "unauthorized" }, 401)
