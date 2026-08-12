@@ -1,5 +1,6 @@
+import { requireControlPlaneDbUrl } from "../auth/auth-db-query-helpers"
 import { getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
-import { requiredNumber, requiredString } from "../sql-row"
+import { numberOrNull, requiredNumber, requiredString } from "../sql-row"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import { resolveAgeGateViewerState } from "../posts/age-gate-viewer-state"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
@@ -219,7 +220,7 @@ function toHomeFeedProjectionRow(row: unknown): HomeFeedProjectionRow {
     downvote_count: requiredNumber(row, "downvote_count"),
     comment_count: requiredNumber(row, "comment_count"),
     like_count: requiredNumber(row, "like_count"),
-    feed_sort_key: typeof record.feed_sort_key === "number" ? record.feed_sort_key : null,
+    feed_sort_key: numberOrNull(record.feed_sort_key),
     post_type: typeof record.post_type === "string"
       ? record.post_type as HomeFeedProjectionRow["post_type"]
       : undefined,
@@ -719,7 +720,8 @@ export function homeFeedBestRankSql(input: {
     : `MAX(0.0, ${elapsedHours})`
   const age = `((${nonNegativeAge}) + 2.0)`
   const magnitudeSquared = `((${numerator}) * (${numerator}) / ((${age}) * (${age}) * (${age})))`
-  return `(CASE WHEN ${numerator} < 0 THEN -${magnitudeSquared} ELSE ${magnitudeSquared} END)`
+  const rank = `(CASE WHEN ${numerator} < 0 THEN -${magnitudeSquared} ELSE ${magnitudeSquared} END)`
+  return input.postgres ? `CAST(${rank} AS DOUBLE PRECISION)` : rank
 }
 
 function projectionVisibilitySql(input: {
@@ -775,7 +777,7 @@ export async function listHomeFeedProjectionPage(input: {
     return homeFeedBestRankSql({
       engagementScore,
       rankedAtPlaceholder: `?${rankedAtIndex}`,
-      postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+      postgres: isPostgresControlPlaneUrl(requireControlPlaneDbUrl(input.env)),
     })
   })()
   const keyExpr = input.sort === "top" ? engagementScore : bestRankSql

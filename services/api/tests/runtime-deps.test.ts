@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import {
   getControlPlaneClient,
+  isPostgresControlPlaneUrl,
   postgresifySql,
   resolveControlPlanePostgresConnectionString,
   setControlPlanePostgresPoolFactoryForTests,
@@ -12,6 +13,14 @@ const POSTGRES_TEST_ENV = {
   CONTROL_PLANE_DATABASE_URL: "postgres://runtime-deadline.test/control",
   ENVIRONMENT: "test",
 } as unknown as Env
+
+describe("isPostgresControlPlaneUrl", () => {
+  test("normalizes whitespace and scheme casing", () => {
+    expect(isPostgresControlPlaneUrl("  POSTGRES://db.test/control  ")).toBe(true)
+    expect(isPostgresControlPlaneUrl("PostgreSQL://db.test/control")).toBe(true)
+    expect(isPostgresControlPlaneUrl("libsql://db.test/control")).toBe(false)
+  })
+})
 
 type TestPostgresPool = ReturnType<
   NonNullable<Parameters<typeof setControlPlanePostgresPoolFactoryForTests>[0]>

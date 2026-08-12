@@ -609,6 +609,8 @@ describe("listHomeFeedProjectionPage", () => {
       rankedAtPlaceholder: "?1",
       postgres: true,
     })
+    expect(postgres).toStartWith("CAST(")
+    expect(postgres).toEndWith(" AS DOUBLE PRECISION)")
     expect(postgres).toContain("GREATEST(0.0")
     expect(postgres).toContain("EXTRACT(EPOCH FROM (?1::timestamptz - source_created_at::timestamptz))")
     expect(postgres).not.toContain("julianday")
@@ -622,6 +624,7 @@ describe("listHomeFeedProjectionPage", () => {
     expect(sqlite).toContain("MAX(0.0")
     expect(sqlite).toContain("julianday(?1)")
     expect(sqlite).not.toContain("EXTRACT(EPOCH")
+    expect(sqlite).not.toContain("DOUBLE PRECISION")
   })
 
   async function setupProjectionRows(rows: Array<{
