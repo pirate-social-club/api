@@ -322,6 +322,12 @@ kill switch; outside local/test the default is async when unset.
 Before promoting to production, run the staging real-file timing harness and
 review `docs/runbooks/async-locked-delivery.md`.
 
+### Rewards Money Paths
+
+For reward campaign funding, cashout settlement diagnostics, and the coupled
+campaign/payout kill switches, use
+`docs/runbooks/rewards-money-paths.md`.
+
 ## Mint A Dev JWT
 
 ```bash
