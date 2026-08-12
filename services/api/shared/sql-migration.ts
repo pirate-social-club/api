@@ -1129,26 +1129,18 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
   sqliteCompat = sqliteCompat.replace(/::(?:jsonb|text)\b/gi, "")
   // PostgreSQL's `~` operator is unavailable in the SQLite test mirror. Preserve
-  // fixed-length lowercase hex checks, including the 0x and sha256: prefixes used
-  // by funding observations and content-security evidence.
+  // fixed-length lowercase-hex checks, including the equivalent [0-9a-f] and
+  // [a-f0-9] spellings and fixed prefixes such as 0x or sha256:.
   sqliteCompat = sqliteCompat.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^0x\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
-    (_match, column: string, hexLength: string) => {
-      const expectedLength = Number(hexLength) + 2
-      return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 2) = '0x' AND substr(${column}, 3) NOT GLOB '*[^0-9a-f]*'`
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^([a-z0-9:]*)\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
+    (_match, column: string, prefix: string, hexLength: string) => {
+      const expectedLength = prefix.length + Number(hexLength)
+      const hexCheck = prefix
+        ? `substr(${column}, ${prefix.length + 1}) NOT GLOB '*[^0-9a-f]*'`
+        : `${column} NOT GLOB '*[^0-9a-f]*'`
+      if (!prefix) return `length(${column}) = ${expectedLength} AND ${hexCheck}`
+      return `length(${column}) = ${expectedLength} AND substr(${column}, 1, ${prefix.length}) = '${prefix}' AND ${hexCheck}`
     },
-  )
-  sqliteCompat = sqliteCompat.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^sha256:\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
-    (_match, column: string, hexLength: string) => {
-      const expectedLength = Number(hexLength) + "sha256:".length
-      return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 7) = 'sha256:' AND substr(${column}, 8) NOT GLOB '*[^0-9a-f]*'`
-    },
-  )
-  sqliteCompat = sqliteCompat.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
-    (_match, column: string, hexLength: string) =>
-      `length(${column}) = ${Number(hexLength)} AND ${column} NOT GLOB '*[^0-9a-f]*'`,
   )
 
   return [sqliteCompat]
