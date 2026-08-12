@@ -14,6 +14,8 @@ on:
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
+      - "services/content-malware-scanner-container/**"
+      - "services/content-malware-scanner-runtime/**"
       - "services/contracts/**"
       - "services/dance-grader/**"
       - "services/shared/**"
@@ -39,6 +41,8 @@ on:
       - "services/api/**"
       - "services/cli/**"
       - "services/community-d1-shard/**"
+      - "services/content-malware-scanner-container/**"
+      - "services/content-malware-scanner-runtime/**"
       - "services/contracts/**"
       - "services/dance-grader/**"
       - "services/shared/**"
@@ -493,6 +497,12 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
+      # The egress-audit action intentionally restricts Docker-socket access.
+      # Build first; every remote scanner-image input is pinned by digest or
+      # checksum in the Dockerfile, and the build executes the corpus gate.
+      - name: Build and verify content malware scanner image
+        run: docker build --file services/api/Dockerfile.content-malware-scanner --tag content-malware-scanner:ci services
+
       - name: Start iron-proxy egress audit
         uses: ironsh/iron-proxy-action@fa1fd82ec32396d044deba7040a6db576bec927a
         with:
@@ -651,6 +661,38 @@ jobs:
       - name: Audit song preview runtime dependencies
         working-directory: services/song-preview-runtime
         run: bun audit --audit-level=high
+
+      - name: Install content malware scanner container dependencies
+        working-directory: services/content-malware-scanner-container
+        run: bun install --frozen-lockfile
+
+      - name: Audit content malware scanner container dependencies
+        working-directory: services/content-malware-scanner-container
+        run: bun audit --audit-level=high
+
+      - name: Typecheck content malware scanner container
+        working-directory: services/content-malware-scanner-container
+        run: bun run check
+
+      - name: Test content malware scanner container
+        working-directory: services/content-malware-scanner-container
+        run: bun run test
+
+      - name: Install content malware scanner runtime dependencies
+        working-directory: services/content-malware-scanner-runtime
+        run: bun install --frozen-lockfile
+
+      - name: Audit content malware scanner runtime dependencies
+        working-directory: services/content-malware-scanner-runtime
+        run: bun audit --audit-level=high
+
+      - name: Typecheck content malware scanner runtime
+        working-directory: services/content-malware-scanner-runtime
+        run: bun run check
+
+      - name: Test content malware scanner runtime
+        working-directory: services/content-malware-scanner-runtime
+        run: bun run test
 
       - name: Install API dependencies
         working-directory: services/api
