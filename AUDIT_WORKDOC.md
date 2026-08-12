@@ -1,6 +1,6 @@
 # Pirate API Audit Notes
 
-Last reviewed: 2026-05-31.
+Last reviewed: 2026-08-12.
 
 This is the current lightweight audit map for `pirate-api`. The older May 2026 snapshot with line-numbered tasks has been retired because the route split, media extraction, hygiene checks, and Story/CDR path docs have landed.
 
@@ -27,6 +27,20 @@ This is the current lightweight audit map for `pirate-api`. The older May 2026 s
 2. The repo-level `rtk bun run check` and `rtk bun run test` are broad chains. Prefer service-local checks during normal work, then run the broad chain only when needed.
 3. Story/CDR route tests use deterministic doubles. They prove service call graph wiring, not live chain, CDR, RunPod, or Bitcoin finality behavior.
 4. Runtime maintenance scripts and production-only deploy paths still need operator smoke coverage rather than ordinary unit coverage.
+
+## Feed Audit Follow-ups (2026-08-12)
+
+- Video `top` and `new` projection pages use the full-tuple `k:` keyset cursor;
+  legacy `v1`/`v2` offset cursors restart from the first keyset page. Video
+  `best` retains its bounded two-leg scorer deck and `v2` cursor.
+- Materialized public-feed reads and writes emit weighted, sampled structured
+  records for hit, stale, and miss outcomes, while cache errors are always
+  emitted once at error severity. Missing cache-table errors remain availability
+  fallbacks, but are now visible to log aggregation. Top-community identity
+  shard-open failures also retain their availability fallback while emitting a
+  structured warning. A durable counter/alert backed by the production
+  observability system remains a release follow-up because this repository has
+  no native metric binding.
 
 ## Audit Checklist For Future Passes
 

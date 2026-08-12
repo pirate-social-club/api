@@ -31,6 +31,55 @@ type MaterializedPublicHomeFeedTarget = {
   cursor: null
 }
 
+type MaterializedFeedObservation =
+  | "cache_hit"
+  | "cache_stale"
+  | "cache_miss"
+  | "cache_error"
+  | "store_error"
+
+// The materialized homepage is the public fan-in for every anonymous request,
+// so a per-request log line for the ordinary outcomes would be a flood. Hit,
+// stale, and miss use stateless probabilistic sampling. Each sampled record is
+// weighted by the inverse probability so aggregation can estimate rates. Error
+// outcomes are always emitted because they are availability signals.
+const MATERIALIZED_FEED_INFORMATIONAL_SAMPLE_RATE = 1 / 256
+
+function observeMaterializedFeed(
+  target: MaterializedPublicHomeFeedTarget | null,
+  event: MaterializedFeedObservation,
+  details: Record<string, unknown> = {},
+): void {
+  const informational = event === "cache_hit" || event === "cache_stale" || event === "cache_miss"
+  // This randomness only controls telemetry volume; it is not used for an ID,
+  // secret, authorization decision, or any other security-sensitive purpose.
+  if (informational && Math.random() >= MATERIALIZED_FEED_INFORMATIONAL_SAMPLE_RATE) {
+    return
+  }
+  const sampleRate = informational ? MATERIALIZED_FEED_INFORMATIONAL_SAMPLE_RATE : 1
+  const record = {
+    message: "materialized public feed observation",
+    metric: "materialized_public_feed",
+    value: 1 / sampleRate,
+    sample_rate: sampleRate,
+    event,
+    content_kind: target?.contentKind ?? "mixed",
+    locale: target?.locale ?? "default",
+    sort: target?.sort ?? null,
+    time_range: target?.timeRange ?? null,
+    ...details,
+  }
+  if (event === "cache_error" || event === "store_error") {
+    console.error(JSON.stringify(record))
+  } else {
+    console.log(JSON.stringify(record))
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export type MaterializedPublicHomeFeedRead =
   | {
     result: HomeFeedResponseWithTiming
@@ -174,17 +223,20 @@ export async function readMaterializedPublicHomeFeed(input: {
     })
     const row = result.rows[0]
     if (!row) {
+      observeMaterializedFeed(input.target, "cache_miss")
       return { result: null, state: "miss" }
     }
 
     const body = parseMaterializedPublicHomeFeedBody(row.json_body)
     if (!body) {
+      observeMaterializedFeed(input.target, "cache_miss", { reason: "invalid_body" })
       return { result: null, state: "miss" }
     }
 
     const expiresAt = typeof row.expires_at === "string" ? row.expires_at : String(row.expires_at ?? "")
     const staleAt = typeof row.stale_at === "string" ? row.stale_at : String(row.stale_at ?? "")
     if (expiresAt > now) {
+      observeMaterializedFeed(input.target, "cache_hit")
       return {
         result: attachMaterializedServerTiming(body, {
           durationMs: Math.round(performance.now() - startedAt),
@@ -194,6 +246,7 @@ export async function readMaterializedPublicHomeFeed(input: {
       }
     }
     if (staleAt > now) {
+      observeMaterializedFeed(input.target, "cache_stale")
       return {
         result: attachMaterializedServerTiming(body, {
           durationMs: Math.round(performance.now() - startedAt),
@@ -204,6 +257,7 @@ export async function readMaterializedPublicHomeFeed(input: {
     }
     const staleAtMs = Date.parse(staleAt)
     if (Number.isFinite(staleAtMs) && nowMs <= staleAtMs + MATERIALIZED_PUBLIC_HOME_FEED_EXPIRED_GRACE_MS) {
+      observeMaterializedFeed(input.target, "cache_stale", { reason: "expired_grace" })
       return {
         result: attachMaterializedServerTiming(body, {
           durationMs: Math.round(performance.now() - startedAt),
@@ -212,11 +266,15 @@ export async function readMaterializedPublicHomeFeed(input: {
         state: "stale",
       }
     }
+    observeMaterializedFeed(input.target, "cache_miss", { reason: "expired" })
     return { result: null, state: "miss" }
   } catch (error) {
-    if (!isMissingRelationError(error, "materialized_public_feeds")) {
-      console.error("[materialized-public-feed] read failed", error)
-    }
+    const missingRelation = isMissingRelationError(error, "materialized_public_feeds")
+    observeMaterializedFeed(input.target, "cache_error", {
+      operation: "read",
+      error_kind: missingRelation ? "missing_relation" : "database_error",
+      error: errorMessage(error),
+    })
     return { result: null, state: "error" }
   }
 }
@@ -266,9 +324,12 @@ export async function storeMaterializedPublicHomeFeed(input: {
       ],
     })
   } catch (error) {
-    if (!isMissingRelationError(error, "materialized_public_feeds")) {
-      console.error("[materialized-public-feed] store failed", error)
-    }
+    const missingRelation = isMissingRelationError(error, "materialized_public_feeds")
+    observeMaterializedFeed(input.target, "store_error", {
+      operation: "store",
+      error_kind: missingRelation ? "missing_relation" : "database_error",
+      error: errorMessage(error),
+    })
   }
 }
 
