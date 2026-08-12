@@ -81,7 +81,8 @@ replace them.
 
 ## Kill switches and coupling
 
-All three flags fail closed: only the literal value `true` enables them.
+All three flags fail closed: after trimming and lowercasing, only `true` enables
+them.
 
 | Flag | Effect when disabled |
 | --- | --- |
