@@ -393,9 +393,9 @@ export function videoFeedOrderSql(sort: HomeFeedSort): string {
   const score = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
   if (sort === "new") return "source_created_at DESC, source_post_id DESC"
   if (sort === "top" || sort === "best") {
-    // Video projection still uses its portable engagement order for both best and top.
-    // Mixed-feed best ranking is separate and applies tested recency decay in
-    // listHomeFeedProjectionPage.
+    // The best path uses this as its engagement candidate leg; its final order
+    // is applied by video-scorer.ts after the separate recent-candidate leg.
+    // Top uses the same portable engagement order directly.
     return `CASE WHEN ${score} > 0 THEN 1 ELSE 0 END DESC, ${score} DESC, source_created_at DESC, source_post_id DESC`
   }
   return "source_created_at DESC, source_post_id DESC"
@@ -412,54 +412,99 @@ function cursorVersionLabel(cursor: string | null | undefined): string | null {
   return /^[a-z0-9]{1,8}$/u.test(prefix) ? prefix : "unknown"
 }
 
-async function listVideoHomeFeedProjectionRows(input: {
+export async function listVideoHomeFeedProjectionRows(input: {
   communityIds: string[]
   cursor?: string | null
   env: Env
   includeProjectedPayload?: boolean
+  memberCommunityIdSet: Set<string>
   now: number
   pageSize?: number
   sort: HomeFeedSort
   timeRange: HomeFeedTimeRange
 }): Promise<VideoFeedProjectionPage> {
-  const cursor = parseVideoFeedCursor(input.cursor, input.now)
+  // New video top/new pages use the same full-tuple keyset cursor as the mixed
+  // feed. Legacy v1/v2 video offset cursors cannot be translated into the
+  // tuple keyset, so per the mainline cursor policy they are explicitly reset
+  // to a fresh first page instead of silently reusing their stale ranking
+  // timestamp while the offset is dropped.
+  const parsedKeysetAnchor = parseHomeFeedCursor(input.cursor)
+  const keysetAnchor = parsedKeysetAnchor
+    && (input.sort === "new" || parsedKeysetAnchor.sortKey !== null)
+    ? parsedKeysetAnchor
+    : null
+  const rankedAt = keysetAnchor?.now ?? input.now
   const pageSize = Math.max(1, Math.min(VIDEO_FEED_PAGE_SIZE, input.pageSize ?? VIDEO_FEED_PAGE_SIZE))
   const args: Array<string | number> = [...input.communityIds]
   const communityPlaceholders = input.communityIds.map((_, index) => `?${index + 1}`).join(", ")
-  const cutoffMs = getTimeRangeCutoffMs(input.timeRange, cursor.rankedAt)
+  const visibility = projectionVisibilitySql({
+    memberCommunityIds: input.communityIds.filter((communityId) => input.memberCommunityIdSet.has(communityId)),
+    nextArgIndex: args.length + 1,
+  })
+  args.push(...visibility.args)
+  const cutoffMs = getTimeRangeCutoffMs(input.timeRange, rankedAt)
   const filters = [
     "projection_version = 1",
     "status = 'published'",
     "post_type = 'video'",
     `community_id IN (${communityPlaceholders})`,
+    visibility.sql,
   ]
   if (cutoffMs != null) {
     args.push(new Date(cutoffMs).toISOString())
     filters.push(`source_created_at >= ?${args.length}`)
   }
-  args.push(pageSize + 1, cursor.offset)
-  const limitPlaceholder = `?${args.length - 1}`
-  const offsetPlaceholder = `?${args.length}`
+  const engagementScore = "((upvote_count - downvote_count) * 3 + comment_count * 2 + like_count)"
+  const feedSortKeySql = input.sort === "top" ? engagementScore : "NULL"
+  let keysetSql = ""
+  if (keysetAnchor) {
+    if (input.sort === "new") {
+      const createdIndex = args.push(keysetAnchor.createdIso)
+      const postIndex = args.push(keysetAnchor.postId)
+      keysetSql = `AND (source_created_at < ?${createdIndex}`
+        + ` OR (source_created_at = ?${createdIndex} AND source_post_id < ?${postIndex}))`
+    } else {
+      const keyIndex = args.push(keysetAnchor.sortKey ?? 0)
+      const createdIndex = args.push(keysetAnchor.createdIso)
+      const postIndex = args.push(keysetAnchor.postId)
+      keysetSql = `AND (feed_sort_key < ?${keyIndex}`
+        + ` OR (feed_sort_key = ?${keyIndex} AND source_created_at < ?${createdIndex})`
+        + ` OR (feed_sort_key = ?${keyIndex} AND source_created_at = ?${createdIndex} AND source_post_id < ?${postIndex}))`
+    }
+  }
+  const limitIndex = args.push(pageSize + 1)
   const projectedPayloadColumns = input.includeProjectedPayload
     ? ", author_user_id, identity_mode, projected_payload_json"
     : ""
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
+      WITH eligible AS (
+        SELECT community_id, source_post_id, source_created_at, visibility, post_type${projectedPayloadColumns},
+               upvote_count, downvote_count, comment_count, like_count,
+               ${feedSortKeySql} AS feed_sort_key
+        FROM community_post_projections
+        WHERE ${filters.join("\n          AND ")}
+      )
       SELECT community_id, source_post_id, source_created_at, visibility, post_type${projectedPayloadColumns},
-             upvote_count, downvote_count, comment_count, like_count
-      FROM community_post_projections
-      WHERE ${filters.join("\n        AND ")}
-      ORDER BY ${videoFeedOrderSql(input.sort)}
-      LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
+             upvote_count, downvote_count, comment_count, like_count, feed_sort_key
+      FROM eligible
+      WHERE 1 = 1
+        ${keysetSql}
+      ORDER BY ${input.sort === "new" ? "source_created_at DESC, source_post_id DESC" : "feed_sort_key DESC, source_created_at DESC, source_post_id DESC"}
+      LIMIT ?${limitIndex}
     `,
     args,
   })
   const rows = result.rows.map((row) => toHomeFeedProjectionRow(row))
   const hasMore = rows.length > pageSize
+  const pageRows = rows.slice(0, pageSize)
+  const lastRow = pageRows[pageRows.length - 1] ?? null
   return {
     allowHydrationBackfill: true,
-    rows: rows.slice(0, pageSize),
-    nextCursor: hasMore ? `v1:${cursor.rankedAt}:${cursor.offset + pageSize}` : null,
+    rows: pageRows,
+    nextCursor: hasMore && lastRow
+      ? encodeHomeFeedCursor(lastRow, input.sort, rankedAt)
+      : null,
   }
 }
 
@@ -1091,6 +1136,7 @@ export async function listHomeFeed(input: {
           cursor: input.cursor,
           env: input.env,
           includeProjectedPayload: shadowControlPlane,
+          memberCommunityIdSet: corpusMemberCommunityIdSet,
           now,
           sort,
           timeRange,
@@ -1225,6 +1271,7 @@ export async function listHomeFeed(input: {
             cursor: videoPage.nextCursor,
             env: input.env,
             includeProjectedPayload: shadowControlPlane,
+            memberCommunityIdSet: corpusMemberCommunityIdSet,
             now,
             pageSize: nextPageSize,
             sort,

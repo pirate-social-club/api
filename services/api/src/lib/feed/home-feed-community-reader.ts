@@ -357,7 +357,19 @@ export async function resolveTopCommunitiesIdentity(input: {
         input.cachedIdentityByCommunityId.get(summary.community_id) ?? null,
       )
     }
-    const db = await openCommunityReadClient(input.env, input.communityRepository, summary.community_id).catch(() => null)
+    const db = await openCommunityReadClient(
+      input.env,
+      input.communityRepository,
+      summary.community_id,
+    ).catch((error: unknown) => {
+      console.warn(JSON.stringify({
+        message: "home feed community identity read degraded",
+        event: "home_feed_community_identity_open_failed",
+        community_id: summary.community_id,
+        error: error instanceof Error ? error.message : String(error),
+      }))
+      return null
+    })
     if (!db) {
       return withHomeFeedCommunityIdentity(summary, null)
     }
@@ -365,7 +377,7 @@ export async function resolveTopCommunitiesIdentity(input: {
       const identity = await getHomeFeedCommunityIdentity(db.client, summary.community_id)
       return withHomeFeedCommunityIdentity(summary, identity)
     } finally {
-      db.close()
+      await db.close()
     }
   }))
 }

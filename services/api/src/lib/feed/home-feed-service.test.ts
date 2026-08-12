@@ -6,6 +6,7 @@ import {
   listHomeFeedCommunityViewCounts,
   homeFeedBestRankSql,
   listHomeFeedProjectionPage,
+  listVideoHomeFeedProjectionRows,
   mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
   resolveHomeFeedCandidateCommunityIds,
@@ -627,6 +628,7 @@ describe("listHomeFeedProjectionPage", () => {
   async function setupProjectionRows(rows: Array<{
     id: string
     createdAt: string
+    postType?: "text" | "video"
     visibility?: "public" | "members_only"
     upvotes?: number
     comments?: number
@@ -664,13 +666,14 @@ describe("listHomeFeedProjectionPage", () => {
           created_at, updated_at
         ) VALUES (
           ?1, 'cmt_feed', ?2, 'usr_feed_operator', 'public',
-          'text', 'published', ?3, ?4, 0, ?5,
-          ?6, ?7, '{}', 1, ?8, ?8
+          ?3, 'published', ?4, ?5, 0, ?6,
+          ?7, ?8, '{}', 1, ?9, ?9
         )
       `,
       args: [
         `cpp_${row.id}`,
         row.id,
+        row.postType ?? "text",
         row.visibility ?? "public",
         row.upvotes ?? 0,
         row.comments ?? 0,
@@ -809,6 +812,107 @@ describe("listHomeFeedProjectionPage", () => {
     expect(second.rows.map((row) => row.source_post_id)).toEqual(["pst_01", "pst_00"])
     const firstIds = new Set(first.rows.map((row) => row.source_post_id))
     expect(second.rows.some((row) => firstIds.has(row.source_post_id))).toBe(false)
+  }, 20000)
+
+  test("uses a stable keyset for video top pages", async () => {
+    const rows = Array.from({ length: 27 }, (_, index) => ({
+      id: `video_${String(index).padStart(2, "0")}`,
+      createdAt: new Date(Date.parse("2026-04-18T00:00:00.000Z") + index * 60_000).toISOString(),
+      postType: "video" as const,
+      upvotes: index,
+    }))
+    const { client, env } = await setupProjectionRows(rows)
+    const now = Date.parse("2026-04-18T12:00:00.000Z")
+    const first = await listVideoHomeFeedProjectionRows({
+      communityIds: ["cmt_feed"],
+      env,
+      memberCommunityIdSet: new Set(),
+      now,
+      sort: "top",
+      timeRange: "all",
+    })
+
+    expect(first.rows).toHaveLength(25)
+    expect(first.rows[0]?.source_post_id).toBe("video_26")
+    expect(first.nextCursor?.startsWith("k:")).toBe(true)
+
+    await client.execute({
+      sql: "UPDATE community_post_projections SET upvote_count = ?1 WHERE source_post_id = ?2",
+      args: [500, "video_10"],
+    })
+    const second = await listVideoHomeFeedProjectionRows({
+      communityIds: ["cmt_feed"],
+      cursor: first.nextCursor,
+      env,
+      memberCommunityIdSet: new Set(),
+      now,
+      sort: "top",
+      timeRange: "all",
+    })
+
+    expect(second.rows.map((row) => row.source_post_id)).toEqual(["video_01", "video_00"])
+    const firstIds = new Set(first.rows.map((row) => row.source_post_id))
+    expect(second.rows.some((row) => firstIds.has(row.source_post_id))).toBe(false)
+  }, 20000)
+
+  test("uses a stable keyset for video new pages", async () => {
+    const rows = Array.from({ length: 27 }, (_, index) => ({
+      id: `video_new_${String(index).padStart(2, "0")}`,
+      createdAt: new Date(Date.parse("2026-04-18T00:00:00.000Z") + index * 60_000).toISOString(),
+      postType: "video" as const,
+    }))
+    const { env } = await setupProjectionRows(rows)
+    const now = Date.parse("2026-04-18T12:00:00.000Z")
+    const first = await listVideoHomeFeedProjectionRows({
+      communityIds: ["cmt_feed"],
+      env,
+      memberCommunityIdSet: new Set(),
+      now,
+      sort: "new",
+      timeRange: "all",
+    })
+    const second = await listVideoHomeFeedProjectionRows({
+      communityIds: ["cmt_feed"],
+      cursor: first.nextCursor,
+      env,
+      memberCommunityIdSet: new Set(),
+      now,
+      sort: "new",
+      timeRange: "all",
+    })
+
+    expect(first.nextCursor?.startsWith("k:")).toBe(true)
+    expect(first.rows[0]?.source_post_id).toBe("video_new_26")
+    expect(second.rows.map((row) => row.source_post_id)).toEqual(["video_new_01", "video_new_00"])
+  }, 20000)
+
+  test("rejects legacy v1/v2 video offset cursors as a fresh first page", async () => {
+    const rows = Array.from({ length: 27 }, (_, index) => ({
+      id: `video_legacy_${String(index).padStart(2, "0")}`,
+      createdAt: new Date(Date.parse("2026-04-18T00:00:00.000Z") + index * 60_000).toISOString(),
+      postType: "video" as const,
+    }))
+    const { env } = await setupProjectionRows(rows)
+    const now = Date.parse("2026-04-18T12:00:00.000Z")
+    // Legacy cursors encode a future ranking timestamp and an offset that a
+    // tuple keyset cannot translate. Both must be discarded: the page restarts
+    // from the newest row with a fresh ranking time instead of applying a stale
+    // time-range cutoff built from the orphaned timestamp.
+    for (const cursor of ["v1:1870000000000:3", "v2:1870000000000:3"]) {
+      const first = await listVideoHomeFeedProjectionRows({
+        communityIds: ["cmt_feed"],
+        cursor,
+        env,
+        memberCommunityIdSet: new Set(),
+        now,
+        sort: "new",
+        timeRange: "day",
+      })
+
+      expect(first.rows).toHaveLength(25)
+      expect(first.rows[0]?.source_post_id).toBe("video_legacy_26")
+      expect(first.nextCursor?.startsWith("k:")).toBe(true)
+    }
   }, 20000)
 })
 
