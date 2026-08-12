@@ -38,6 +38,18 @@ export type StudyExerciseForAttempt = StudyExerciseRow & {
   target_language: string
 }
 
+export type FillBlankExerciseIdentity = {
+  fingerprint: string | null
+  language: string
+  unitId: string
+  version: number
+}
+
+export type FillBlankExerciseIdentityStatus = {
+  current: boolean
+  identity: FillBlankExerciseIdentity
+}
+
 export type StudyAttemptRow = {
   attempt_number: number
   exercise_id: string
@@ -75,6 +87,67 @@ export function readString(value: unknown): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   return trimmed || null
+}
+
+export function parseFillBlankExerciseIdentity(exerciseId: string): FillBlankExerciseIdentity | null {
+  const current = /^stu:([^:]+):fill_blank:v(\d+):([0-9a-f]{64}):(.+)$/u.exec(exerciseId)
+  if (current) {
+    return {
+      fingerprint: current[3]!,
+      language: current[4]!,
+      unitId: current[1]!,
+      version: Number(current[2]),
+    }
+  }
+  const legacy = /^stu:([^:]+):fill_blank:([^:]+)$/u.exec(exerciseId)
+  return legacy ? {
+    // Legacy ids were served only by generation v2. Absence is a v2 identity,
+    // never an unconstrained match. Remove this parser after all staging v2
+    // sessions have exceeded their 24-hour TTL and before production enablement.
+    fingerprint: null,
+    language: legacy[2]!,
+    unitId: legacy[1]!,
+    version: 2,
+  } : null
+}
+
+async function fillBlankExerciseRow(
+  client: ReadClient,
+  identity: FillBlankExerciseIdentity,
+): Promise<Record<string, unknown> | null> {
+  return await executeFirst(client, {
+    sql: `
+      SELECT u.id, u.post_id, u.line_id, u.line_index, u.source_language,
+             u.prompt_text, c.segments_json, c.tokens_json,
+             c.correct_placements_json, c.max_attempts, c.status, c.cloze_version,
+             c.source_fingerprint
+      FROM song_study_unit u
+      JOIN song_study_unit_cloze c ON c.unit_id = u.id
+      WHERE u.id = ?1
+        AND COALESCE(u.source_language, 'source') = ?2
+      LIMIT 1
+    `,
+    args: [identity.unitId, identity.language],
+  }) as Record<string, unknown> | null
+}
+
+export async function getFillBlankExerciseIdentityStatus(
+  client: ReadClient,
+  exerciseId: string,
+): Promise<FillBlankExerciseIdentityStatus | null> {
+  const identity = parseFillBlankExerciseIdentity(exerciseId)
+  if (!identity) return null
+  const row = await fillBlankExerciseRow(client, identity)
+  if (!row) return { current: false, identity }
+  const persistedVersion = Number(row.cloze_version ?? 0)
+  const persistedFingerprint = readString(row.source_fingerprint)
+  return {
+    current: persistedVersion === identity.version
+      && (identity.fingerprint == null
+        ? identity.version === 2
+        : persistedFingerprint === identity.fingerprint),
+    identity,
+  }
 }
 
 export async function getExerciseForAttempt(
@@ -163,24 +236,15 @@ export async function getExerciseForAttempt(
     }
   }
 
-  const fillBlankMatch = /^stu:([^:]+):fill_blank:([^:]+)$/u.exec(exerciseId)
-  if (fillBlankMatch) {
-    const unitId = fillBlankMatch[1]!
-    const sourceLanguage = fillBlankMatch[2]!
-    const row = await executeFirst(client, {
-      sql: `
-        SELECT u.id, u.post_id, u.line_id, u.line_index, u.source_language,
-               u.prompt_text, c.segments_json, c.tokens_json,
-               c.correct_placements_json, c.max_attempts, c.status, c.cloze_version
-        FROM song_study_unit u
-        JOIN song_study_unit_cloze c ON c.unit_id = u.id
-        WHERE u.id = ?1
-          AND COALESCE(u.source_language, 'source') = ?2
-        LIMIT 1
-      `,
-      args: [unitId, sourceLanguage],
-    }) as Record<string, unknown> | null
+  const fillBlankIdentity = parseFillBlankExerciseIdentity(exerciseId)
+  if (fillBlankIdentity) {
+    const row = await fillBlankExerciseRow(client, fillBlankIdentity)
     if (!row) return null
+    const current = Number(row.cloze_version ?? 0) === fillBlankIdentity.version
+      && (fillBlankIdentity.fingerprint == null
+        ? fillBlankIdentity.version === 2
+        : readString(row.source_fingerprint) === fillBlankIdentity.fingerprint)
+    if (!current) return null
     const reviewLanguage = readString(row.source_language) ?? "source"
     return {
       correct_option_id: null,

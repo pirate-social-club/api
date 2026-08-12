@@ -5,7 +5,11 @@ import type { Client, ReadClient } from "../sql-client"
 import type { AttemptOutcome } from "./post-study-recall-grading"
 import type { ExerciseType, StudyExerciseRow } from "./post-study-attempt-store"
 import type { StudyTransitionSessionState } from "./post-study-transition-planner"
-import type { StudyGradedTransitionPlan, StudyUngradableTransitionPlan } from "./post-study-transition-planner"
+import type {
+  StudyGradedTransitionPlan,
+  StudyStaleTransitionPlan,
+  StudyUngradableTransitionPlan,
+} from "./post-study-transition-planner"
 
 export const STUDY_SESSION_DISTINCT_EXERCISE_LIMIT = 10
 export const STUDY_SESSION_MAX_CARD_PRESENTATIONS = 3
@@ -769,7 +773,7 @@ export async function applyPlannedStudyTransition(input: {
   expectedRevision: number
   idempotencyKey: string
   now: string
-  plan: StudyGradedTransitionPlan | StudyUngradableTransitionPlan
+  plan: StudyGradedTransitionPlan | StudyStaleTransitionPlan | StudyUngradableTransitionPlan
   sessionId: string
   userId: string
 }): Promise<void> {

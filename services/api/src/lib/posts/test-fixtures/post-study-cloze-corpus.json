@@ -1,0 +1,114 @@
+[
+  {
+    "id": "english",
+    "language": "en",
+    "lines": [
+      "You said the harbour lights would guide us home",
+      "Silver rain keeps falling across the empty station",
+      "Every quiet window holds a fading memory",
+      "Take me back before the turning tide arrives",
+      "Moonlit rivers carry distant voices through the valley",
+      "Broken shadows gather underneath the amber skyline",
+      "Morning finds the footprints scattered near the water",
+      "We chase the final lantern past the sleeping houses"
+    ]
+  },
+  {
+    "id": "spanish",
+    "language": "es",
+    "lines": [
+      "Las luces del puerto guían nuestro camino",
+      "La lluvia plateada cubre la estación vacía",
+      "Cada ventana tranquila guarda recuerdos lejanos",
+      "Volvamos antes que llegue la marea creciente",
+      "Los ríos nocturnos llevan voces por el valle",
+      "Sombras rotas cruzan lentamente el horizonte dorado"
+    ]
+  },
+  {
+    "id": "french",
+    "language": "fr",
+    "lines": [
+      "Les lumières du port guident notre chemin",
+      "La pluie argentée recouvre la gare déserte",
+      "Chaque fenêtre tranquille garde un souvenir lointain",
+      "Revenons avant que monte la marée silencieuse",
+      "Les rivières nocturnes portent des voix dans la vallée",
+      "Des ombres brisées traversent lentement le ciel doré"
+    ]
+  },
+  {
+    "id": "german",
+    "language": "de",
+    "lines": [
+      "Die Hafenlichter zeigen unseren sicheren Heimweg",
+      "Silberner Regen bedeckt den verlassenen Bahnhof",
+      "Jedes stille Fenster bewahrt ferne Erinnerungen",
+      "Kehren wir vor der steigenden Flut zurück"
+    ]
+  },
+  {
+    "id": "italian",
+    "language": "it",
+    "lines": [
+      "Le luci del porto guidano il ritorno",
+      "La pioggia argentata copre la stazione vuota",
+      "Ogni finestra silenziosa conserva ricordi lontani",
+      "Torniamo prima della marea crescente"
+    ]
+  },
+  {
+    "id": "portuguese",
+    "language": "pt",
+    "lines": [
+      "As luzes do porto guiam nosso caminho",
+      "A chuva prateada cobre a estação vazia",
+      "Cada janela tranquila guarda memórias distantes",
+      "Voltamos antes da maré crescente chegar"
+    ]
+  },
+  {
+    "id": "russian",
+    "language": "ru",
+    "lines": [
+      "Огни гавани ведут нас домой",
+      "Серебряный дождь укрывает пустую станцию",
+      "Каждое тихое окно хранит далёкую память",
+      "Вернёмся раньше пока поднимается морской прилив",
+      "Ночные реки несут голоса через долину",
+      "Разбитые тени медленно пересекают золотой горизонт"
+    ]
+  },
+  {
+    "id": "unsupported-japanese",
+    "language": "ja",
+    "lines": [
+      "朝はすべての静かな記憶を運んでくる",
+      "港の明かりが遠い家路を照らしている"
+    ]
+  },
+  {
+    "id": "unsupported-thai",
+    "language": "th",
+    "lines": [
+      "แสงจากท่าเรือนำทางเรากลับบ้าน",
+      "ฝนสีเงินปกคลุมสถานีที่ว่างเปล่า"
+    ]
+  },
+  {
+    "id": "unsupported-korean",
+    "language": "ko",
+    "lines": [
+      "항구의 불빛이 집으로 가는 길을 비춘다",
+      "은빛 비가 텅 빈 역을 덮는다"
+    ]
+  },
+  {
+    "id": "missing-language",
+    "language": null,
+    "lines": [
+      "Harbour lanterns guide the quiet journey home",
+      "Silver rainfall covers every empty platform"
+    ]
+  }
+]

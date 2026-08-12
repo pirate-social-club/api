@@ -55,6 +55,12 @@ export type StudyUngradableTransitionPlan = {
   session: StudySessionSummary
 }
 
+export type StudyStaleTransitionPlan = {
+  changedExercises: StudyTransitionExerciseState[]
+  lesson: StudyLessonTransitionState
+  session: StudySessionSummary
+}
+
 function cloneExercise(exercise: StudyTransitionExerciseState): StudyTransitionExerciseState {
   return { ...exercise }
 }
@@ -263,6 +269,64 @@ export function planUngradableStudyTransition(input: {
       served_count: input.session.exerciseCount,
       session_revision: revision,
       status: "active",
+      total_units: input.session.exerciseCount,
+    },
+  }
+}
+
+/** Resolve regenerated cards without recording a presentation, attempt, or review event. */
+export function planStaleStudyTransition(input: {
+  exerciseIds: ReadonlySet<string>
+  session: StudyTransitionSessionState
+}): StudyStaleTransitionPlan {
+  if (input.session.status !== "active") throw notFoundError("Study session exercise not found")
+  const exercises = input.session.exercises.map(cloneExercise)
+  const changedExercises = exercises.filter((exercise) =>
+    input.exerciseIds.has(exercise.exerciseId) && !exercise.lessonResolved)
+  if (changedExercises.length === 0) throw notFoundError("Study session exercise not found")
+  for (const exercise of changedExercises) {
+    exercise.lessonResolved = true
+    exercise.appearanceOrdinal += 1
+    exercise.appearanceAttemptCount = 0
+  }
+
+  const next = selectNextExercise(exercises, input.session.presentationCount)
+  const completionReason: StudyTransitionSessionState["completionReason"] = next ? null : "all_resolved"
+  const resolvedCount = exercises.filter((exercise) => exercise.lessonResolved).length
+  const presentedCount = exercises.filter((exercise) => exercise.firstOutcome != null).length
+  const firstPassCorrectCount = exercises.filter((exercise) =>
+    exercise.qualifiesForReward && exercise.firstOutcome === "correct").length
+  const qualifyingPresented = exercises.every((exercise) =>
+    !exercise.qualifiesForReward || exercise.firstOutcome != null)
+  const revision = input.session.sessionRevision + 1
+
+  return {
+    changedExercises,
+    lesson: lessonState({
+      completionReason,
+      current: next,
+      exerciseCount: input.session.exerciseCount,
+      presentationCount: input.session.presentationCount,
+      resolvedCount,
+      sessionRevision: revision,
+    }),
+    session: {
+      completion_reason: completionReason,
+      completed_exercise_count: presentedCount,
+      due_count: 0,
+      first_pass_correct_count: firstPassCorrectCount,
+      id: input.session.id,
+      mastered_exercise_count: input.session.masteredExerciseCount,
+      max_presentations: input.session.maxPresentations,
+      presentation_count: input.session.presentationCount,
+      qualified: completionReason != null
+        && qualifyingPresented
+        && firstPassCorrectCount >= input.session.requiredCorrectCount,
+      required_correct_count: input.session.requiredCorrectCount,
+      resolved_exercise_count: resolvedCount,
+      served_count: input.session.exerciseCount,
+      session_revision: revision,
+      status: completionReason ? "completed" : "active",
       total_units: input.session.exerciseCount,
     },
   }

@@ -26,6 +26,7 @@ import {
   getAttemptByIdempotencyKey,
   getAttemptBySessionPresentation,
   getExerciseForAttempt,
+  getFillBlankExerciseIdentityStatus,
   getReviewState,
   readString,
   readExerciseType,
@@ -74,6 +75,7 @@ import {
 import {
   hasStudyRevisionConflict,
   planGradedStudyTransition,
+  planStaleStudyTransition,
   planUngradableStudyTransition,
 } from "./post-study-transition-planner"
 import { canGenerateStudyTranslations } from "./post-study-generation-provider"
@@ -900,6 +902,7 @@ async function persistStudyRevisionConflictSnapshot(input: {
   idempotencyKey: string
   now: string
   postId: string
+  resolveStaleFillBlank?: boolean
   requestFingerprint: string
   sessionId: string
   userId: string
@@ -912,11 +915,27 @@ async function persistStudyRevisionConflictSnapshot(input: {
       sessionId: input.sessionId,
       userId: input.userId,
     })
-    const lesson = await buildStudyLessonState({
-      client: input.client,
-      sessionId: input.sessionId,
-      userId: input.userId,
-    })
+    const staleExerciseIds = new Set<string>()
+    if (input.resolveStaleFillBlank) {
+      for (const candidate of state.exercises) {
+        if (candidate.lessonResolved) continue
+        const identity = await getFillBlankExerciseIdentityStatus(input.client, candidate.exerciseId)
+        if (identity && !identity.current) staleExerciseIds.add(candidate.exerciseId)
+      }
+      if (!staleExerciseIds.has(input.exerciseId)) {
+        throw notFoundError("Study exercise not found")
+      }
+    }
+    const stalePlan = staleExerciseIds.size > 0
+      ? planStaleStudyTransition({ exerciseIds: staleExerciseIds, session: state })
+      : null
+    const lesson = stalePlan
+      ? await renderStudyLessonState({ client: input.client, state: stalePlan.lesson, userId: input.userId })
+      : await buildStudyLessonState({
+          client: input.client,
+          sessionId: input.sessionId,
+          userId: input.userId,
+        })
     const snapshotExerciseId = state.exercises.find((candidate) => candidate.exerciseId === state.currentExerciseId)?.exerciseId
       ?? state.exercises.find((candidate) => candidate.exerciseId === input.exerciseId)?.exerciseId
       ?? state.exercises[0]?.exerciseId
@@ -939,6 +958,18 @@ async function persistStudyRevisionConflictSnapshot(input: {
         sessionId: input.sessionId,
         userId: input.userId,
       }))
+      if (stalePlan) {
+        await applyPlannedStudyTransition({
+          client: tx,
+          commitToken,
+          expectedRevision: state.sessionRevision,
+          idempotencyKey: input.idempotencyKey,
+          now: input.now,
+          plan: stalePlan,
+          sessionId: input.sessionId,
+          userId: input.userId,
+        })
+      }
     })
     const stored = await getStudyAttemptResponseSnapshot<{ lesson: SongStudyLessonState }>({
       client: input.client,
@@ -1549,6 +1580,10 @@ export async function submitPostStudyAttempt(input: {
         })
       }
     }
+    const persistCompletedConflictSession = async () => {
+      const summary = await getStudySessionSummary(db.client, sessionId)
+      if (summary) await persistCompletedSession(summary)
+    }
 
     const finalizeResponse = async (
       snapshot: Awaited<ReturnType<typeof getStudyAttemptResponseSnapshot<SongStudyAttemptResult>>>,
@@ -1616,6 +1651,7 @@ export async function submitPostStudyAttempt(input: {
       timingOutcome = "idempotent_retry"
       if (storedResponse.httpStatus === 409) {
         const lesson = storedResponse.response.lesson
+        await persistCompletedConflictSession()
         throw codedConflictError(
           "study_session_revision_conflict",
           "Study session orchestration has advanced",
@@ -1700,6 +1736,7 @@ export async function submitPostStudyAttempt(input: {
           sessionId,
           userId: input.actor.userId,
         })
+        await persistCompletedConflictSession()
         throw codedConflictError(
           "study_session_revision_conflict",
           "Study session orchestration has advanced",
@@ -1725,6 +1762,29 @@ export async function submitPostStudyAttempt(input: {
         retrySession,
       )
       return resultForTiming
+    }
+
+    if (type === "fill_blank") {
+      const fillBlankIdentity = await getFillBlankExerciseIdentityStatus(db.client, exerciseId)
+      if (fillBlankIdentity && !fillBlankIdentity.current) {
+        const lesson = await persistStudyRevisionConflictSnapshot({
+          client: db.client,
+          exerciseId,
+          idempotencyKey,
+          now: nowIso(),
+          postId: input.postId,
+          resolveStaleFillBlank: true,
+          requestFingerprint,
+          sessionId,
+          userId: input.actor.userId,
+        })
+        await persistCompletedConflictSession()
+        throw codedConflictError(
+          "study_session_revision_conflict",
+          "Study exercise content has changed",
+          { lesson },
+        )
+      }
     }
 
     const exercise = await getExerciseForAttempt(db.client, exerciseId)

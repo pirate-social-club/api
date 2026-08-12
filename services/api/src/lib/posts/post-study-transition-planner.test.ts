@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   hasStudyRevisionConflict,
   planGradedStudyTransition,
+  planStaleStudyTransition,
   planUngradableStudyTransition,
   type StudyTransitionSessionState,
 } from "./post-study-transition-planner"
@@ -201,5 +202,44 @@ describe("song study orchestration transition fixture", () => {
       attemptNumber: 1, exerciseId: "ex_0", exerciseType: "translation_choice", outcome: "correct", session: state,
     })
     expect(plan.session).toMatchObject({ first_pass_correct_count: 1, qualified: true, status: "completed" })
+  })
+
+  test("stale enrichment resolves without consuming a presentation or reward progress", () => {
+    const state = session(3)
+    state.exercises[0]!.qualifiesForReward = false
+    state.exercises[1]!.qualifiesForReward = false
+    const plan = planStaleStudyTransition({
+      exerciseIds: new Set(["ex_0", "ex_1"]),
+      session: state,
+    })
+
+    expect(plan.changedExercises.map((exercise) => exercise.exerciseId)).toEqual(["ex_0", "ex_1"])
+    expect(plan.changedExercises.every((exercise) => exercise.lessonResolved)).toBe(true)
+    expect(plan.lesson).toMatchObject({
+      next: { exerciseId: "ex_2", presentationNumber: 1 },
+      resolvedCount: 2,
+      sessionRevision: 1,
+    })
+    expect(plan.session).toMatchObject({
+      completed_exercise_count: 0,
+      first_pass_correct_count: 0,
+      presentation_count: 0,
+      qualified: false,
+      resolved_exercise_count: 2,
+      status: "active",
+    })
+  })
+
+  test("stale-only enrichment completes without creating reward qualification", () => {
+    const state = session(2)
+    state.exercises.forEach((exercise) => { exercise.qualifiesForReward = false })
+    state.requiredCorrectCount = 1
+    const plan = planStaleStudyTransition({
+      exerciseIds: new Set(["ex_0", "ex_1"]),
+      session: state,
+    })
+
+    expect(plan.lesson).toMatchObject({ completionReason: "all_resolved", next: null, resolvedCount: 2 })
+    expect(plan.session).toMatchObject({ qualified: false, status: "completed" })
   })
 })
