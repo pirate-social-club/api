@@ -199,4 +199,34 @@ describe("listCommunityNamespaceAttachments", () => {
     expect(rows[0]?.hnsSetupStatus).toBe("setup_complete")
     client.close()
   })
+
+  test("exposes an observed DS mismatch as an owner action", async () => {
+    const client = await setup()
+    await insertHns(client, { id: "nv_drifted", authority: 0, routing: 0 })
+    const observedAt = new Date()
+    await client.execute({
+      sql: `
+        INSERT INTO hns_root_parent_observations (
+          parent_observation_id, normalized_root_label,
+          observed_delegation_security, parent_ds_matches_live_dnskey,
+          authoritative_dnssec_valid, observed_at, earliest_rrsig_expires_at
+        ) VALUES ('obs_drifted', 'dankmeme', 'drifted', 0, 0, ?1, ?2)
+      `,
+      args: [observedAt.toISOString(), new Date(observedAt.getTime() + 86_400_000).toISOString()],
+    })
+    await client.execute({
+      sql: `
+        INSERT INTO hns_root_delegation_state (
+          normalized_root_label, rollover_state, last_parent_observation_id
+        ) VALUES ('dankmeme', 'none', 'obs_drifted')
+      `,
+      args: [],
+    })
+
+    const rows = await listCommunityNamespaceAttachments(client, "cmt_test")
+
+    expect(rows[0]?.delegation?.delegation_security).toBe("drifted")
+    expect(rows[0]?.delegation?.ds_update_required).toBe(true)
+    client.close()
+  })
 })
