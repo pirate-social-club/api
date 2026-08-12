@@ -1,14 +1,59 @@
 import { describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
+import type { ContentSecurityScanJob } from "../content-security/content-security-types"
 import {
+  ContentSourceScanError,
   CONTENT_SOURCE_STORAGE_ENDPOINT,
   CONTENT_SOURCE_STORAGE_NAMESPACE,
   CONTENT_SOURCE_STORAGE_PROVIDER,
+  scanContentSource,
   storeContentSource,
 } from "./content-source-broker-client"
 
 const bytes = new TextEncoder().encode("source bytes")
 const sha256 = "a".repeat(64)
+const job: ContentSecurityScanJob = {
+  scanJobId: "csj_fixture",
+  contentBlobId: "cbl_fixture",
+  scannerRelease: {
+    scannerReleaseId: "csr_release",
+    securityScanProfile: "clamav-text-v1",
+    engineVersion: "1.5.4",
+    signatureVersion: "fixture-signatures",
+    signatureDate: "2026-08-12T00:00:00.000Z",
+    engineImageDigest: `sha256:${"b".repeat(64)}`,
+    definitionDigest: "c".repeat(64),
+    deployedImageDigest: `sha256:${"d".repeat(64)}`,
+  },
+  scanSequence: 1,
+  requestReason: "initial_upload",
+  expectedContentHash: `0x${sha256}`,
+  expectedSizeBytes: bytes.byteLength,
+  attemptCount: 1,
+  maxAttempts: 4,
+  leaseOwner: "worker-fixture",
+}
+
+function scannerResult(overrides: Record<string, unknown> = {}) {
+  return {
+    object: "content_malware_scan",
+    job: job.scanJobId,
+    content_sha256: sha256,
+    size_bytes: bytes.byteLength,
+    outcome: "clean",
+    policy_version: "clamav-text-v1",
+    engine: "clamav",
+    engine_version: "1.5.4",
+    signature_version: "fixture-signatures",
+    signature_date: "2026-08-12T00:00:00.000Z",
+    engine_image_digest: `sha256:${"b".repeat(64)}`,
+    definition_digest: "c".repeat(64),
+    finding: null,
+    error_code: null,
+    duration_ms: 12,
+    ...overrides,
+  }
+}
 
 function env(fetcher: (request: Request) => Promise<Response>): Env {
   return {
@@ -91,5 +136,45 @@ describe("content source broker client", () => {
       bytes,
       sha256,
     })).rejects.toMatchObject({ status: 502, retryable: true })
+  })
+
+  test("requests a job-bound scan and returns bounded read evidence", async () => {
+    const result = await scanContentSource({
+      env: env(async (request) => {
+        expect(request.url).toEndWith("/objects/cbl_fixture/scan")
+        expect(request.headers.get("authorization")).toBe("Bearer broker-secret")
+        expect(request.headers.get("x-content-scan-job")).toBe(job.scanJobId)
+        expect(request.headers.get("x-content-sha256")).toBe(sha256)
+        return Response.json(scannerResult(), {
+          headers: { "x-content-source-bytes-read": String(bytes.byteLength) },
+        })
+      }),
+      job,
+    })
+    expect(result.result.outcome).toBe("clean")
+    expect(result.bytesRead).toBe(bytes.byteLength)
+    expect(result.readOutcome).toBe("completed")
+  })
+
+  test("classifies broker failures without accepting unbounded evidence", async () => {
+    await expect(scanContentSource({
+      env: env(async () => Response.json({ code: "source_missing" }, { status: 404 })),
+      job,
+    })).rejects.toMatchObject({
+      code: "source_missing",
+      retryable: false,
+      readOutcome: "source_missing",
+    } satisfies Partial<ContentSourceScanError>)
+
+    await expect(scanContentSource({
+      env: env(async () => Response.json(scannerResult(), {
+        headers: { "x-content-source-bytes-read": String(bytes.byteLength + 1) },
+      })),
+      job,
+    })).rejects.toMatchObject({
+      code: "invalid_bytes_read",
+      retryable: false,
+      readOutcome: "metadata_mismatch",
+    } satisfies Partial<ContentSourceScanError>)
   })
 })

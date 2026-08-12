@@ -11,6 +11,10 @@ import {
 import type { CommunityReadRepository } from "../communities/db-community-repository"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
 import { sha256Hex } from "../crypto"
+import {
+  dispatchContentSecurityScanJob,
+  prepareInitialContentSecurityScan,
+} from "../content-security/content-security-queue"
 import { badRequestError, conflictError, notFoundError } from "../errors"
 import { envFlag, makeId, nowIso, splitCsv } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -190,6 +194,11 @@ export async function uploadContentBlobBytes(input: {
   if (owned.blob.declared_content_hash && owned.blob.declared_content_hash !== contentHash) {
     throw badRequestError("Uploaded bytes do not match declared_content_hash")
   }
+  const scanJob = await prepareInitialContentSecurityScan({
+    env: input.env,
+    client,
+    scanJobId: makeId("csj"),
+  })
 
   const locked = await beginProxyContentUpload({
     client,
@@ -226,7 +235,16 @@ export async function uploadContentBlobBytes(input: {
       gatewayUrl: null,
       ipfsCid: null,
       completedAt,
+      scanJob: scanJob ?? undefined,
     })
+    if (scanJob) {
+      await dispatchContentSecurityScanJob({
+        env: input.env,
+        client,
+        scanJobId: scanJob.scanJobId,
+        dispatchedAt: nowIso(),
+      })
+    }
     return serializeContentBlob(uploaded)
   } catch (error) {
     await releaseProxyContentUpload({

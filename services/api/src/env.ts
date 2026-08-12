@@ -312,6 +312,14 @@ export type Env = {
   CONTENT_BLOB_UPLOAD_COMMUNITY_IDS?: string
   CONTENT_SOURCE_BROKER?: Fetcher
   CONTENT_SOURCE_BROKER_SHARED_SECRET?: string
+  /** Durable hint transport; the control-plane scan-job ledger remains authoritative. */
+  CONTENT_SECURITY_SCAN_QUEUE?: Queue<import("./lib/content-security/content-security-types").ContentSecurityScanMessage>
+  /** Producer rollout gate. Missing or any value other than "true" disables scan-job creation. */
+  CONTENT_SECURITY_SCAN_ENQUEUE_ENABLED?: string
+  /** Consumer rollout gate. Missing or any value other than "true" acknowledges telemetry-only hints. */
+  CONTENT_SECURITY_SCAN_CONSUMER_ENABLED?: string
+  /** Active promoted scanner profile required for new jobs, for example clamav-text-v1. */
+  CONTENT_SECURITY_SCAN_PROFILE?: string
   SONG_PREVIEW_SERVICE?: Fetcher
   SONG_PREVIEW_SERVICE_URL?: string
   SONG_PREVIEW_SHARED_SECRET?: string
