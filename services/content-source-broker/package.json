@@ -1,5 +1,5 @@
 {
-  "name": "@pirate/content-malware-scanner-container",
+  "name": "@pirate/content-source-broker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -12,12 +12,11 @@
     "test": "bun test"
   },
   "dependencies": {
-    "@cloudflare/containers": "0.3.6",
+    "@pirate/content-source-protocol": "file:../content-source-protocol",
     "@pirate/internal-service-auth": "file:../internal-service-auth"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "4.20260702.1",
-    "@types/node": "24.5.2",
     "typescript": "7.0.2",
     "wrangler": "4.107.0"
   },

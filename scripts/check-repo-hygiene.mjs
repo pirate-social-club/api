@@ -179,6 +179,25 @@ export function checkScannerContainerIsolation(file, source) {
   return failures;
 }
 
+export function checkContentSourceBrokerIsolation(file, source) {
+  const failures = [];
+  const workersDevDisabled = source.match(/"workers_dev"\s*:\s*false/gu)?.length ?? 0;
+  const previewUrlsDisabled = source.match(/"preview_urls"\s*:\s*false/gu)?.length ?? 0;
+  if (workersDevDisabled !== 3 || previewUrlsDisabled !== 3) {
+    failures.push(`${file}: development, staging, and production must disable public worker URLs`);
+  }
+  if (/"routes?"\s*:/u.test(source)) {
+    failures.push(`${file}: public routes are forbidden`);
+  }
+  if (!source.includes('"binding": "CONTENT_SOURCE_OBJECTS"')) {
+    failures.push(`${file}: missing private source-object R2 binding`);
+  }
+  if (!source.includes('"binding": "CONTENT_MALWARE_SCANNER_SERVICE"')) {
+    failures.push(`${file}: missing malware-scanner service binding`);
+  }
+  return failures;
+}
+
 function checkRuntimeImageDockerfiles() {
   const dockerfiles = [
     "services/api/Dockerfile.content-malware-scanner",
@@ -199,6 +218,11 @@ function checkRuntimeImageDockerfiles() {
   failures.push(...checkScannerContainerIsolation(
     scannerWorker,
     fs.readFileSync(path.join(repoRoot, scannerWorker), "utf8"),
+  ));
+  const sourceBrokerConfig = "services/content-source-broker/wrangler.jsonc";
+  failures.push(...checkContentSourceBrokerIsolation(
+    sourceBrokerConfig,
+    fs.readFileSync(path.join(repoRoot, sourceBrokerConfig), "utf8"),
   ));
 
   return { label: "runtime-image-dockerfiles", failures };

@@ -10,7 +10,6 @@ export type ContentUploadSession = {
   id: string
   status: ContentUploadSessionRow["status"]
   upload_mode: ContentUploadMode
-  object_key: string
   provider_upload_id: string | null
   part_size_bytes: number | null
   total_parts: number | null
@@ -71,7 +70,6 @@ export function serializeContentBlob(owned: OwnedContentBlob): ContentBlob {
       id: uploadSession.content_upload_session_id,
       status: uploadSession.status,
       upload_mode: uploadSession.upload_mode,
-      object_key: uploadSession.object_key,
       provider_upload_id: uploadSession.provider_upload_id,
       part_size_bytes: uploadSession.part_size_bytes,
       total_parts: uploadSession.total_parts,

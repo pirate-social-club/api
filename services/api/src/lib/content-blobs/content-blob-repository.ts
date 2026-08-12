@@ -224,8 +224,8 @@ export async function markProxyContentBlobUploaded(input: {
   storageBucket: string
   storageObjectKey: string
   storageEndpoint: string
-  gatewayUrl: string
-  ipfsCid: string
+  gatewayUrl: string | null
+  ipfsCid: string | null
   completedAt: string
 }): Promise<OwnedContentBlob> {
   await withTransaction(input.client, "write", async (tx) => {

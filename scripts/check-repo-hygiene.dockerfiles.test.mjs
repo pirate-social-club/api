@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import {
   checkRuntimeImageDockerfileContent,
   checkRuntimeImageShutdownEntrypoint,
+  checkContentSourceBrokerIsolation,
   checkScannerContainerIsolation,
   checkScannerImageSupplyChain,
 } from "./check-repo-hygiene.mjs";
@@ -134,5 +135,32 @@ describe("scanner container isolation guard", () => {
     const file = "services/content-malware-scanner-container/src/index.ts";
     const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
     expect(checkScannerContainerIsolation(file, source)).toEqual([]);
+  });
+});
+
+describe("content source broker isolation guard", () => {
+  const valid = `
+    "workers_dev": false,
+    "preview_urls": false,
+    "binding": "CONTENT_SOURCE_OBJECTS",
+    "binding": "CONTENT_MALWARE_SCANNER_SERVICE",
+    "workers_dev": false,
+    "preview_urls": false,
+    "workers_dev": false,
+    "preview_urls": false
+  `;
+
+  test("accepts three private environments with exact internal bindings", () => {
+    expect(checkContentSourceBrokerIsolation(FILE, valid)).toEqual([]);
+  });
+
+  test("rejects public URLs, routes, and missing bindings", () => {
+    expect(checkContentSourceBrokerIsolation(FILE, '"workers_dev": true, "routes": []')).toHaveLength(4);
+  });
+
+  test("the content source broker configuration passes", () => {
+    const file = "services/content-source-broker/wrangler.jsonc";
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    expect(checkContentSourceBrokerIsolation(file, source)).toEqual([]);
   });
 });
