@@ -1,4 +1,4 @@
-import { getControlPlaneClient } from "../runtime-deps"
+import { getControlPlaneClient, isPostgresControlPlaneUrl } from "../runtime-deps"
 import { requiredNumber, requiredString } from "../sql-row"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import { resolveAgeGateViewerState } from "../posts/age-gate-viewer-state"
@@ -705,6 +705,23 @@ export type HomeFeedProjectionPage = {
   hasMore: boolean
 }
 
+export function homeFeedBestRankSql(input: {
+  engagementScore: string
+  rankedAtPlaceholder: string
+  postgres: boolean
+}): string {
+  const numerator = `((${input.engagementScore}) + 1.0)`
+  const elapsedHours = input.postgres
+    ? `(EXTRACT(EPOCH FROM (${input.rankedAtPlaceholder}::timestamptz - source_created_at::timestamptz)) / 3600.0)`
+    : `((julianday(${input.rankedAtPlaceholder}) - julianday(source_created_at)) * 24.0)`
+  const nonNegativeAge = input.postgres
+    ? `GREATEST(0.0, ${elapsedHours})`
+    : `MAX(0.0, ${elapsedHours})`
+  const age = `((${nonNegativeAge}) + 2.0)`
+  const magnitudeSquared = `((${numerator}) * (${numerator}) / ((${age}) * (${age}) * (${age})))`
+  return `(CASE WHEN ${numerator} < 0 THEN -${magnitudeSquared} ELSE ${magnitudeSquared} END)`
+}
+
 function projectionVisibilitySql(input: {
   memberCommunityIds: string[]
   nextArgIndex: number
@@ -755,10 +772,11 @@ export async function listHomeFeedProjectionPage(input: {
   const bestRankSql = (() => {
     if (input.sort !== "best") return null
     const rankedAtIndex = pushArg(new Date(input.now).toISOString())
-    const numerator = `((${engagementScore}) + 1.0)`
-    const age = `(MAX(0.0, (julianday(?${rankedAtIndex}) - julianday(source_created_at)) * 24.0) + 2.0)`
-    const magnitudeSquared = `((${numerator}) * (${numerator}) / ((${age}) * (${age}) * (${age})))`
-    return `(CASE WHEN ${numerator} < 0 THEN -${magnitudeSquared} ELSE ${magnitudeSquared} END)`
+    return homeFeedBestRankSql({
+      engagementScore,
+      rankedAtPlaceholder: `?${rankedAtIndex}`,
+      postgres: isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
+    })
   })()
   const keyExpr = input.sort === "top" ? engagementScore : bestRankSql
   const orderSql = input.sort === "new"

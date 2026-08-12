@@ -4,6 +4,7 @@ import {
   filterVisibleHomeFeedProjections,
   homeFeedCorpusMemberCommunityIds,
   listHomeFeedCommunityViewCounts,
+  homeFeedBestRankSql,
   listHomeFeedProjectionPage,
   mergeVideoFeedCandidateRows,
   nextVideoFeedBackfillBatchSize,
@@ -602,6 +603,27 @@ describe("homeFeedCorpusMemberCommunityIds", () => {
 })
 
 describe("listHomeFeedProjectionPage", () => {
+  test("uses native date arithmetic for each control-plane dialect", () => {
+    const postgres = homeFeedBestRankSql({
+      engagementScore: "score",
+      rankedAtPlaceholder: "?1",
+      postgres: true,
+    })
+    expect(postgres).toContain("GREATEST(0.0")
+    expect(postgres).toContain("EXTRACT(EPOCH FROM (?1::timestamptz - source_created_at::timestamptz))")
+    expect(postgres).not.toContain("julianday")
+    expect(postgres).not.toContain("MAX(0.0")
+
+    const sqlite = homeFeedBestRankSql({
+      engagementScore: "score",
+      rankedAtPlaceholder: "?1",
+      postgres: false,
+    })
+    expect(sqlite).toContain("MAX(0.0")
+    expect(sqlite).toContain("julianday(?1)")
+    expect(sqlite).not.toContain("EXTRACT(EPOCH")
+  })
+
   async function setupProjectionRows(rows: Array<{
     id: string
     createdAt: string
