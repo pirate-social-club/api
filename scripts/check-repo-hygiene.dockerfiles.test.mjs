@@ -3,7 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { checkRuntimeImageDockerfileContent } from "./check-repo-hygiene.mjs";
+import {
+  checkRuntimeImageDockerfileContent,
+  checkRuntimeImageShutdownEntrypoint,
+} from "./check-repo-hygiene.mjs";
 
 const FILE = "Dockerfile.fixture";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -53,6 +56,29 @@ describe("runtime image Dockerfile guard: rejected forms", () => {
     for (const file of ["services/api/Dockerfile.song-preview", "services/api/Dockerfile.zkpassport-verifier"]) {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
       expect(checkRuntimeImageDockerfileContent(file, source)).toEqual([]);
+    }
+  });
+});
+
+describe("runtime image Dockerfile guard: graceful shutdown", () => {
+  test("accepts tini as the image entrypoint", () => {
+    expect(checkRuntimeImageShutdownEntrypoint(
+      FILE,
+      'ENTRYPOINT ["/usr/bin/tini", "--"]\nCMD ["bun", "run", "service.ts"]',
+    )).toEqual([]);
+  });
+
+  test("rejects a runtime process as PID 1", () => {
+    expect(checkRuntimeImageShutdownEntrypoint(
+      FILE,
+      'CMD ["bun", "run", "service.ts"]',
+    )).toEqual([`${FILE}: missing tini shutdown ENTRYPOINT`]);
+  });
+
+  test("current production Dockerfiles use tini", () => {
+    for (const file of ["services/api/Dockerfile.song-preview", "services/api/Dockerfile.zkpassport-verifier"]) {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      expect(checkRuntimeImageShutdownEntrypoint(file, source)).toEqual([]);
     }
   });
 });

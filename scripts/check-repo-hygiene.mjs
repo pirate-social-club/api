@@ -143,13 +143,25 @@ export function checkRuntimeImageDockerfileContent(file, source) {
   return failures;
 }
 
+export function checkRuntimeImageShutdownEntrypoint(file, source) {
+  const tiniEntrypoint = /^\s*ENTRYPOINT\s+\["\/usr\/bin\/tini",\s*"--"\]\s*$/mu;
+  return tiniEntrypoint.test(source)
+    ? []
+    : [`${file}: missing tini shutdown ENTRYPOINT`];
+}
+
 function checkRuntimeImageDockerfiles() {
   const dockerfiles = [
     "services/api/Dockerfile.song-preview",
     "services/api/Dockerfile.zkpassport-verifier",
   ];
-  const failures = dockerfiles.flatMap((file) =>
-    checkRuntimeImageDockerfileContent(file, fs.readFileSync(path.join(repoRoot, file), "utf8")));
+  const failures = dockerfiles.flatMap((file) => {
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    return [
+      ...checkRuntimeImageDockerfileContent(file, source),
+      ...checkRuntimeImageShutdownEntrypoint(file, source),
+    ];
+  });
 
   return { label: "runtime-image-dockerfiles", failures };
 }
