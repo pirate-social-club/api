@@ -36,10 +36,16 @@ Do not add production or staging bindings until all of these are reviewed:
 2. Deploy the pinned scanner image and private source broker. Neither Worker
    may expose a public route. Provision separate private R2 namespaces and the
    same internal authentication secret through the approved secret path.
-3. Add reviewed scanner-release promotion tooling. Raw database writes are not
-   a supported promotion or revocation path. The tooling must bind source
-   revision, frozen runtime lock, image digests, engine and signature versions,
-   SBOM, and clean/malicious corpus evidence before activation.
+3. Issue a dedicated operator credential with only
+   `content-security:scanner-releases:manage`. Stage the release through
+   `POST /operator/content-security/scanner-releases`, then activate it through
+   `POST /operator/content-security/scanner-releases/{id}/activate`. Raw
+   database writes are not a supported promotion or revocation path. The stage
+   request binds source revision, frozen runtime lock, image digests, engine and
+   signature versions, SBOM, clean/malicious corpus evidence, an authorization
+   reference, and a bounded reason. Rejection or later invalidation uses
+   `POST /operator/content-security/scanner-releases/{id}/revoke`; revocation is
+   terminal and can apply before activation or after retirement.
 4. Provision the content-security Queue and dead-letter Queue. Add the API
    producer/consumer Queue binding and broker service binding in a separate
    reviewed deployment change.
@@ -50,8 +56,9 @@ Do not add production or staging bindings until all of these are reviewed:
    published ciphertext storage. The physical quota is authoritative; locked
    goods generally consume roughly twice their logical size.
 
-Scanner-release promotion tooling and real infrastructure are currently
-missing. That blocks enablement even after this code ships.
+The operator lifecycle is implemented but remains dormant until its API change
+and the matching Core 0222 migration are released. Real infrastructure is still
+missing, so no scanner can be enabled by merging this code alone.
 
 ## Staged enablement
 

@@ -31,6 +31,7 @@ import notifications from "./routes/notifications"
 import oauth from "./routes/oauth"
 import royalties from "./routes/royalties"
 import storySettlementOps from "./routes/story-settlement-ops"
+import contentSecurityOps from "./routes/content-security-ops"
 import onboarding from "./routes/onboarding"
 import posts from "./routes/posts"
 import publicAgents from "./routes/public-agents"
@@ -786,6 +787,13 @@ app.use("/admin/*", async (c, next) => {
     applyNoStore(c.res)
   }
 })
+app.use("/operator/*", async (c, next) => {
+  try {
+    await next()
+  } finally {
+    applyNoStore(c.res)
+  }
+})
 app.route("/admin/bot-users", botUsers)
 app.route("/admin/debug", debugPipeline)
 // Operational state must never be served from a cache. These endpoints report
@@ -825,6 +833,7 @@ app.route("/notifications", notifications)
 app.route("/oauth", oauth)
 app.route("/royalties", royalties)
 app.route("/operator/story-settlement", storySettlementOps)
+app.route("/operator/content-security", contentSecurityOps)
 app.route("/admin/ops/hns-wallet-origins", hnsWalletOriginOps)
 app.route("/posts", posts)
 app.route("/public-agents", publicAgents)
@@ -874,6 +883,7 @@ app.onError(async (error, c) => {
   // become a cacheable body either.
   if (
     new URL(c.req.url).pathname.startsWith("/admin/")
+    || new URL(c.req.url).pathname.startsWith("/operator/")
     || hasCredentialBearingHeader(c.req.raw)
   ) {
     applyNoStore(response)
