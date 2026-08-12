@@ -1,4 +1,5 @@
 import { app } from "../../../src/index"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import { json, mintUpstreamJwt } from "../../helpers"
 import type { Env } from "../../../src/types"
 
@@ -46,7 +47,7 @@ export async function exchangeJwt(env: Env, sub: string): Promise<{ accessToken:
   const publicUserId = body.user.id
   return {
     accessToken: body.access_token,
-    userId: publicUserId.replace(/^usr_/, ""),
+    userId: decodePublicUserId(publicUserId),
     publicUserId,
   }
 }
@@ -77,7 +78,7 @@ export async function exchangeJwtWithWallet(env: Env, sub: string, walletAddress
   const publicUserId = body.user.id
   return {
     accessToken: body.access_token,
-    userId: publicUserId.replace(/^usr_/, ""),
+    userId: decodePublicUserId(publicUserId),
     publicUserId,
     primaryWalletAttachment: body.user.primary_wallet_attachment,
   }

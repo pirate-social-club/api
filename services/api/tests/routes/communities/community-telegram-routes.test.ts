@@ -3472,6 +3472,8 @@ describe("community Telegram routes", () => {
       },
     })
     expect(exchangeResponse.status).toBe(200)
+    const exchangeBody = await json(exchangeResponse) as { user: { id: string } }
+    expect(exchangeBody.user.id).toMatch(/^usr_[^_]+$/u)
 
     const studyExchangeResponse = await telegramSessionAutoExchange({
       env: ctx.env,

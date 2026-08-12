@@ -21,6 +21,7 @@ import { getJoinEligibility } from "../lib/communities/membership/eligibility-se
 import {
   decodePublicNamespaceVerificationId,
   decodePublicNamespaceVerificationSessionId,
+  decodePublicUserId,
   decodePublicVerificationSessionId,
 } from "../lib/public-ids"
 import {
@@ -105,7 +106,7 @@ verification.post("/verification-sessions/:verificationSessionId/receive-self-pr
   }
   await trackApiEvent(c.env, c.req, {
     eventName: result.status === "verified" ? "unique_human_verification_succeeded" : "unique_human_verification_failed",
-    userId: result.user.replace(/^usr_/, ""),
+    userId: decodePublicUserId(result.user),
     verificationSessionId: result.id.replace(/^vs_/, ""),
     properties: {
       provider: "self",

@@ -651,8 +651,8 @@ describe("community live-room routes", () => {
     expect(room.status).toBe("scheduled")
     expect(room.recording_enabled).toBe(false)
     expect(room.anchor_post.startsWith("pst_")).toBe(true)
-    expect(room.host_user).toBe(`usr_${owner.userId}`)
-    expect(room.performer_allocations[0]?.user).toBe(`usr_${owner.userId}`)
+    expect(room.host_user).toBe(owner.userId)
+    expect(room.performer_allocations[0]?.user).toBe(owner.userId)
     expect(room.performer_allocations[0]?.share_bps).toBe(10000)
     expect(room.setlist.status).toBe("ready")
     expect(room.setlist.items[0]?.title).toBe("Opening Song")
@@ -2308,7 +2308,7 @@ describe("community live-room routes", () => {
           locked_delivery_status: "none",
           allocations: [
             {
-              participant_user: `usr_${owner.userId}`,
+              participant_user: owner.userId,
               role: "host",
               share_bps: 10000,
               rights_basis: "performer_default",
@@ -2366,7 +2366,7 @@ describe("community live-room routes", () => {
           access_mode: "free",
           allocations: [
             {
-              participant_user: `usr_${owner.userId}`,
+              participant_user: owner.userId,
               external_party_ref: null,
               role: "host",
               share_bps: 8500,

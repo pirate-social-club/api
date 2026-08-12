@@ -407,7 +407,7 @@ describe("feed routes", () => {
       title: "Original feed source",
       community_label: "Feed Source Club",
     })
-    expect(crosspostItem?.post.post.crosspost_source?.author_user).toBe(`usr_${session.userId}`)
+    expect(crosspostItem?.post.post.crosspost_source?.author_user).toBe(session.userId)
 
     const deleteSource = await requestJson(
       `http://pirate.test/communities/${sourceCommunityId}/posts/${sourcePostBody.id}/delete`,

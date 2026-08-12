@@ -341,7 +341,7 @@ describe("d1_native community provisioning", () => {
 
     const load = calls[1]!.input as { statements: Array<{ args?: unknown[] }> }
     expect(load.statements.some((statement) =>
-      Array.isArray(statement.args) && statement.args.includes(namespaceVerificationId.replace(/^nv_/, ""))
+      Array.isArray(statement.args) && statement.args.includes(namespaceVerificationId)
     )).toBe(true)
 
     const communityIdBare = body.community.id.replace(/^com_/, "")
@@ -363,11 +363,11 @@ describe("d1_native community provisioning", () => {
       args: [communityIdBare],
     })).rows[0] as Record<string, unknown>
     expect(communityRow).toMatchObject({
-      namespace_verification_id: namespaceVerificationId.replace(/^nv_/, ""),
+      namespace_verification_id: namespaceVerificationId,
       route_slug: "piratecommunityroot",
     })
 
     const createdState = await getCommunityControlPlaneState(ctx.env, communityIdBare)
-    expect(createdState.namespaceVerificationId).toBe(namespaceVerificationId.replace(/^nv_/, ""))
+    expect(createdState.namespaceVerificationId).toBe(namespaceVerificationId)
   }, COMMUNITY_PROVISIONING_TEST_TIMEOUT_MS)
 })

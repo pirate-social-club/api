@@ -16,8 +16,21 @@ export function publicCommentId(rawCommentId: string): string {
   return `cmt_${rawCommentId}`
 }
 
+// Only families audited end-to-end for single-prefix output belong here.
+// Other decoder-tolerant families, including sab/sau, retain their historical
+// representation until their serializers and clients are migrated together.
+// Families using the single-strip generic decoder, including lst/aor, must
+// retain both prefix layers for round-tripping.
+const NORMALIZABLE_PUBLIC_ID_PREFIXES = new Set(["agt", "nv", "usr"])
+
 export function publicId(rawId: string, publicPrefix: string): string {
-  return `${publicPrefix}_${rawId}`
+  const prefix = `${publicPrefix}_`
+  if (!NORMALIZABLE_PUBLIC_ID_PREFIXES.has(publicPrefix)) return `${prefix}${rawId}`
+  let normalized = rawId.trim()
+  while (normalized.startsWith(prefix)) {
+    normalized = normalized.slice(prefix.length)
+  }
+  return `${prefix}${normalized}`
 }
 
 export function decodePublicCommunityId(value: string): string {

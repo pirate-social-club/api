@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { app } from "../../src/index"
+import { decodePublicUserId } from "../../src/lib/public-ids"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../helpers"
 import type { Env } from "../../src/types"
 
@@ -49,7 +50,7 @@ async function exchangeJwt(env: Env, sub: string, walletAddress?: string): Promi
   const body = await json(response) as { access_token: string; user: { id: string } }
   return {
     accessToken: body.access_token,
-    userId: body.user.id.replace(/^usr_/, ""),
+    userId: decodePublicUserId(body.user.id),
   }
 }
 

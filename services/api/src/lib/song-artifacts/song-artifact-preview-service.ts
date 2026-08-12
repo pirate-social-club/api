@@ -2,6 +2,7 @@ import { badRequestError, notFoundError, songContentHashMismatchError } from "..
 import { makeId, nowIso } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import { sha256Hex } from "../crypto"
+import { decodePublicUserId } from "../public-ids"
 import {
   createSongArtifactUploadIntent,
   findUploadedSongArtifactByStorageRef,
@@ -114,7 +115,7 @@ export async function generateSongPreviewForBundle(input: {
     await createSongArtifactUploadIntent({
       client,
       communityId: input.communityId,
-      userId: bundle.creator_user.replace(/^usr_/, ""),
+      userId: decodePublicUserId(bundle.creator_user),
       songArtifactUploadId: previewUploadId,
       storageRef: buildSongArtifactContentUrl(origin, input.communityId, previewUploadId),
       body: {

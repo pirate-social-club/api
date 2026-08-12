@@ -30,6 +30,7 @@ import { parseStoredCountryCode, parseStoredReferenceLinks } from "./community-s
 import { isCommunityLive } from "./community-status"
 import { getControlPlaneClient } from "../runtime-deps"
 import { dedupeStrings, splitCsv } from "../helpers"
+import { publicId } from "../public-ids"
 import type {
   CommunityDatabaseBindingRepository,
   CommunityReadRepository,
@@ -207,7 +208,7 @@ async function getCommunityRoleSummary(input: {
   }
 
   return {
-    user: `usr_${String(row.user_id)}`,
+    user: publicId(String(row.user_id), "usr"),
     display_name: displayName,
     handle,
     avatar_ref: row.avatar_ref == null ? null : String(row.avatar_ref),

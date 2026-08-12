@@ -8,6 +8,7 @@ import {
 } from "../../../src/lib/communities/commerce/checkout-config"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import { badRequestError } from "../../../src/lib/errors"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import type { Env } from "../../../src/types"
 import { createRouteTestContext, json, mintUpstreamJwt, resetRuntimeCaches } from "../../helpers"
 import {
@@ -89,7 +90,7 @@ async function exchangeJwtWithWallet(env: Env, sub: string): Promise<{
   }
   return {
     accessToken: body.access_token,
-    userId: body.user.id.replace(/^usr_/, ""),
+    userId: decodePublicUserId(body.user.id),
     primaryWalletAttachment: body.user.primary_wallet_attachment,
   }
 }

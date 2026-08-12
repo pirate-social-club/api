@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import { createClient } from "@libsql/client"
 import { app } from "../../../src/index"
 import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { publicId } from "../../../src/lib/public-ids"
 import type { CommunityPreview, Env } from "../../../src/types"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import {
@@ -13,7 +14,7 @@ import {
 let cleanup: (() => Promise<void>) | null = null
 
 function publicUserId(userId: string): string {
-  return userId.startsWith("usr_") ? `usr_${userId}` : `usr_${userId}`
+  return publicId(userId, "usr")
 }
 
 beforeEach(() => {
