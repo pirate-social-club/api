@@ -91,7 +91,7 @@ describe("graceful HTTP shutdown", () => {
     })
 
     shutdown("SIGTERM")
-    await Bun.sleep(25)
+    await new Promise((resolve) => setTimeout(resolve, 25))
 
     expect(closeCalls).toBe(1)
     expect(closeIdleConnectionsCalls).toBe(1)
