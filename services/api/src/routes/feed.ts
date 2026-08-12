@@ -5,6 +5,7 @@ import { getCommunityRepository } from "../lib/communities/db-community-reposito
 import { getProfileRepository, getUserRepository } from "../lib/auth/repositories"
 import {
   HOME_FEED_SERVER_TIMING,
+  HOME_FEED_ROUTING_DIAGNOSTICS,
   listHomeFeed,
   refreshMaterializedHomeFeedBookings,
 } from "../lib/feed/home-feed-service"
@@ -73,10 +74,14 @@ function getWaitUntil(c: Context): ((promise: Promise<void>) => void) | undefine
   return waitUntil
 }
 
-function setHomeFeedServerTiming(c: Context, result: Awaited<ReturnType<typeof listHomeFeed>>): void {
+function setHomeFeedDiagnostics(c: Context, result: Awaited<ReturnType<typeof listHomeFeed>>): void {
   const value = result[HOME_FEED_SERVER_TIMING]
   if (value) {
     c.header("Server-Timing", value)
+  }
+  const routing = result[HOME_FEED_ROUTING_DIAGNOSTICS]
+  if (routing) {
+    c.header("x-pirate-home-feed-routing", routing)
   }
 }
 
@@ -107,7 +112,7 @@ feed.get("/home/public", async (c) => {
       }))
     }
     setPublicReadCacheHeaders(c)
-    setHomeFeedServerTiming(c, materialized.result)
+    setHomeFeedDiagnostics(c, materialized.result)
     c.header("x-pirate-materialized-feed", materialized.state)
     return c.json(materialized.result, 200)
   }
@@ -163,7 +168,7 @@ feed.get("/home/public", async (c) => {
   })
   await store
   setPublicReadCacheHeaders(c)
-  setHomeFeedServerTiming(c, result)
+  setHomeFeedDiagnostics(c, result)
   c.header("x-pirate-materialized-feed", materialized.state)
   return c.json(result, 200)
 })
@@ -196,7 +201,7 @@ feed.get("/home/videos/public", async (c) => {
       }))
     }
     setPublicReadCacheHeaders(c)
-    setHomeFeedServerTiming(c, materialized.result)
+    setHomeFeedDiagnostics(c, materialized.result)
     c.header("x-pirate-materialized-feed", materialized.state)
     return c.json(materialized.result, 200)
   }
@@ -252,7 +257,7 @@ feed.get("/home/videos/public", async (c) => {
     target: materializedTarget,
   })
   setPublicReadCacheHeaders(c)
-  setHomeFeedServerTiming(c, result)
+  setHomeFeedDiagnostics(c, result)
   c.header("x-pirate-materialized-feed", materialized.state)
   return c.json(result, 200)
 })
@@ -276,7 +281,7 @@ feed.get("/home", async (c) => {
   if (!actor && !c.req.header("authorization")) {
     setPublicReadCacheHeaders(c, { vary: ["Authorization"] })
   }
-  setHomeFeedServerTiming(c, result)
+  setHomeFeedDiagnostics(c, result)
   return c.json(result, 200)
 })
 
@@ -298,7 +303,7 @@ feed.get("/home/videos", async (c) => {
   if (!actor && !c.req.header("authorization")) {
     setPublicReadCacheHeaders(c, { vary: ["Authorization"] })
   }
-  setHomeFeedServerTiming(c, result)
+  setHomeFeedDiagnostics(c, result)
   return c.json(result, 200)
 })
 

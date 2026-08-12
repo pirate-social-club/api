@@ -237,3 +237,40 @@ Before changing this file, run:
 4. Test-seam/global-state removal.
 5. `src/types.ts` facade cleanup with cross-repo checks.
 6. Community-bookings decision as a separate breaking-change proposal.
+
+## 2026-08-12 home-feed hydration follow-up
+
+Audit item #8 remains open. The first batching slice reduced query calls inside
+each community read, but production endpoint samples did not show a measurable
+wall-time improvement: the observed fanout range changed from 2.2–10.8 seconds
+to 2.2–11.6 seconds. Do not describe that slice as a latency fix.
+
+The next release is instrumentation-only. Fresh live responses expose:
+
+- Per-request sum and maximum durations for community wall time, database open,
+  batched reads, localization, streaks, derivative hydration, and unaccounted
+  residual through `Server-Timing`.
+- Page-community, prefetch-operation, prefetch-batch, and shard-group
+  counts through `x-pirate-home-feed-routing` and the structured timing log.
+
+The aggregate durations are request-local; no module-global counters are used.
+Shard counts come from the existing routing pass, not a second resolver scan.
+`prefetch_shard_groups` is a sum across prefetch batches. For the mixed
+feed's normal single prefetch batch, it is the page's shard-group count.
+
+Before changing the fanout mechanism, collect at least 50 cache-busted mixed
+`best` first-page samples on the instrumentation build. Report p50 and p95,
+split first/cold observations from subsequent/warm observations, and correlate
+the phase metrics with `page_communities` and `prefetch_shard_groups`.
+
+The second hydration slice is accepted only if the same production probe:
+
+1. Reduces p95 `community-fanout` by at least 40% from that instrumentation
+   baseline and brings it to at most 5 seconds.
+2. Does not regress p50 total `home-feed` time by more than 10%.
+3. Produces no repeated `source_post_id` during a seven-page mixed-`best` walk.
+
+If the rewrite uses `bulkCommunityRead`, it must remove both serial waits in
+that helper: binding resolution and shard-group reads. Measure the typical
+page's shard distribution first; a page spread over many shards would otherwise
+replace concurrency-four fanout with serial shard RPCs and can be slower.

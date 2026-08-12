@@ -13,6 +13,7 @@ import type {
 import {
   prefetchHomeFeedCommunities,
   readHomeFeedCommunityItems,
+  summarizeHomeFeedCommunityPhaseTimings,
   resolveTopCommunitiesIdentity,
   serializeHomeFeedCommunitySummary,
   type HomeFeedCommunityIdentity,
@@ -62,9 +63,11 @@ export type {
 const HOME_FEED_COMMUNITY_READ_CONCURRENCY = 4
 
 export const HOME_FEED_SERVER_TIMING: unique symbol = Symbol("home-feed-server-timing")
+export const HOME_FEED_ROUTING_DIAGNOSTICS: unique symbol = Symbol("home-feed-routing-diagnostics")
 
 export type HomeFeedResponseWithTiming = HomeFeedResponse & {
   [HOME_FEED_SERVER_TIMING]?: string
+  [HOME_FEED_ROUTING_DIAGNOSTICS]?: string
 }
 
 function elapsedMs(startedAt: number): number {
@@ -91,6 +94,12 @@ function withHomeFeedServerTiming(
   response: HomeFeedResponse,
   input: {
     phases: Record<string, number>
+    routing?: {
+      pageCommunityCount: number
+      prefetchBatchCount: number
+      prefetchOperationCount: number
+      prefetchShardGroupCount: number
+    }
     totalMs: number
   },
 ): HomeFeedResponseWithTiming {
@@ -99,6 +108,18 @@ function withHomeFeedServerTiming(
     enumerable: false,
     value: formatHomeFeedServerTiming(input),
   })
+  if (input.routing) {
+    Object.defineProperty(response, HOME_FEED_ROUTING_DIAGNOSTICS, {
+      configurable: true,
+      enumerable: false,
+      value: [
+        `page_communities=${input.routing.pageCommunityCount}`,
+        `prefetch_batches=${input.routing.prefetchBatchCount}`,
+        `prefetch_operations=${input.routing.prefetchOperationCount}`,
+        `prefetch_shard_groups=${input.routing.prefetchShardGroupCount}`,
+      ].join("; "),
+    })
+  }
   return response as HomeFeedResponseWithTiming
 }
 
@@ -1198,6 +1219,9 @@ export async function listHomeFeed(input: {
   const communityPrefetchById = new Map<string, HomeFeedCommunityPrefetch>()
   const communityTimings: HomeFeedCommunityTiming[] = []
   let communityPrefetchMs = 0
+  let communityPrefetchBatchCount = 0
+  let communityPrefetchOperationCount = 0
+  let communityPrefetchShardGroupCount = 0
 
   phaseStartedAt = performance.now()
   const hydrateRows = async (
@@ -1213,14 +1237,17 @@ export async function listHomeFeed(input: {
       .filter((communityId) => !communityPrefetchById.has(communityId))
     if (missingPrefetchCommunityIds.length > 0) {
       const prefetchStartedAt = performance.now()
-      const prefetched = await prefetchHomeFeedCommunities({
+      const prefetchResult = await prefetchHomeFeedCommunities({
         communityIds: missingPrefetchCommunityIds,
         communityRepository: input.communityRepository,
         env: input.env,
       })
-      for (const [communityId, value] of prefetched) {
+      for (const [communityId, value] of prefetchResult.communities) {
         communityPrefetchById.set(communityId, value)
       }
+      communityPrefetchOperationCount += prefetchResult.operationCount
+      communityPrefetchShardGroupCount += prefetchResult.shardGroupCount
+      communityPrefetchBatchCount += 1
       communityPrefetchMs += elapsedMs(prefetchStartedAt)
     }
     const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
@@ -1314,6 +1341,7 @@ export async function listHomeFeed(input: {
   }
   phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
   phaseTimings.community_prefetch_ms = communityPrefetchMs
+  Object.assign(phaseTimings, summarizeHomeFeedCommunityPhaseTimings(communityTimings))
   phaseTimings.order_items_ms = 0
 
   if (shadowControlPlane) {
@@ -1361,6 +1389,9 @@ export async function listHomeFeed(input: {
     time_filtered_rows: timeFilteredRows.length,
     page_rows: pageRows.length,
     page_communities: new Set(pageRows.map((row) => row.community_id)).size,
+    prefetch_batches: communityPrefetchBatchCount,
+    prefetch_operations: communityPrefetchOperationCount,
+    prefetch_shard_groups: communityPrefetchShardGroupCount,
     returned_items: bookingDecoratedItems.length,
     top_communities: topCommunities.length,
     degraded_profile_slices: communityTimings.filter((timing) => timing.derivative_profiles_degraded).length,
@@ -1374,6 +1405,12 @@ export async function listHomeFeed(input: {
     next_cursor: nextCursor,
   }, {
     phases: phaseTimings,
+    routing: {
+      pageCommunityCount: new Set(pageRows.map((row) => row.community_id)).size,
+      prefetchBatchCount: communityPrefetchBatchCount,
+      prefetchOperationCount: communityPrefetchOperationCount,
+      prefetchShardGroupCount: communityPrefetchShardGroupCount,
+    },
     totalMs,
   })
 }

@@ -251,9 +251,14 @@ export async function bulkCommunityRead(
   env: Env,
   repo: CommunityDatabaseBindingRepository,
   operations: CommunityBulkOperation[],
+  observeRouting?: (operationCount: number, shardGroupCount: number) => void,
 ): Promise<Map<string, QueryResult[]>> {
-  if (operations.length === 0) return new Map()
+  if (operations.length === 0) {
+    observeRouting?.(0, 0)
+    return new Map()
+  }
   if (shouldUseLocalCommunityDb(env)) {
+    observeRouting?.(operations.length, new Set(operations.map((operation) => operation.communityId)).size)
     const values = await Promise.all(operations.map(async (operation) => {
       const db = await openLocalCommunityDb(env, repo, operation.communityId)
       try {
@@ -284,6 +289,7 @@ export async function bulkCommunityRead(
     })
     groups.set(key, group)
   }
+  observeRouting?.(operations.length, groups.size)
 
   const values = new Map<string, QueryResult[]>()
   for (const group of groups.values()) {
