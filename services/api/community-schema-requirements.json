@@ -52,7 +52,8 @@
     "1152_user_account_merge_receipts.sql",
     "1153_dance_attempt_start_cue_evidence.sql",
     "1154_commerce_integer_money.sql",
-    "1155_listings_asset_unique_index.sql"
+    "1155_listings_asset_unique_index.sql",
+    "1156_song_study_fill_blank.sql"
   ],
   "features": {},
   "transitional": {
@@ -122,6 +123,7 @@
     "1151_song_study_orchestration_v2.sql": "The migration adds server-owned lesson-orchestration columns and receipt/response tables, then backfills completed sessions and resolved exercises with UPDATE statements the fleet artifact deriver cannot model. Require the exact pinned Core ledger checksum; Core migration tests verify the backfill and persistence contract while the API snapshot verifies the resulting columns, constraints, indexes, and tables.",
     "1153_dance_attempt_start_cue_evidence.sql": "SQLite widens the immutable dance reason contract and appends cue evidence through a full table rebuild. Require the exact pinned Core ledger checksum; Core migration tests verify populated-row preservation and API finalization tests verify the cue fields written by scorer v2.",
     "1154_commerce_integer_money.sql": "The migration rebuilds four populated commerce tables, converts floating-point USD and percentage values into integer cents and basis points, rewrites allocation snapshot JSON, and recreates indexes. Require the exact pinned Core ledger checksum; migration regressions verify populated-row conversion and integer guards while the API snapshot verifies the final schema.",
-    "1155_listings_asset_unique_index.sql": "The migration replaces the non-unique asset lookup with a partial unique index on (community_id, asset_id) to close the paid-listing read-then-write race. It intentionally does not delete pre-existing duplicate money records; duplicate shards must be reconciled by an operator before the migration can apply."
+    "1155_listings_asset_unique_index.sql": "The migration replaces the non-unique asset lookup with a partial unique index on (community_id, asset_id) to close the paid-listing read-then-write race. It intentionally does not delete pre-existing duplicate money records; duplicate shards must be reconciled by an operator before the migration can apply.",
+    "1156_song_study_fill_blank.sql": "The migration adds persisted cloze definitions and widens the study exercise-type contract through populated attempt and review-state table rebuilds. Require the exact pinned Core ledger checksum because the fleet artifact deriver cannot model rebuild equivalence; migration and grading regressions verify populated-row preservation and fill-blank behavior while the generated snapshot verifies the final schema."
   }
 }

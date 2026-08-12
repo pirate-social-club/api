@@ -3,16 +3,23 @@ import type { ReadClient } from "../sql-client"
 import type { StudyPack } from "./post-study-localization-service"
 import type { AttemptOutcome, FsrsRating } from "./post-study-recall-grading"
 
-export type ExerciseType = "say_it_back" | "translation_choice"
+export type ExerciseType = "say_it_back" | "translation_choice" | "fill_blank"
+
+export function readExerciseType(value: unknown): ExerciseType | null {
+  const type = readString(value)
+  return type === "say_it_back" || type === "translation_choice" || type === "fill_blank" ? type : null
+}
 
 export type StudyExerciseRow = {
   correct_option_id: string | null
+  correct_placements_json?: string | null
   exercise_type: ExerciseType
   id: string
   line_id: string
   line_index: number
   max_attempts: number
   options_json: string | null
+  segments_json?: string | null
   prompt_text: string
   /** Immutable session-creation policy snapshot; current shipped types default to true. */
   qualifies_for_reward?: boolean
@@ -21,6 +28,7 @@ export type StudyExerciseRow = {
   review_language: string
   study_pack_version: number
   translation_text: string | null
+  tokens_json?: string | null
 }
 
 export type StudyExerciseForAttempt = StudyExerciseRow & {
@@ -37,6 +45,7 @@ export type StudyAttemptRow = {
   fsrs_rating: FsrsRating | null
   id: string
   outcome: AttemptOutcome
+  placements_json: string | null
   selected_option_id: string | null
   study_session_id: string | null
   transcript: string | null
@@ -89,12 +98,14 @@ export async function getExerciseForAttempt(
     const sourceLanguage = readString(row.source_language) ?? "source"
     return {
       correct_option_id: null,
+      correct_placements_json: null,
       exercise_type: "say_it_back",
       id: exerciseId,
       line_id: readString(row.line_id) ?? "",
       line_index: Number(row.line_index ?? 0),
       max_attempts: Number(row.max_attempts ?? 2),
       options_json: null,
+      segments_json: null,
       post_id: readString(row.post_id) ?? "",
       prompt_text: readString(row.prompt_text) ?? "",
       question: null,
@@ -105,6 +116,7 @@ export async function getExerciseForAttempt(
       study_pack_version: Number(row.unit_version ?? 1),
       target_language: sourceLanguage,
       translation_text: null,
+      tokens_json: null,
     }
   }
 
@@ -129,12 +141,14 @@ export async function getExerciseForAttempt(
     if (!row) return null
     return {
       correct_option_id: readString(row.correct_option_id),
+      correct_placements_json: null,
       exercise_type: "translation_choice",
       id: exerciseId,
       line_id: readString(row.line_id) ?? "",
       line_index: Number(row.line_index ?? 0),
       max_attempts: Number(row.max_attempts ?? 1),
       options_json: readString(row.options_json),
+      segments_json: null,
       post_id: readString(row.post_id) ?? "",
       prompt_text: readString(row.prompt_text) ?? "",
       question: readString(row.question),
@@ -145,6 +159,50 @@ export async function getExerciseForAttempt(
       study_pack_version: Number(row.localization_version ?? 1),
       target_language: readString(row.target_language) ?? targetLanguage,
       translation_text: readString(row.translation_text),
+      tokens_json: null,
+    }
+  }
+
+  const fillBlankMatch = /^stu:([^:]+):fill_blank:([^:]+)$/u.exec(exerciseId)
+  if (fillBlankMatch) {
+    const unitId = fillBlankMatch[1]!
+    const sourceLanguage = fillBlankMatch[2]!
+    const row = await executeFirst(client, {
+      sql: `
+        SELECT u.id, u.post_id, u.line_id, u.line_index, u.source_language,
+               u.prompt_text, c.segments_json, c.tokens_json,
+               c.correct_placements_json, c.max_attempts, c.status, c.cloze_version
+        FROM song_study_unit u
+        JOIN song_study_unit_cloze c ON c.unit_id = u.id
+        WHERE u.id = ?1
+          AND COALESCE(u.source_language, 'source') = ?2
+        LIMIT 1
+      `,
+      args: [unitId, sourceLanguage],
+    }) as Record<string, unknown> | null
+    if (!row) return null
+    const reviewLanguage = readString(row.source_language) ?? "source"
+    return {
+      correct_option_id: null,
+      correct_placements_json: readString(row.correct_placements_json),
+      exercise_type: "fill_blank",
+      id: exerciseId,
+      line_id: readString(row.line_id) ?? "",
+      line_index: Number(row.line_index ?? 0),
+      max_attempts: Number(row.max_attempts ?? 2),
+      options_json: null,
+      post_id: readString(row.post_id) ?? "",
+      prompt_text: readString(row.prompt_text) ?? "",
+      question: null,
+      reference_text: null,
+      review_language: reviewLanguage,
+      segments_json: readString(row.segments_json),
+      source_language: reviewLanguage,
+      status: readString(row.status) === "ready" ? "ready" : "unavailable",
+      study_pack_version: Number(row.cloze_version ?? 1),
+      target_language: reviewLanguage,
+      tokens_json: readString(row.tokens_json),
+      translation_text: null,
     }
   }
 
@@ -159,7 +217,7 @@ export async function getAttemptByIdempotencyKey(
   const row = await executeFirst(client, {
     sql: `
       SELECT id, exercise_id, exercise_type, attempt_number,
-             selected_option_id, transcript, outcome, feedback_json, fsrs_rating,
+             selected_option_id, transcript, placements_json, outcome, feedback_json, fsrs_rating,
              study_session_id
       FROM song_study_attempt
       WHERE user_id = ?1
@@ -168,7 +226,8 @@ export async function getAttemptByIdempotencyKey(
     `,
     args: [userId, idempotencyKey],
   }) as Record<string, unknown> | null
-  return row
+  const type = readExerciseType(row?.exercise_type)
+  return row && type
     ? {
         attempt_number: Number(row.attempt_number ?? 1),
         exercise_id: readString(row.exercise_id) ?? "",
@@ -176,10 +235,11 @@ export async function getAttemptByIdempotencyKey(
         fsrs_rating: readString(row.fsrs_rating) as FsrsRating | null,
         id: readString(row.id) ?? "",
         outcome: (readString(row.outcome) ?? "incorrect") as AttemptOutcome,
+        placements_json: readString(row.placements_json),
         selected_option_id: readString(row.selected_option_id),
         study_session_id: readString(row.study_session_id),
         transcript: readString(row.transcript),
-        type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
+        type,
       }
     : null
 }
@@ -194,7 +254,7 @@ export async function getAttemptBySessionPresentation(input: {
   const row = await executeFirst(input.client, {
     sql: `
       SELECT id, exercise_id, exercise_type, attempt_number,
-             selected_option_id, transcript, outcome, feedback_json, fsrs_rating,
+             selected_option_id, transcript, placements_json, outcome, feedback_json, fsrs_rating,
              study_session_id
       FROM song_study_attempt
       WHERE user_id = ?1 AND study_session_id = ?2
@@ -203,7 +263,8 @@ export async function getAttemptBySessionPresentation(input: {
     `,
     args: [input.userId, input.sessionId, input.exerciseId, input.attemptNumber],
   }) as Record<string, unknown> | null
-  return row
+  const type = readExerciseType(row?.exercise_type)
+  return row && type
     ? {
         attempt_number: Number(row.attempt_number ?? 1),
         exercise_id: readString(row.exercise_id) ?? "",
@@ -211,10 +272,11 @@ export async function getAttemptBySessionPresentation(input: {
         fsrs_rating: readString(row.fsrs_rating) as FsrsRating | null,
         id: readString(row.id) ?? "",
         outcome: (readString(row.outcome) ?? "incorrect") as AttemptOutcome,
+        placements_json: readString(row.placements_json),
         selected_option_id: readString(row.selected_option_id),
         study_session_id: readString(row.study_session_id),
         transcript: readString(row.transcript),
-        type: (readString(row.exercise_type) ?? "say_it_back") as ExerciseType,
+        type,
       }
     : null
 }

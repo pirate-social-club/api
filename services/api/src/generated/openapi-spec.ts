@@ -15952,7 +15952,8 @@ const spec = {
             "type": "string",
             "enum": [
               "say_it_back",
-              "translation_choice"
+              "translation_choice",
+              "fill_blank"
             ]
           },
           "attempt_number": {
@@ -15967,6 +15968,25 @@ const spec = {
           },
           "transcript": {
             "type": "string"
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "blank_id",
+                "token_id"
+              ],
+              "properties": {
+                "blank_id": {
+                  "type": "string"
+                },
+                "token_id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
           },
           "transcription_language_code": {
             "type": "string"
@@ -16014,6 +16034,25 @@ const spec = {
           },
           "correct_option_id": {
             "type": "string"
+          },
+          "correct_placements": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "blank_id",
+                "token_id"
+              ],
+              "properties": {
+                "blank_id": {
+                  "type": "string"
+                },
+                "token_id": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
           },
           "feedback": {
             "type": "object",
@@ -22622,6 +22661,126 @@ const spec = {
           },
           {
             "type": "object",
+            "title": "SongStudyFillBlankExercise",
+            "required": [
+              "id",
+              "type",
+              "line_id",
+              "line_index",
+              "prompt_text",
+              "segments",
+              "tokens",
+              "max_attempts",
+              "presentation_count",
+              "mastered",
+              "first_outcome"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "fill_blank"
+                ]
+              },
+              "line_id": {
+                "type": "string"
+              },
+              "line_index": {
+                "type": "integer"
+              },
+              "prompt_text": {
+                "type": "string"
+              },
+              "segments": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "text"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "text"
+                          ]
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "id"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "blank"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "tokens": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "text"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "max_attempts": {
+                "type": "integer"
+              },
+              "presentation_count": {
+                "type": "integer"
+              },
+              "mastered": {
+                "type": "boolean"
+              },
+              "first_outcome": {
+                "type": "string",
+                "nullable": true,
+                "enum": [
+                  "correct",
+                  "incorrect",
+                  "revealed"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
             "title": "SongStudyTranslationChoiceExercise",
             "required": [
               "id",
@@ -26843,7 +27002,8 @@ const spec = {
             "type": "string",
             "enum": [
               "say_it_back",
-              "translation_choice"
+              "translation_choice",
+              "fill_blank"
             ]
           },
           "is_reappearance": {

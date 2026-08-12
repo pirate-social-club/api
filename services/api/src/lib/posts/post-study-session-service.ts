@@ -103,16 +103,16 @@ function expiresAt(now: string): string {
 export function interleaveStudySessionCandidates(candidates: StudyExerciseRow[]): StudyExerciseRow[] {
   const byLine = new Map<string, StudyExerciseRow[]>()
   for (const candidate of candidates) {
-    const line = byLine.get(candidate.line_id)
-    if (line) line.push(candidate)
+    const entries = byLine.get(candidate.line_id)
+    if (entries) entries.push(candidate)
     else byLine.set(candidate.line_id, [candidate])
   }
   const ordered: StudyExerciseRow[] = []
   let depth = 0
   while (ordered.length < candidates.length) {
     let added = false
-    for (const line of byLine.values()) {
-      const candidate = line[depth]
+    for (const entries of byLine.values()) {
+      const candidate = entries[depth]
       if (!candidate) continue
       ordered.push(candidate)
       added = true
@@ -121,6 +121,24 @@ export function interleaveStudySessionCandidates(candidates: StudyExerciseRow[])
     depth += 1
   }
   return ordered
+}
+
+export function selectStudySessionCandidates(candidates: StudyExerciseRow[]): StudyExerciseRow[] {
+  const enrichment = candidates.filter((candidate) => candidate.qualifies_for_reward === false)
+  // Preserve the shipped line-first selection exactly when no enrichment type
+  // is present. The fill-blank flag is the only path that supplies non-reward
+  // candidates, so flag-off lessons retain their prior composition and order.
+  if (enrichment.length === 0) {
+    return interleaveStudySessionCandidates(
+      candidates.slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT),
+    )
+  }
+  const qualifying = candidates
+    .filter((candidate) => candidate.qualifies_for_reward !== false)
+    .slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT)
+  const remaining = STUDY_SESSION_DISTINCT_EXERCISE_LIMIT - qualifying.length
+  if (remaining <= 0) return interleaveStudySessionCandidates(qualifying)
+  return interleaveStudySessionCandidates([...qualifying, ...enrichment.slice(0, remaining)])
 }
 
 function mapSummary(row: SessionRow, dueCount: number, totalUnits: number): StudySessionSummary {
@@ -372,9 +390,7 @@ export async function ensureStudySession(input: {
   await expireStaleSession(input)
   let session = await activeSession(input)
   if (!session) {
-    const candidates = interleaveStudySessionCandidates(
-      input.candidates.slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT),
-    )
+    const candidates = selectStudySessionCandidates(input.candidates)
     if (candidates.length === 0) {
       return {
         exercises: [],
