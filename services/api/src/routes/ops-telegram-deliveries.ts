@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono"
-import { authenticateAdminToken, authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticateAdminAccess, authenticateAdminAccessOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { ADMIN_OPERATIONS_MANAGE_SCOPE } from "../lib/operator-credential-auth"
 import { mergeTelegramAccountIntoCanonical } from "../lib/telegram/account-merge-service"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { enqueueCommunityJob } from "../lib/communities/jobs/store"
@@ -33,22 +34,23 @@ import { rowValue, stringOrNull } from "../lib/sql-row"
 // rows are invisible.
 const opsTelegramDeliveries = new Hono<AuthenticatedEnv>()
 
-// Reads are token-only: an operator surveying the fleet has no per-community
-// identity to assert.
+// Reads require the operations scope; no impersonated user is needed.
 function requireOpsAdmin(c: Context<AuthenticatedEnv>) {
-  return authenticateAdminTokenOnly({
+  return authenticateAdminAccessOnly({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
+    requiredScope: ADMIN_OPERATIONS_MANAGE_SCOPE,
   })
 }
 
-// Writes demand an attributable human. authenticateAdminToken throws unless
-// x-admin-as-user-id names a real user, which is what makes the audit record
-// (and its FK to users) meaningful rather than "some admin token did this".
+// Writes additionally demand an impersonated user for existing user-FK audit
+// fields. The operator credential remains the authoritative actor attribution.
 function requireOpsActor(c: Context<AuthenticatedEnv>) {
-  return authenticateAdminToken({
+  return authenticateAdminAccess({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
     asUserId: c.req.header("x-admin-as-user-id"),
   })
 }
@@ -72,7 +74,7 @@ function requireStaging(c: Context<AuthenticatedEnv>): Response | null {
 // receipt-independent sweep for a completed/finalizing merge without exposing
 // merge identifiers or consumed link intents to normal users.
 opsTelegramDeliveries.post("/account-merges/:mergeId/residual-repair", async (c) => {
-  const actor = requireOpsActor(c)
+  const actor = await requireOpsActor(c)
   if (!actor) return c.json({ error: "unauthorized" }, 401)
   const mergeId = c.req.param("mergeId")?.trim()
   if (!mergeId) return c.json({ error: "merge_id_required" }, 400)
@@ -116,7 +118,7 @@ opsTelegramDeliveries.post("/account-merges/:mergeId/residual-repair", async (c)
 opsTelegramDeliveries.get("/synthetic-fixture", async (c) => {
   const unavailable = requireStaging(c)
   if (unavailable) return unavailable
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const fixture = await findTelegramSyntheticFixture({
     client: getControlPlaneClient(c.env),
     communityId: c.req.query("community_id") ?? null,
@@ -131,7 +133,7 @@ opsTelegramDeliveries.get("/synthetic-fixture", async (c) => {
 opsTelegramDeliveries.post("/synthetic-fixture/drain", async (c) => {
   const unavailable = requireStaging(c)
   if (unavailable) return unavailable
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const fixture = await findTelegramSyntheticFixture({
     client: getControlPlaneClient(c.env),
     communityId: c.req.query("community_id") ?? null,
@@ -157,7 +159,7 @@ opsTelegramDeliveries.post("/synthetic-fixture/drain", async (c) => {
 opsTelegramDeliveries.get("/synthetic-deliveries/:postId", async (c) => {
   const unavailable = requireStaging(c)
   if (unavailable) return unavailable
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const delivery = await getTelegramSyntheticDelivery({
     client: getControlPlaneClient(c.env),
     postId: c.req.param("postId"),
@@ -169,7 +171,7 @@ opsTelegramDeliveries.get("/synthetic-deliveries/:postId", async (c) => {
 opsTelegramDeliveries.post("/synthetic-deliveries/:postId/cleanup", async (c) => {
   const unavailable = requireStaging(c)
   if (unavailable) return unavailable
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const fixture = await findTelegramSyntheticFixture({
     client: getControlPlaneClient(c.env),
     communityId: c.req.query("community_id") ?? null,
@@ -200,7 +202,7 @@ opsTelegramDeliveries.post("/synthetic-deliveries/:postId/cleanup", async (c) =>
 })
 
 opsTelegramDeliveries.get("/uncertain-deliveries", async (c) => {
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const requestedLimit = Number.parseInt(c.req.query("limit") ?? "50", 10)
   const client = getControlPlaneClient(c.env)
   const filters = parseFilters(c)
@@ -218,14 +220,14 @@ opsTelegramDeliveries.get("/uncertain-deliveries", async (c) => {
 })
 
 opsTelegramDeliveries.get("/uncertain-deliveries/count", async (c) => {
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const client = getControlPlaneClient(c.env)
   const total = await countUncertainDeliveries({ client, filters: parseFilters(c) })
   return c.json({ total, ok: total === 0 })
 })
 
 opsTelegramDeliveries.post("/uncertain-deliveries/:deliveryId/resolve", async (c) => {
-  const actor = requireOpsActor(c)
+  const actor = await requireOpsActor(c)
   if (!actor) return c.json({ error: "unauthorized" }, 401)
 
   const body = await c.req.json<{

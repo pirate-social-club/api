@@ -1,5 +1,6 @@
 import { Hono, type Context } from "hono"
-import { authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticateAdminAccessOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { ADMIN_DEBUG_ACCESS_SCOPE } from "../lib/operator-credential-auth"
 import { getCommunityRepository } from "../lib/communities/db-community-repository"
 import { openCommunityReadClient, openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { recycleCommunityJobForRetry } from "../lib/communities/jobs/store"
@@ -43,10 +44,12 @@ const STAGING_RECLAIM_CONFIRMATION = "RECLAIM STAGING SMOKE COMMUNITIES"
 const STAGING_ARCHIVE_CONFIRMATION = "ARCHIVE STAGING SMOKE COMMUNITIES"
 const STAGING_ARCHIVE_MIN_AGE_MS = 24 * 60 * 60 * 1000
 
-function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
-  const admin = authenticateAdminTokenOnly({
+async function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
+  const admin = await authenticateAdminAccessOnly({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
+    requiredScope: ADMIN_DEBUG_ACCESS_SCOPE,
   })
   if (!admin) {
     return null
@@ -56,7 +59,7 @@ function requireDebugAdmin(c: Context<AuthenticatedEnv>) {
 
 debugPipeline.post("/home-feed-benchmark", async (c) => {
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
-  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
 
   // This operator-only staging route deliberately impersonates `user_id` so
   // benchmarks exercise the authenticated viewer path over a fixed candidate
@@ -95,7 +98,7 @@ debugPipeline.post("/home-feed-benchmark", async (c) => {
 })
 
 debugPipeline.post("/staging-d1/archive-smoke", async (c) => {
-  const adminOverride = requireDebugAdmin(c)
+  const adminOverride = await requireDebugAdmin(c)
   if (!adminOverride) return c.json({ error: "unauthorized" }, 401)
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
 
@@ -185,7 +188,7 @@ debugPipeline.post("/staging-d1/archive-smoke", async (c) => {
 })
 
 debugPipeline.post("/staging-d1/reclaim", async (c) => {
-  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
   if (!c.env.SHARD_ADMIN_TOKEN) {
     return c.json({ error: "staging_reclaim_not_configured" }, 503)
@@ -305,7 +308,7 @@ debugPipeline.post("/staging-d1/reclaim", async (c) => {
 })
 
 debugPipeline.get("/post-pipeline", async (c) => {
-  if (!requireDebugAdmin(c)) {
+  if (!await requireDebugAdmin(c)) {
     return c.json({ error: "unauthorized" }, 401)
   }
 
@@ -436,7 +439,7 @@ debugPipeline.get("/post-pipeline", async (c) => {
 })
 
 debugPipeline.post("/community-job/recycle", async (c) => {
-  if (!requireDebugAdmin(c)) {
+  if (!await requireDebugAdmin(c)) {
     return c.json({ error: "unauthorized" }, 401)
   }
 
@@ -541,7 +544,7 @@ function storyEffectResolutionFields(body: Record<string, unknown>, requireProvi
 }
 
 debugPipeline.get("/story-registration-effect", async (c) => {
-  if (!requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const rawCommunityId = c.req.query("community_id")?.trim() ?? ""
   const rawAssetId = c.req.query("asset_id")?.trim() ?? ""
   if (!rawCommunityId || !rawAssetId) {
@@ -566,7 +569,7 @@ debugPipeline.get("/story-registration-effect", async (c) => {
 })
 
 debugPipeline.post("/story-registration-effect/confirm-no-broadcast", async (c) => {
-  const admin = requireDebugAdmin(c)
+  const admin = await requireDebugAdmin(c)
   if (!admin) return c.json({ error: "unauthorized" }, 401)
   let body: Record<string, unknown>
   try {
@@ -617,7 +620,7 @@ debugPipeline.post("/story-registration-effect/confirm-no-broadcast", async (c) 
 })
 
 debugPipeline.post("/story-registration-effect/confirm-receipt", async (c) => {
-  const admin = requireDebugAdmin(c)
+  const admin = await requireDebugAdmin(c)
   if (!admin) return c.json({ error: "unauthorized" }, 401)
   let body: Record<string, unknown>
   try {
@@ -687,7 +690,7 @@ debugPipeline.post("/story-registration-effect/confirm-receipt", async (c) => {
 })
 
 debugPipeline.post("/story-registration-effect/confirm-reverted", async (c) => {
-  const admin = requireDebugAdmin(c)
+  const admin = await requireDebugAdmin(c)
   if (!admin) return c.json({ error: "unauthorized" }, 401)
   let body: Record<string, unknown>
   try {

@@ -1,6 +1,7 @@
 import { formatEther, formatUnits } from "ethers"
 import { Hono, type Context } from "hono"
-import { authenticateAdminTokenOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { authenticateAdminAccessOnly, type AuthenticatedEnv } from "../lib/auth-middleware"
+import { ADMIN_OPERATIONS_MANAGE_SCOPE } from "../lib/operator-credential-auth"
 import { getRuntimeWalletFundingStatuses } from "../lib/ops-alerts/runtime-wallet-funding-watchdog"
 import { getStoryRuntimeSignerBalances } from "../lib/story/story-runtime-funding"
 import { resolveEnforcedFloorWei, resolveStorySignerExplorerUrl } from "../lib/story/story-runtime-funding-watchdog"
@@ -19,7 +20,7 @@ import {
 const opsWallets = new Hono<AuthenticatedEnv>()
 
 opsWallets.get("/rewards-settlement-diagnostics", async (c) => {
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const coordinatorRef = String(c.req.query("coordinator_ref") ?? "").trim()
   let parsed: unknown
   try {
@@ -61,7 +62,7 @@ opsWallets.get("/rewards-settlement-diagnostics", async (c) => {
 })
 
 opsWallets.get("/funding-refund-reviews", async (c) => {
-  if (!requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
+  if (!await requireOpsAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   const requestedLimit = Number.parseInt(c.req.query("limit") ?? "50", 10)
   const client = getControlPlaneClient(c.env)
   try {
@@ -76,9 +77,11 @@ opsWallets.get("/funding-refund-reviews", async (c) => {
 })
 
 function requireOpsAdmin(c: Context<AuthenticatedEnv>) {
-  return authenticateAdminTokenOnly({
+  return authenticateAdminAccessOnly({
     env: c.env,
-    token: c.req.header("x-admin-token"),
+    authorization: c.req.header("authorization"),
+    legacyToken: c.req.header("x-admin-token"),
+    requiredScope: ADMIN_OPERATIONS_MANAGE_SCOPE,
   })
 }
 
@@ -96,7 +99,7 @@ type WalletReport = {
 // runtime signers (checked against the same enforced floors the registration
 // path asserts) plus every wallet the runtime funding watchdog covers.
 opsWallets.get("/wallets", async (c) => {
-  if (!requireOpsAdmin(c)) {
+  if (!await requireOpsAdmin(c)) {
     return c.json({ error: "unauthorized" }, 401)
   }
 

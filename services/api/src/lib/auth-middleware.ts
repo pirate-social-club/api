@@ -6,6 +6,12 @@ import { getUserRepository } from "./auth/repositories"
 import { DEFAULT_PIRATE_APP_SCOPE, verifyPirateAccessToken } from "./auth/pirate-session-token"
 import { resolveCanonicalUserId } from "./auth/account-alias-service"
 import type { Env } from "../env"
+import {
+  ADMIN_USERS_ACT_AS_SCOPE,
+  authenticateOperatorCredential,
+  requireOperatorScope,
+  type OperatorScope,
+} from "./operator-credential-auth"
 
 export type ActorContext = {
   userId: string
@@ -124,6 +130,62 @@ export function authenticateAdminTokenOnly(input: {
   }
 }
 
+export async function authenticateAdminAccessOnly(input: {
+  env: Env
+  authorization: string | undefined
+  legacyToken: string | undefined
+  requiredScope: OperatorScope
+}): Promise<AdminActorContext["adminOverride"] | null> {
+  if (input.env.ENVIRONMENT === "production" && String(input.env.PIRATE_ADMIN_TOKEN || "").trim()) {
+    console.error("[admin-auth] deprecated production shared token remains configured", {
+      code: "legacy_admin_token_configured_in_production",
+      removal_after: "2026-10-01",
+    })
+  }
+  if (input.authorization?.startsWith("Operator ")) {
+    const operator = await authenticateOperatorCredential({
+      env: input.env,
+      authorization: input.authorization,
+    })
+    requireOperatorScope(operator, input.requiredScope)
+    return {
+      adminActorId: operator.operatorActorId,
+      scope: input.requiredScope,
+    }
+  }
+
+  // TODO(security-deprecation-2026-10-01): remove the shared-token fallback
+  // after production telemetry confirms zero legacy requests.
+  const legacy = authenticateAdminTokenOnly({ env: input.env, token: input.legacyToken })
+  if (legacy) {
+    const production = input.env.ENVIRONMENT === "production"
+    console[production ? "error" : "warn"]("[admin-auth] legacy shared token used", {
+      code: "legacy_admin_token_used",
+      environment: input.env.ENVIRONMENT ?? "unknown",
+      removal_after: "2026-10-01",
+    })
+  }
+  return legacy
+}
+
+export async function authenticateAdminAccess(input: {
+  env: Env
+  authorization: string | undefined
+  legacyToken: string | undefined
+  asUserId: string | undefined
+}): Promise<AdminActorContext | null> {
+  const adminOverride = await authenticateAdminAccessOnly({
+    env: input.env,
+    authorization: input.authorization,
+    legacyToken: input.legacyToken,
+    requiredScope: ADMIN_USERS_ACT_AS_SCOPE,
+  })
+  if (!adminOverride) return null
+  const userId = input.asUserId?.trim()
+  if (!userId) throw authError("Admin actor user is required")
+  return { userId, authType: "admin", adminOverride }
+}
+
 function timingSafeTokenEqual(left: string, right: string): boolean {
   const leftDigest = createHash("sha256").update(left).digest()
   const rightDigest = createHash("sha256").update(right).digest()
@@ -137,9 +199,10 @@ export async function authenticateAdminUserOrAgentDelegated(input: {
   xAdminAsUserId: string | undefined
   xAdminToken: string | undefined
 }): Promise<ActorContext | AdminActorContext> {
-  const adminActor = authenticateAdminToken({
+  const adminActor = await authenticateAdminAccess({
     env: input.env,
-    token: input.xAdminToken,
+    authorization: input.authorization,
+    legacyToken: input.xAdminToken,
     asUserId: input.xAdminAsUserId,
   })
   if (adminActor) {
@@ -171,9 +234,10 @@ export const authenticate = createMiddleware<{ Bindings: Env; Variables: Authent
 
 export const authenticateAdminOrUser = createMiddleware<{ Bindings: Env; Variables: AuthenticatedVariables }>(
   async (c, next) => {
-    const adminActor = authenticateAdminToken({
+    const adminActor = await authenticateAdminAccess({
       env: c.env,
-      token: c.req.header("x-admin-token"),
+      authorization: c.req.header("authorization"),
+      legacyToken: c.req.header("x-admin-token"),
       asUserId: c.req.header("x-admin-as-user-id"),
     })
     if (adminActor) {

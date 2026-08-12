@@ -2,6 +2,10 @@ import { describe, expect, test } from "bun:test"
 
 import {
   ALLOWED_SCOPES,
+  ADMIN_DEBUG_ACCESS_SCOPE,
+  ADMIN_OPERATIONS_MANAGE_SCOPE,
+  ADMIN_USERS_ACT_AS_SCOPE,
+  ADMIN_USERS_MANAGE_SCOPE,
   BOOKING_SETTLEMENT_RESOLVE_SCOPE,
   CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE,
   credentialEnvNameForScopes,
@@ -54,6 +58,16 @@ describe("operator credential issuance config", () => {
     expect(ALLOWED_SCOPES.has(DANCE_CHOREOGRAPHY_SEED_SCOPE)).toBe(true)
     expect(credentialEnvNameForScopes([DANCE_CHOREOGRAPHY_SEED_SCOPE]))
       .toBe("PIRATE_DANCE_CHOREOGRAPHY_OPERATOR_CREDENTIAL")
+  })
+
+  test("allows only the explicit administrative capabilities", () => {
+    expect([
+      ADMIN_USERS_ACT_AS_SCOPE,
+      ADMIN_USERS_MANAGE_SCOPE,
+      ADMIN_OPERATIONS_MANAGE_SCOPE,
+      ADMIN_DEBUG_ACCESS_SCOPE,
+    ].every((scope) => ALLOWED_SCOPES.has(scope))).toBe(true)
+    expect(ALLOWED_SCOPES.has("admin:full")).toBe(false)
   })
 
   test("uses a dedicated content security release credential", () => {
