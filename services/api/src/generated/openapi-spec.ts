@@ -4139,7 +4139,7 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           },
           "403": {
-            "$ref": "#/components/responses/VerificationRequired"
+            "$ref": "#/components/responses/CommentCreateForbidden"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -7158,7 +7158,7 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           },
           "403": {
-            "$ref": "#/components/responses/VerificationRequired"
+            "$ref": "#/components/responses/CommentCreateForbidden"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -7605,6 +7605,43 @@ const spec = {
       }
     },
     "/reward_campaigns": {
+      "get": {
+        "operationId": "reward_campaigns_resolve",
+        "tags": [
+          "Rewards"
+        ],
+        "summary": "Resolve the permanent reward pool for a song post",
+        "parameters": [
+          {
+            "name": "community_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "post_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RewardCampaign"
+                }
+              }
+            }
+          },
+          "404": {}
+        }
+      },
       "post": {
         "operationId": "reward_campaigns_create",
         "tags": [
@@ -9133,6 +9170,15 @@ const spec = {
           }
         }
       },
+      "CommentCreateForbidden": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
       "StructuredSurfaceDisabled": {
         "content": {
           "application/json": {
@@ -9795,6 +9841,9 @@ const spec = {
               "payment_required",
               "verification_required",
               "membership_required",
+              "gate_unsatisfied",
+              "banned",
+              "comments_locked",
               "eligibility_failed",
               "gate_failed",
               "posting_trust_tier_too_low",
@@ -18535,166 +18584,6 @@ const spec = {
           }
         }
       },
-      "RewardCampaignCreateRequest": {
-        "type": "object",
-        "required": [
-          "community",
-          "post",
-          "reward_identity_provider",
-          "eligible_activity",
-          "min_score_bps",
-          "daily_reward_cents",
-          "milestone_7_cents",
-          "milestone_30_cents",
-          "reward_period_cap_cents",
-          "budget_cents",
-          "starts_at",
-          "ends_at",
-          "idempotency_key"
-        ],
-        "properties": {
-          "community": {
-            "type": "string"
-          },
-          "post": {
-            "type": "string"
-          },
-          "reward_identity_provider": {
-            "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
-          },
-          "eligible_activity": {
-            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
-          },
-          "min_score_bps": {
-            "type": "integer",
-            "minimum": 7000,
-            "maximum": 10000
-          },
-          "daily_reward_cents": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "default_amount_cents": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "payout_tiers": {
-            "type": "array",
-            "maxItems": 10,
-            "items": {
-              "$ref": "#/components/schemas/RewardCampaignPayoutTier"
-            }
-          },
-          "milestone_7_cents": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 0
-          },
-          "milestone_30_cents": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 0
-          },
-          "reward_period_cap_cents": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "budget_cents": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "starts_at": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "ends_at": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "idempotency_key": {
-            "type": "string"
-          }
-        }
-      },
-      "PublicRewardOffer": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "campaign",
-          "eligible_activity",
-          "min_score_bps",
-          "daily_reward_cents",
-          "chain_id",
-          "ends_at"
-        ],
-        "properties": {
-          "campaign": {
-            "type": "string"
-          },
-          "eligible_activity": {
-            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
-          },
-          "min_score_bps": {
-            "type": "integer",
-            "minimum": 7000,
-            "maximum": 10000
-          },
-          "daily_reward_cents": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "chain_id": {
-            "type": "integer",
-            "minimum": 1
-          },
-          "ends_at": {
-            "type": "integer",
-            "format": "int64"
-          }
-        }
-      },
-      "RewardSongOwnerPolicy": {
-        "type": "object",
-        "required": [
-          "community",
-          "post",
-          "song_owner",
-          "third_party_rewards"
-        ],
-        "properties": {
-          "community": {
-            "type": "string"
-          },
-          "post": {
-            "type": "string"
-          },
-          "song_owner": {
-            "type": "string"
-          },
-          "third_party_rewards": {
-            "type": "string",
-            "enum": [
-              "allowed",
-              "blocked"
-            ]
-          }
-        }
-      },
-      "RewardSongOwnerPolicyUpdateRequest": {
-        "type": "object",
-        "required": [
-          "third_party_rewards"
-        ],
-        "properties": {
-          "third_party_rewards": {
-            "type": "string",
-            "enum": [
-              "allowed",
-              "blocked"
-            ]
-          }
-        }
-      },
       "RewardCampaign": {
         "type": "object",
         "required": [
@@ -18861,6 +18750,166 @@ const spec = {
           "created": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "RewardCampaignCreateRequest": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "reward_identity_provider",
+          "eligible_activity",
+          "min_score_bps",
+          "daily_reward_cents",
+          "milestone_7_cents",
+          "milestone_30_cents",
+          "reward_period_cap_cents",
+          "budget_cents",
+          "starts_at",
+          "ends_at",
+          "idempotency_key"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "reward_identity_provider": {
+            "$ref": "#/components/schemas/RewardCampaignIdentityProvider"
+          },
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "min_score_bps": {
+            "type": "integer",
+            "minimum": 7000,
+            "maximum": 10000
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "default_amount_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "payout_tiers": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/RewardCampaignPayoutTier"
+            }
+          },
+          "milestone_7_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 0
+          },
+          "milestone_30_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 0
+          },
+          "reward_period_cap_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "budget_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "starts_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicRewardOffer": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "campaign",
+          "eligible_activity",
+          "min_score_bps",
+          "daily_reward_cents",
+          "chain_id",
+          "ends_at"
+        ],
+        "properties": {
+          "campaign": {
+            "type": "string"
+          },
+          "eligible_activity": {
+            "$ref": "#/components/schemas/RewardCampaignEligibleActivity"
+          },
+          "min_score_bps": {
+            "type": "integer",
+            "minimum": 7000,
+            "maximum": 10000
+          },
+          "daily_reward_cents": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "chain_id": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "ends_at": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "RewardSongOwnerPolicy": {
+        "type": "object",
+        "required": [
+          "community",
+          "post",
+          "song_owner",
+          "third_party_rewards"
+        ],
+        "properties": {
+          "community": {
+            "type": "string"
+          },
+          "post": {
+            "type": "string"
+          },
+          "song_owner": {
+            "type": "string"
+          },
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
+          }
+        }
+      },
+      "RewardSongOwnerPolicyUpdateRequest": {
+        "type": "object",
+        "required": [
+          "third_party_rewards"
+        ],
+        "properties": {
+          "third_party_rewards": {
+            "type": "string",
+            "enum": [
+              "allowed",
+              "blocked"
+            ]
           }
         }
       },
@@ -24522,6 +24571,21 @@ const spec = {
           "very"
         ]
       },
+      "RewardCampaignStatus": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "funding_quoted",
+          "funding_confirming",
+          "scheduled",
+          "active",
+          "paused",
+          "operational_hold",
+          "exhausted",
+          "ended",
+          "canceled"
+        ]
+      },
       "RewardCampaignPayoutTier": {
         "type": "object",
         "required": [
@@ -24543,21 +24607,6 @@ const spec = {
             "minimum": 1
           }
         }
-      },
-      "RewardCampaignStatus": {
-        "type": "string",
-        "enum": [
-          "draft",
-          "funding_quoted",
-          "funding_confirming",
-          "scheduled",
-          "active",
-          "paused",
-          "operational_hold",
-          "exhausted",
-          "ended",
-          "canceled"
-        ]
       },
       "RewardCampaignFundingStatus": {
         "type": "string",
