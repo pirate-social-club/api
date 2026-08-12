@@ -670,7 +670,9 @@ export async function createRewardCampaign(input: {
       return campaignResource(replay)
     }
 
-    await requireThirdPartyRewardsAllowed(tx, target.communityId, target.postId)
+    if (input.userId !== target.songOwnerUserId) {
+      await requireThirdPartyRewardsAllowed(tx, target.communityId, target.postId)
+    }
     const windowStart = `${now.slice(0, 13)}:00:00.000Z`
     await tx.execute({
       sql: `
@@ -776,6 +778,34 @@ export async function getRewardCampaign(input: {
     ? await input.canModerateCommunity(requiredString(row, "community_id"))
     : false
   if (!isPublicOffer && !ownsCampaign && !canModerate) throw notFoundError("Reward campaign not found")
+  return campaignResource(row)
+}
+
+export async function getRewardCampaignForSongPool(input: {
+  env: Env
+  client: Client
+  communityId: string
+  postId: string
+}): Promise<RewardCampaign> {
+  requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const row = queryResultRow(await executeFirst(input.client, {
+    sql: `
+      SELECT ${CAMPAIGN_COLUMNS}
+      FROM reward_campaigns
+      WHERE reward_campaign_id = (
+        SELECT reward_campaign_id
+        FROM reward_song_pools
+        WHERE community_id = ?1 AND post_id = ?2
+      )
+        AND status NOT IN ('ended', 'canceled')
+      LIMIT 1
+    `,
+    args: [
+      nonEmpty(input.communityId, "community_id"),
+      nonEmpty(input.postId, "post_id"),
+    ],
+  }))
+  if (!row) throw notFoundError("Reward campaign not found")
   return campaignResource(row)
 }
 
@@ -924,11 +954,13 @@ export async function createRewardCampaignFundingQuote(input: {
     if (assertedProvider !== null && assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
       throw conflictError("Funding provider assertion does not match the permanent song pool")
     }
-    await requireThirdPartyRewardsAllowed(
-      tx,
-      requiredString(campaign, "community_id"),
-      requiredString(campaign, "post_id"),
-    )
+    if (input.userId !== requiredString(campaign, "song_owner_user_id")) {
+      await requireThirdPartyRewardsAllowed(
+        tx,
+        requiredString(campaign, "community_id"),
+        requiredString(campaign, "post_id"),
+      )
+    }
     const status = requiredString(campaign, "status") as RewardCampaignStatus
     if (![
       "draft",

@@ -1112,6 +1112,94 @@ describe("rewards routes", () => {
     expect(await json(paused)).toMatchObject({ status: "paused", funded_cents: 100000 })
   })
 
+  test("keeps creation and funding available to the song owner after third-party opt-out", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-owner-policy-bypass")
+    const booster = await exchangeJwt(ctx.env, "reward-owner-policy-outsider")
+    await seedCampaignSong(ctx, owner.userId)
+    await addWallet(ctx, owner.userId, new Date().toISOString())
+    await addWallet(
+      ctx,
+      booster.userId,
+      new Date().toISOString(),
+      "0x2000000000000000000000000000000000000002",
+    )
+    const policyUrl = "http://pirate.test/reward_song_policies/com_cmt_rewards_route/post_pst_reward_campaign_song"
+
+    const block = await app.request(policyUrl, {
+      method: "PUT",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ third_party_rewards: "blocked" }),
+    }, ctx.env)
+    expect(block.status).toBe(200)
+
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "owner-policy-bypass-create" })),
+    }, ctx.env)
+    expect(create.status).toBe(201)
+    const campaign = await json(create) as { id: string }
+
+    const ownerQuote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify({ amount_cents: 25000, idempotency_key: "owner-policy-bypass-funding" }),
+    }, ctx.env)
+    expect(ownerQuote.status).toBe(201)
+
+    const blockedThirdPartyQuote = await app.request(
+      `http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`,
+      {
+        method: "POST",
+        headers: { ...authHeaders(booster.accessToken), "content-type": "application/json" },
+        body: JSON.stringify({ amount_cents: 25000, idempotency_key: "blocked-third-party-funding" }),
+      },
+      ctx.env,
+    )
+    expect(blockedThirdPartyQuote.status).toBe(403)
+  })
+
+  test("resolves an exhausted permanent pool by song target without browser history", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-pool-resolver-owner")
+    const funder = await exchangeJwt(ctx.env, "reward-pool-resolver-funder")
+    await seedCampaignSong(ctx, owner.userId)
+
+    const create = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "pool-resolver-campaign" })),
+    }, ctx.env)
+    expect(create.status).toBe(201)
+    const campaign = await json(create) as { id: string }
+
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'exhausted' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    const resolved = await app.request(
+      "http://pirate.test/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song",
+      { headers: authHeaders(funder.accessToken) },
+      ctx.env,
+    )
+    expect(resolved.status).toBe(200)
+    expect(await json(resolved)).toMatchObject({ id: campaign.id, status: "exhausted" })
+
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1",
+      args: [campaign.id],
+    })
+    const released = await app.request(
+      "http://pirate.test/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song",
+      { headers: authHeaders(funder.accessToken) },
+      ctx.env,
+    )
+    expect(released.status).toBe(404)
+  })
+
   test("uses one stable song pool and accepts concurrent contribution lots from different funders", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup

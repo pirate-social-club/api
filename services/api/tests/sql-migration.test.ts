@@ -485,8 +485,9 @@ describe("sql migration helpers", () => {
         token_address TEXT NOT NULL CHECK (token_address ~ '^0x[0-9a-f]{40}$'),
         tx_hash TEXT NOT NULL CHECK (tx_hash ~ '^0x[0-9a-f]{64}$'),
         content_sha256 TEXT NOT NULL CHECK (content_sha256 ~ '^[0-9a-f]{64}$'),
-        lock_sha256 TEXT NOT NULL CHECK (lock_sha256 ~ '^[a-f0-9]{64}$'),
-        image_digest TEXT NOT NULL CHECK (image_digest ~ '^sha256:[a-f0-9]{64}$')
+        runtime_lock_sha256 TEXT NOT NULL CHECK (runtime_lock_sha256 ~ '^[a-f0-9]{64}$'),
+        image_digest TEXT NOT NULL CHECK (image_digest ~ '^sha256:[a-f0-9]{64}$'),
+        expected_content_hash TEXT NOT NULL CHECK (expected_content_hash ~ '^0x[a-f0-9]{64}$')
       );
     `)
 
@@ -495,11 +496,12 @@ describe("sql migration helpers", () => {
     expect(statement).toContain("length(tx_hash) = 66")
     expect(statement).toContain("length(content_sha256) = 64")
     expect(statement).toContain("content_sha256 NOT GLOB '*[^0-9a-f]*'")
-    expect(statement).toContain("length(lock_sha256) = 64")
-    expect(statement).toContain("lock_sha256 NOT GLOB '*[^0-9a-f]*'")
+    expect(statement).toContain("length(runtime_lock_sha256) = 64")
+    expect(statement).toContain("runtime_lock_sha256 NOT GLOB '*[^0-9a-f]*'")
     expect(statement).toContain("length(image_digest) = 71")
     expect(statement).toContain("substr(image_digest, 1, 7) = 'sha256:'")
     expect(statement).toContain("substr(image_digest, 8) NOT GLOB '*[^0-9a-f]*'")
+    expect(statement).toContain("length(expected_content_hash) = 66")
     expect(statement).not.toContain(" ~ ")
   })
 
