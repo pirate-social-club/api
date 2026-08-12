@@ -17,7 +17,10 @@ import {
 } from "../communities/membership/membership-state-store"
 import { getMembershipGatePolicy } from "../communities/membership/gate-policy-store"
 import { listCommunityLabels } from "../communities/community-label-store"
-import { buildLocalizedPostResponse } from "../localization/post-localization-service"
+import {
+  buildLocalizedPostResponse,
+  listPublicSongArtifactPresentations,
+} from "../localization/post-localization-service"
 import { DEFAULT_CONTENT_LOCALE, normalizeContentLocale } from "../localization/content-locale"
 import { contentTranslationLookupKey, listContentTranslationsForContentIds } from "../localization/content-translation-store"
 import { hydrateCrosspostSourcesForResponses } from "../posts/crosspost-source-hydration"
@@ -640,7 +643,14 @@ export async function readHomeFeedCommunityItems(input: {
       [input.communityId, Promise.resolve(input.prefetch.karaokeEnabled)],
     ])
     const studyElevenLabsCredentialResolver = createStudyElevenLabsCredentialResolver({ env: input.env })
-    let localizeMs = 0
+    const songArtifactExecutor = getControlPlaneClient(input.env)
+    const songArtifactPrefetchStartedAt = performance.now()
+    const songArtifactPresentationByPostId = await listPublicSongArtifactPresentations({
+      communityId: input.communityId,
+      executor: songArtifactExecutor,
+      posts: [...postsById.values()],
+    })
+    let localizeMs = elapsedMs(songArtifactPrefetchStartedAt)
     for (const row of input.rows) {
       const post = postsById.get(row.source_post_id) ?? null
       if (!post || post.status !== "published") {
@@ -655,7 +665,8 @@ export async function readHomeFeedCommunityItems(input: {
       const response = await buildLocalizedPostResponse({
         executor: db.client,
         env: input.env,
-        songArtifactExecutor: getControlPlaneClient(input.env),
+        songArtifactExecutor,
+        songArtifactPresentationByPostId,
         post,
         locale: input.locale ?? undefined,
         threadSnapshot,

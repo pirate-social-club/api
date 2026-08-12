@@ -274,3 +274,32 @@ If the rewrite uses `bulkCommunityRead`, it must remove both serial waits in
 that helper: binding resolution and shard-group reads. Measure the typical
 page's shard distribution first; a page spread over many shards would otherwise
 replace concurrency-four fanout with serial shard RPCs and can be slower.
+
+### Production baseline and second-slice decision
+
+Release `31637900386` deployed the instrumentation. Fifty sequential,
+cache-busted anonymous mixed-`best` first-page requests then produced this
+server-side baseline:
+
+| Metric | p50 | p95 |
+| --- | ---: | ---: |
+| `home-feed` | 12.060s | 14.345s |
+| `community-fanout` | 11.177s | 13.126s |
+| `community-prefetch` | 1.266s | 1.571s |
+| `community-batched-reads-max` | 56ms | 76ms |
+| `community-localize-max` | 7.520s | 8.893s |
+| `community-derivatives-max` | 2.364s | 2.757s |
+
+All 50 responses reported nine page communities, one prefetch batch, nine
+prefetch operations, and one shard group. The first five samples and remaining
+45 had the same phase shape, so the latency is not explained by a one-time cold
+open. Parallelizing resolver or shard-group loops would optimize the wrong
+layer for this page.
+
+The response contained eight song posts and 17 video posts. Code inspection
+matched the timing signal: song artifact presentations were fetched from the
+control plane sequentially inside the per-post localization loop, with a fresh
+request wrapper per post. The approved second slice therefore batches song
+artifact bundles and upload proofs per community slice. Keep derivative
+hydration as the next measured target after this batch is deployed and the same
+50-request probe is repeated.

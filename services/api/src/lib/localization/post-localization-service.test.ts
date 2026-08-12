@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test"
-import { buildLocalizedPostResponse } from "./post-localization-service"
+import {
+  buildLocalizedPostResponse,
+  listPublicSongArtifactPresentations,
+} from "./post-localization-service"
 import { buildLocalizedPostFeedResponses } from "../posts/post-read-response"
 import type { DbExecutor } from "../db-helpers"
 import type { PublishedLocalizedPostFeedItem } from "../posts/community-post-feed"
@@ -256,6 +259,68 @@ const activeElevenLabsCredential = async () => true
 const inactiveElevenLabsCredential = async () => false
 
 describe("buildLocalizedPostResponse", () => {
+  test("prefetches multiple song artifact bundles and upload proofs in two queries", async () => {
+    const queries: string[] = []
+    const executor = {
+      async execute(query) {
+        const sql = typeof query === "string" ? query : query.sql
+        queries.push(String(sql))
+        if (String(sql).includes("FROM song_artifact_uploads")) {
+          return {
+            rows: [
+              { song_artifact_upload_id: "sau_one", ipfs_cid: "bafyone" },
+              { song_artifact_upload_id: "sau_two", ipfs_cid: "bafytwo" },
+            ],
+          }
+        }
+        return {
+          rows: [
+            {
+              song_artifact_bundle_id: "sab_one",
+              primary_audio_json: {
+                storage_ref: "https://api.pirate.sc/communities/cmt_music/song-artifact-uploads/sau_one/content",
+                mime_type: "audio/mpeg",
+              },
+              instrumental_audio_json: null,
+              vocal_audio_json: null,
+              alignment_status: "completed",
+              alignment_reason: null,
+              timed_lyrics_ref: null,
+              timed_lyrics_json: null,
+            },
+            {
+              song_artifact_bundle_id: "sab_two",
+              primary_audio_json: {
+                storage_ref: "https://api.pirate.sc/communities/cmt_music/song-artifact-uploads/sau_two/content",
+                mime_type: "audio/mpeg",
+              },
+              instrumental_audio_json: null,
+              vocal_audio_json: null,
+              alignment_status: "pending",
+              alignment_reason: null,
+              timed_lyrics_ref: null,
+              timed_lyrics_json: null,
+            },
+          ],
+        }
+      },
+    } as DbExecutor
+    const posts = [
+      { ...makeSongPost(), post_id: "pst_one", song_artifact_bundle_id: "sab_one" },
+      { ...makeSongPost(), post_id: "pst_two", song_artifact_bundle_id: "sab_two" },
+    ]
+
+    const presentations = await listPublicSongArtifactPresentations({
+      communityId: "cmt_music",
+      executor,
+      posts,
+    })
+
+    expect(queries).toHaveLength(2)
+    expect(presentations.get("pst_one")?.downloadable_audio?.[0]?.decentralized_storage?.cid).toBe("bafyone")
+    expect(presentations.get("pst_two")?.downloadable_audio?.[0]?.decentralized_storage?.cid).toBe("bafytwo")
+  })
+
   test("maps object-valued song audio descriptors into downloadable audio", async () => {
     const response = await buildLocalizedPostResponse({
       executor: emptyExecutor(),
