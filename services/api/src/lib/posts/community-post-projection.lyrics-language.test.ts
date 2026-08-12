@@ -1,7 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 
-import { postSelectColumnsForSchema, type PostProjectionSchema } from "./community-post-projection"
+import {
+  postProjectionSchemaFromResults,
+  postProjectionSchemaReadStatements,
+  postSelectColumnsForSchema,
+  type PostProjectionSchema,
+} from "./community-post-projection"
 
 /**
  * Migration 1143 (posts.lyrics_language + 5 provenance columns) is classified
@@ -35,6 +40,49 @@ const LYRICS_COLUMNS = [
 ] as const
 
 describe("lyrics_language projection compatibility (1143 transitional)", () => {
+  test("builds and parses the four schema probes used by batched feed hydration", () => {
+    expect(postProjectionSchemaReadStatements()).toEqual([
+      { sql: "PRAGMA table_info(posts)" },
+      { sql: "PRAGMA table_info(assets)" },
+      { sql: "PRAGMA table_info(post_events)" },
+      { sql: "PRAGMA table_info(rights_holds)" },
+    ])
+
+    const schema = postProjectionSchemaFromResults([
+      { rows: [
+        { name: "crosspost_source_json" },
+        { name: "song_annotations_url" },
+        { name: "song_cover_art_ref" },
+        { name: "song_duration_ms" },
+        { name: "comments_locked" },
+        { name: "comments_locked_at" },
+        { name: "comments_locked_by_user_id" },
+        { name: "comments_lock_reason" },
+        { name: "idempotency_body_hash" },
+        { name: "publish_failure_code" },
+        { name: "publish_failure_message" },
+        { name: "publish_failure_retryable" },
+        { name: "publish_failed_at" },
+        { name: "lyrics_language" },
+        { name: "lyrics_language_confidence" },
+        { name: "lyrics_language_reliable" },
+        { name: "lyrics_language_detector" },
+        { name: "lyrics_language_detected_at" },
+        { name: "lyrics_language_source_hash" },
+      ] },
+      { rows: [
+        { name: "asset_id" },
+        { name: "community_id" },
+        { name: "story_ip_id" },
+        { name: "story_royalty_registration_status" },
+      ] },
+      { rows: [{ name: "post_event_id" }] },
+      { rows: [{ name: "rights_hold_id" }] },
+    ])
+
+    expect(schema).toEqual({ ...BASE, hasLyricsLanguageColumns: true })
+  })
+
   test("a shard WITH 1143 selects the real columns", () => {
     const sql = postSelectColumnsForSchema({ ...BASE, hasLyricsLanguageColumns: true })
     for (const column of LYRICS_COLUMNS) {
