@@ -93,6 +93,22 @@ describe("HNS edge alert ingress", () => {
     ])
   })
 
+  it("records a heartbeat during a role's monitoring grace period", async () => {
+    const kv = testKv()
+    const response = await app().fetch(request("edge-secret", {
+      kind: "heartbeat",
+      host: "ns1-pirate-fluence",
+      role: "hns-verifier",
+      core_commit: "a".repeat(40),
+      verified_at: new Date().toISOString(),
+    }), { ...environment(), OPS_ALERT_DEDUPE: kv.binding })
+
+    expect(response.status).toBe(202)
+    expect([...kv.values.keys()]).toEqual([
+      "hns-edge-heartbeat:v1:ns1-pirate-fluence:hns-verifier",
+    ])
+  })
+
   it("rejects unknown heartbeat identities", async () => {
     const response = await app().fetch(request("edge-secret", {
       kind: "heartbeat",

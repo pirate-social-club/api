@@ -10,6 +10,16 @@ export const HNS_EDGE_ROLES = [
   { host: "ns1-pirate-fluence", role: "hns-chain-observer" },
   { host: "ns1-pirate-fluence", role: "hns-authoritative-dns" },
   { host: "ns1-pirate-fluence", role: "hns-doh-resolver" },
+  {
+    host: "ns1-pirate-fluence",
+    role: "hns-verifier",
+    monitorFrom: "2026-08-14T00:00:00.000Z",
+  },
+  {
+    host: "ns1-pirate-fluence",
+    role: "hns-public-gateway",
+    monitorFrom: "2026-08-14T00:00:00.000Z",
+  },
   { host: "ns1-pirate-fluence", role: "spaces-verifier" },
   { host: "ns1-pirate-fluence", role: "hns-state-backup" },
   { host: "ns2-pirate-fluence", role: "hns-secondary-dns" },
@@ -27,6 +37,15 @@ function heartbeatKey(input: { host: string; role: string }): string {
 
 function alertKey(input: { host: string; role: string }): string {
   return `${ALERT_PREFIX}${identity(input)}`
+}
+
+function isMonitoringDeferred(expected: HnsEdgeRole, nowMs: number): boolean {
+  if (!("monitorFrom" in expected)) return false
+  const monitorFromMs = Date.parse(expected.monitorFrom)
+  if (!Number.isFinite(monitorFromMs)) {
+    throw new Error(`Invalid HNS edge monitorFrom for ${identity(expected)}`)
+  }
+  return nowMs < monitorFromMs
 }
 
 export function isExpectedHnsEdgeRole(input: { host: string; role: string }): boolean {
@@ -65,6 +84,7 @@ export async function checkHnsEdgeHeartbeatFreshness(
 
   const stale: string[] = []
   for (const expected of HNS_EDGE_ROLES) {
+    if (isMonitoringDeferred(expected, now.getTime())) continue
     const roleIdentity = identity(expected)
     const raw = await kv.get(heartbeatKey(expected))
     let state: HeartbeatState | null = null
