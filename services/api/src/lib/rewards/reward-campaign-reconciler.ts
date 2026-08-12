@@ -23,6 +23,7 @@ import {
 } from "./reward-campaign-candidates"
 import { resolveRewardCampaignConfig } from "./reward-campaign-config"
 import { advanceRewardCampaignLifecycle } from "./reward-campaign-lifecycle"
+import { isNationalityTierRewardIdentityProvider } from "./reward-campaign-provider-policy"
 import { assertRewardSolvencyAdmission } from "./reward-solvency-gate"
 
 const REWARD_CAMPAIGN_SETTLEMENT_TAIL_MS = 86_400_000
@@ -593,7 +594,7 @@ export async function creditRewardCampaignQualification(input: {
     let amount = Number(rowValue(campaignRow, "daily_reward_cents") ?? 0)
     let tierDecision: RewardNationalityShadowDecision | null = null
     if (tiered) {
-      if (campaignProvider !== "self" && campaignProvider !== "zkpassport") {
+      if (!isNationalityTierRewardIdentityProvider(campaignProvider)) {
         throw new Error("tiered reward campaign identity provider is invalid")
       }
       tierDecision = await resolveRewardNationalityBinding({
