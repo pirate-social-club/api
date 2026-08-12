@@ -62,7 +62,7 @@ export function parseVerificationCapabilities(raw: string | null | undefined): V
 export function serializeUser(row: UserRow): ContractUser {
   const verificationCapabilities = parseVerificationCapabilities(row.verification_capabilities_json)
   return {
-    id: `usr_${row.user_id}`,
+    id: publicId(row.user_id, "usr"),
     object: "user",
     primary_wallet_attachment: row.primary_wallet_attachment_id,
     verification_state: deriveVerificationState(verificationCapabilities),
@@ -138,7 +138,7 @@ export function assembleProfile(
     : null
 
   return {
-    id: `usr_${profileRow.user_id}`,
+    id: publicId(profileRow.user_id, "usr"),
     object: "profile",
     display_name: profileRow.display_name,
     avatar_ref: profileRow.avatar_ref,
@@ -257,7 +257,7 @@ export function serializeVerificationSession(input: {
   return {
     id: `vs_${input.row.verification_session_id}`,
     object: "verification_session",
-    user: `usr_${input.row.user_id}`,
+    user: publicId(input.row.user_id, "usr"),
     provider: input.row.provider === "self" || input.row.provider === "very" || input.row.provider === "zkpassport"
       ? input.row.provider
       : "self",
@@ -295,7 +295,7 @@ export function serializeNamespaceVerificationSession(
     id: publicId(decodePublicNamespaceVerificationSessionId(row.namespace_verification_session_id), "nvs"),
     object: "namespace_verification_session",
     namespace_verification: row.namespace_verification_id ? publicId(decodePublicNamespaceVerificationId(row.namespace_verification_id), "nv") : row.namespace_verification_id,
-    user: `usr_${row.user_id}`,
+    user: publicId(row.user_id, "usr"),
     family: row.family,
     submitted_root_label: row.submitted_root_label,
     normalized_root_label: row.normalized_root_label,
@@ -336,9 +336,9 @@ function parseOptionalStringArray(raw: string | null): string[] | null {
 
 export function serializeNamespaceVerification(row: NamespaceVerificationRow): NamespaceVerification {
   return {
-    id: `nv_${row.namespace_verification_id}`,
+    id: publicId(row.namespace_verification_id, "nv"),
     object: "namespace_verification",
-    user: `usr_${row.user_id}`,
+    user: publicId(row.user_id, "usr"),
     family: row.family,
     normalized_root_label: row.normalized_root_label,
     status: row.status,

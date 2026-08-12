@@ -5,6 +5,7 @@ import { authenticateUserToken } from "../../src/lib/auth-middleware"
 import { getSessionRepository } from "../../src/lib/auth/repositories"
 import { openCommunityWriteClient } from "../../src/lib/communities/community-read-access"
 import { getCommunityRepository } from "../../src/lib/communities/db-community-repository"
+import { decodePublicUserId } from "../../src/lib/public-ids"
 import { mergeTelegramAccountIntoCanonical } from "../../src/lib/telegram/account-merge-service"
 import { resolveTelegramAccount } from "../../src/lib/telegram/join-request-service"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../helpers"
@@ -48,7 +49,7 @@ async function createMergeFixture(input: {
     selectedWallet: null,
     wallets: [],
   })
-  const sourceUserId = telegramSession.user.id.replace(/^usr_/, "")
+  const sourceUserId = decodePublicUserId(telegramSession.user.id)
   const sourceToken = await mintPirateAccessToken({ env: ctx.env, userId: sourceUserId })
   const communityId = `cmt_merge_${input.tag}`
   const now = "2026-08-09T08:00:00.000Z"
@@ -255,7 +256,7 @@ describe("Telegram account linking", () => {
       selectedWallet: null,
       wallets: [],
     })
-    const sourceUserId = telegramSession.user.id.replace(/^usr_/, "")
+    const sourceUserId = decodePublicUserId(telegramSession.user.id)
     const sourceToken = await mintPirateAccessToken({ env: ctx.env, userId: sourceUserId })
     const now = new Date().toISOString()
 
@@ -356,7 +357,7 @@ describe("Telegram account linking", () => {
       selectedWallet: null,
       wallets: [],
     })
-    const sourceUserId = telegramSession.user.id.replace(/^usr_/, "")
+    const sourceUserId = decodePublicUserId(telegramSession.user.id)
     const sourceToken = await mintPirateAccessToken({ env: ctx.env, userId: sourceUserId })
     const now = new Date().toISOString()
     await ctx.client.execute({
@@ -833,7 +834,7 @@ describe("Telegram account linking", () => {
       selectedWallet: null,
       wallets: [],
     })
-    expect(telegramResolution.user.id.replace(/^usr_/, "")).toBe(canonicalUserId)
+    expect(decodePublicUserId(telegramResolution.user.id)).toBe(canonicalUserId)
     expect((await authenticateUserToken({
       env: fixture.ctx.env,
       token: fixture.sourceToken,

@@ -2,6 +2,7 @@ import { internalError } from "../../errors"
 import { buildDefaultVerificationCapabilities } from "../../verification/verification-capabilities"
 import { makeId, nowIso } from "../../helpers"
 import { normalizeIdentityCountryAlpha2 } from "../../identity/country-codes"
+import { publicId } from "../../public-ids"
 import { generateHandleCandidate } from "../handle-generator"
 import { listIdentityWallets, pickEmbeddedEvmIdentityWallet, resolveExplicitSelectedIdentityWallet } from "../upstream-wallets"
 import { nullableUnixSeconds, unixSeconds } from "../../../serializers/time"
@@ -121,7 +122,7 @@ export function exposeMemoryWalletAttachments(attachments: MemoryWalletAttachmen
 
 function exposeMemoryUser(user: User): SessionExchangeResponse["user"] {
   return {
-    id: `usr_${user.user_id}`,
+    id: publicId(user.user_id, "usr"),
     object: "user",
     primary_wallet_attachment: user.primary_wallet_attachment_id,
     verification_state: user.verification_state,
@@ -141,7 +142,7 @@ export function exposeMemoryProfile(record: MemoryAuthRecord): Profile {
     : null
 
   return {
-    id: `usr_${record.profile.user_id}`,
+    id: publicId(record.profile.user_id, "usr"),
     object: "profile",
     display_name: record.profile.display_name,
     avatar_ref: record.profile.avatar_ref,

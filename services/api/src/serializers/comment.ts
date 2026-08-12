@@ -13,7 +13,7 @@ import type {
   CommentThreadSnapshot,
 } from "../lib/comments/comment-types"
 import { nullableUnixSeconds, unixSeconds } from "./time"
-import { publicCommentId, publicCommunityId, publicPostId } from "../lib/public-ids"
+import { publicCommentId, publicCommunityId, publicId, publicPostId } from "../lib/public-ids"
 
 type CurrentCommentResponse = ContractComment & Pick<Comment, "source_language">
 
@@ -24,10 +24,10 @@ export function serializeComment(comment: Comment): CurrentCommentResponse {
     community: publicCommunityId(comment.community_id),
     thread_root_post: publicPostId(comment.thread_root_post_id),
     parent_comment: comment.parent_comment_id ? publicCommentId(comment.parent_comment_id) : null,
-    author_user: comment.authorship_mode === "guest" || !comment.author_user_id ? null : `usr_${comment.author_user_id}`,
+    author_user: comment.authorship_mode === "guest" || !comment.author_user_id ? null : publicId(comment.author_user_id, "usr"),
     author_public_handle: comment.identity_mode === "public" && comment.authorship_mode === "human_direct" ? comment.author_public_handle ?? null : null,
     authorship_mode: comment.authorship_mode,
-    agent: comment.agent_id ? `agt_${comment.agent_id}` : comment.agent_id,
+    agent: comment.agent_id ? publicId(comment.agent_id, "agt") : comment.agent_id,
     agent_ownership_record: comment.agent_ownership_record_id ? `aor_${comment.agent_ownership_record_id}` : comment.agent_ownership_record_id,
     identity_mode: comment.identity_mode,
     anonymous_scope: comment.anonymous_scope,
@@ -42,7 +42,7 @@ export function serializeComment(comment: Comment): CurrentCommentResponse {
     status: comment.status,
     replies_locked: comment.replies_locked ?? false,
     replies_locked_at: nullableUnixSeconds(comment.replies_locked_at ?? null),
-    replies_locked_by_user: comment.replies_locked_by_user_id ? `usr_${comment.replies_locked_by_user_id}` : null,
+    replies_locked_by_user: comment.replies_locked_by_user_id ? publicId(comment.replies_locked_by_user_id, "usr") : null,
     replies_lock_reason: comment.replies_lock_reason ?? null,
     depth: comment.depth,
     direct_reply_count: comment.direct_reply_count,

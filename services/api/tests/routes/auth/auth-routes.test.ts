@@ -4,6 +4,7 @@ import { setPrivyAccessProofVerifierForTests } from "../../../src/lib/auth/privy
 import { setEnsResolverForTests } from "../../../src/lib/auth/ens-linked-handle-service"
 import { setEnsResolutionTimeoutForTests } from "../../../src/lib/auth/db-profile-repository"
 import { mintPirateAccessToken } from "../../../src/lib/auth/pirate-session-token"
+import { decodePublicUserId } from "../../../src/lib/public-ids"
 import type { Env } from "../../../src/types"
 import { buildTestEnv, createRouteTestContext, json, mintUpstreamJwt, resetMemoryStore } from "../../helpers"
 
@@ -37,7 +38,7 @@ function makeAuthedJsonRequest(url: string, body: unknown, env: Env, accessToken
 }
 
 function rawUserId(publicUserId: string): string {
-  return publicUserId.replace(/^usr_/, "")
+  return decodePublicUserId(publicUserId)
 }
 
 async function expectAuthError(response: Response): Promise<void> {

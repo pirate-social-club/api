@@ -53,7 +53,7 @@ import {
 } from "../lib/telegram/mini-app-auth"
 import { trackApiEvent } from "../lib/analytics/track"
 import { authError, badRequestError, HttpError, notFoundError, telegramStudyUnavailable } from "../lib/errors"
-import { publicCommunityId } from "../lib/public-ids"
+import { decodePublicUserId, publicCommunityId, publicId } from "../lib/public-ids"
 import { getTelegramCopy } from "../lib/telegram/telegram-copy"
 import {
   resolveTelegramStartLocale,
@@ -1507,7 +1507,7 @@ telegram.post("/session/auto-exchange", async (c) => {
   })
   const userId = await resolveCanonicalUserId({
     env: c.env,
-    userId: session.user.id.replace(/^usr_/, ""),
+    userId: decodePublicUserId(session.user.id),
   })
 
   await syncTelegramAccountForUser({
@@ -1551,7 +1551,7 @@ telegram.post("/session/auto-exchange", async (c) => {
   return c.json({
     ...session,
     access_token: accessToken,
-    user: { ...session.user, id: `usr_${userId}` },
+    user: { ...session.user, id: publicId(userId, "usr") },
     profile: syncedProfile ?? session.profile,
     community: publicCommunityId(communityId),
     eligibility,

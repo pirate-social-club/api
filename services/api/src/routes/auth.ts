@@ -6,6 +6,7 @@ import { mintPirateAccessToken } from "../lib/auth/pirate-session-token"
 import { verifyPrivyAccessProof } from "../lib/auth/privy-auth"
 import { getProfileRepository, getSessionRepository } from "../lib/auth/repositories"
 import { trackApiEvent } from "../lib/analytics/track"
+import { decodePublicUserId } from "../lib/public-ids"
 import type { Env } from "../env"
 import type { SessionExchangeRequest } from "../types"
 
@@ -39,7 +40,7 @@ auth.post("/session/exchange", async (c) => {
 
   const repository = getSessionRepository(c.env)
   const session = await repository.exchangeIdentity(upstreamIdentity)
-  const userId = session.user.id.replace(/^usr_/, "")
+  const userId = decodePublicUserId(session.user.id)
   const syncedProfile = await getProfileRepository(c.env)
     .syncLinkedHandles(userId)
     .catch(() => null)

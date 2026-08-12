@@ -881,7 +881,7 @@ membership_mode: "request",
       author_user: string | null
     }
     expect(reviewHeldBody.status).toBe("draft")
-    expect(reviewHeldBody.author_user).toBe(`usr_${author.userId}`)
+    expect(reviewHeldBody.author_user).toBe(author.userId)
 
     const ownerRead = await app.request(
       `http://pirate.test/posts/${reviewHeldBody.id}`,
@@ -1490,7 +1490,7 @@ membership_mode: "request",
     }
     expect(lockBody.comments_locked).toBe(true)
     expect(lockBody.comments_lock_reason).toBe("cooldown")
-    expect(lockBody.comments_locked_by_user).toBe(`usr_${moderator.userId}`)
+    expect(lockBody.comments_locked_by_user).toBe(moderator.userId)
 
     const remove = await requestJson(
       `http://pirate.test/communities/${communityId}/posts/${postBody.id}/remove`,

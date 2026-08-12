@@ -1,10 +1,11 @@
 import type { User as ContractUser } from "@pirate/api-contracts"
 import type { User } from "../types"
+import { publicId } from "../lib/public-ids"
 import { nullableUnixSeconds, unixSeconds } from "./time"
 
 export function serializeUser(user: User): ContractUser {
   return {
-    id: `usr_${user.user_id}`,
+    id: publicId(user.user_id, "usr"),
     object: "user",
     community_posting_state: user.community_posting_state
       ? {

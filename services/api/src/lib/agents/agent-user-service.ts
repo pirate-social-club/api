@@ -6,6 +6,7 @@ import { makeId, nowIso } from "../helpers"
 import { packCursor, unpackCursor } from "../cursor-codec"
 import { withTransaction } from "../transactions"
 import { unixSeconds } from "../../serializers/time"
+import { publicId } from "../public-ids"
 import type {
   AgentHandle,
   UserAgent,
@@ -390,7 +391,7 @@ export async function resolvePublicAgentByHandle(
       created: unixSeconds(agentRow.created_at),
     },
     owner: {
-      user: ownerProfile.id,
+      user: publicId(ownerProfile.id, "usr"),
       display_name: profileRow.display_name,
       global_handle: ownerProfile.global_handle,
       primary_public_handle: ownerProfile.primary_public_handle ?? null,

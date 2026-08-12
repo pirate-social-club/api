@@ -632,7 +632,7 @@ describe("mcp routes", () => {
     const post = createdBody.result?.structuredContent?.post
     expect(post?.id).toMatch(/^post_/)
     expect(post?.authorship_mode).toBe("user_agent")
-    expect(post?.agent).toBe(`agt_${ownershipCompleteBody.agent_id}`)
+    expect(post?.agent).toBe(ownershipCompleteBody.agent_id)
     expect(createdBody.result?.structuredContent?.links?.canonical?.href).toBe(`https://pirate.test/p/${post?.id}`)
     expect(createdBody.result?.content?.[0]?.text).toContain(`https://pirate.test/p/${post?.id}`)
 
