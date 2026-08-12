@@ -29,6 +29,9 @@ const job: ContentSecurityScanJob = {
   requestReason: "initial_upload",
   expectedContentHash: `0x${"a".repeat(64)}`,
   expectedSizeBytes: 12,
+  validationProfile: "download_file_v1",
+  declaredFilename: "records.csv",
+  declaredMimeType: "text/csv",
   attemptCount: 1,
   maxAttempts: 4,
   leaseOwner: "worker-fixture",
@@ -47,6 +50,11 @@ const result: ContentSecurityScanResult = {
   definitionDigest: job.scannerRelease.definitionDigest,
   findingCode: null,
   errorCode: null,
+  formatPolicyVersion: "text-download-formats-v1",
+  formatOutcome: "allow",
+  detectedMimeType: "text/csv",
+  formatFindingCode: null,
+  formatErrorCode: null,
   durationMs: 20,
 }
 

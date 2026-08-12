@@ -114,6 +114,17 @@ describe("content blob request policy", () => {
     })).toThrow("deck_import_csv_v1 requires text/csv")
   })
 
+  test("rejects unsafe display filenames before allocating storage", () => {
+    for (const declaredFilename of ["../records.csv", "folder\\records.csv", "bad\u0000.csv", "CON.csv", "   "]) {
+      expect(() => assertCreateContentBlobRequest({
+        validation_profile: "download_file_v1",
+        declared_filename: declaredFilename,
+        declared_mime_type: "text/csv",
+        upload_mode: "proxy",
+      })).toThrow()
+    }
+  })
+
   test("rejects direct multipart until its public lifecycle routes exist", () => {
     expect(() => assertCreateContentBlobRequest({
       validation_profile: "download_file_v1",

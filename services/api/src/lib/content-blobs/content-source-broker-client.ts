@@ -118,12 +118,20 @@ function parseContentSecurityScanResult(value: unknown): ContentSecurityScanResu
   const outcome = record.outcome
   const findingCode = record.finding == null ? null : boundedText(record.finding)
   const errorCode = record.error_code == null ? null : boundedText(record.error_code)
+  const formatOutcome = record.format_outcome
+  const detectedMimeType = record.detected_mime_type == null ? null : boundedText(record.detected_mime_type)
+  const formatFindingCode = record.format_finding_code == null ? null : boundedText(record.format_finding_code)
+  const formatErrorCode = record.format_error_code == null ? null : boundedText(record.format_error_code)
   if (outcome !== "clean" && outcome !== "suspicious" && outcome !== "malicious" && outcome !== "error") {
     return null
   }
   if (outcome === "malicious" && (!findingCode || errorCode)) return null
   if (outcome === "error" && (findingCode || !errorCode)) return null
   if ((outcome === "clean" || outcome === "suspicious") && errorCode) return null
+  if (formatOutcome !== "allow" && formatOutcome !== "reject" && formatOutcome !== "error") return null
+  if (formatOutcome === "allow" && (!detectedMimeType || formatFindingCode || formatErrorCode)) return null
+  if (formatOutcome === "reject" && (!formatFindingCode || formatErrorCode)) return null
+  if (formatOutcome === "error" && (formatFindingCode || !formatErrorCode)) return null
   if (record.engine !== "clamav") return null
   if (typeof record.size_bytes !== "number" || !Number.isSafeInteger(record.size_bytes) || record.size_bytes <= 0) {
     return null
@@ -139,6 +147,7 @@ function parseContentSecurityScanResult(value: unknown): ContentSecurityScanResu
   const signatureDate = boundedText(record.signature_date)
   const engineImageDigest = boundedText(record.engine_image_digest, 71)
   const definitionDigest = boundedText(record.definition_digest, 64)
+  const formatPolicyVersion = boundedText(record.format_policy_version)
   if (
     !job
     || !contentSha256
@@ -152,6 +161,7 @@ function parseContentSecurityScanResult(value: unknown): ContentSecurityScanResu
     || !/^sha256:[a-f0-9]{64}$/u.test(engineImageDigest)
     || !definitionDigest
     || !/^[a-f0-9]{64}$/u.test(definitionDigest)
+    || !formatPolicyVersion
   ) return null
   return {
     job,
@@ -166,6 +176,11 @@ function parseContentSecurityScanResult(value: unknown): ContentSecurityScanResu
     definitionDigest,
     findingCode,
     errorCode,
+    formatPolicyVersion,
+    formatOutcome,
+    detectedMimeType,
+    formatFindingCode,
+    formatErrorCode,
     durationMs: record.duration_ms,
   }
 }
@@ -214,6 +229,11 @@ export async function scanContentSource(input: {
           "x-content-scan-job": input.job.scanJobId,
           "x-content-sha256": input.job.expectedContentHash.slice(2),
           "x-content-size": String(input.job.expectedSizeBytes),
+          "x-content-validation-profile": input.job.validationProfile,
+          "x-content-declared-mime-type": input.job.declaredMimeType,
+          ...(input.job.declaredFilename
+            ? { "x-content-declared-filename-base64url": Buffer.from(input.job.declaredFilename).toString("base64url") }
+            : {}),
         },
       },
     ))

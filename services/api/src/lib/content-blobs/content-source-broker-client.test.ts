@@ -29,6 +29,9 @@ const job: ContentSecurityScanJob = {
   requestReason: "initial_upload",
   expectedContentHash: `0x${sha256}`,
   expectedSizeBytes: bytes.byteLength,
+  validationProfile: "download_file_v1",
+  declaredFilename: "records.csv",
+  declaredMimeType: "text/csv",
   attemptCount: 1,
   maxAttempts: 4,
   leaseOwner: "worker-fixture",
@@ -50,6 +53,11 @@ function scannerResult(overrides: Record<string, unknown> = {}) {
     definition_digest: "c".repeat(64),
     finding: null,
     error_code: null,
+    format_policy_version: "text-download-formats-v1",
+    format_outcome: "allow",
+    detected_mime_type: "text/csv",
+    format_finding_code: null,
+    format_error_code: null,
     duration_ms: 12,
     ...overrides,
   }
@@ -145,6 +153,9 @@ describe("content source broker client", () => {
         expect(request.headers.get("authorization")).toBe("Bearer broker-secret")
         expect(request.headers.get("x-content-scan-job")).toBe(job.scanJobId)
         expect(request.headers.get("x-content-sha256")).toBe(sha256)
+        expect(request.headers.get("x-content-validation-profile")).toBe("download_file_v1")
+        expect(request.headers.get("x-content-declared-mime-type")).toBe("text/csv")
+        expect(Buffer.from(request.headers.get("x-content-declared-filename-base64url")!, "base64url").toString()).toBe("records.csv")
         return Response.json(scannerResult(), {
           headers: { "x-content-source-bytes-read": String(bytes.byteLength) },
         })
@@ -152,6 +163,7 @@ describe("content source broker client", () => {
       job,
     })
     expect(result.result.outcome).toBe("clean")
+    expect(result.result.formatOutcome).toBe("allow")
     expect(result.bytesRead).toBe(bytes.byteLength)
     expect(result.readOutcome).toBe("completed")
   })

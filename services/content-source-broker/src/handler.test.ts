@@ -119,6 +119,9 @@ function requestHeaders(sha256: string, sizeBytes: number): Record<string, strin
     "content-length": String(sizeBytes),
     "x-content-sha256": sha256,
     "x-content-size": String(sizeBytes),
+    "x-content-validation-profile": "download_file_v1",
+    "x-content-declared-mime-type": "text/plain",
+    "x-content-declared-filename-base64url": Buffer.from("notes.txt").toString("base64url"),
   }
 }
 
@@ -209,6 +212,8 @@ describe("content source broker", () => {
         scannerCalls += 1
         expect(request.headers.get("authorization")).toBe(`Bearer ${SCANNER_SECRET}`)
         expect(request.headers.get("x-content-scan-job")).toBe("csj_fixture")
+        expect(request.headers.get("x-content-validation-profile")).toBe("download_file_v1")
+        expect(request.headers.get("x-content-declared-mime-type")).toBe("text/plain")
         expect(new Uint8Array(await request.arrayBuffer())).toEqual(bytes)
         return Response.json({
           object: "content_malware_scan",

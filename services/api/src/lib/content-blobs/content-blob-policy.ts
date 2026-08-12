@@ -34,9 +34,29 @@ export function normalizeContentHash(value: string | null | undefined): string |
 }
 
 export function normalizeFilename(value: string | null | undefined): string | null {
-  const filename = value?.trim() || null
+  const normalized = value?.normalize("NFC").trim() ?? ""
+  if (value != null && !normalized) {
+    throw badRequestError("declared_filename must not be empty")
+  }
+  const filename = normalized || null
   if (filename && filename.length > 255) {
     throw badRequestError("declared_filename must be at most 255 characters")
+  }
+  if (filename && /[\\/]/u.test(filename)) {
+    throw badRequestError("declared_filename must not contain path separators")
+  }
+  if (filename && /[\p{Cc}\p{Cf}]/u.test(filename)) {
+    throw badRequestError("declared_filename must not contain control characters")
+  }
+  if (filename) {
+    const stem = filename.split(".", 1)[0]?.toUpperCase() ?? ""
+    if (
+      filename === "."
+      || filename === ".."
+      || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/u.test(stem)
+    ) {
+      throw badRequestError("declared_filename is reserved")
+    }
   }
   return filename
 }
