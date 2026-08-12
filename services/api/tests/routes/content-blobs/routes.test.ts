@@ -1,19 +1,17 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { app } from "../../../src/index"
 import { createRouteTestContext, json, resetRuntimeCaches } from "../../helpers"
 import { exchangeJwt } from "../communities/community-routes-test-helpers"
 import { createOpenSongCommunity } from "../song-artifacts/song-artifact-locked-test-helpers"
 
 let cleanup: (() => Promise<void>) | null = null
-let originalFetch: typeof fetch
+setDefaultTimeout(15_000)
 
 beforeEach(() => {
   resetRuntimeCaches()
-  originalFetch = globalThis.fetch
 })
 
 afterEach(async () => {
-  globalThis.fetch = originalFetch
   if (cleanup) {
     await cleanup()
     cleanup = null
@@ -55,26 +53,29 @@ describe("content blob routes", () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     ctx.env.CONTENT_BLOB_UPLOADS_ENABLED = "true"
-    ctx.env.FILEBASE_S3_ACCESS_KEY = "fixture-access-key"
-    ctx.env.FILEBASE_S3_SECRET_KEY = "fixture-secret-key"
-    ctx.env.FILEBASE_MEDIA_BUCKET = "fixture-bucket"
-    ctx.env.FILEBASE_S3_ENDPOINT = "https://s3.filebase.test"
+    ctx.env.CONTENT_SOURCE_BROKER_SHARED_SECRET = "fixture-broker-secret"
     const session = await exchangeJwt(ctx.env, "content-blob-owner-fixture")
     const communityId = await createOpenSongCommunity(ctx.env, session.accessToken, "Content Blob Owner Fixture")
     ctx.env.CONTENT_BLOB_UPLOAD_COMMUNITY_IDS = communityId
     const bytes = new TextEncoder().encode("word,meaning\nship,vessel\n")
-    let providerPutCount = 0
-
-    globalThis.fetch = async (requestInput: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const request = requestInput instanceof Request ? requestInput : new Request(requestInput, init)
-      if (request.method === "PUT" && request.url.startsWith("https://s3.filebase.test/")) {
-        providerPutCount += 1
-        return new Response(null, {
-          status: 200,
-          headers: { "x-amz-meta-cid": "bafycontentblobfixture" },
-        })
-      }
-      return await originalFetch(request)
+    let brokerPutCount = 0
+    ctx.env.CONTENT_SOURCE_BROKER = {
+      fetch: async (input, init) => {
+        const request = input instanceof Request ? input : new Request(input, init)
+        brokerPutCount += 1
+        expect(request.headers.get("authorization")).toBe("Bearer fixture-broker-secret")
+        const contentBlobId = new URL(request.url).pathname.split("/").at(-1)
+        return Response.json({
+          object: "content_source_object",
+          content_blob: contentBlobId,
+          status: "stored",
+          storage_namespace: "content-source/v1",
+          storage_object_key: `content-source/v1/${contentBlobId}`,
+          size_bytes: Number(request.headers.get("x-content-size")),
+          content_sha256: request.headers.get("x-content-sha256"),
+        }, { status: 201 })
+      },
+      connect: () => { throw new Error("not implemented") },
     }
 
     const createdResponse = await app.request(
@@ -98,15 +99,13 @@ describe("content blob routes", () => {
       status: string
       security_scan_state: string
       upload_url: string | null
-      upload_session: { object_key: string; status: string }
+      upload_session: { status: string }
     }
     expect(created.id).toStartWith("cbl_")
     expect(created.status).toBe("pending_upload")
     expect(created.security_scan_state).toBe("pending")
     expect(created.upload_url).toContain(`/content-blobs/${created.id}/content`)
-    expect(created.upload_session.object_key).toBe(
-      `content-blobs/${communityId}/${created.id}/payload`,
-    )
+    expect(JSON.stringify(created)).not.toContain("content-source/v1")
 
     const uploadedResponse = await app.request(
       `http://pirate.test/communities/${communityId}/content-blobs/${created.id}/content`,
@@ -173,6 +172,6 @@ describe("content blob routes", () => {
       ctx.env,
     )
     expect(mismatchUploadResponse.status).toBe(400)
-    expect(providerPutCount).toBe(1)
+    expect(brokerPutCount).toBe(1)
   })
 })

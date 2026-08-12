@@ -1,3 +1,7 @@
+import {
+  CONTENT_SOURCE_STORAGE_NAMESPACE,
+  contentSourceObjectKey,
+} from "@pirate/content-source-protocol"
 import type { Env } from "../../env"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import {
@@ -9,8 +13,6 @@ import type { CommunityDatabaseBindingRepository } from "../communities/communit
 import { sha256Hex } from "../crypto"
 import { badRequestError, conflictError, notFoundError } from "../errors"
 import { envFlag, makeId, nowIso, splitCsv } from "../helpers"
-import { resolveFilebaseConfig } from "../storage/filebase-config"
-import { uploadFilebaseObject } from "../storage/filebase-object"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
   beginProxyContentUpload,
@@ -28,10 +30,13 @@ import {
   type CreateContentBlobRequest,
 } from "./content-blob-policy"
 import { serializeContentBlob, type ContentBlob } from "./content-blob-serialization"
+import {
+  assertContentSourceBrokerConfigured,
+  CONTENT_SOURCE_STORAGE_ENDPOINT,
+  storeContentSource,
+} from "./content-source-broker-client"
 
 const CONTENT_BLOB_SESSION_TTL_MS = 60 * 60 * 1000
-const CONTENT_BLOB_STORAGE_PROVIDER = "filebase_ipfs"
-
 type ContentBlobCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
 
 
@@ -44,10 +49,6 @@ function buildContentBlobContentUrl(origin: string, communityId: string, content
     `/communities/${encodeURIComponent(communityId)}/content-blobs/${encodeURIComponent(contentBlobId)}/content`,
     origin,
   ).toString()
-}
-
-function buildContentBlobObjectKey(communityId: string, contentBlobId: string): string {
-  return ["content-blobs", communityId, contentBlobId, "payload"].join("/")
 }
 
 function requireContentBlobUploadsEnabled(env: Env, communityId: string): void {
@@ -83,12 +84,12 @@ export async function createContentBlob(input: {
   origin: string
 }): Promise<ContentBlob> {
   requireContentBlobUploadsEnabled(input.env, input.communityId)
+  assertContentSourceBrokerConfigured(input.env)
   assertCreateContentBlobRequest(input.body)
   await requireCommunityMember(input)
 
   const now = nowIso()
   const contentBlobId = makeId("cbl")
-  const config = resolveFilebaseConfig(input.env)
   const owned = await createContentBlobIntent({
     client: getControlPlaneClient(input.env),
     intent: {
@@ -103,12 +104,12 @@ export async function createContentBlob(input: {
       declaredContentHash: normalizeContentHash(input.body.declared_content_hash),
       storageRef: buildContentBlobContentUrl(input.origin, input.communityId, contentBlobId),
       uploadMode: input.body.upload_mode,
-      objectKey: buildContentBlobObjectKey(input.communityId, contentBlobId),
+      objectKey: contentSourceObjectKey(contentBlobId),
       providerUploadId: null,
       partSizeBytes: null,
       totalParts: null,
-      bucket: config.bucket,
-      storageEndpoint: config.endpoint.toString(),
+      bucket: CONTENT_SOURCE_STORAGE_NAMESPACE,
+      storageEndpoint: CONTENT_SOURCE_STORAGE_ENDPOINT,
       expiresAt: addMilliseconds(now, CONTENT_BLOB_SESSION_TTL_MS),
       createdAt: now,
     },
@@ -134,8 +135,16 @@ export async function getOwnedContentBlob(input: {
   return serializeContentBlob(owned)
 }
 
-function normalizeUploadBytes(content: ArrayBuffer | Uint8Array): Uint8Array {
-  return content instanceof Uint8Array ? content : new Uint8Array(content)
+function normalizeUploadBytes(content: ArrayBuffer | Uint8Array): Uint8Array<ArrayBuffer> {
+  if (content instanceof ArrayBuffer) return new Uint8Array(content)
+  if (
+    content.buffer instanceof ArrayBuffer
+    && content.byteOffset === 0
+    && content.byteLength === content.buffer.byteLength
+  ) {
+    return content as Uint8Array<ArrayBuffer>
+  }
+  return new Uint8Array(content)
 }
 
 export async function uploadContentBlobBytes(input: {
@@ -195,12 +204,11 @@ export async function uploadContentBlobBytes(input: {
   }
 
   try {
-    const storage = await uploadFilebaseObject({
+    const storage = await storeContentSource({
       env: input.env,
-      objectKey: session.object_key,
-      mimeType: owned.blob.declared_mime_type,
+      contentBlobId: input.contentBlobId,
       bytes,
-      payloadHashHex: hashHex,
+      sha256: hashHex,
     })
     const completedAt = nowIso()
     const uploaded = await markProxyContentBlobUploaded({
@@ -211,12 +219,12 @@ export async function uploadContentBlobBytes(input: {
       contentUploadSessionId: session.content_upload_session_id,
       verifiedSizeBytes: bytes.byteLength,
       verifiedContentHash: storage.contentHash,
-      storageProvider: CONTENT_BLOB_STORAGE_PROVIDER,
+      storageProvider: storage.storageProvider,
       storageBucket: storage.storageBucket,
       storageObjectKey: storage.storageObjectKey,
       storageEndpoint: storage.storageEndpoint,
-      gatewayUrl: owned.blob.storage_ref,
-      ipfsCid: storage.ipfsCid,
+      gatewayUrl: null,
+      ipfsCid: null,
       completedAt,
     })
     return serializeContentBlob(uploaded)

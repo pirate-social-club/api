@@ -14,6 +14,7 @@
         "@pirate/api-contracts": "file:../contracts",
         "@pirate/api-shared": "file:../shared",
         "@pirate/bookings-domain": "file:../../../core/packages/bookings-domain",
+        "@pirate/content-source-protocol": "file:../content-source-protocol",
         "@pirate/hns-delegation": "file:../../../core/packages/hns-delegation",
         "@privy-io/node": "^0.11.0",
         "@selfxyz/core": "^1.2.0-beta.1",
@@ -476,6 +477,8 @@
     "@pirate/api-shared": ["@pirate/api-shared@file:../shared", { "devDependencies": { "@types/node": "^24.5.2", "typescript": "7.0.2" } }],
 
     "@pirate/bookings-domain": ["@pirate/bookings-domain@file:../../../core/packages/bookings-domain", { "devDependencies": { "@types/bun": "latest" } }],
+
+    "@pirate/content-source-protocol": ["@pirate/content-source-protocol@file:../content-source-protocol", { "devDependencies": { "typescript": "7.0.2" } }],
 
     "@pirate/hns-delegation": ["@pirate/hns-delegation@file:../../../core/packages/hns-delegation", { "devDependencies": { "@types/bun": "latest", "typescript": "^5.9.2" } }],
 

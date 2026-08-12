@@ -16,9 +16,12 @@ on:
       - "services/community-d1-shard/**"
       - "services/content-malware-scanner-container/**"
       - "services/content-malware-scanner-runtime/**"
+      - "services/content-source-broker/**"
+      - "services/content-source-protocol/**"
       - "services/contracts/**"
       - "services/dance-grader/**"
       - "services/shared/**"
+      - "services/internal-service-auth/**"
       - "services/song-preview-container/**"
       - "services/song-preview-runtime/**"
       - "services/story-controlled-inclusion-harness/**"
@@ -43,9 +46,12 @@ on:
       - "services/community-d1-shard/**"
       - "services/content-malware-scanner-container/**"
       - "services/content-malware-scanner-runtime/**"
+      - "services/content-source-broker/**"
+      - "services/content-source-protocol/**"
       - "services/contracts/**"
       - "services/dance-grader/**"
       - "services/shared/**"
+      - "services/internal-service-auth/**"
       - "services/song-preview-container/**"
       - "services/song-preview-runtime/**"
       - "services/story-controlled-inclusion-harness/**"
@@ -665,6 +671,60 @@ jobs:
       - name: Install content malware scanner container dependencies
         working-directory: services/content-malware-scanner-container
         run: bun install --frozen-lockfile
+
+      - name: Install internal service auth dependencies
+        working-directory: services/internal-service-auth
+        run: bun install --frozen-lockfile
+
+      - name: Audit internal service auth dependencies
+        working-directory: services/internal-service-auth
+        run: bun audit --audit-level=high
+
+      - name: Typecheck internal service auth
+        working-directory: services/internal-service-auth
+        run: bun run check
+
+      - name: Test internal service auth
+        working-directory: services/internal-service-auth
+        run: bun run test
+
+      - name: Install content source broker dependencies
+        working-directory: services/content-source-broker
+        run: bun install --frozen-lockfile
+
+      - name: Install content source protocol dependencies
+        working-directory: services/content-source-protocol
+        run: bun install --frozen-lockfile
+
+      - name: Audit content source protocol dependencies
+        working-directory: services/content-source-protocol
+        run: bun audit --audit-level=high
+
+      - name: Typecheck content source protocol
+        working-directory: services/content-source-protocol
+        run: bun run check
+
+      - name: Test content source protocol
+        working-directory: services/content-source-protocol
+        run: bun run test
+
+      - name: Audit content source broker dependencies
+        working-directory: services/content-source-broker
+        run: bun audit --audit-level=high
+
+      - name: Typecheck content source broker
+        working-directory: services/content-source-broker
+        run: bun run check
+
+      - name: Test content source broker
+        working-directory: services/content-source-broker
+        run: bun run test
+
+      - name: Validate content source broker staging bundle
+        working-directory: services/content-source-broker
+        env:
+          WRANGLER_SEND_METRICS: "false"
+        run: bunx wrangler deploy --dry-run --env staging
 
       - name: Audit content malware scanner container dependencies
         working-directory: services/content-malware-scanner-container

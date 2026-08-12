@@ -1131,14 +1131,21 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   // PostgreSQL's `~` operator is unavailable in the SQLite test mirror. Preserve the
   // fixed-length lowercase 0x-hex checks used by funding-observation migrations.
   sqliteCompat = sqliteCompat.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^0x\[0-9a-f\]\{(\d+)\}\$'/g,
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^0x\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
     (_match, column: string, hexLength: string) => {
       const expectedLength = Number(hexLength) + 2
       return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 2) = '0x' AND substr(${column}, 3) NOT GLOB '*[^0-9a-f]*'`
     },
   )
   sqliteCompat = sqliteCompat.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^\[0-9a-f\]\{(\d+)\}\$'/g,
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^sha256:\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
+    (_match, column: string, hexLength: string) => {
+      const expectedLength = Number(hexLength) + "sha256:".length
+      return `length(${column}) = ${expectedLength} AND substr(${column}, 1, 7) = 'sha256:' AND substr(${column}, 8) NOT GLOB '*[^0-9a-f]*'`
+    },
+  )
+  sqliteCompat = sqliteCompat.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
     (_match, column: string, hexLength: string) =>
       `length(${column}) = ${Number(hexLength)} AND ${column} NOT GLOB '*[^0-9a-f]*'`,
   )

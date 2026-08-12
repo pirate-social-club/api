@@ -1,7 +1,8 @@
+import { CONTENT_SOURCE_MAX_BYTES } from "@pirate/content-source-protocol"
 import { badRequestError } from "../errors"
 import type { ContentUploadMode } from "./content-blob-types"
 
-export const CONTENT_BLOB_PROXY_MAX_BYTES = 50 * 1024 * 1024
+export const CONTENT_BLOB_PROXY_MAX_BYTES = CONTENT_SOURCE_MAX_BYTES
 
 const SUPPORTED_VALIDATION_PROFILES = new Set([
   "download_file_v1",

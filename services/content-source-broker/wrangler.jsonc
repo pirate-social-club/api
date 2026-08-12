@@ -1,0 +1,69 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pirate-content-source-broker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  "observability": {
+    "enabled": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "CONTENT_SOURCE_OBJECTS",
+      "bucket_name": "pirate-content-source-development"
+    }
+  ],
+  "services": [
+    {
+      "binding": "CONTENT_MALWARE_SCANNER_SERVICE",
+      "service": "pirate-content-malware-scanner-container"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "development"
+  },
+  "env": {
+    "staging": {
+      "name": "pirate-content-source-broker-staging",
+      "workers_dev": false,
+      "preview_urls": false,
+      "r2_buckets": [
+        {
+          "binding": "CONTENT_SOURCE_OBJECTS",
+          "bucket_name": "pirate-content-source-staging"
+        }
+      ],
+      "services": [
+        {
+          "binding": "CONTENT_MALWARE_SCANNER_SERVICE",
+          "service": "pirate-content-malware-scanner-container-staging"
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "staging"
+      }
+    },
+    "production": {
+      "name": "content-source-broker",
+      "workers_dev": false,
+      "preview_urls": false,
+      "r2_buckets": [
+        {
+          "binding": "CONTENT_SOURCE_OBJECTS",
+          "bucket_name": "pirate-content-source"
+        }
+      ],
+      "services": [
+        {
+          "binding": "CONTENT_MALWARE_SCANNER_SERVICE",
+          "service": "content-malware-scanner-container"
+        }
+      ],
+      "vars": {
+        "ENVIRONMENT": "production"
+      }
+    }
+  }
+}
