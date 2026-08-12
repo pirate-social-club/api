@@ -56,7 +56,43 @@ function validateGatePolicyInternal(input: unknown, identityMode: "strict" | "re
   if (atomCount.value === 0) {
     throw eligibilityFailed("gate_policy requires at least one gate")
   }
-  return { version: 1, expression: normalizeGateExpressionIdentities(expression) }
+  const normalizedExpression = normalizeGateExpressionIdentities(expression)
+  if (identityMode === "strict") {
+    requiredIdentityCapabilities(normalizedExpression)
+  }
+  return { version: 1, expression: normalizedExpression }
+}
+
+type ProviderBackedIdentityCapability = "unique_human" | "minimum_age" | "nationality" | "gender"
+
+function requiredIdentityCapabilities(expression: GateExpression): Set<ProviderBackedIdentityCapability> {
+  if (expression.op === "gate") {
+    const capability = expression.gate.type
+    return capability === "unique_human" || capability === "minimum_age"
+      || capability === "nationality" || capability === "gender"
+      ? new Set([capability])
+      : new Set()
+  }
+
+  const childCapabilities = expression.children.map(requiredIdentityCapabilities)
+  if (expression.op === "or") {
+    return new Set([...childCapabilities[0]!].filter((capability) =>
+      childCapabilities.every((child) => child.has(capability)),
+    ))
+  }
+
+  const required = new Set<ProviderBackedIdentityCapability>()
+  for (const child of childCapabilities) {
+    for (const capability of child) {
+      if (required.has(capability)) {
+        throw eligibilityFailed(
+          `gate_policy cannot require ${capability} more than once through an AND path until multi-provider evidence is supported`,
+        )
+      }
+      required.add(capability)
+    }
+  }
+  return required
 }
 
 /**

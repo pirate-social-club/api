@@ -134,6 +134,59 @@ describe("evaluateMembershipGatePolicy", () => {
       }))).toThrow("nationality gate accepted_providers must only include self or zkpassport")
     })
 
+    test("rejects identity capabilities required twice through an AND path", () => {
+      expect(() => validateGatePolicy(andPolicy(
+        { type: "unique_human", provider: "self" },
+        { type: "unique_human", provider: "zkpassport" },
+      ))).toThrow("gate_policy cannot require unique_human more than once through an AND path")
+
+      expect(() => validateGatePolicy({
+        version: 1,
+        expression: {
+          op: "and",
+          children: [
+            { op: "gate", gate: { type: "nationality", provider: "self", accepted_providers: ["self"], allowed: ["US"] } },
+            {
+              op: "or",
+              children: [
+                { op: "gate", gate: { type: "nationality", provider: "self", accepted_providers: ["zkpassport"], allowed: ["CA"] } },
+                { op: "gate", gate: { type: "nationality", provider: "self", accepted_providers: ["self"], allowed: ["GB"] } },
+              ],
+            },
+          ],
+        },
+      })).toThrow("gate_policy cannot require nationality more than once through an AND path")
+    })
+
+    test("keeps identity-provider OR alternatives and stored legacy conjunctions readable", () => {
+      expect(() => validateGatePolicy(orPolicy(
+        { type: "unique_human", provider: "self" },
+        { type: "unique_human", provider: "zkpassport" },
+      ))).not.toThrow()
+
+      expect(() => validateGatePolicy({
+        version: 1,
+        expression: {
+          op: "and",
+          children: [
+            { op: "gate", gate: { type: "unique_human", provider: "self" } },
+            {
+              op: "or",
+              children: [
+                { op: "gate", gate: { type: "unique_human", provider: "zkpassport" } },
+                { op: "gate", gate: { type: "altcha_pow" } },
+              ],
+            },
+          ],
+        },
+      })).not.toThrow()
+
+      expect(() => normalizeStoredGatePolicy(andPolicy(
+        { type: "unique_human", provider: "self" },
+        { type: "unique_human", provider: "zkpassport" },
+      ))).not.toThrow()
+    })
+
     test("normalizes supported asset balance atoms and rejects unsafe amounts", () => {
       expect(validateGatePolicy(atomGate({
         type: "asset_balance",
