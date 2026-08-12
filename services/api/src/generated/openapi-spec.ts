@@ -4139,7 +4139,7 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           },
           "403": {
-            "$ref": "#/components/responses/CommentCreateForbidden"
+            "$ref": "#/components/responses/VerificationRequired"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -7158,7 +7158,7 @@ const spec = {
             "$ref": "#/components/responses/AuthError"
           },
           "403": {
-            "$ref": "#/components/responses/CommentCreateForbidden"
+            "$ref": "#/components/responses/VerificationRequired"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -9170,15 +9170,6 @@ const spec = {
           }
         }
       },
-      "CommentCreateForbidden": {
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/Error"
-            }
-          }
-        }
-      },
       "StructuredSurfaceDisabled": {
         "content": {
           "application/json": {
@@ -9841,9 +9832,6 @@ const spec = {
               "payment_required",
               "verification_required",
               "membership_required",
-              "gate_unsatisfied",
-              "banned",
-              "comments_locked",
               "eligibility_failed",
               "gate_failed",
               "posting_trust_tier_too_low",
