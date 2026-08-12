@@ -31,6 +31,7 @@ type SongArtifactPresentation = {
   has_instrumental_audio: boolean
   has_timed_lyrics: boolean
 }
+export type SongArtifactPresentationByPostId = ReadonlyMap<string, SongArtifactPresentation | null>
 type StudyEnabledCache = Map<string, Promise<boolean>>
 type KaraokeEnabledCache = Map<string, Promise<boolean>>
 type StudyElevenLabsCredentialResolver = (communityId: string) => Promise<boolean>
@@ -280,6 +281,117 @@ async function enrichDownloadableAudioWithUploadProofs(input: {
   })
 }
 
+function downloadableAudioEntries(row: Record<string, unknown>): SongPresentationDownloadableAudio[] {
+  const entries: SongPresentationDownloadableAudio[] = []
+  const original = parseJsonAudioDescriptor(row.primary_audio_json)
+  if (original) entries.push({ kind: "original", ...original })
+  const instrumental = parseJsonAudioDescriptor(row.instrumental_audio_json)
+  if (instrumental) entries.push({ kind: "instrumental", ...instrumental })
+  const vocals = parseJsonAudioDescriptor(row.vocal_audio_json)
+  if (vocals) entries.push({ kind: "vocals", ...vocals })
+  return entries
+}
+
+function songArtifactPresentationFromRow(input: {
+  row: Record<string, unknown>
+  proofByUploadId: ReadonlyMap<string, DecentralizedStorageProof>
+}): SongArtifactPresentation {
+  const rawEntries = downloadableAudioEntries(input.row)
+  const entries = rawEntries.map((entry) => {
+    if (entry.decentralized_storage) return entry
+    const uploadId = parseSongArtifactUploadIdFromStorageRef(entry.storage_ref)
+    const proof = uploadId ? input.proofByUploadId.get(uploadId) : null
+    return proof ? { ...entry, decentralized_storage: proof } : entry
+  })
+  return {
+    alignment_reason: alignmentReasonValue(input.row.alignment_reason),
+    alignment_status: alignmentStatusValue(input.row.alignment_status),
+    downloadable_audio: entries.length ? entries : null,
+    has_instrumental_audio: rawEntries.some((entry) => entry.kind === "instrumental"),
+    has_timed_lyrics: hasTimedLyrics({
+      inline: input.row.timed_lyrics_json,
+      ref: input.row.timed_lyrics_ref,
+    }),
+  }
+}
+
+export async function listPublicSongArtifactPresentations(input: {
+  communityId: string
+  executor: DbExecutor
+  posts: Post[]
+}): Promise<SongArtifactPresentationByPostId> {
+  const eligiblePosts = input.posts.filter((post) => (
+    post.community_id === input.communityId
+    && post.post_type === "song"
+    && post.status === "published"
+    && (post.access_mode ?? "public") === "public"
+    && Boolean(post.song_artifact_bundle_id)
+  ))
+  const bundleIds = [...new Set(eligiblePosts
+    .map((post) => post.song_artifact_bundle_id)
+    .filter((value): value is string => Boolean(value)))]
+  if (!bundleIds.length) return new Map()
+
+  const bundlePlaceholders = bundleIds.map((_, index) => `?${index + 2}`).join(", ")
+  const bundleResult = await input.executor.execute({
+    sql: `
+      SELECT song_artifact_bundle_id, primary_audio_json, instrumental_audio_json, vocal_audio_json,
+             alignment_status, alignment_reason, timed_lyrics_ref, timed_lyrics_json
+      FROM song_artifact_bundles
+      WHERE community_id = ?1
+        AND song_artifact_bundle_id IN (${bundlePlaceholders})
+    `,
+    args: [input.communityId, ...bundleIds],
+  })
+  const rowByBundleId = new Map<string, Record<string, unknown>>()
+  for (const row of bundleResult.rows) {
+    const bundleId = stringValue(row.song_artifact_bundle_id)
+    if (bundleId) rowByBundleId.set(bundleId, row)
+  }
+
+  const uploadIds = [...new Set([...rowByBundleId.values()]
+    .flatMap(downloadableAudioEntries)
+    .filter((entry) => !entry.decentralized_storage)
+    .map((entry) => parseSongArtifactUploadIdFromStorageRef(entry.storage_ref))
+    .filter((value): value is string => Boolean(value)))]
+  const proofByUploadId = new Map<string, DecentralizedStorageProof>()
+  if (uploadIds.length) {
+    const uploadPlaceholders = uploadIds.map((_, index) => `?${index + 2}`).join(", ")
+    const uploadResult = await input.executor.execute({
+      sql: `
+        SELECT song_artifact_upload_id, ipfs_cid
+        FROM song_artifact_uploads
+        WHERE community_id = ?1
+          AND song_artifact_upload_id IN (${uploadPlaceholders})
+          AND ipfs_cid IS NOT NULL
+          AND ipfs_cid <> ''
+      `,
+      args: [input.communityId, ...uploadIds],
+    })
+    for (const row of uploadResult.rows) {
+      const uploadId = stringValue(row.song_artifact_upload_id)
+      const cid = stringValue(row.ipfs_cid)
+      if (uploadId && cid) {
+        proofByUploadId.set(uploadId, {
+          provider: "filebase_ipfs",
+          cid,
+          gateway_url: buildDefaultIpfsGatewayUrl(cid),
+        })
+      }
+    }
+  }
+
+  return new Map(eligiblePosts.map((post) => {
+    const row = post.song_artifact_bundle_id
+      ? rowByBundleId.get(post.song_artifact_bundle_id) ?? null
+      : null
+    return [
+      post.post_id,
+      row ? songArtifactPresentationFromRow({ row, proofByUploadId }) : null,
+    ] as const
+  }))
+}
+
 async function getPublicDownloadableAudio(input: {
   executor: DbExecutor
   post: Post
@@ -439,6 +551,7 @@ function buildKaraokeCapability(input: {
 
 async function buildSongPresentation(input: {
   songArtifactExecutor?: DbExecutor | null
+  songArtifactPresentationByPostId?: SongArtifactPresentationByPostId
   post: Post
 }): Promise<{
   artifactPresentation: SongArtifactPresentation | null
@@ -451,12 +564,14 @@ async function buildSongPresentation(input: {
   const postTitle = stringValue(input.post.song_title)
   const postCoverArtRef = stringValue(input.post.song_cover_art_ref)
   const postDurationMs = numberValue(input.post.song_duration_ms)
-  const artifactPresentation = input.songArtifactExecutor
-    ? await getPublicDownloadableAudio({
+  const artifactPresentation = input.songArtifactPresentationByPostId
+    ? input.songArtifactPresentationByPostId.get(input.post.post_id) ?? null
+    : input.songArtifactExecutor
+      ? await getPublicDownloadableAudio({
         executor: input.songArtifactExecutor,
         post: input.post,
       })
-    : null
+      : null
   const presentation = postTitle || postCoverArtRef || postDurationMs !== null || artifactPresentation
     ? {
         title: postTitle,
@@ -718,6 +833,7 @@ export async function buildLocalizedPostResponse(input: {
   executor: DbExecutor
   env?: Env | null
   songArtifactExecutor?: DbExecutor | null
+  songArtifactPresentationByPostId?: SongArtifactPresentationByPostId
   post: Post
   locale?: string | null
   metrics?: Partial<PostReadMetrics>
@@ -735,6 +851,7 @@ export async function buildLocalizedPostResponse(input: {
   const sourceHash = await computePostSourceHash(input.post)
   const songPresentationResult = await buildSongPresentation({
     songArtifactExecutor: input.songArtifactExecutor,
+    songArtifactPresentationByPostId: input.songArtifactPresentationByPostId,
     post: input.post,
   })
   const songPresentation = songPresentationResult.presentation
