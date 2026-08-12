@@ -297,6 +297,17 @@ describe("mcp routes", () => {
       visibility: "members_only",
     })
 
+    const rateLimitedUserIds: string[] = []
+    ctx.env.COMMENT_CREATE_RATE_LIMITER = {
+      getByName(userId: string) {
+        rateLimitedUserIds.push(userId)
+        return {
+          async consume() {
+            return { allowed: true, count: 1, retryAfterSeconds: 0, windowStartedAt: Date.now() }
+          },
+        }
+      },
+    } as never
     const replyResponse = await mcpCall(ctx.env, {
       jsonrpc: "2.0",
       id: "mcp-public-read-reply",
@@ -312,6 +323,7 @@ describe("mcp routes", () => {
       },
     }, creator.accessToken)
     expect(replyResponse.status).toBe(200)
+    expect(rateLimitedUserIds).toEqual([creator.userId])
 
     const searchResponse = await mcpCall(ctx.env, {
       jsonrpc: "2.0",

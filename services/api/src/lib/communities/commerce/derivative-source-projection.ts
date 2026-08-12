@@ -256,7 +256,7 @@ export async function findStoryRegisteredAssetProjectionSources(input: {
       FROM story_registered_asset_projections
       WHERE source_post_status = 'published'
         AND (${clauses.join(" OR ")})
-      ORDER BY updated_at DESC, asset_id DESC
+      ORDER BY created_at ASC, projection_id ASC
     `,
     args,
   })

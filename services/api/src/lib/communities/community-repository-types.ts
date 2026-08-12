@@ -29,6 +29,14 @@ export interface CommunityReadRepository {
   }): Promise<CommunityRow[]>
 }
 
+export interface CommunityScheduledJobPollRepository {
+  listScheduledCommunityJobPollIds(input: {
+    maxCommunities: number
+    nowMs?: number
+    priorityCommunityIds?: string[]
+  }): Promise<string[]>
+}
+
 export interface CommunityDatabaseBindingRepository {
   getPrimaryCommunityDatabaseBinding(communityId: string): Promise<CommunityDatabaseBindingRow | null>
 }
@@ -281,6 +289,7 @@ export interface CommunityMutationRepository {
 export interface CommunityRepository
   extends CommunityRepositoryLifecycle,
     CommunityReadRepository,
+    CommunityScheduledJobPollRepository,
     CommunityNamespaceReadRepository,
     CommunityDatabaseBindingRepository,
     CommunityJobReadRepository,

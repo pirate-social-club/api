@@ -3,6 +3,7 @@ import type {
   CommunityDatabaseBindingRepository,
   CommunityPostProjectionRepository,
   CommunityReadRepository,
+  CommunityScheduledJobPollRepository,
 } from "../db-community-repository"
 
 export const COMMUNITY_JOB_MAX_ATTEMPTS = 8
@@ -12,6 +13,7 @@ export const THREAD_SNAPSHOT_MIN_INTERVAL_MS = 60_000
 
 export type CommunityJobRepository =
   & Pick<CommunityReadRepository, "getCommunityById" | "listActiveCommunities">
+  & CommunityScheduledJobPollRepository
   & CommunityDatabaseBindingRepository
   & CommunityPostProjectionRepository
   & CommunityCommentProjectionRepository

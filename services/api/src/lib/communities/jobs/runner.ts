@@ -635,18 +635,14 @@ export async function processAvailableCommunityJobs(input: {
   const sweepDeadlineAtMs = sweepDeadlineMs == null
     ? null
     : Math.min(startedAt + sweepDeadlineMs, deadlineAtMs ?? Number.POSITIVE_INFINITY)
-  const activeCommunities = input.communityIds?.length
-    ? []
-    : await input.communityRepository.listActiveCommunities({ requireReadyRouting: true })
   const communityIds = input.communityIds?.length
     ? input.communityIds.slice(0, maxCommunities)
     : orderScheduledCommunityJobPollIds(
-      selectScheduledCommunityJobPollIds(
-        activeCommunities,
+      await input.communityRepository.listScheduledCommunityJobPollIds({
         maxCommunities,
-        startedAt,
-        input.priorityCommunityIds ?? [],
-      ),
+        nowMs: startedAt,
+        priorityCommunityIds: input.priorityCommunityIds ?? [],
+      }),
       input.priorityCommunityIds ?? [],
       startedAt,
     )

@@ -1,5 +1,5 @@
 import { calculateJwkThumbprint, exportJWK, importPKCS8, importSPKI, jwtVerify, SignJWT } from "jose"
-import { authError } from "../errors"
+import { authError, internalError } from "../errors"
 import type { Env } from "../../env"
 
 const SESSION_JWT_ALG = "RS256"
@@ -13,7 +13,7 @@ let cachedPublicKey: { pem: string; key: SessionJwtKey } | null = null
 async function getPrivateKey(env: Env): Promise<SessionJwtKey> {
   const pem = String(env.PIRATE_APP_JWT_PRIVATE_KEY || "").trim()
   if (!pem) {
-    throw authError("PIRATE_APP_JWT_PRIVATE_KEY is not configured")
+    throw internalError("PIRATE_APP_JWT_PRIVATE_KEY is not configured")
   }
   if (cachedPrivateKey?.pem === pem) {
     return cachedPrivateKey.key
@@ -26,7 +26,7 @@ async function getPrivateKey(env: Env): Promise<SessionJwtKey> {
 async function getPublicKey(env: Env): Promise<SessionJwtKey> {
   const pem = String(env.PIRATE_APP_JWT_PUBLIC_KEY || "").trim()
   if (!pem) {
-    throw authError("PIRATE_APP_JWT_PUBLIC_KEY is not configured")
+    throw internalError("PIRATE_APP_JWT_PUBLIC_KEY is not configured")
   }
   if (cachedPublicKey?.pem === pem) {
     return cachedPublicKey.key

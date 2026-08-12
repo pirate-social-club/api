@@ -4,3 +4,6 @@ minimumReleaseAge = 604800
 # in-tarball provenance; excluding it lets fresh publishes (e.g. 0.2.1 for the
 # study recall grading phonetics) install without waiting the 7-day age gate.
 minimumReleaseAgeExcludes = ["esbuild", "form-data", "@pirate-social-club/karaoke-runtime"]
+
+[test]
+pathIgnorePatterns = ["services/api-courtyard-pagination-cap/**", "worktrees/**"]

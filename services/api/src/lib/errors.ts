@@ -15,8 +15,14 @@ export class HttpError extends Error {
   }
 }
 
-export function authError(message: string): HttpError {
-  return new HttpError(401, "auth_error", message)
+export class AuthenticationFailureError extends HttpError {
+  constructor(message: string) {
+    super(401, "auth_error", message)
+  }
+}
+
+export function authError(message: string): AuthenticationFailureError {
+  return new AuthenticationFailureError(message)
 }
 
 export function badRequestError(message: string): HttpError {
