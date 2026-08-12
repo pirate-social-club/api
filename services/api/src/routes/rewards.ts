@@ -21,6 +21,7 @@ import {
   createRewardCampaign,
   createRewardCampaignFundingQuote,
   getRewardCampaign,
+  getRewardCampaignForSongPool,
   getRewardSongOwnerPolicy,
   setRewardSongOwnerPolicy,
   type RewardCampaignCreateInput,
@@ -269,6 +270,16 @@ rewards.get("/reward_campaign_capabilities", (c) => {
   const postId = c.req.query("post_id")?.trim()
   if (!postId) throw badRequestError("post_id is required")
   return c.json(getRewardCampaignCapabilities(c.env, postId), 200, { "cache-control": "no-store" })
+})
+
+rewards.get("/reward_campaigns", async (c) => {
+  const result = await getRewardCampaignForSongPool({
+    env: c.env,
+    client: getControlPlaneClient(c.env),
+    communityId: decodePublicCommunityId(c.req.query("community_id") ?? ""),
+    postId: decodePublicPostId(c.req.query("post_id") ?? ""),
+  })
+  return c.json(result, 200, { "cache-control": "no-store" })
 })
 
 rewards.post("/reward_campaigns", async (c) => {
