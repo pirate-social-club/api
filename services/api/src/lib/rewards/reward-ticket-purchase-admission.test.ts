@@ -17,13 +17,14 @@ describe("reward ticket purchase admission", () => {
       currentDrawingId: "141",
       quote: freshQuote,
       maxTicketCents: "250",
+      ticketCount: 2,
       nowMs: 5_000,
     })).toEqual({
       status: "admitted",
       drawingId: "141",
       quotedTicketPriceCents: "100",
       quotedTicketPriceAtomic: "1000000",
-      reserveCents: "250",
+      reserveCents: "500",
     })
   })
 
@@ -34,6 +35,7 @@ describe("reward ticket purchase admission", () => {
         currentDrawingId: "141",
         quote,
         maxTicketCents: "250",
+        ticketCount: 1,
         nowMs: 5_000,
       })).toEqual({ status: "blocked", reason: "price_unavailable" })
     }
@@ -45,6 +47,7 @@ describe("reward ticket purchase admission", () => {
       currentDrawingId: "141",
       quote: { ...freshQuote, ticketPriceCents: "251" },
       maxTicketCents: "250",
+      ticketCount: 1,
       nowMs: 5_000,
     })).toEqual({ status: "blocked", reason: "price_above_ceiling" })
   })
@@ -55,6 +58,7 @@ describe("reward ticket purchase admission", () => {
       currentDrawingId: "142",
       quote: freshQuote,
       maxTicketCents: "250",
+      ticketCount: 1,
       nowMs: 5_000,
     })
     expect(result.status).toBe("blocked")
@@ -71,6 +75,7 @@ describe("reward ticket purchase admission", () => {
       currentDrawingId: "141",
       quote: { ...freshQuote, drawingId: "140" },
       maxTicketCents: "250",
+      ticketCount: 1,
       nowMs: 5_000,
     })).toMatchObject({
       status: "blocked",

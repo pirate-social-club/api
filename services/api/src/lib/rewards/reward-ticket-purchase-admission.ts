@@ -42,18 +42,25 @@ function validTimestamp(value: number): boolean {
  * Admission is deliberately separate from reservation and submission.
  *
  * The live quote answers only whether the campaign may buy for this drawing.
- * The reserved amount is always the accepted max-ticket ceiling, never the
- * quoted price; a later confirmation can release the unused delta.
+ * The reserved amount is always ticketCount times the accepted max-ticket
+ * ceiling, never the quoted price; a later confirmation can release the
+ * unused delta.
  */
 export function evaluateRewardTicketPurchaseAdmission(input: {
   expectedDrawingId: string | bigint
   currentDrawingId: string | bigint
   quote: RewardTicketPriceQuote | null
   maxTicketCents: string | bigint
+  ticketCount: number
   nowMs: number
 }): RewardTicketPurchaseAdmission {
   const maxTicketCents = positiveInteger(input.maxTicketCents)
-  if (maxTicketCents === null || !validTimestamp(input.nowMs)) {
+  if (
+    maxTicketCents === null
+    || !Number.isSafeInteger(input.ticketCount)
+    || input.ticketCount <= 0
+    || !validTimestamp(input.nowMs)
+  ) {
     return { status: "blocked", reason: "invalid_quote" }
   }
 
@@ -109,6 +116,6 @@ export function evaluateRewardTicketPurchaseAdmission(input: {
     drawingId: drawingCheck.drawingId,
     quotedTicketPriceCents: ticketPriceCents.toString(),
     quotedTicketPriceAtomic: ticketPriceAtomic.toString(),
-    reserveCents: maxTicketCents.toString(),
+    reserveCents: (maxTicketCents * BigInt(input.ticketCount)).toString(),
   }
 }
