@@ -1,10 +1,10 @@
 import type { CommunityHandle, CommunityHandleClaimRequest, Env } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
-import { badRequestError, conflictError, eligibilityFailed, HttpError } from "../../errors"
+import { badRequestError, conflictError, eligibilityFailed, HttpError, retryableConflictError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { withStandaloneControlPlaneClient } from "../../runtime-deps"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../../sql-row"
-import { verifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-service"
+import { classifyPirateCheckoutUsdcFunding } from "../commerce/funding-proof-service"
 import { openCommunityWriteClient } from "../community-read-access"
 import { serializeHandle } from "./handle-row-store"
 import {
@@ -56,6 +56,8 @@ export async function claimCommunityHandleWithFundedIntent(input: {
   }
   const priceCents = numberOrNull(rowValue(initialIntent, "price_cents")) ?? 0
   if (priceCents <= 0) throw conflictError("Funded handle claim intent has no payable amount")
+  const chainId = numberOrNull(rowValue(initialIntent, "chain_id"))
+  if (!chainId || chainId <= 0) throw conflictError("Funded handle claim intent has no valid source chain")
 
   const walletAttachmentId = input.body.settlement_wallet_attachment?.trim()
   if (!walletAttachmentId) {
@@ -72,7 +74,7 @@ export async function claimCommunityHandleWithFundedIntent(input: {
   let fundingStatus: "funded_pending_finalization" | "refund_pending" = "funded_pending_finalization"
   let refundReason: string | null = null
   if (initialStatus === "authorized") {
-    const receipt = await verifyPirateCheckoutUsdcFunding({
+    const verification = await classifyPirateCheckoutUsdcFunding({
       env: input.env,
       quoteId: input.quoteId,
       amountCents: priceCents,
@@ -81,11 +83,38 @@ export async function claimCommunityHandleWithFundedIntent(input: {
       fundingDestinationAddress: requiredString(initialIntent, "funding_destination_address"),
       sourceChainJson: JSON.stringify({
         chain_namespace: "eip155",
-        chain_id: numberOrNull(rowValue(initialIntent, "chain_id")),
+        chain_id: chainId,
         display_name: "Intent snapshot",
       }),
       tokenAddress: requiredString(initialIntent, "token_address"),
+      finality: { expectedChainId: chainId, fallbackConfirmations: 30, preferSafeBlock: true },
     })
+    if (verification.kind === "pending") {
+      throw retryableConflictError("Funding transaction is not final", {
+        funding_tx_ref: fundingTxRef,
+        reason: verification.reason,
+      })
+    }
+    if (verification.kind === "rejected") {
+      throw badRequestError(`Funding transaction could not be classified: ${verification.reason}`)
+    }
+    const receipt = verification.kind === "verified" ? verification.receipt : verification.receipts[0]
+    if (!receipt) throw badRequestError("Funding transaction has no custody evidence")
+    const custodyDisposition = verification.kind === "verified"
+      ? undefined
+      : verification.kind === "custody_mismatch"
+      ? {
+          reason: verification.receipts.length > 1
+            ? "custody_operator_review_duplicate_transfers"
+            : verification.reason,
+          review: verification.receipts.length > 1,
+          additionalReceipts: verification.receipts.slice(1),
+        }
+      : {
+          reason: "custody_operator_review_multiple_senders",
+          review: true,
+          additionalReceipts: verification.receipts.slice(1),
+        }
     const result = await withStandaloneControlPlaneClient(input.env, async (client) => {
       return await fundAuthorizedHandleClaimIntent({
         authorizationId,
@@ -97,6 +126,7 @@ export async function claimCommunityHandleWithFundedIntent(input: {
         paymentClockSkewSeconds: resolveHandleClaimPaymentClockSkewSeconds(input.env),
         quoteId: input.quoteId,
         receipt,
+        custodyDisposition,
         settlementWalletAttachmentId: walletAttachmentId,
       })
     })

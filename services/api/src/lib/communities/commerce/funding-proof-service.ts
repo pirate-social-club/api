@@ -1,5 +1,5 @@
 import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
-import { badRequestError, fundingConfirmationTimeout } from "../../errors"
+import { badRequestError, fundingConfirmationTimeout, retryableConflictError } from "../../errors"
 import type { Env } from "../../../env"
 import type { Client, Transaction } from "../../sql-client"
 import { getControlPlaneClient } from "../../runtime-deps"
@@ -18,7 +18,10 @@ import {
   failPurchaseSettlementEffect,
   findConfirmedBuyerFundingEffectByTx,
 } from "./settlement-effects"
-import { claimCanonicalFundingReceipt } from "./observed-funding-receipts"
+import {
+  claimCanonicalFundingReceipt,
+  claimCanonicalFundingReceiptForReview,
+} from "./observed-funding-receipts"
 
 const ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 const ERC20_TRANSFER_INTERFACE = new Interface([
@@ -99,23 +102,27 @@ function topicAddress(topic: string): string | null {
   return getAddress(`0x${topic.slice(26)}`)
 }
 
-async function verifyPirateCheckoutUsdcFundingReceipt(input: {
+type CheckoutFundingExpectation = {
+  expectedAmount: bigint
+  expectedSourceChainId: number
+  expectedRecipient: string
+  expectedSender: string
+  expectedToken: string
+  chainRef: string
+}
+
+function resolveCheckoutFundingExpectation(input: {
   env: Env
   quote: CheckoutFundingQuote
   buyerAddress: string
-  fundingTxRef: string
   expectedTokenAddress?: string | null
-}): Promise<BuyerFundingReceipt> {
-  if (testBuyerFundingVerifier) {
-    return await testBuyerFundingVerifier(input)
-  }
+}): CheckoutFundingExpectation {
   if (input.quote.route_provider !== "pirate_checkout") {
     throw badRequestError("Only Pirate checkout funding receipts are supported")
   }
   if (input.quote.funding_mode !== "routed") {
     throw badRequestError("Story royalty commerce requires routed checkout funding")
   }
-
   const expectedAmount = requireCheckoutFundingAmountAtomic(input.quote)
   const sourceChain = parseJsonValue(input.quote.source_chain_json, {
     chain_namespace: "eip155",
@@ -129,42 +136,98 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   const expectedRecipient = getAddress(input.quote.funding_destination_address || resolvePirateCheckoutOperatorAddress(input.env))
   const expectedSender = getAddress(input.buyerAddress)
   const expectedToken = getAddress(input.expectedTokenAddress || resolvePirateCheckoutUsdcTokenAddress(input.env))
+  return {
+    expectedAmount,
+    expectedSourceChainId,
+    expectedRecipient,
+    expectedSender,
+    expectedToken,
+    chainRef: toChainRefString(sourceChain),
+  }
+}
+
+async function verifyPirateCheckoutUsdcFundingReceipt(input: {
+  env: Env
+  quote: CheckoutFundingQuote
+  buyerAddress: string
+  fundingTxRef: string
+  expectedTokenAddress?: string | null
+  finality?: BookingPaymentFinalityPolicy
+}): Promise<BuyerFundingReceipt> {
+  if (testBuyerFundingVerifier) {
+    return await testBuyerFundingVerifier(input)
+  }
+  const expected = resolveCheckoutFundingExpectation(input)
+  const {
+    expectedAmount,
+    expectedSourceChainId,
+    expectedRecipient,
+    expectedSender,
+    expectedToken,
+    chainRef,
+  } = expected
 
   const rpcUrl = resolvePirateCheckoutRpcUrl(input.env)
-  const provider = testBuyerFundingProviderFactory?.(rpcUrl, expectedSourceChainId)
-    ?? new JsonRpcProvider(rpcUrl, expectedSourceChainId)
-  const txWaitTimeoutMs = resolvePirateCheckoutTxWaitTimeoutMs(input.env)
-  let receipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
-  try {
-    receipt = await provider.waitForTransaction(
-      input.fundingTxRef,
-      1,
-      txWaitTimeoutMs,
-    )
-  } catch (error) {
-    if (isTransactionWaitTimeout(error)) {
-      console.warn("[pirate-checkout] funding confirmation timed out", {
-        quoteId: input.quote.quote_id,
-        fundingTxRef: input.fundingTxRef,
-        sourceChainId: expectedSourceChainId,
-        timeoutMs: txWaitTimeoutMs,
+  let receipt: MinimalReceipt & { blockNumber: number; blockHash: string; logs: ReadonlyArray<FundingTransferLog> }
+  let canonicalBlock: { hash: string | null; timestamp?: number } | null
+  if (input.finality) {
+    const finalized = await resolveFinalizedPaymentReceipt({
+      provider: createFinalityProvider(rpcUrl, expectedSourceChainId),
+      fundingTxRef: input.fundingTxRef,
+      expected: {
+        chainId: expectedSourceChainId,
+        tokenAddress: expectedToken,
+        recipientAddress: expectedRecipient,
+        amountAtomic: expectedAmount,
+        senderAddress: expectedSender,
+      },
+      finality: input.finality,
+    })
+    if (finalized.kind === "pending") {
+      throw retryableConflictError("Funding transaction is not final", {
+        funding_tx_ref: input.fundingTxRef,
+        reason: finalized.reason,
       })
-      throw fundingConfirmationTimeout(
-        "Funding transaction confirmation timed out",
-        {
-          quote_id: input.quote.quote_id,
-          funding_tx_ref: input.fundingTxRef,
-          source_chain_id: expectedSourceChainId,
-          timeout_ms: txWaitTimeoutMs,
-        },
-      )
     }
-    throw error
+    receipt = finalized.receipt
+    canonicalBlock = finalized.block
+  } else {
+    const provider = testBuyerFundingProviderFactory?.(rpcUrl, expectedSourceChainId)
+      ?? new JsonRpcProvider(rpcUrl, expectedSourceChainId)
+    const txWaitTimeoutMs = resolvePirateCheckoutTxWaitTimeoutMs(input.env)
+    let waitedReceipt: Awaited<ReturnType<typeof provider.waitForTransaction>>
+    try {
+      waitedReceipt = await provider.waitForTransaction(
+        input.fundingTxRef,
+        1,
+        txWaitTimeoutMs,
+      )
+    } catch (error) {
+      if (isTransactionWaitTimeout(error)) {
+        console.warn("[pirate-checkout] funding confirmation timed out", {
+          quoteId: input.quote.quote_id,
+          fundingTxRef: input.fundingTxRef,
+          sourceChainId: expectedSourceChainId,
+          timeoutMs: txWaitTimeoutMs,
+        })
+        throw fundingConfirmationTimeout(
+          "Funding transaction confirmation timed out",
+          {
+            quote_id: input.quote.quote_id,
+            funding_tx_ref: input.fundingTxRef,
+            source_chain_id: expectedSourceChainId,
+            timeout_ms: txWaitTimeoutMs,
+          },
+        )
+      }
+      throw error
+    }
+    if (!waitedReceipt || waitedReceipt.status !== 1) {
+      throw badRequestError("Funding transaction is not confirmed")
+    }
+    receipt = waitedReceipt as MinimalReceipt & { blockNumber: number; blockHash: string; logs: ReadonlyArray<FundingTransferLog> }
+    canonicalBlock = await provider.getBlock(receipt.blockNumber)
   }
-  if (!receipt || receipt.status !== 1) {
-    throw badRequestError("Funding transaction is not confirmed")
-  }
-  const canonicalBlock = await provider.getBlock(receipt.blockNumber)
   if (!canonicalBlock?.hash || canonicalBlock.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) {
     throw badRequestError("Funding transaction block is not canonical")
   }
@@ -186,6 +249,9 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
     if (String(fromTopic).toLowerCase() !== expectedSenderTopic) {
       continue
     }
+    if (log.index == null) {
+      continue
+    }
     const parsed = ERC20_TRANSFER_INTERFACE.parseLog({
       topics: [...log.topics],
       data: log.data,
@@ -203,7 +269,7 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
       toAddress: expectedRecipient,
       tokenAddress: expectedToken,
       amountAtomic: amount.toString(),
-      chainRef: toChainRefString(sourceChain),
+      chainRef,
       observation: {
         chainId: expectedSourceChainId,
         logIndex: log.index,
@@ -220,6 +286,134 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   return matched
 }
 
+export type PirateCheckoutFundingVerification =
+  | { kind: "verified"; receipt: BuyerFundingReceipt }
+  | {
+    kind: "custody_mismatch"
+    reason: "wrong_transfer_amount" | "unexpected_sender"
+    senderAddress: string
+    observedAmountAtomic: string
+    receipts: BuyerFundingReceipt[]
+  }
+  | { kind: "custody_incident"; reason: "multiple_senders"; receipts: BuyerFundingReceipt[] }
+  | { kind: "pending"; reason: string }
+  | { kind: "rejected"; reason: string }
+
+function checkoutFundingTransfers(input: {
+  receipt: FinalityReceipt
+  expected: CheckoutFundingExpectation
+  fundingTxRef: string
+  blockTimestamp?: number
+}): BuyerFundingReceipt[] {
+  const transfers: BuyerFundingReceipt[] = []
+  for (const log of input.receipt.logs) {
+    if (log.index == null || getAddress(log.address) !== input.expected.expectedToken) continue
+    const [topic0, fromTopic, toTopic] = log.topics
+    if (String(topic0).toLowerCase() !== ERC20_TRANSFER_TOPIC) continue
+    if (String(toTopic).toLowerCase() !== zeroPadValue(input.expected.expectedRecipient, 32).toLowerCase()) continue
+    const senderAddress = topicAddress(String(fromTopic))
+    if (!senderAddress) continue
+    const parsed = ERC20_TRANSFER_INTERFACE.parseLog({ topics: [...log.topics], data: log.data })
+    const amount = parsed?.args.value as bigint | undefined
+    if (amount == null || amount <= 0n) continue
+    transfers.push({
+      txRef: input.fundingTxRef,
+      fromAddress: senderAddress,
+      toAddress: input.expected.expectedRecipient,
+      tokenAddress: input.expected.expectedToken,
+      amountAtomic: amount.toString(),
+      chainRef: input.expected.chainRef,
+      observation: {
+        chainId: input.expected.expectedSourceChainId,
+        logIndex: log.index,
+        blockNumber: input.receipt.blockNumber,
+        blockHash: input.receipt.blockHash,
+        blockTimestamp: input.blockTimestamp,
+      },
+    })
+  }
+  return transfers
+}
+
+/**
+ * Finality-aware buyer funding classification for handle intents. Unlike the
+ * legacy verifier, every transfer into operator custody is returned with its
+ * observation identity so mismatches can be durably recorded and refunded or
+ * routed to operator review instead of disappearing during log scanning.
+ */
+export async function classifyPirateCheckoutUsdcFunding(input: {
+  env: Env
+  quoteId: string
+  amountCents: number
+  buyerAddress: string
+  fundingTxRef: string
+  fundingDestinationAddress?: string | null
+  sourceChainJson?: string | null
+  tokenAddress?: string | null
+  finality: BookingPaymentFinalityPolicy
+}): Promise<PirateCheckoutFundingVerification> {
+  const txRef = input.fundingTxRef.trim()
+  const quote: CheckoutFundingQuote = {
+    quote_id: input.quoteId,
+    route_provider: "pirate_checkout",
+    funding_mode: "routed",
+    final_price_cents: input.amountCents,
+    source_chain_json: input.sourceChainJson ?? null,
+    funding_destination_address: input.fundingDestinationAddress ?? null,
+  }
+  if (testBuyerFundingVerifier) {
+    return { kind: "verified", receipt: await testBuyerFundingVerifier({ env: input.env, quote, buyerAddress: input.buyerAddress, fundingTxRef: txRef }) }
+  }
+  const expected = resolveCheckoutFundingExpectation({
+    env: input.env,
+    quote,
+    buyerAddress: input.buyerAddress,
+    expectedTokenAddress: input.tokenAddress,
+  })
+  const finalized = await resolveFinalizedPaymentReceipt({
+    provider: createFinalityProvider(resolvePirateCheckoutRpcUrl(input.env), expected.expectedSourceChainId),
+    fundingTxRef: txRef,
+    expected: {
+      chainId: expected.expectedSourceChainId,
+      tokenAddress: expected.expectedToken,
+      recipientAddress: expected.expectedRecipient,
+      amountAtomic: expected.expectedAmount,
+      senderAddress: expected.expectedSender,
+    },
+    finality: input.finality,
+  })
+  if (finalized.kind === "pending") return finalized
+  if (finalized.receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
+  const transfers = checkoutFundingTransfers({
+    receipt: finalized.receipt,
+    expected,
+    fundingTxRef: txRef,
+    blockTimestamp: finalized.block.timestamp,
+  })
+  if (transfers.length === 0) return { kind: "rejected", reason: "no_matching_transfer" }
+  const senders = new Set(transfers.map((receipt) => receipt.fromAddress?.toLowerCase()))
+  if (senders.size > 1) return { kind: "custody_incident", reason: "multiple_senders", receipts: transfers }
+  const senderAddress = transfers[0]?.fromAddress
+  if (!senderAddress) return { kind: "rejected", reason: "sender_missing" }
+  const observedAmountAtomic = transfers.reduce((sum, receipt) => sum + BigInt(receipt.amountAtomic), 0n).toString()
+  if (
+    transfers.length === 1
+    && senderAddress.toLowerCase() === expected.expectedSender.toLowerCase()
+    && observedAmountAtomic === expected.expectedAmount.toString()
+  ) {
+    return { kind: "verified", receipt: transfers[0] }
+  }
+  return {
+    kind: "custody_mismatch",
+    reason: senderAddress.toLowerCase() === expected.expectedSender.toLowerCase()
+      ? "wrong_transfer_amount"
+      : "unexpected_sender",
+    senderAddress,
+    observedAmountAtomic,
+    receipts: transfers,
+  }
+}
+
 // --- Booking payment-intent verification: validates a funding tx against EXPLICIT expected values
 // (snapshotted on the persisted payment intent), never env/quote, and returns a CLASSIFIED outcome
 // instead of throwing — so the confirmation state machine branches on kind, not on message text.
@@ -229,6 +423,12 @@ export interface BookingPaymentExpectation {
   recipientAddress: string
   amountAtomic: bigint
   senderAddress: string
+}
+type FundingTransferLog = {
+  address: string
+  topics: ReadonlyArray<string>
+  data: string
+  index?: number
 }
 export type BookingCustodyTransfer = {
   senderAddress: string
@@ -260,6 +460,14 @@ type FinalityProvider = {
   getBlockNumber(): Promise<number>
 }
 
+type FinalizedPaymentReceipt =
+  | { kind: "pending"; reason: string }
+  | {
+    kind: "ready"
+    receipt: FinalityReceipt
+    block: { hash: string | null; timestamp?: number }
+  }
+
 let testFinalityProviderFactory: ((rpcUrl: string, chainId: number) => FinalityProvider) | null = null
 export function setBookingPaymentFinalityProviderFactoryForTests(
   factory: typeof testFinalityProviderFactory,
@@ -287,12 +495,12 @@ function parseRpcChainId(value: unknown): number | null {
   }
 }
 
-async function classifyFinalizedPaymentReceipt(input: {
+async function resolveFinalizedPaymentReceipt(input: {
   provider: FinalityProvider
   fundingTxRef: string
   expected: BookingPaymentExpectation
   finality: BookingPaymentFinalityPolicy
-}): Promise<BookingPaymentVerification> {
+}): Promise<FinalizedPaymentReceipt> {
   const rpcChainId = parseRpcChainId(await input.provider.send("eth_chainId", []))
   if (rpcChainId !== input.finality.expectedChainId || rpcChainId !== input.expected.chainId) {
     return { kind: "pending", reason: "rpc_chain_id_mismatch" }
@@ -325,6 +533,18 @@ async function classifyFinalizedPaymentReceipt(input: {
       return { kind: "pending", reason: "confirmation_depth_pending" }
     }
   }
+  return { kind: "ready", receipt, block: canonicalBlock }
+}
+
+async function classifyFinalizedPaymentReceipt(input: {
+  provider: FinalityProvider
+  fundingTxRef: string
+  expected: BookingPaymentExpectation
+  finality: BookingPaymentFinalityPolicy
+}): Promise<BookingPaymentVerification> {
+  const finalized = await resolveFinalizedPaymentReceipt(input)
+  if (finalized.kind === "pending") return finalized
+  const { receipt, block: canonicalBlock } = finalized
   const evaluated = evaluateBookingPaymentReceipt(receipt, input.expected, input.fundingTxRef)
   return evaluated.kind === "verified" || evaluated.kind === "custody_mismatch" || evaluated.kind === "custody_incident"
     ? {
@@ -341,7 +561,7 @@ let testBookingPaymentVerifier: ((input: { env: Env; fundingTxRef: string; expec
 export function setBookingPaymentVerifierForTests(fn: typeof testBookingPaymentVerifier): void { testBookingPaymentVerifier = fn }
 
 // Pure receipt evaluation (no RPC) so the matching/amount rules are directly unit-testable.
-interface MinimalReceipt { status: number; logs: ReadonlyArray<{ address: string; topics: ReadonlyArray<string>; data: string }> }
+interface MinimalReceipt { status: number; logs: ReadonlyArray<FundingTransferLog> }
 export function evaluateBookingPaymentReceipt(receipt: MinimalReceipt | null, expected: BookingPaymentExpectation, txRef: string): BookingPaymentVerification {
   if (!receipt) return { kind: "pending" } // not found yet
   if (receipt.status !== 1) return { kind: "rejected", reason: "transaction_reverted" }
@@ -443,6 +663,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
   fundingDestinationAddress?: string | null
   sourceChainJson?: string | null
   tokenAddress?: string | null
+  finality?: BookingPaymentFinalityPolicy
 }): Promise<BuyerFundingReceipt> {
   const txRef = input.fundingTxRef.trim()
   if (!txRef) {
@@ -452,6 +673,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
     env: input.env,
     buyerAddress: input.buyerAddress,
     fundingTxRef: txRef,
+    finality: input.finality,
     expectedTokenAddress: input.tokenAddress,
     quote: {
       quote_id: input.quoteId,
@@ -484,6 +706,39 @@ export async function claimVerifiedBuyerFundingReceipt(input: {
     throw badRequestError("Funding receipt observation identity is missing")
   }
   return await claimCanonicalFundingReceipt({
+    client: input.client,
+    chainId: observation.chainId,
+    tokenAddress: input.receipt.tokenAddress,
+    txHash: input.receipt.txRef,
+    logIndex: observation.logIndex,
+    blockNumber: observation.blockNumber,
+    blockHash: observation.blockHash,
+    blockTimestamp: observation.blockTimestamp,
+    senderAddress: input.receipt.fromAddress ?? input.fallbackSenderAddress,
+    recipientAddress: input.receipt.toAddress,
+    amountAtomic: input.receipt.amountAtomic,
+    consumerRail: input.consumerRail,
+    consumerId: input.consumerId,
+    quoteId: input.quoteId,
+    now: input.now,
+  })
+}
+
+export async function claimBuyerFundingReceiptForReview(input: {
+  client: Client | Transaction
+  receipt: BuyerFundingReceipt
+  fallbackSenderAddress: string
+  consumerRail: string
+  consumerId: string
+  quoteId: string
+  now: string
+}) {
+  const observation = input.receipt.observation
+  if (!observation) {
+    if (testBuyerFundingVerifier) return
+    throw badRequestError("Funding receipt observation identity is missing")
+  }
+  return await claimCanonicalFundingReceiptForReview({
     client: input.client,
     chainId: observation.chainId,
     tokenAddress: input.receipt.tokenAddress,

@@ -9,6 +9,7 @@ import {
   completeFundedHandleClaimIntent,
   consumeAuthorizedFreeHandleClaimIntent,
   fundAuthorizedHandleClaimIntent,
+  type HandleClaimCustodyDisposition,
   markFundedHandleClaimIntentRefundPending,
   releaseExpiredHandleClaimTokenAllocations,
 } from "./handle-claim-intent-ledger"
@@ -131,7 +132,11 @@ function receipt(blockTimestamp?: number): BuyerFundingReceipt {
   }
 }
 
-async function fund(client: Client, blockTimestamp?: number) {
+async function fund(
+  client: Client,
+  blockTimestamp?: number,
+  custodyDisposition?: HandleClaimCustodyDisposition,
+) {
   return await fundAuthorizedHandleClaimIntent({
     authorizationId: AUTHORIZATION_ID,
     client,
@@ -142,6 +147,7 @@ async function fund(client: Client, blockTimestamp?: number) {
     paymentClockSkewSeconds: 30,
     quoteId: QUOTE_ID,
     receipt: receipt(blockTimestamp),
+    custodyDisposition,
     settlementWalletAttachmentId: "wa_test",
   })
 }
@@ -281,6 +287,33 @@ describe("funded handle-claim intent ledger", () => {
 
     const receipts = await client.execute("SELECT COUNT(*) AS count FROM observed_funding_receipts")
     expect(Number(receipts.rows[0]?.count)).toBe(1)
+  })
+
+  test("binds duplicate custody events into operator review without refund dispatch", async () => {
+    const client = await createLedgerClient()
+    const duplicate = {
+      ...receipt(Date.parse("2026-08-13T11:59:00.000Z") / 1000),
+      observation: {
+        ...receipt(Date.parse("2026-08-13T11:59:00.000Z") / 1000).observation!,
+        logIndex: 9,
+      },
+    }
+
+    const result = await fund(client, Date.parse("2026-08-13T11:59:00.000Z") / 1000, {
+      reason: "custody_operator_review_duplicate_transfers",
+      review: true,
+      additionalReceipts: [duplicate],
+    })
+    expect(result).toEqual({
+      status: "refund_pending",
+      reason: "custody_operator_review_duplicate_transfers",
+    })
+
+    const observed = await client.execute("SELECT log_index, match_status, consumer_id FROM observed_funding_receipts ORDER BY log_index")
+    expect(observed.rows).toEqual([
+      { log_index: 7, match_status: "refund_review", consumer_id: INTENT_ID },
+      { log_index: 9, match_status: "refund_review", consumer_id: `${INTENT_ID}:custody:1` },
+    ])
   })
 
   test("consumes and completes a free authorization without entering the funding saga", async () => {

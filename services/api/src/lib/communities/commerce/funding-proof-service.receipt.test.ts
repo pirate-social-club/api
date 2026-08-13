@@ -3,7 +3,9 @@ import { Interface } from "ethers"
 
 import type { Env } from "../../../env"
 import {
+  classifyPirateCheckoutUsdcFunding,
   evaluateBookingPaymentReceipt,
+  setBookingPaymentFinalityProviderFactoryForTests,
   setBuyerFundingProviderFactoryForTests,
   verifyPirateCheckoutUsdcFunding,
 } from "./funding-proof-service"
@@ -49,7 +51,10 @@ function verify() {
   })
 }
 
-afterEach(() => setBuyerFundingProviderFactoryForTests(null))
+afterEach(() => {
+  setBuyerFundingProviderFactoryForTests(null)
+  setBookingPaymentFinalityProviderFactoryForTests(null)
+})
 
 describe("Pirate checkout raw funding receipt parser", () => {
   test.each([
@@ -78,6 +83,168 @@ describe("Pirate checkout raw funding receipt parser", () => {
         blockHash: BLOCK,
         blockTimestamp: 1_786_622_400,
       },
+    })
+  })
+
+  test("does not bind a receipt before the safe block", async () => {
+    setBookingPaymentFinalityProviderFactoryForTests(() => ({
+      send: async () => "0x14a34",
+      getTransactionReceipt: async () => ({ status: 1, blockNumber: 123, blockHash: BLOCK, logs: [log({ index: 7 })] }),
+      getBlock: async (tag: number | "safe") => tag === "safe"
+        ? { number: 122, hash: BLOCK, timestamp: 1_786_622_400 }
+        : { number: 123, hash: BLOCK, timestamp: 1_786_622_400 },
+      getBlockNumber: async () => 123,
+    }) as never)
+
+    const pending = await verifyPirateCheckoutUsdcFunding({
+      env,
+      quoteId: "quote_finality_pending",
+      amountCents: 500,
+      buyerAddress: BUYER,
+      fundingTxRef: TX,
+      finality: { expectedChainId: 84532, fallbackConfirmations: 30, preferSafeBlock: true },
+    }).catch((error) => error)
+    expect(pending).toMatchObject({
+      code: "conflict",
+      retryable: true,
+      details: { reason: "safe_block_pending" },
+    })
+  })
+
+  test("uses the safe block before binding an exact receipt", async () => {
+    setBookingPaymentFinalityProviderFactoryForTests(() => ({
+      send: async () => "0x14a34",
+      getTransactionReceipt: async () => ({ status: 1, blockNumber: 123, blockHash: BLOCK, logs: [log({ index: 7 })] }),
+      getBlock: async (tag: number | "safe") => tag === "safe"
+        ? { number: 123, hash: BLOCK, timestamp: 1_786_622_400 }
+        : { number: 123, hash: BLOCK, timestamp: 1_786_622_400 },
+      getBlockNumber: async () => 123,
+    }) as never)
+
+    await expect(verifyPirateCheckoutUsdcFunding({
+      env,
+      quoteId: "quote_finality_safe",
+      amountCents: 500,
+      buyerAddress: BUYER,
+      fundingTxRef: TX,
+      finality: { expectedChainId: 84532, fallbackConfirmations: 30, preferSafeBlock: true },
+    })).resolves.toMatchObject({
+      txRef: TX,
+      amountAtomic: "5000000",
+      observation: { blockNumber: 123, blockHash: BLOCK, logIndex: 7 },
+    })
+  })
+
+  test("treats a shallow reorg as retryable before custody binding", async () => {
+    setBookingPaymentFinalityProviderFactoryForTests(() => ({
+      send: async () => "0x14a34",
+      getTransactionReceipt: async () => ({ status: 1, blockNumber: 123, blockHash: BLOCK, logs: [log({ index: 7 })] }),
+      getBlock: async () => ({ hash: `0x${"99".repeat(32)}`, timestamp: 1_786_622_400 }),
+      getBlockNumber: async () => 200,
+    }) as never)
+
+    const reorged = await verifyPirateCheckoutUsdcFunding({
+      env,
+      quoteId: "quote_finality_reorg",
+      amountCents: 500,
+      buyerAddress: BUYER,
+      fundingTxRef: TX,
+      finality: { expectedChainId: 84532, fallbackConfirmations: 30, preferSafeBlock: true },
+    }).catch((error) => error)
+    expect(reorged).toMatchObject({
+      code: "conflict",
+      retryable: true,
+      details: { reason: "receipt_not_canonical" },
+    })
+  })
+
+  test("durably classifies an underpayment from the expected sender", async () => {
+    setBookingPaymentFinalityProviderFactoryForTests(() => ({
+      send: async () => "0x14a34",
+      getTransactionReceipt: async () => ({ status: 1, blockNumber: 123, blockHash: BLOCK, logs: [log({ amount: 4_000_000n, index: 7 })] }),
+      getBlock: async (tag: number | "safe") => tag === "safe"
+        ? { number: 123, hash: BLOCK, timestamp: 1_786_622_400 }
+        : { number: 123, hash: BLOCK, timestamp: 1_786_622_400 },
+      getBlockNumber: async () => 123,
+    }) as never)
+
+    await expect(classifyPirateCheckoutUsdcFunding({
+      env,
+      quoteId: "quote_underpay",
+      amountCents: 500,
+      buyerAddress: BUYER,
+      fundingTxRef: TX,
+      finality: { expectedChainId: 84532, fallbackConfirmations: 30, preferSafeBlock: true },
+    })).resolves.toMatchObject({
+      kind: "custody_mismatch",
+      reason: "wrong_transfer_amount",
+      observedAmountAtomic: "4000000",
+      receipts: [{ amountAtomic: "4000000", observation: { logIndex: 7 } }],
+    })
+  })
+
+  test("routes duplicate transfers to operator review with every event preserved", async () => {
+    setBookingPaymentFinalityProviderFactoryForTests(() => ({
+      send: async () => "0x14a34",
+      getTransactionReceipt: async () => ({
+        status: 1,
+        blockNumber: 123,
+        blockHash: BLOCK,
+        logs: [log({ amount: 5_000_000n, index: 7 }), log({ amount: 5_000_000n, index: 9 })],
+      }),
+      getBlock: async (tag: number | "safe") => tag === "safe"
+        ? { number: 123, hash: BLOCK, timestamp: 1_786_622_400 }
+        : { number: 123, hash: BLOCK, timestamp: 1_786_622_400 },
+      getBlockNumber: async () => 123,
+    }) as never)
+
+    await expect(classifyPirateCheckoutUsdcFunding({
+      env,
+      quoteId: "quote_duplicate",
+      amountCents: 500,
+      buyerAddress: BUYER,
+      fundingTxRef: TX,
+      finality: { expectedChainId: 84532, fallbackConfirmations: 30, preferSafeBlock: true },
+    })).resolves.toMatchObject({
+      kind: "custody_mismatch",
+      reason: "wrong_transfer_amount",
+      observedAmountAtomic: "10000000",
+      receipts: [
+        { amountAtomic: "5000000", observation: { logIndex: 7 } },
+        { amountAtomic: "5000000", observation: { logIndex: 9 } },
+      ],
+    })
+  })
+
+  test("retains every sender for a custody incident", async () => {
+    setBookingPaymentFinalityProviderFactoryForTests(() => ({
+      send: async () => "0x14a34",
+      getTransactionReceipt: async () => ({
+        status: 1,
+        blockNumber: 123,
+        blockHash: BLOCK,
+        logs: [log({ index: 7 }), log({ from: OTHER, amount: 1_000_000n, index: 9 })],
+      }),
+      getBlock: async (tag: number | "safe") => tag === "safe"
+        ? { number: 123, hash: BLOCK, timestamp: 1_786_622_400 }
+        : { number: 123, hash: BLOCK, timestamp: 1_786_622_400 },
+      getBlockNumber: async () => 123,
+    }) as never)
+
+    await expect(classifyPirateCheckoutUsdcFunding({
+      env,
+      quoteId: "quote_multiple_senders",
+      amountCents: 500,
+      buyerAddress: BUYER,
+      fundingTxRef: TX,
+      finality: { expectedChainId: 84532, fallbackConfirmations: 30, preferSafeBlock: true },
+    })).resolves.toMatchObject({
+      kind: "custody_incident",
+      reason: "multiple_senders",
+      receipts: [
+        { amountAtomic: "5000000", fromAddress: BUYER, observation: { logIndex: 7 } },
+        { amountAtomic: "1000000", fromAddress: OTHER, observation: { logIndex: 9 } },
+      ],
     })
   })
 })

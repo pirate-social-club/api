@@ -145,7 +145,7 @@ export async function reconcileHandleClaimRefunds(input: {
           i.funding_destination_address, i.custody_account_id, i.custody_key_epoch,
           i.funding_tx_hash, i.refund_coordinator_ref, i.refund_tx_hash,
           CAST(r.amount_atomic AS TEXT) AS amount_atomic,
-          r.sender_address, r.recipient_address
+          r.sender_address, r.recipient_address, r.match_status
         FROM community_handle_claim_intents i
         JOIN observed_funding_receipts r
           ON r.observed_funding_receipt_id = i.observed_funding_receipt_id
@@ -161,6 +161,10 @@ export async function reconcileHandleClaimRefunds(input: {
     summary.scanned += 1
     const intentId = requiredString(row, "community_handle_claim_intent_id")
     try {
+      if (String(rowValue(row, "match_status") ?? "") === "refund_review") {
+        summary.operator_attention += 1
+        continue
+      }
       const expected = {
         chainId: Number(rowValue(row, "chain_id")),
         tokenAddress: requiredString(row, "token_address"),

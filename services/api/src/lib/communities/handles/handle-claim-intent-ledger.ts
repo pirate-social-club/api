@@ -12,7 +12,11 @@ import {
   type AltchaProofInput,
   type VerifiedAltchaChallenge,
 } from "../../verification/altcha-provider"
-import { claimVerifiedBuyerFundingReceipt, type BuyerFundingReceipt } from "../commerce/funding-proof-service"
+import {
+  claimBuyerFundingReceiptForReview,
+  claimVerifiedBuyerFundingReceipt,
+  type BuyerFundingReceipt,
+} from "../commerce/funding-proof-service"
 import type { GatePolicy, GatePolicyEvaluation, GateTraceNode } from "../membership/gate-types"
 
 export const HANDLE_CLAIM_AUTHORIZATION_SCOPE = "namespace_handle_claim" as const
@@ -53,6 +57,12 @@ export type FundHandleClaimIntentResult =
       reason: string
       status: "refund_pending"
     }
+
+export type HandleClaimCustodyDisposition = {
+  reason: string
+  review: boolean
+  additionalReceipts?: BuyerFundingReceipt[]
+}
 
 type SatisfiedAtomWitness = {
   gate_id: string
@@ -286,6 +296,7 @@ export async function fundAuthorizedHandleClaimIntent(input: {
   paymentClockSkewSeconds: number
   quoteId: string
   receipt: BuyerFundingReceipt
+  custodyDisposition?: HandleClaimCustodyDisposition
   settlementWalletAttachmentId: string
 }): Promise<FundHandleClaimIntentResult> {
   return await withTransaction(input.client, "write", async (tx) => {
@@ -306,16 +317,38 @@ export async function fundAuthorizedHandleClaimIntent(input: {
     if (requiredString(intent, "action_authorization_id") !== input.authorizationId) {
       throw conflictError("Handle claim authorization is not bound to this intent")
     }
-    const receipt = await claimVerifiedBuyerFundingReceipt({
-      client: tx,
-      receipt: input.receipt,
-      fallbackSenderAddress: input.fallbackSenderAddress,
-      consumerRail: "community_handle_intent",
-      consumerId: input.intentId,
-      quoteId: input.quoteId,
-      now: input.now,
-    })
+    const receipt = input.custodyDisposition?.review
+      ? await claimBuyerFundingReceiptForReview({
+          client: tx,
+          receipt: input.receipt,
+          fallbackSenderAddress: input.fallbackSenderAddress,
+          consumerRail: "community_handle_intent",
+          consumerId: input.intentId,
+          quoteId: input.quoteId,
+          now: input.now,
+        })
+      : await claimVerifiedBuyerFundingReceipt({
+          client: tx,
+          receipt: input.receipt,
+          fallbackSenderAddress: input.fallbackSenderAddress,
+          consumerRail: "community_handle_intent",
+          consumerId: input.intentId,
+          quoteId: input.quoteId,
+          now: input.now,
+        })
     if (!receipt) throw conflictError("Funding receipt observation identity is missing")
+
+    for (const [index, additionalReceipt] of (input.custodyDisposition?.additionalReceipts ?? []).entries()) {
+      await claimBuyerFundingReceiptForReview({
+        client: tx,
+        receipt: additionalReceipt,
+        fallbackSenderAddress: input.fallbackSenderAddress,
+        consumerRail: "community_handle_intent",
+        consumerId: `${input.intentId}:custody:${index + 1}`,
+        quoteId: input.quoteId,
+        now: input.now,
+      })
+    }
 
     const allocationState = await tx.execute({
       sql: `
@@ -331,14 +364,15 @@ export async function fundAuthorizedHandleClaimIntent(input: {
     const includedAt = input.receipt.observation?.blockTimestamp
     const deadlineMs = Date.parse(requiredString(intent, "payment_not_after"))
     const includedMs = includedAt == null ? Number.NaN : includedAt * 1000
-    const refundReason = totalAllocations > reservedAllocations
+    const refundReason = input.custodyDisposition?.reason
+      ?? (totalAllocations > reservedAllocations
       ? "token_entitlement_reservation_expired"
       : includedAt == null
       ? "funding_block_timestamp_missing"
       : !Number.isFinite(deadlineMs)
           || includedMs > deadlineMs + Math.max(0, input.paymentClockSkewSeconds) * 1000
         ? "funding_included_after_deadline"
-        : null
+        : null)
     const nextStatus = refundReason == null ? "funded_pending_finalization" : "refund_pending"
 
     const consumed = await tx.execute({

@@ -229,6 +229,42 @@ export async function claimObservedFundingReceipt(input: {
   return decode(result.rows[0])
 }
 
+/**
+ * Claims a canonical receipt into operator review without making it eligible
+ * for an automatic refund. This is used when one transaction contains
+ * ambiguous custody evidence (for example multiple senders or duplicate
+ * transfers); every event remains durable and operator-owned.
+ */
+export async function claimObservedFundingReceiptForReview(input: {
+  client: Client | Transaction
+  receiptId: string
+  consumerRail: string
+  consumerId: string
+  quoteId?: string | null
+  now: string
+}): Promise<ObservedFundingReceipt> {
+  const result = await input.client.execute({
+    sql: `
+      UPDATE observed_funding_receipts
+      SET match_status = 'refund_review', consumer_rail = ?2, consumer_id = ?3,
+          quote_id = ?4, claimed_at = COALESCE(claimed_at, ?5), updated_at = ?5
+      WHERE observed_funding_receipt_id = ?1
+        AND finality_status = 'canonical'
+        AND (
+          match_status = 'unmatched'
+          OR (
+            match_status = 'refund_review' AND consumer_rail = ?2 AND consumer_id = ?3
+            AND quote_id IS NOT DISTINCT FROM ?4
+          )
+        )
+      RETURNING ${COLUMNS}
+    `,
+    args: [input.receiptId, input.consumerRail, input.consumerId, input.quoteId ?? null, input.now],
+  })
+  if (!result.rows[0]) throw conflictError("Observed funding receipt is not available for operator review")
+  return decode(result.rows[0])
+}
+
 export async function claimCanonicalFundingReceipt(input: {
   client: Client | Transaction
   chainId: number
@@ -270,6 +306,56 @@ export async function claimCanonicalFundingReceipt(input: {
         now: input.now,
       })
   return await claimObservedFundingReceipt({
+    client: input.client,
+    receiptId: canonical.id,
+    consumerRail: input.consumerRail,
+    consumerId: input.consumerId,
+    quoteId: input.quoteId,
+    now: input.now,
+  })
+}
+
+export async function claimCanonicalFundingReceiptForReview(input: {
+  client: Client | Transaction
+  chainId: number
+  tokenAddress: string
+  txHash: string
+  logIndex: number
+  blockNumber: number
+  blockHash: string
+  blockTimestamp?: number | null
+  senderAddress: string
+  recipientAddress: string
+  amountAtomic: string
+  consumerRail: string
+  consumerId: string
+  quoteId: string
+  now: string
+}): Promise<ObservedFundingReceipt> {
+  const observed = await observeFundingReceipt({
+    client: input.client,
+    chainId: input.chainId,
+    tokenAddress: input.tokenAddress,
+    txHash: input.txHash,
+    logIndex: input.logIndex,
+    blockNumber: input.blockNumber,
+    blockHash: input.blockHash,
+    blockTimestamp: input.blockTimestamp,
+    senderAddress: input.senderAddress,
+    recipientAddress: input.recipientAddress,
+    amountAtomic: input.amountAtomic,
+    source: "buyer_hint",
+    observedAt: input.now,
+  })
+  const canonical = observed.finalityStatus === "canonical"
+    ? observed
+    : await setObservedFundingReceiptFinality({
+        client: input.client,
+        receiptId: observed.id,
+        status: "canonical",
+        now: input.now,
+      })
+  return await claimObservedFundingReceiptForReview({
     client: input.client,
     receiptId: canonical.id,
     consumerRail: input.consumerRail,
