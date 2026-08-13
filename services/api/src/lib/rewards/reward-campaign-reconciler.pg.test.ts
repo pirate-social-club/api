@@ -189,7 +189,8 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         mechanism TEXT NOT NULL,
         nullifier_hash TEXT NOT NULL,
         status TEXT NOT NULL,
-        first_seen_at TEXT NOT NULL
+        first_seen_at TEXT NOT NULL,
+        source_user_attestation_id TEXT
       );
       CREATE TABLE reward_campaigns (
         reward_campaign_id TEXT PRIMARY KEY,
@@ -352,7 +353,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         source_verification_session_id TEXT, provider TEXT NOT NULL,
         attestation_type TEXT NOT NULL, capability_key TEXT NOT NULL,
         status TEXT NOT NULL, value_json JSONB NOT NULL, verified_at TEXT NOT NULL,
-        revoked_at TEXT, source_identity_nullifier_id TEXT
+        expires_at TEXT, revoked_at TEXT, source_identity_nullifier_id TEXT
       );
       CREATE TABLE reward_identity_bindings (
         reward_identity_binding_id TEXT PRIMARY KEY, user_id TEXT NOT NULL,
@@ -464,9 +465,15 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       })],
     )
     await db.unsafe(`INSERT INTO communities VALUES ('cmt_reward_pg')`)
+    await db.unsafe(`
+      INSERT INTO user_attestations VALUES (
+        'att_reward_pg_unique_human', 'usr_reward_pg', NULL, 'self', 'unique_human',
+        'unique_human', 'accepted', '{"state":"verified"}'::jsonb, $1, NULL, NULL, NULL
+      )
+    `, [NOW])
     await db.unsafe(
-      `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4)`,
-      ["idn_reward_pg", "usr_reward_pg", "stable-nullifier", NOW],
+      `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4, $5)`,
+      ["idn_reward_pg", "usr_reward_pg", "stable-nullifier", NOW, "att_reward_pg_unique_human"],
     )
     await db.unsafe(`
       INSERT INTO reward_campaigns (
@@ -547,8 +554,16 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         })],
       )
       await db.unsafe(
-        `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4)`,
-        [`idn_budget_${suffix}`, `usr_budget_${suffix}`, `budget-nullifier-${suffix}`, NOW],
+        `INSERT INTO user_attestations VALUES (
+          $1, $2, NULL, 'self', 'unique_human', 'unique_human', 'accepted',
+          '{"state":"verified"}'::jsonb, $3, NULL, NULL, NULL
+        )`,
+        [`att_budget_${suffix}_unique_human`, `usr_budget_${suffix}`, NOW],
+      )
+      await db.unsafe(
+        `INSERT INTO identity_nullifiers VALUES ($1, $2, 'self', 'passport', $3, 'active', $4, $5)`,
+        [`idn_budget_${suffix}`, `usr_budget_${suffix}`, `budget-nullifier-${suffix}`, NOW,
+          `att_budget_${suffix}_unique_human`],
       )
     }
     await db.unsafe(`
@@ -1163,17 +1178,21 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         JSON.stringify({ unique_human: { state: "verified", provider: "self",
           mechanism: "passport", verified_at: NOW } }),
       ])
+      await seed.unsafe(`INSERT INTO user_attestations VALUES (
+        $1, $2, NULL, 'self', 'unique_human', 'unique_human', 'accepted',
+        '{"state":"verified"}'::jsonb, $3, NULL, NULL, NULL
+      )`, [`att_tier_${claimant.suffix}_unique_human`, `usr_tier_${claimant.suffix}`, NOW])
       await seed.unsafe(`INSERT INTO identity_nullifiers VALUES (
-        $1, $2, 'self', 'passport', $3, 'active', $4
+        $1, $2, 'self', 'passport', $3, 'active', $4, $5
       )`, [`idn_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`,
-        `tier-${claimant.suffix}-nullifier`, NOW])
+        `tier-${claimant.suffix}-nullifier`, NOW, `att_tier_${claimant.suffix}_unique_human`])
       await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
         $1, $2, $3, 'active', $4, NULL
       )`, [`rib_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`,
         `idn_tier_${claimant.suffix}`, NOW])
       await seed.unsafe(`INSERT INTO user_attestations VALUES (
         $1, $2, NULL, 'self', 'nationality', 'nationality', 'accepted',
-        $3::jsonb, $4, NULL, $5
+        $3::jsonb, $4, NULL, NULL, $5
       )`, [`att_tier_${claimant.suffix}`, `usr_tier_${claimant.suffix}`,
         JSON.stringify({ nationality: claimant.nationality }), NOW,
         `idn_tier_${claimant.suffix}`])
@@ -1254,10 +1273,14 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         JSON.stringify({ unique_human: { state: "verified", provider: "self",
           mechanism: "passport", verified_at: NOW } }),
       ])
+      await seed.unsafe(`INSERT INTO user_attestations VALUES (
+        $1, $2, NULL, 'self', 'unique_human', 'unique_human', 'accepted',
+        '{"state":"verified"}'::jsonb, $3, NULL, NULL, NULL
+      )`, [`att_pending_tier_${suffix}_unique_human`, `usr_pending_tier_${suffix}`, NOW])
       await seed.unsafe(`INSERT INTO identity_nullifiers VALUES (
-        $1, $2, 'self', 'passport', $3, 'active', $4
+        $1, $2, 'self', 'passport', $3, 'active', $4, $5
       )`, [`idn_pending_tier_${suffix}`, `usr_pending_tier_${suffix}`,
-        `pending-tier-${suffix}-nullifier`, NOW])
+        `pending-tier-${suffix}-nullifier`, NOW, `att_pending_tier_${suffix}_unique_human`])
       await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
         $1, $2, $3, 'active', $4, NULL
       )`, [`rib_pending_tier_${suffix}`, `usr_pending_tier_${suffix}`,
@@ -1442,7 +1465,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await seed.unsafe(`INSERT INTO user_attestations VALUES (
       'att_provider_mismatch_pg', 'usr_reward_pg', NULL, 'self',
       'nationality', 'nationality', 'accepted',
-      '{"nationality":"CAN"}'::jsonb, $1, NULL, 'idn_reward_pg'
+      '{"nationality":"CAN"}'::jsonb, $1, NULL, NULL, 'idn_reward_pg'
     )`, [NOW])
     await seed.unsafe(`INSERT INTO reward_qualification_events (
       reward_qualification_event_id, user_id, community_id, post_id,
@@ -1539,9 +1562,15 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       'usr_evidence_conflict_pg',
       '{"unique_human":{"state":"verified","provider":"zkpassport","mechanism":"passport","verified_at":"2026-07-10T12:00:00.000Z"}}'
     )`)
+    await seed.unsafe(`INSERT INTO user_attestations VALUES (
+      'att_evidence_conflict_unique_human_pg', 'usr_evidence_conflict_pg', NULL,
+      'zkpassport', 'unique_human', 'unique_human', 'accepted',
+      '{"state":"verified"}'::jsonb, $1, NULL, NULL, NULL
+    )`, [NOW])
     await seed.unsafe(`INSERT INTO identity_nullifiers VALUES (
       'idn_evidence_conflict_pg', 'usr_evidence_conflict_pg', 'zkpassport',
-      'passport', 'evidence-conflict-nullifier', 'active', $1
+      'passport', 'evidence-conflict-nullifier', 'active', $1,
+      'att_evidence_conflict_unique_human_pg'
     )`, [NOW])
     await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
       'rib_evidence_conflict_pg', 'usr_evidence_conflict_pg',
@@ -1551,7 +1580,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       await seed.unsafe(`INSERT INTO user_attestations VALUES (
         $1, 'usr_evidence_conflict_pg', NULL, 'zkpassport',
         'nationality', 'nationality', 'accepted', $2::jsonb,
-        $3, NULL, 'idn_evidence_conflict_pg'
+        $3, NULL, NULL, 'idn_evidence_conflict_pg'
       )`, [`att_evidence_conflict_${suffix}_pg`, JSON.stringify({ nationality }), NOW])
     }
     await seed.unsafe(`INSERT INTO reward_qualification_events (
