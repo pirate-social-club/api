@@ -409,13 +409,35 @@ export async function listUserReportsForCase(input: {
   return result.rows.map((row) => serializeUserReport(row))
 }
 
+const genericModerationColumnsByExecutor = new WeakMap<object, Promise<boolean>>()
+
+async function hasGenericModerationColumns(executor: DbExecutor): Promise<boolean> {
+  const key = executor as object
+  const cached = genericModerationColumnsByExecutor.get(key)
+  if (cached) return await cached
+
+  const probe = executor.execute("PRAGMA table_info(moderation_actions)").then((result) => {
+    const columns = new Set(result.rows.map((row) => String(rowValue(row, "name"))))
+    return columns.has("asset_id")
+      && columns.has("previous_asset_enforcement_state")
+      && columns.has("next_asset_enforcement_state")
+  })
+  genericModerationColumnsByExecutor.set(key, probe)
+  try {
+    return await probe
+  } catch (error) {
+    genericModerationColumnsByExecutor.delete(key)
+    throw error
+  }
+}
+
 export async function listModerationActionsForCase(input: {
   executor: DbExecutor
   moderationCaseId: string
 }): Promise<ModerationAction[]> {
-  let result
-  try {
-    result = await input.executor.execute({
+  const hasGenericColumns = await hasGenericModerationColumns(input.executor)
+  const result = hasGenericColumns
+    ? await input.executor.execute({
       sql: `
       SELECT moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
              asset_id, actor_user_id, action_type, note, created_at,
@@ -429,15 +451,7 @@ export async function listModerationActionsForCase(input: {
     `,
       args: [input.moderationCaseId],
     })
-  } catch (error) {
-    // Transitional compatibility only: this runs on the base read client, never
-    // inside a buffered write transaction where a failed statement could poison
-    // the batch. Generic writers still require the migrated schema.
-    const message = error instanceof Error ? error.message : String(error)
-    if (!/(?:no such column|unknown column).*(?:asset_id|asset_enforcement_state)/iu.test(message)) {
-      throw error
-    }
-    result = await input.executor.execute({
+    : await input.executor.execute({
       sql: `
         SELECT moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
                actor_user_id, action_type, note, created_at,
@@ -450,7 +464,6 @@ export async function listModerationActionsForCase(input: {
       `,
       args: [input.moderationCaseId],
     })
-  }
   return result.rows.map((row) => serializeModerationAction(row))
 }
 
