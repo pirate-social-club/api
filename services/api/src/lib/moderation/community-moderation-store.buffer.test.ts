@@ -174,12 +174,15 @@ describe("moderation create helpers (buffer-safe)", () => {
       enforcementState: "quarantined",
       reasonCode: "quarantine_asset",
       evidenceRef: "scan:evt_1",
+      expectedEnforcementState: "active",
+      allowMissingInsert: true,
       now: "2026-08-13T00:00:00.000Z",
     })
 
     expect(hasRead(sqls)).toBe(false)
     expect(sqls.some((s) => /insert\s+into\s+moderation_actions/i.test(s))).toBe(true)
-    expect(sqls.some((s) => /update\s+asset_enforcement/i.test(s))).toBe(true)
+    expect(sqls.some((s) => /insert\s+into\s+asset_enforcement/i.test(s))).toBe(true)
+    expect(sqls.some((s) => /on\s+conflict\s*\(asset_id\)/i.test(s))).toBe(true)
     expect(created).toMatchObject({
       asset_id: "ast_1",
       previous_post_status: "published",
@@ -188,6 +191,26 @@ describe("moderation create helpers (buffer-safe)", () => {
       next_asset_enforcement_state: "quarantined",
       evidence_ref: "scan:evt_1",
     })
+  })
+
+  test("asset restore uses an expected-state guarded update", async () => {
+    const { executor, sqls } = recordingExecutor()
+    await setAssetModerationEnforcement({
+      executor,
+      assetId: "ast_1",
+      moderationActionId: "mac_restore",
+      enforcementState: "active",
+      reasonCode: "restore_asset",
+      evidenceRef: "review:evt_2",
+      expectedEnforcementState: "quarantined",
+      allowMissingInsert: false,
+      now: "2026-08-13T00:00:00.000Z",
+    })
+
+    expect(hasRead(sqls)).toBe(false)
+    expect(sqls).toHaveLength(1)
+    expect(sqls[0]).toMatch(/update\s+asset_enforcement/i)
+    expect(sqls[0]).toMatch(/and\s+enforcement_state\s*=\s*\?7/i)
   })
 
   test("moderation action reads fall back before generic asset columns exist", async () => {

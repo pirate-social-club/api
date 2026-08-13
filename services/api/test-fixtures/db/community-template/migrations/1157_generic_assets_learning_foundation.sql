@@ -375,7 +375,10 @@ CREATE TABLE moderation_actions_next (
             AND post_id IS NOT NULL
             AND previous_post_status IS NOT NULL
             AND next_post_status IS NOT NULL
-            AND previous_asset_enforcement_state IS NOT NULL
+            AND (
+                previous_asset_enforcement_state IS NOT NULL
+                OR action_type IN ('hide', 'remove', 'quarantine_asset', 'block_asset')
+            )
             AND next_asset_enforcement_state IS NOT NULL
             AND evidence_ref IS NOT NULL
             AND length(trim(evidence_ref)) > 0)
@@ -480,6 +483,30 @@ CREATE TABLE asset_enforcement (
 
 CREATE INDEX idx_asset_enforcement_state_updated
     ON asset_enforcement(enforcement_state, updated_at);
+
+CREATE TRIGGER moderation_actions_asset_previous_state_match_guard
+BEFORE INSERT ON moderation_actions
+WHEN NEW.asset_id IS NOT NULL AND EXISTS (
+    SELECT 1
+    FROM asset_enforcement
+    WHERE asset_id = NEW.asset_id
+      AND enforcement_state IS NOT NEW.previous_asset_enforcement_state
+)
+BEGIN
+    SELECT RAISE(ABORT, 'asset enforcement state changed concurrently');
+END;
+
+CREATE TRIGGER moderation_actions_asset_missing_state_guard
+BEFORE INSERT ON moderation_actions
+WHEN NEW.asset_id IS NOT NULL
+  AND NOT EXISTS (SELECT 1 FROM asset_enforcement WHERE asset_id = NEW.asset_id)
+  AND (
+      NEW.previous_asset_enforcement_state IS NOT NULL
+      OR NEW.action_type NOT IN ('hide', 'remove', 'quarantine_asset', 'block_asset')
+  )
+BEGIN
+    SELECT RAISE(ABORT, 'asset enforcement state is missing');
+END;
 
 CREATE TABLE learning_decks (
     learning_deck_id TEXT PRIMARY KEY,

@@ -430,6 +430,9 @@ export async function listModerationActionsForCase(input: {
       args: [input.moderationCaseId],
     })
   } catch (error) {
+    // Transitional compatibility only: this runs on the base read client, never
+    // inside a buffered write transaction where a failed statement could poison
+    // the batch. Generic writers still require the migrated schema.
     const message = error instanceof Error ? error.message : String(error)
     if (!/(?:no such column|unknown column).*(?:asset_id|asset_enforcement_state)/iu.test(message)) {
       throw error
@@ -572,8 +575,44 @@ export async function setAssetModerationEnforcement(input: {
   enforcementState: "active" | "quarantined" | "blocked"
   reasonCode: string
   evidenceRef: string
+  expectedEnforcementState: "active" | "quarantined" | "blocked" | null
+  allowMissingInsert: boolean
   now: string
 }): Promise<void> {
+  if (input.allowMissingInsert) {
+    await input.executor.execute({
+      sql: `
+        INSERT INTO asset_enforcement (
+          asset_id, enforcement_state, reason_code, authority_kind, authority_ref,
+          moderation_action_id, actor_role, evidence_ref, decided_at, updated_at
+        ) VALUES (
+          ?1, ?2, ?3, 'moderation_action', ?4,
+          ?4, 'community_moderator', ?5, ?6, ?6
+        )
+        ON CONFLICT(asset_id) DO UPDATE SET
+          enforcement_state = excluded.enforcement_state,
+          reason_code = excluded.reason_code,
+          authority_kind = excluded.authority_kind,
+          authority_ref = excluded.authority_ref,
+          moderation_action_id = excluded.moderation_action_id,
+          actor_role = excluded.actor_role,
+          evidence_ref = excluded.evidence_ref,
+          decided_at = excluded.decided_at,
+          updated_at = excluded.updated_at
+        WHERE asset_enforcement.enforcement_state = ?7
+      `,
+      args: [
+        input.assetId,
+        input.enforcementState,
+        input.reasonCode,
+        input.moderationActionId,
+        input.evidenceRef,
+        input.now,
+        input.expectedEnforcementState,
+      ],
+    })
+    return
+  }
   await input.executor.execute({
     sql: `
       UPDATE asset_enforcement
@@ -587,6 +626,7 @@ export async function setAssetModerationEnforcement(input: {
           decided_at = ?6,
           updated_at = ?6
       WHERE asset_id = ?1
+        AND enforcement_state = ?7
     `,
     args: [
       input.assetId,
@@ -595,6 +635,7 @@ export async function setAssetModerationEnforcement(input: {
       input.moderationActionId,
       input.evidenceRef,
       input.now,
+      input.expectedEnforcementState,
     ],
   })
 }

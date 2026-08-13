@@ -387,6 +387,32 @@ type ModerationActionPlan = {
   applyWrites: (executor: DbExecutor, moderationActionId: string) => Promise<void>
 }
 
+async function applyPostStatusTransition(input: {
+  executor: DbExecutor
+  postId: string
+  previousStatus: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted"
+  analysisState: "pending" | "allow" | "allow_with_required_reference" | "review_required" | "blocked"
+  nextStatus: "hidden" | "removed" | "published"
+  now: string
+}): Promise<void> {
+  if (
+    input.nextStatus === "published"
+    && input.previousStatus === "draft"
+    && input.analysisState === "review_required"
+  ) {
+    await approveReviewHeldPost({ executor: input.executor, postId: input.postId, now: input.now })
+    return
+  }
+  await setPostModerationStatus({
+    executor: input.executor,
+    postId: input.postId,
+    status: input.nextStatus,
+    now: input.now,
+  })
+}
+
+export const moderationServiceTestOnly = { applyPostStatusTransition }
+
 /**
  * Reads the target post/comment and validates/decides the action on the BASE client
  * BEFORE any write tx (a buffered D1 write tx can't read the target back or branch on
@@ -413,16 +439,16 @@ async function planModerationAction(input: {
     const enforcement = genericAsset
       ? await getAssetEnforcement(input.dbClient, genericAsset.asset_id)
       : null
-    if (genericAsset && !enforcement) {
-      throw internalError("Generic asset enforcement state is missing")
-    }
-
     const planPostAndAssetTransition = (
       nextPostStatus: "hidden" | "removed" | "published",
       nextAssetEnforcementState: "quarantined" | "blocked" | "active",
     ): ModerationActionPlan => {
-      if (!genericAsset || !enforcement) {
+      if (!genericAsset) {
         throw badRequestError("Asset moderation actions require a generic asset post")
+      }
+      const restrictive = nextAssetEnforcementState !== "active"
+      if (!enforcement && !restrictive) {
+        throw internalError("Generic asset enforcement state is missing")
       }
       const evidenceRef = input.body.evidence_ref?.trim()
       if (!evidenceRef) {
@@ -435,11 +461,18 @@ async function planModerationAction(input: {
           publicReadPostId: postId,
           evidenceRef,
           assetId: genericAsset.asset_id,
-          previousAssetEnforcementState: enforcement.enforcement_state,
+          previousAssetEnforcementState: enforcement?.enforcement_state ?? null,
           nextAssetEnforcementState,
         },
         applyWrites: async (executor, moderationActionId) => {
-          await setPostModerationStatus({ executor, postId, status: nextPostStatus, now: input.now })
+          await applyPostStatusTransition({
+            executor,
+            postId,
+            previousStatus: post.status,
+            analysisState: post.analysis_state,
+            nextStatus: nextPostStatus,
+            now: input.now,
+          })
           await setAssetModerationEnforcement({
             executor,
             assetId: genericAsset.asset_id,
@@ -447,6 +480,8 @@ async function planModerationAction(input: {
             enforcementState: nextAssetEnforcementState,
             reasonCode: input.body.action_type,
             evidenceRef,
+            expectedEnforcementState: enforcement?.enforcement_state ?? null,
+            allowMissingInsert: restrictive,
             now: input.now,
           })
         },
@@ -455,7 +490,6 @@ async function planModerationAction(input: {
 
     const planPostTransition = (
       nextPostStatus: "hidden" | "removed" | "published",
-      write: (executor: DbExecutor) => Promise<void>,
     ): ModerationActionPlan => {
       if (genericAsset) {
         const nextEnforcement = nextPostStatus === "hidden"
@@ -467,7 +501,14 @@ async function planModerationAction(input: {
       }
       return {
         mutation: { previousStatus: post.status, nextStatus: nextPostStatus, publicReadPostId: postId },
-        applyWrites: (executor) => write(executor),
+        applyWrites: (executor) => applyPostStatusTransition({
+          executor,
+          postId,
+          previousStatus: post.status,
+          analysisState: post.analysis_state,
+          nextStatus: nextPostStatus,
+          now: input.now,
+        }),
       }
     }
     switch (input.body.action_type) {
@@ -477,18 +518,15 @@ async function planModerationAction(input: {
         }
         return { mutation: { publicReadPostId: postId }, applyWrites: noWrites }
       case "hide":
-        return planPostTransition("hidden", (executor) => setPostModerationStatus({ executor, postId, status: "hidden", now: input.now }))
+        return planPostTransition("hidden")
       case "quarantine_asset":
         return planPostAndAssetTransition("hidden", "quarantined")
       case "remove":
-        return planPostTransition("removed", (executor) => setPostModerationStatus({ executor, postId, status: "removed", now: input.now }))
+        return planPostTransition("removed")
       case "block_asset":
         return planPostAndAssetTransition("removed", "blocked")
       case "restore": {
-        const useApprove = post.status === "draft" && post.analysis_state === "review_required"
-        return planPostTransition("published", (executor) => useApprove
-            ? approveReviewHeldPost({ executor, postId, now: input.now })
-            : setPostModerationStatus({ executor, postId, status: "published", now: input.now }))
+        return planPostTransition("published")
       }
       case "restore_asset":
         return planPostAndAssetTransition("published", "active")
