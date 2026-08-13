@@ -12,6 +12,7 @@ import {
 } from "../../helpers"
 import { setCommunityCommerceBuyerFundingVerifierForTests } from "../../../src/lib/communities/commerce/funding-proof-service"
 import {
+  completeUniqueHumanVerification,
   exchangeJwt,
   prepareVerifiedNamespace,
   requestJson,
@@ -233,12 +234,50 @@ describe("community handle claim intents", () => {
     })
     expect(Number(legacyReceipts.rows[0]?.count)).toBe(0)
 
+    const sweptWalletAddress = "0x2000000000000000000000000000000000000002"
+    const sweptUpstreamJwt = await mintUpstreamJwt(context.env, {
+      sub: "swept-handle-intent-account",
+      wallet_address: sweptWalletAddress,
+    })
+    const sweptExchangeResponse = await requestJson("http://pirate.test/auth/session/exchange", {
+      proof: { type: "jwt_based_auth", jwt: sweptUpstreamJwt },
+    }, context.env)
+    expect(sweptExchangeResponse.status).toBe(200)
+    const sweptExchanged = await json(sweptExchangeResponse) as {
+      access_token: string
+      user: { primary_wallet_attachment: string }
+    }
+    await completeUniqueHumanVerification(context.env, sweptExchanged.access_token)
+    const joinResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/join`,
+      { note: "Join for the reservation recovery test." },
+      context.env,
+      sweptExchanged.access_token,
+    )
+    expect(joinResponse.status).toBe(200)
+    const membershipRequests = await app.request(
+      `http://pirate.test/communities/${communityId}/membership-requests`,
+      { headers: { authorization: `Bearer ${exchanged.access_token}` } },
+      context.env,
+    )
+    expect(membershipRequests.status).toBe(200)
+    const membershipRequestBody = await json(membershipRequests) as { items: Array<{ id: string }> }
+    const membershipRequestId = membershipRequestBody.items.at(-1)?.id
+    expect(membershipRequestId).toBeTruthy()
+    const approveResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/membership-requests/${membershipRequestId}/approve`,
+      {},
+      context.env,
+      exchanged.access_token,
+    )
+    expect(approveResponse.status).toBe(200)
+
     context.env.COMMUNITY_HANDLE_CLAIM_INTENTS_ENABLED = "true"
     const sweptQuoteResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/quote`,
       { desired_label: "sweptcard" },
       context.env,
-      exchanged.access_token,
+      sweptExchanged.access_token,
     )
     expect(sweptQuoteResponse.status).toBe(200)
     const sweptQuote = await json(sweptQuoteResponse) as {
@@ -281,11 +320,11 @@ describe("community handle claim intents", () => {
         quote: sweptQuote.id,
         claim_intent: sweptQuote.claim_intent,
         action_authorization: sweptQuote.action_authorization,
-        settlement_wallet_attachment: exchanged.user.primary_wallet_attachment,
+        settlement_wallet_attachment: sweptExchanged.user.primary_wallet_attachment,
         funding_tx_ref: sweptFundingTxHash,
       },
       context.env,
-      exchanged.access_token,
+      sweptExchanged.access_token,
     )
     const sweptClaimPayload = await json(sweptClaimResponse)
     expect({ status: sweptClaimResponse.status, payload: sweptClaimPayload }).toMatchObject({
