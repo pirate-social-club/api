@@ -18,7 +18,7 @@ import {
  * tests pin that contract in both directions.
  */
 
-const BASE: Omit<PostProjectionSchema, "hasLyricsLanguageColumns"> = {
+const BASE: Omit<PostProjectionSchema, "hasLyricsLanguageColumns" | "hasSourceLanguageReliabilityColumn"> = {
   hasAssetStoryColumns: true,
   hasCommentLockColumns: true,
   hasCrosspostSourceJson: true,
@@ -63,6 +63,7 @@ describe("lyrics_language projection compatibility (1143 transitional)", () => {
         { name: "publish_failure_message" },
         { name: "publish_failure_retryable" },
         { name: "publish_failed_at" },
+        { name: "source_language_reliable" },
         { name: "lyrics_language" },
         { name: "lyrics_language_confidence" },
         { name: "lyrics_language_reliable" },
@@ -80,11 +81,15 @@ describe("lyrics_language projection compatibility (1143 transitional)", () => {
       { rows: [{ name: "rights_hold_id" }] },
     ])
 
-    expect(schema).toEqual({ ...BASE, hasLyricsLanguageColumns: true })
+    expect(schema).toEqual({ ...BASE, hasLyricsLanguageColumns: true, hasSourceLanguageReliabilityColumn: true })
   })
 
   test("a shard WITH 1143 selects the real columns", () => {
-    const sql = postSelectColumnsForSchema({ ...BASE, hasLyricsLanguageColumns: true })
+    const sql = postSelectColumnsForSchema({
+      ...BASE,
+      hasLyricsLanguageColumns: true,
+      hasSourceLanguageReliabilityColumn: true,
+    })
     for (const column of LYRICS_COLUMNS) {
       expect(sql).toContain(column)
       expect(sql).not.toContain(`NULL AS ${column}`)
@@ -92,7 +97,11 @@ describe("lyrics_language projection compatibility (1143 transitional)", () => {
   })
 
   test("a shard WITHOUT 1143 projects absent values, not an error", () => {
-    const sql = postSelectColumnsForSchema({ ...BASE, hasLyricsLanguageColumns: false })
+    const sql = postSelectColumnsForSchema({
+      ...BASE,
+      hasLyricsLanguageColumns: false,
+      hasSourceLanguageReliabilityColumn: false,
+    })
     expect(sql).toContain("NULL AS lyrics_language")
     expect(sql).toContain("NULL AS lyrics_language_confidence")
     expect(sql).toContain("NULL AS lyrics_language_detector")
@@ -104,10 +113,24 @@ describe("lyrics_language projection compatibility (1143 transitional)", () => {
     // The column is NOT NULL DEFAULT 0: absence of detection evidence must read as
     // unverified. Projecting NULL here would let a nullish check mistake "unknown" for
     // "reliable" downstream, and projecting 1 would assert a detection that never ran.
-    const sql = postSelectColumnsForSchema({ ...BASE, hasLyricsLanguageColumns: false })
+    const sql = postSelectColumnsForSchema({
+      ...BASE,
+      hasLyricsLanguageColumns: false,
+      hasSourceLanguageReliabilityColumn: false,
+    })
     expect(sql).toContain("0 AS lyrics_language_reliable")
     expect(sql).not.toContain("NULL AS lyrics_language_reliable")
     expect(sql).not.toContain("1 AS lyrics_language_reliable")
+  })
+
+  test("the source-language reliability fallback is false when metadata is absent", () => {
+    const sql = postSelectColumnsForSchema({
+      ...BASE,
+      hasLyricsLanguageColumns: false,
+      hasSourceLanguageReliabilityColumn: false,
+    })
+    expect(sql).toContain("0 AS source_language_reliable")
+    expect(sql).not.toContain("1 AS source_language_reliable")
   })
 
   test("the fallback expression executes against a posts table lacking the columns", () => {

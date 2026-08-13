@@ -75,6 +75,7 @@ export function serializePost(post: Post): CurrentPostResponse {
     creator_relation: post.creator_relation,
     promotion_disclosure: post.promotion_disclosure,
     source_language: post.source_language,
+    source_language_reliable: post.source_language_reliable ?? false,
     lyrics_language: post.lyrics_language ?? null,
     lyrics_language_confidence: post.lyrics_language_confidence ?? null,
     lyrics_language_reliable: post.lyrics_language_reliable ?? false,

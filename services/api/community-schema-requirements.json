@@ -112,7 +112,7 @@
       "compatibility_tests": [
         {
           "path": "src/lib/posts/community-post-projection.lyrics-language.test.ts",
-          "sha256": "5065a6c6b2e048761bfac9df4fa1c4a3ab120c24310e0009173a61fe71bdfba3"
+          "sha256": "af54238f0a0709d5b38fc031d99d2494faac1e34b20bf593dec9999fa61d5d67"
         }
       ]
     }

@@ -394,6 +394,7 @@ function studyPostFromRow(row: unknown): StudyPost | null {
     song_artifact_bundle_id: stringOrNull(rowValue(row, "song_artifact_bundle_id")),
     song_title: stringOrNull(rowValue(row, "song_title")),
     source_language: stringOrNull(rowValue(row, "source_language")),
+    source_language_reliable: Number(rowValue(row, "source_language_reliable") ?? 0) === 1,
     status: stringOrNull(rowValue(row, "status")) ?? "",
     title: stringOrNull(rowValue(row, "title")),
     visibility: stringOrNull(rowValue(row, "visibility")) ?? "public",
@@ -527,7 +528,7 @@ async function listReadySongs(input: {
       const rows = await db.client.execute({
         sql: `
           SELECT post_id, community_id, author_user_id, post_type, status, visibility,
-                 lyrics, title, song_title, song_cover_art_ref, song_artifact_bundle_id, source_language,
+                 lyrics, title, song_title, song_cover_art_ref, song_artifact_bundle_id, source_language, source_language_reliable,
                  access_mode, age_gate_policy, asset_id, created_at
           FROM posts
           WHERE community_id = ?1

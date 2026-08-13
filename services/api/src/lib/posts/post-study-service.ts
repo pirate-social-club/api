@@ -136,6 +136,7 @@ type StudyCapabilityPost = {
   song_cover_art_ref?: string | null
   song_title?: string | null
   source_language?: string | null
+  source_language_reliable?: boolean
   stored_source_language?: string | null
   title?: string | null
 }
@@ -400,6 +401,15 @@ function fillBlankEnabled(env: Env | null | undefined): boolean {
   return envFlag(env.SONG_STUDY_FILL_BLANK_ENABLED, false)
 }
 
+function fillBlankAvailableForPost(env: Env | null | undefined, post: {
+  source_language_reliable?: boolean
+}): boolean {
+  // source_language remains Study's served-language identity. Fill blank uses
+  // language-specific stopword and script rules, so only an explicitly
+  // reliable label may generate, select, or grade an exercise.
+  return fillBlankEnabled(env) && post.source_language_reliable === true
+}
+
 function ungradableRerecordEnabled(env: Env): boolean {
   return envFlag(env.SONG_STUDY_UNGRADABLE_RERECORD_ENABLED, false)
 }
@@ -491,7 +501,13 @@ async function resolveCapabilityStudyUnits(input: {
             post_id: input.post.post_id,
             source_language: input.post.source_language ?? null,
           })
-      if (fillBlankEnabled(input.env)) await ensureStudyClozeRows(input.artifactWriteClient, input.post.post_id)
+      if (fillBlankAvailableForPost(input.env, input.post)) {
+        await ensureStudyClozeRows({
+          client: input.artifactWriteClient,
+          postId: input.post.post_id,
+          sourceLanguageReliable: true,
+        })
+      }
       await enqueueStudyGenerationIfNeeded({
         client: input.artifactWriteClient,
         communityId: input.post.community_id,
@@ -543,7 +559,7 @@ async function resolveStudyExerciseAvailability(input: {
   units: StudyUnitRow[]
   unitsPersisted: boolean
 }): Promise<StudyExerciseAvailability> {
-  const includeFillBlank = fillBlankEnabled(input.env)
+  const includeFillBlank = fillBlankAvailableForPost(input.env, input.post)
   const includeTranslation = !isSameLanguageStudyPair(input.post.source_language, input.targetLanguage)
   const [includeSayItBack, pack] = await Promise.all([
     resolveHasActiveElevenLabsCredential({
@@ -1050,7 +1066,13 @@ export async function getPostStudyPayload(input: {
         unavailable_reason: "no_lyrics",
       }
     }
-    if (fillBlankEnabled(input.env)) await ensureStudyClozeRows(db.client, input.postId)
+    if (fillBlankAvailableForPost(input.env, post)) {
+      await ensureStudyClozeRows({
+        client: db.client,
+        postId: input.postId,
+        sourceLanguageReliable: true,
+      })
+    }
     await enqueueStudyGenerationIfNeeded({
       client: db.client,
       communityId: input.communityId,
@@ -1501,6 +1523,12 @@ export async function submitPostStudyAttempt(input: {
     if (!communityStudyEnabled) {
       throw new HttpError(403, "forbidden", "Study is disabled for this community")
     }
+    if (type === "fill_blank") {
+      const fillBlankPost = await getStudyPostById(db.client, input.postId)
+      if (!fillBlankPost || !fillBlankAvailableForPost(input.env, fillBlankPost)) {
+        throw notFoundError("Study exercise not found")
+      }
+    }
     const streakWritesEnabled = studyStreakWritesEnabled(input.env)
     const rewardQualificationWritesEnabled = envFlag(input.env.REWARDS_CAMPAIGNS_ENABLED, false)
       && envFlag(input.env.REWARDS_ACCRUAL_ENABLED, false)
@@ -1612,7 +1640,7 @@ export async function submitPostStudyAttempt(input: {
         const progress = await getStudyAttemptProgressSnapshot({
           client: db.client,
           includeSayItBack: true,
-          includeFillBlank: fillBlankEnabled(input.env),
+          includeFillBlank: fillBlankAvailableForPost(input.env, responsePost),
           includeTranslation: !isSameLanguageStudyPair(responsePost.source_language, finalizedSessionState.targetLanguage),
           now: snapshot.materializationContext?.completed_at ?? nowIso(),
           postId: input.postId,

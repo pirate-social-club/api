@@ -130,7 +130,7 @@ describe("buildStudyCloze", () => {
           ('stu_1', 'post_1', 'line_001', 0, 'en', 'I walked beside the river under moonlight', 'I walked beside the river under moonlight', 'ready', 2, 2);
       `)
 
-      await expect(ensureStudyClozeRows(client, "post_1")).resolves.toBeUndefined()
+      await expect(ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: true })).resolves.toBeUndefined()
       const schema = await client.execute("SELECT name FROM sqlite_master WHERE name = 'song_study_unit_cloze'")
       expect(schema.rows).toEqual([])
     } finally {
@@ -159,10 +159,12 @@ describe("buildStudyCloze", () => {
           ('stu_1', 'post_1', 'line_001', 0, 'en', 'I walked beside the river under moonlight', 'I walked beside the river under moonlight', 'ready', 2, 2),
           ('stu_2', 'post_1', 'line_002', 1, 'en', 'The morning carries every quiet memory', 'The morning carries every quiet memory', 'ready', 2, 2);
       `)
-      await ensureStudyClozeRows(client, "post_1")
+      await ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: false })
+      expect((await client.execute("SELECT COUNT(*) AS count FROM song_study_unit_cloze")).rows[0]?.count).toBe(0)
+      await ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: true })
       const before = await client.execute("SELECT unit_id, cloze_version, source_fingerprint FROM song_study_unit_cloze ORDER BY unit_id")
       await client.execute("UPDATE song_study_unit SET prompt_text = 'The evening carries another vivid memory' WHERE id = 'stu_2'")
-      await ensureStudyClozeRows(client, "post_1")
+      await ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: true })
       const after = await client.execute("SELECT unit_id, source_fingerprint FROM song_study_unit_cloze ORDER BY unit_id")
 
       expect(before.rows).toHaveLength(2)

@@ -297,17 +297,24 @@ function clozeUpsertStatement(input: {
   }
 }
 
-export async function ensureStudyClozeRows(client: Client, postId: string): Promise<void> {
+export async function ensureStudyClozeRows(input: {
+  client: Client
+  postId: string
+  sourceLanguageReliable: boolean
+}): Promise<void> {
+  // Cloze selection applies language-specific rules. Do not convert an
+  // unverified language label into an apparently-valid exercise.
+  if (!input.sourceLanguageReliable) return
   // Fleet quarantines and pre-allocation pools can legitimately lag the
   // community template. Fill-blank is enrichment, so a missing 1156 table
   // degrades to the established exercise types instead of breaking Study.
-  if (!await hasStudyClozeSchema(client)) return
+  if (!await hasStudyClozeSchema(input.client)) return
   // Always load the complete persisted song. Distractors must never depend on
   // which caller happened to provide the first in-memory slice.
-  const units = await selectStudyUnits(client, postId)
+  const units = await selectStudyUnits(input.client, input.postId)
   if (units.length === 0) return
   const fingerprint = await clozeSourceFingerprint(units)
-  const existing = await client.execute({
+  const existing = await input.client.execute({
     sql: `SELECT unit_id, source_text, source_fingerprint FROM song_study_unit_cloze WHERE cloze_version >= ?1 AND unit_id IN (${units.map((_, index) => `?${index + 2}`).join(", ")})`,
     args: [STUDY_CLOZE_GENERATION_VERSION, ...units.map((unit) => unit.id)],
   })
@@ -322,5 +329,5 @@ export async function ensureStudyClozeRows(client: Client, postId: string): Prom
   if (stale.length === 0) return
   const now = new Date().toISOString()
   const partsByUnit = new Map(units.map((unit) => [unit.id, wordParts(unit.prompt_text, unit.source_language)]))
-  await client.batch(stale.map((unit) => clozeUpsertStatement({ fingerprint, now, partsByUnit, unit, units })), "write")
+  await input.client.batch(stale.map((unit) => clozeUpsertStatement({ fingerprint, now, partsByUnit, unit, units })), "write")
 }
