@@ -14,6 +14,7 @@ import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
 import { normalizeStoredGatePolicy, validateGatePolicy } from "../membership/gate-policy-validation"
+import { assertGatePolicyContractsValid } from "../membership/gate-policy-contract-validation"
 import type { GatePolicy } from "../membership/gate-types"
 import {
   type LabelClaimRuleRow,
@@ -363,6 +364,10 @@ export async function updateCommunityHandlePolicy(input: {
           throw badRequestError("label_claim_rules id does not belong to this namespace policy")
         }
       }
+    }
+    await assertGatePolicyContractsValid({ env: input.env, policy: submittedExpression })
+    for (const rule of submittedLabelClaimRules ?? []) {
+      await assertGatePolicyContractsValid({ env: input.env, policy: rule.expression })
     }
     const updatedAt = nowIso()
     const tx = await db.client.transaction("write")

@@ -355,8 +355,8 @@ function validateGateAtom(
       return { ...identity, type: "wallet_score", provider: "passport", minimum_score: atom.minimum_score }
     }
     case "erc721_holding": {
-      if (atom.chain_namespace !== "eip155:1") {
-        throw eligibilityFailed("erc721_holding gate must target Ethereum mainnet (eip155:1)")
+      if (atom.chain_namespace !== "eip155:1" && atom.chain_namespace !== "eip155:8453") {
+        throw eligibilityFailed("erc721_holding gate must target Ethereum or Base mainnet")
       }
       const contractAddress = normalizeEthereumAddress(atom.contract_address)
       if (!contractAddress) {
@@ -368,7 +368,7 @@ function validateGateAtom(
       return {
         ...identity,
         type: "erc721_holding",
-        chain_namespace: "eip155:1",
+        chain_namespace: atom.chain_namespace,
         contract_address: contractAddress,
         ...(atom.min_count != null ? { min_count: atom.min_count as number } : {}),
       }

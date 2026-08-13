@@ -95,12 +95,15 @@ export function normalizeEthereumAddress(value: unknown): string | null {
   }
 }
 
-function listEthereumMainnetWalletAddresses(walletAttachments: WalletAttachmentSummary[]): string[] {
+function listEvmWalletAddresses(
+  walletAttachments: WalletAttachmentSummary[],
+  chainNamespace: EvmChainNamespace,
+): string[] {
   const seen = new Set<string>()
   const addresses: string[] = []
 
   for (const attachment of walletAttachments) {
-    if (attachment.chain_namespace !== "eip155:1") {
+    if (attachment.chain_namespace !== chainNamespace) {
       continue
     }
 
@@ -117,6 +120,7 @@ function listEthereumMainnetWalletAddresses(walletAttachments: WalletAttachmentS
 }
 
 export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(input: {
+  chainNamespace?: EvmChainNamespace
   contractAddress: string
   env: Env
   minCount?: number
@@ -127,7 +131,8 @@ export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(in
     return { owns: false, unavailable: false }
   }
 
-  const walletAddresses = listEthereumMainnetWalletAddresses(input.walletAttachments)
+  const chainNamespace = input.chainNamespace ?? "eip155:1"
+  const walletAddresses = listEvmWalletAddresses(input.walletAttachments, chainNamespace)
   if (walletAddresses.length === 0) {
     return { owns: false, unavailable: false }
   }
@@ -149,7 +154,7 @@ export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(in
     return { owns: false, unavailable: false }
   }
 
-  const provider = getEthereumProvider(input.env)
+  const provider = getEvmJsonRpcProvider(input.env, chainNamespace)
   if (!provider) {
     return { owns: false, unavailable: true }
   }
@@ -173,6 +178,7 @@ export async function evaluateAttachedEthereumWalletErc721CollectionOwnership(in
 }
 
 export async function evaluateErc721ContractSupport(input: {
+  chainNamespace?: EvmChainNamespace
   contractAddress: string
   env: Env
 }): Promise<{ supported: boolean; unavailable: boolean }> {
@@ -191,7 +197,7 @@ export async function evaluateErc721ContractSupport(input: {
     }
   }
 
-  const provider = getEthereumProvider(input.env)
+  const provider = getEvmJsonRpcProvider(input.env, input.chainNamespace ?? "eip155:1")
   if (!provider) {
     return { supported: false, unavailable: true }
   }

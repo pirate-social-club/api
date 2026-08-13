@@ -21,7 +21,7 @@ export type GateAtom = GateAtomIdentity & (
   | { type: "nationality"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: string[] }
   | { type: "gender"; provider: "self"; accepted_providers?: DocumentProofProvider[]; allowed: Array<"M" | "F"> }
   | { type: "wallet_score"; provider: "passport"; minimum_score: number }
-  | { type: "erc721_holding"; chain_namespace: "eip155:1"; contract_address: string; min_count?: number }
+  | { type: "erc721_holding"; chain_namespace: "eip155:1" | "eip155:8453"; contract_address: string; min_count?: number }
   | { type: "asset_balance"; asset_id: string; min_amount_atomic: string }
   | {
     type: "erc721_inventory_match"
@@ -50,6 +50,7 @@ export type GateTraceNode =
     required_amount_atomic?: string | null
     current_amount_atomic?: string | null
     evaluated_wallet_count?: number | null
+    token_keys?: string[] | null
   }
 
 export type RequiredActionNode = RequiredAction | RequiredActionSet
