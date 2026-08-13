@@ -1,7 +1,7 @@
 import { Interface, JsonRpcProvider, getAddress, zeroPadValue } from "ethers"
 import { badRequestError, fundingConfirmationTimeout } from "../../errors"
 import type { Env } from "../../../env"
-import type { Client } from "../../sql-client"
+import type { Client, Transaction } from "../../sql-client"
 import { getControlPlaneClient } from "../../runtime-deps"
 import { parseJsonValue, type PurchaseQuoteRow } from "./row-types"
 import { toChainRefString } from "./row-types"
@@ -47,6 +47,7 @@ export type BuyerFundingReceipt = {
     logIndex: number
     blockNumber: number
     blockHash: string
+    blockTimestamp?: number
   }
 }
 
@@ -69,7 +70,7 @@ let testBuyerFundingVerifier:
   }) => Promise<BuyerFundingReceipt>)
   | null = null
 
-type BuyerFundingProvider = Pick<JsonRpcProvider, "waitForTransaction">
+type BuyerFundingProvider = Pick<JsonRpcProvider, "waitForTransaction" | "getBlock">
 let testBuyerFundingProviderFactory: ((rpcUrl: string, chainId: number) => BuyerFundingProvider) | null = null
 
 export function setCommunityCommerceBuyerFundingVerifierForTests(
@@ -103,6 +104,7 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   quote: CheckoutFundingQuote
   buyerAddress: string
   fundingTxRef: string
+  expectedTokenAddress?: string | null
 }): Promise<BuyerFundingReceipt> {
   if (testBuyerFundingVerifier) {
     return await testBuyerFundingVerifier(input)
@@ -126,7 +128,7 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   }
   const expectedRecipient = getAddress(input.quote.funding_destination_address || resolvePirateCheckoutOperatorAddress(input.env))
   const expectedSender = getAddress(input.buyerAddress)
-  const expectedToken = getAddress(resolvePirateCheckoutUsdcTokenAddress(input.env))
+  const expectedToken = getAddress(input.expectedTokenAddress || resolvePirateCheckoutUsdcTokenAddress(input.env))
 
   const rpcUrl = resolvePirateCheckoutRpcUrl(input.env)
   const provider = testBuyerFundingProviderFactory?.(rpcUrl, expectedSourceChainId)
@@ -161,6 +163,10 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
   }
   if (!receipt || receipt.status !== 1) {
     throw badRequestError("Funding transaction is not confirmed")
+  }
+  const canonicalBlock = await provider.getBlock(receipt.blockNumber)
+  if (!canonicalBlock?.hash || canonicalBlock.hash.toLowerCase() !== receipt.blockHash.toLowerCase()) {
+    throw badRequestError("Funding transaction block is not canonical")
   }
 
   const expectedRecipientTopic = zeroPadValue(expectedRecipient, 32).toLowerCase()
@@ -203,6 +209,7 @@ async function verifyPirateCheckoutUsdcFundingReceipt(input: {
         logIndex: log.index,
         blockNumber: receipt.blockNumber,
         blockHash: receipt.blockHash,
+        blockTimestamp: canonicalBlock.timestamp,
       },
     }
     break
@@ -435,6 +442,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
   fundingTxRef: string
   fundingDestinationAddress?: string | null
   sourceChainJson?: string | null
+  tokenAddress?: string | null
 }): Promise<BuyerFundingReceipt> {
   const txRef = input.fundingTxRef.trim()
   if (!txRef) {
@@ -444,6 +452,7 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
     env: input.env,
     buyerAddress: input.buyerAddress,
     fundingTxRef: txRef,
+    expectedTokenAddress: input.tokenAddress,
     quote: {
       quote_id: input.quoteId,
       route_provider: "pirate_checkout",
@@ -461,20 +470,20 @@ export async function verifyPirateCheckoutUsdcFunding(input: {
  * may omit it for legacy fixtures; focused registry tests provide it explicitly.
  */
 export async function claimVerifiedBuyerFundingReceipt(input: {
-  client: Client
+  client: Client | Transaction
   receipt: BuyerFundingReceipt
   fallbackSenderAddress: string
   consumerRail: string
   consumerId: string
   quoteId: string
   now: string
-}): Promise<void> {
+}) {
   const observation = input.receipt.observation
   if (!observation) {
     if (testBuyerFundingVerifier) return
     throw badRequestError("Funding receipt observation identity is missing")
   }
-  await claimCanonicalFundingReceipt({
+  return await claimCanonicalFundingReceipt({
     client: input.client,
     chainId: observation.chainId,
     tokenAddress: input.receipt.tokenAddress,
@@ -482,6 +491,7 @@ export async function claimVerifiedBuyerFundingReceipt(input: {
     logIndex: observation.logIndex,
     blockNumber: observation.blockNumber,
     blockHash: observation.blockHash,
+    blockTimestamp: observation.blockTimestamp,
     senderAddress: input.receipt.fromAddress ?? input.fallbackSenderAddress,
     recipientAddress: input.receipt.toAddress,
     amountAtomic: input.receipt.amountAtomic,

@@ -35,6 +35,7 @@ function log(input: { from?: string; to?: string; amount?: bigint; index: number
 function provide(logs: ReturnType<typeof log>[]) {
   setBuyerFundingProviderFactoryForTests(() => ({
     waitForTransaction: async () => ({ status: 1, blockNumber: 123, blockHash: BLOCK, logs }),
+    getBlock: async () => ({ hash: BLOCK, timestamp: 1_786_622_400 }),
   } as never))
 }
 
@@ -70,7 +71,13 @@ describe("Pirate checkout raw funding receipt parser", () => {
     await expect(verify()).resolves.toMatchObject({
       txRef: TX,
       amountAtomic: "5000000",
-      observation: { chainId: 84532, logIndex: 7, blockNumber: 123, blockHash: BLOCK },
+      observation: {
+        chainId: 84532,
+        logIndex: 7,
+        blockNumber: 123,
+        blockHash: BLOCK,
+        blockTimestamp: 1_786_622_400,
+      },
     })
   })
 })

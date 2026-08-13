@@ -4,6 +4,13 @@ import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
 import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
 import {
+  resolvePirateCheckoutOperatorAddress,
+  resolvePirateCheckoutOperatorPrivateKey,
+  resolvePirateCheckoutRpcUrl,
+  resolvePirateCheckoutSourceChainId,
+  resolvePirateCheckoutUsdcTokenAddress,
+} from "../commerce/checkout-config"
+import {
   resolveBookingSettlementChainId,
   resolveBookingSettlementOperatorPrivateKey,
   resolveBookingSettlementRpcUrl,
@@ -70,18 +77,27 @@ function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
   broadcastRpcUrl: string
   chainId: number
   usdc: string
-  operatorAddressField: "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS" | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS"
+  operatorAddressField:
+    | "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS"
+    | "PIRATE_CHECKOUT_OPERATOR_ADDRESS"
+    | "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS"
 } {
   const backend = operatorKind === "rewards" ? resolveRewardsSettlementBackend(env) : "local"
   const privateKey = backend !== "lit_vault"
     ? (operatorKind === "rewards"
         ? resolveRewardsSettlementOperatorPrivateKey(env)
-        : resolveBookingSettlementOperatorPrivateKey(env))
+        : operatorKind === "checkout"
+          ? resolvePirateCheckoutOperatorPrivateKey(env)
+          : resolveBookingSettlementOperatorPrivateKey(env))
     : null
   // Last-line guard on the signing path: if an operator address is configured (it names the nonce DO),
   // the key we are about to sign with MUST derive it — otherwise refuse to sign rather than broadcast
   // from a wallet whose nonce is being tracked under a different DO.
-  const operatorAddressField = operatorKind === "rewards" ? "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS" : "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS"
+  const operatorAddressField = operatorKind === "rewards"
+    ? "PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS"
+    : operatorKind === "checkout"
+      ? "PIRATE_CHECKOUT_OPERATOR_ADDRESS"
+      : "PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS"
   const expectedOperator = parseExpectedEvmAddress(env[operatorAddressField])
   if (expectedOperator && privateKey) {
     assertPrivateKeyMatchesExpectedAddress({
@@ -95,13 +111,29 @@ function resolveConfig(env: Env, operatorKind: OperatorKind = "booking"): {
     privateKey,
     operatorAddress: operatorKind === "rewards"
       ? resolveRewardsSettlementOperatorAddress(env)
-      : (privateKey ? getAddress(new Wallet(privateKey).address) : getAddress(expectedOperator!)),
-    rpcUrl: operatorKind === "rewards" ? resolveRewardsSettlementRpcUrl(env) : resolveBookingSettlementRpcUrl(env),
+      : operatorKind === "checkout"
+        ? resolvePirateCheckoutOperatorAddress(env)
+        : (privateKey ? getAddress(new Wallet(privateKey).address) : getAddress(expectedOperator!)),
+    rpcUrl: operatorKind === "rewards"
+      ? resolveRewardsSettlementRpcUrl(env)
+      : operatorKind === "checkout"
+        ? resolvePirateCheckoutRpcUrl(env)
+        : resolveBookingSettlementRpcUrl(env),
     broadcastRpcUrl: operatorKind === "rewards"
       ? resolveRewardsSettlementBroadcastRpcUrl(env)
-      : resolveBookingSettlementRpcUrl(env),
-    chainId: operatorKind === "rewards" ? resolveRewardsSettlementChainId(env) : resolveBookingSettlementChainId(env),
-    usdc: operatorKind === "rewards" ? resolveRewardsSettlementUsdcTokenAddress(env) : resolveBookingSettlementUsdcTokenAddress(env),
+      : operatorKind === "checkout"
+        ? resolvePirateCheckoutRpcUrl(env)
+        : resolveBookingSettlementRpcUrl(env),
+    chainId: operatorKind === "rewards"
+      ? resolveRewardsSettlementChainId(env)
+      : operatorKind === "checkout"
+        ? resolvePirateCheckoutSourceChainId(env)
+        : resolveBookingSettlementChainId(env),
+    usdc: operatorKind === "rewards"
+      ? resolveRewardsSettlementUsdcTokenAddress(env)
+      : operatorKind === "checkout"
+        ? resolvePirateCheckoutUsdcTokenAddress(env)
+        : resolveBookingSettlementUsdcTokenAddress(env),
     operatorAddressField,
   }
 }

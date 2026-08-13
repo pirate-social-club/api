@@ -137,7 +137,7 @@ describe("observed funding receipts", () => {
     }
     expect(update.sql).toContain("finality_status = 'orphaned'")
     expect(update.sql).toContain("match_status = CASE WHEN match_status = 'ignored' THEN 'unmatched'")
-    expect(update.args.slice(1, 4)).toEqual([reIncludedBlockNumber, reIncludedBlockHash, "indexer"])
+    expect(update.args.slice(1, 5)).toEqual([reIncludedBlockNumber, reIncludedBlockHash, null, "indexer"])
   })
 
   test("rejects a block rewrite until the old inclusion is explicitly orphaned", async () => {
