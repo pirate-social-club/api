@@ -35,6 +35,7 @@ plan:
           [[ "$name" == "name" ]] && continue
           : "$integrity"
           [[ -n "$name" && -n "$version" && -n "$cache_version" && -n "$archive" ]]
+          [[ "$cache_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-f]{16})?(\+[0-9a-f]{16})?$ ]]
           local target="$cache/$name@$cache_version@@@1"
           if [[ -f "$target/package.json" ]]; then
             continue
