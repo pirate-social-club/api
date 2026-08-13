@@ -241,8 +241,15 @@ async function resolveBoundEvidence(input: {
     evidence: selectedEvidence,
     atom: { capability: "nationality", acceptedProviders: [input.provider] },
   })
-  if (evaluated.outcome !== "passed") {
+  if (evaluated.outcome === "action_required") {
     return unresolved("nationality_evidence_missing", "retryable", {
+      rewardIdentityBindingId: input.bindingId,
+      identityNullifierId: input.identityNullifierId,
+      bindingSelectedAt: input.bindingSelectedAt,
+    })
+  }
+  if (evaluated.outcome !== "passed") {
+    return unresolved("identity_evidence_conflict", "terminal", {
       rewardIdentityBindingId: input.bindingId,
       identityNullifierId: input.identityNullifierId,
       bindingSelectedAt: input.bindingSelectedAt,
