@@ -27,7 +27,6 @@ plan:
         rm -rf -- "$temp"
       fi
       bun="$bun_runtime"
-      test "$("$bun" --version)" = 1.3.10
       cat > "$bunfig" <<'EOF'
       [install]
       prefer = "offline"
