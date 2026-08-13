@@ -11,7 +11,16 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 describe("staging contract gate workflow", () => {
-  test("keeps public-comment inventory and execution titles aligned", async () => {
+  test("accepts a scoped operator credential from reusable-workflow callers", async () => {
+    const workflow = await readFile(workflowPath, "utf8")
+
+    expect(workflow).toContain("PIRATE_ADMIN_OPERATOR_CREDENTIAL:\n        required: false")
+    expect(workflow).toContain(
+      "PIRATE_ADMIN_OPERATOR_CREDENTIAL: ${{ secrets.PIRATE_ADMIN_OPERATOR_CREDENTIAL }}",
+    )
+  })
+
+  test("keeps public-comment inventory wired into the mobile execution grep", async () => {
     const workflow = await readFile(workflowPath, "utf8")
     const requiredTitles = [
       "comments on a public thread without joining first",
@@ -19,26 +28,27 @@ describe("staging contract gate workflow", () => {
     ]
 
     for (const title of requiredTitles) {
-      expect(occurrences(workflow, title)).toBe(2)
+      expect(occurrences(workflow, title)).toBe(1)
     }
+
+    expect(workflow).toContain('echo "MOBILE_CONTRACT_GREP=$mobile_contract_grep" >> "$GITHUB_ENV"')
+    expect(workflow).toContain('--grep "$MOBILE_CONTRACT_GREP"')
 
     expect(workflow).not.toContain("joins from the comment CTA before exposing the mobile composer")
     expect(workflow).not.toContain("keeps the composer visible but disabled while membership is unknown")
   })
 
-  // The multipart contract is the one step whose test sets its own timeout, so it
-  // is the one step where the CI ceiling can invert below the test and swallow
-  // every diagnostic. Assert the ordering rather than the literal numbers, so
-  // either side can move as long as the relationship survives.
+  // The live suite includes multipart, whose test sets its own timeout. Assert
+  // the ordering rather than literal numbers so either ceiling can move safely.
   test("keeps CI ceilings above the multipart test's own timeout", async () => {
     const workflow = await readFile(workflowPath, "utf8")
 
-    const multipartStep = workflow
-      .split("- name: Verify direct multipart upload contract")[1]
+    const liveContractStep = workflow
+      .split("- name: Verify live staging contracts")[1]
       ?.split("- name:")[0]
-    expect(multipartStep, "multipart contract step").toBeTruthy()
+    expect(liveContractStep, "live staging contract step").toBeTruthy()
 
-    const stepCeiling = Number(multipartStep?.match(/timeout-minutes:\s*(\d+)/u)?.[1])
+    const stepCeiling = Number(liveContractStep?.match(/timeout-minutes:\s*(\d+)/u)?.[1])
     const jobCeiling = Number(workflow.match(/timeout-minutes:\s*(\d+)/u)?.[1])
 
     // Mirrors testInfo.setTimeout(15 * 60_000) in web's e2e/live-staging.live.spec.ts.

@@ -18,6 +18,8 @@ on:
     secrets:
       AUTH_UPSTREAM_JWT_SHARED_SECRET:
         required: false
+      PIRATE_ADMIN_OPERATOR_CREDENTIAL:
+        required: false
   workflow_dispatch:
     inputs:
       api_sha:
@@ -58,7 +60,7 @@ jobs:
       AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
       AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
       AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
-      PIRATE_ADMIN_OPERATOR_CREDENTIAL: ""
+      PIRATE_ADMIN_OPERATOR_CREDENTIAL: ${{ secrets.PIRATE_ADMIN_OPERATOR_CREDENTIAL }}
       E2E_API_BASE_URL: https://api-staging.pirate.sc
       E2E_BASE_URL: https://staging.pirate.sc
       E2E_LIVE_STAGING: "true"
