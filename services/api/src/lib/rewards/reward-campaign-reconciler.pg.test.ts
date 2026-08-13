@@ -1664,7 +1664,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
           reservations: 1,
           events: 1,
           enforcements: 0,
-          outcome: "resolved",
+          outcome: "resolved_tier",
           retryability: "resolved",
         })
       })
