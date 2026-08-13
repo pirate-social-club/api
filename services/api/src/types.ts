@@ -608,6 +608,7 @@ export type Post = {
   creator_relation?: PostCreatorRelation | null
   promotion_disclosure?: PromotionDisclosure | null
   source_language?: string | null
+  source_language_reliable?: boolean
   /**
    * Dominant language of `lyrics`. Null when the post has no lyrics, when detection
    * abstained, or when the shard has not yet received migration 1143 (transitional).

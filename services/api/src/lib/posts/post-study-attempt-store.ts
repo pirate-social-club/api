@@ -41,7 +41,7 @@ export type StudyExerciseForAttempt = StudyExerciseRow & {
 export const FILL_BLANK_PROMPT_TEXT = "Fill in the lyric."
 
 export type FillBlankExerciseIdentity = {
-  fingerprint: string | null
+  fingerprint: string
   language: string
   unitId: string
   version: number
@@ -101,16 +101,7 @@ export function parseFillBlankExerciseIdentity(exerciseId: string): FillBlankExe
       version: Number(current[2]),
     }
   }
-  const legacy = /^stu:([^:]+):fill_blank:([^:]+)$/u.exec(exerciseId)
-  return legacy ? {
-    // Legacy ids were served only by generation v2. Absence is a v2 identity,
-    // never an unconstrained match. Remove this parser after all staging v2
-    // sessions have exceeded their 24-hour TTL and before production enablement.
-    fingerprint: null,
-    language: legacy[2]!,
-    unitId: legacy[1]!,
-    version: 2,
-  } : null
+  return null
 }
 
 async function fillBlankExerciseRow(
@@ -145,9 +136,7 @@ export async function getFillBlankExerciseIdentityStatus(
   const persistedFingerprint = readString(row.source_fingerprint)
   return {
     current: persistedVersion === identity.version
-      && (identity.fingerprint == null
-        ? identity.version === 2
-        : persistedFingerprint === identity.fingerprint),
+      && persistedFingerprint === identity.fingerprint,
     identity,
   }
 }
@@ -243,9 +232,7 @@ export async function getExerciseForAttempt(
     const row = await fillBlankExerciseRow(client, fillBlankIdentity)
     if (!row) return null
     const current = Number(row.cloze_version ?? 0) === fillBlankIdentity.version
-      && (fillBlankIdentity.fingerprint == null
-        ? fillBlankIdentity.version === 2
-        : readString(row.source_fingerprint) === fillBlankIdentity.fingerprint)
+      && readString(row.source_fingerprint) === fillBlankIdentity.fingerprint
     if (!current) return null
     const reviewLanguage = readString(row.source_language) ?? "source"
     return {

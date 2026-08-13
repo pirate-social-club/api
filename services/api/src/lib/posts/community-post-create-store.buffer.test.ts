@@ -16,6 +16,7 @@ const FULL_SCHEMA: PostProjectionSchema = {
   hasCommentLockColumns: true,
   hasCrosspostSourceJson: true,
   hasLyricsLanguageColumns: true,
+  hasSourceLanguageReliabilityColumn: true,
   hasPostEvents: true,
   hasRightsHolds: true,
   hasSongAnnotationsUrl: true,

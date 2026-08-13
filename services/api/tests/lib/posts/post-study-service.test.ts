@@ -562,12 +562,12 @@ async function seedSongPost(accessMode: "public" | "locked" = "public"): Promise
   await exec(`
     INSERT INTO posts (
       post_id, community_id, author_user_id, identity_mode, post_type,
-      status, song_mode, title, lyrics, source_language, rights_basis,
+      status, song_mode, title, lyrics, source_language, source_language_reliable, rights_basis,
       analysis_state, content_safety_state, age_gate_policy, created_at,
       updated_at, access_mode, asset_id, visibility, song_title, song_cover_art_ref
     )
     VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original',
-            'Midnight Waves', 'I was lost in the midnight waves', 'en',
+            'Midnight Waves', 'I was lost in the midnight waves', 'en', 1,
             'original', 'allow', 'safe', 'none', ?4, ?4, ?5, 'ast_song',
             'public', 'Midnight Waves', 'ipfs://cover')
   `, [POST_ID, COMMUNITY_ID, AUTHOR_ID, NOW, accessMode])
@@ -1548,6 +1548,31 @@ describe("post study service", () => {
     })).rejects.toMatchObject({ status: 404 })
   })
 
+  test("rejects an in-flight fill-blank submission after its source language becomes untrusted", async () => {
+    const context = await reachFillBlankExercise("fill-language-kill-switch")
+    await exec("UPDATE posts SET source_language_reliable = 0 WHERE post_id = ?1", [POST_ID])
+
+    await expect(submitPostStudyAttemptRaw({
+      actor: learnerActor,
+      body: {
+        attempt_number: context.lesson.next!.presentation_number,
+        exercise_id: context.prompt.id,
+        idempotency_key: "fill-language-kill-switch-submit",
+        placements: context.correctPlacements,
+        session_id: context.payload.session!.id!,
+        session_revision: context.lesson.session_revision,
+        type: "fill_blank",
+      },
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+    })).rejects.toMatchObject({ status: 404 })
+    expect(Number((await client!.execute(
+      "SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'",
+    )).rows[0]?.count)).toBe(0)
+  })
+
   test("degrades malformed persisted fill-blank segments without a study 500", async () => {
     const context = await reachFillBlankExercise("fill-malformed-segments")
     const unitId = /^stu:([^:]+):/u.exec(context.prompt.id)?.[1] ?? ""
@@ -1607,7 +1632,7 @@ describe("post study service", () => {
       sql: "UPDATE song_study_unit SET prompt_text = ?2 WHERE id = ?1",
       args: ["stu_2", "Hold every fading memory until the quiet morning"],
     })
-    await ensureStudyClozeRows(client!, POST_ID)
+    await ensureStudyClozeRows({ client: client!, postId: POST_ID, sourceLanguageReliable: true })
 
     const body = {
       attempt_number: context.lesson.next!.presentation_number,
@@ -1665,48 +1690,24 @@ describe("post study service", () => {
     expect(snapshots.rows[0]).toMatchObject({ count: 1, http_status: 409, result_kind: "revision_conflict" })
   })
 
-  test("treats a legacy unversioned live card as v2 and returns typed recovery", async () => {
-    const context = await reachFillBlankExercise("fill-stale-legacy")
-    const sessionId = context.payload.session!.id!
-    const unitId = /^stu:([^:]+):/u.exec(context.prompt.id)?.[1] ?? ""
-    const legacyExerciseId = `stu:${unitId}:fill_blank:en`
-    await client!.batch([
-      {
-        sql: `
-          UPDATE song_study_session_exercise
-          SET exercise_id = ?3
-          WHERE session_id = ?1 AND exercise_id = ?2
-        `,
-        args: [sessionId, context.prompt.id, legacyExerciseId],
-      },
-      {
-        sql: "UPDATE song_study_session SET current_exercise_id = ?2 WHERE id = ?1",
-        args: [sessionId, legacyExerciseId],
-      },
-    ], "write")
+  test("does not generate or serve fill blank when its source language is not reliable", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    await exec("UPDATE posts SET source_language_reliable = 0 WHERE post_id = ?1", [POST_ID])
 
-    await expect(submitPostStudyAttemptRaw({
+    const payload = await getPostStudyPayload({
       actor: learnerActor,
-      body: {
-        attempt_number: context.lesson.next!.presentation_number,
-        exercise_id: legacyExerciseId,
-        idempotency_key: "fill-stale-legacy-submit",
-        placements: context.correctPlacements,
-        session_id: sessionId,
-        type: "fill_blank",
-      },
       communityId: COMMUNITY_ID,
       communityRepository: repo,
-      env: context.featureEnv,
+      env: env({ SONG_STUDY_FILL_BLANK_ENABLED: "true" }),
       postId: POST_ID,
-    })).rejects.toMatchObject({
-      code: "study_session_revision_conflict",
-      details: { lesson: { session_revision: context.lesson.session_revision + 1 } },
-      status: 409,
+      targetLanguage: "es",
     })
-    expect(Number((await client!.execute(
-      "SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'",
-    )).rows[0]?.count)).toBe(0)
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type !== "fill_blank")).toBe(true)
+    const clozeRows = await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_cloze")
+    expect(Number(clozeRows.rows[0]?.count)).toBe(0)
   })
 
   test("returns locked without exercise content for a non-entitled locked song", async () => {

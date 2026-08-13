@@ -330,6 +330,7 @@ describe("community study routes", () => {
       song_cover_art_ref: null,
       song_title: post.post_id,
       source_language: "en",
+      source_language_reliable: true,
       status: "published",
       title: post.post_id,
       visibility: "public",

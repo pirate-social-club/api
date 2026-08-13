@@ -12,13 +12,8 @@ describe("fill-blank exercise identity", () => {
     })
   })
 
-  test("treats an unversioned legacy id specifically as generation v2", () => {
-    expect(parseFillBlankExerciseIdentity("stu:unit_1:fill_blank:en")).toEqual({
-      fingerprint: null,
-      language: "en",
-      unitId: "unit_1",
-      version: 2,
-    })
+  test("rejects an expired unversioned v2 id", () => {
+    expect(parseFillBlankExerciseIdentity("stu:unit_1:fill_blank:en")).toBeNull()
   })
 
   test("rejects truncated fingerprints instead of weakening identity matching", () => {

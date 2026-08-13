@@ -53,6 +53,7 @@ export type PostProjectionSchema = {
   hasSongDurationMs: boolean
   hasAsyncPublishColumns: boolean
   hasLyricsLanguageColumns: boolean
+  hasSourceLanguageReliabilityColumn: boolean
 }
 
 export function postProjectionSchemaReadStatements(): InStatement[] {
@@ -100,6 +101,7 @@ export function postProjectionSchemaFromResults(
       && columnNames.has("lyrics_language_detector")
       && columnNames.has("lyrics_language_detected_at")
       && columnNames.has("lyrics_language_source_hash"),
+    hasSourceLanguageReliabilityColumn: columnNames.has("source_language_reliable"),
   }
 }
 
@@ -139,6 +141,11 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
     // reliable flag projects 0 (not NULL) to match the column's NOT NULL DEFAULT 0 semantics:
     // no detection evidence must read as unverified, never as reliable.
     : "NULL AS lyrics_language, NULL AS lyrics_language_confidence, 0 AS lyrics_language_reliable, NULL AS lyrics_language_detector, NULL AS lyrics_language_detected_at, NULL AS lyrics_language_source_hash"
+  const sourceLanguageReliabilityProjection = schema.hasSourceLanguageReliabilityColumn
+    ? "source_language_reliable"
+    // Missing language-detection metadata is never evidence that a cloze policy
+    // may trust the stored source language.
+    : "0 AS source_language_reliable"
   const eventProjection = schema.hasPostEvents
     ? `
   (
@@ -206,7 +213,7 @@ export function postSelectColumnsForSchema(schema: PostProjectionSchema): string
   link_url, link_og_image_url, link_og_title, ${boundedJsonProjection("link_enrichment_snapshot_json", sqlStringLiteral(OVERSIZED_LINK_ENRICHMENT_SNAPSHOT_JSON))}, link_enrichment_synced_at,
   ${eventProjection},
   ${boundedJsonProjection("embeds_json")}, ${boundedJsonProjection("media_refs_json")}, song_artifact_bundle_id, song_title,
-  ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, translation_policy,
+  ${songAnnotationsUrlProjection}, ${songCoverArtRefProjection}, ${songDurationMsProjection}, source_language, ${sourceLanguageReliabilityProjection}, translation_policy,
   ${lyricsLanguageProjection},
   access_mode, asset_id, (
     SELECT live_room_id
