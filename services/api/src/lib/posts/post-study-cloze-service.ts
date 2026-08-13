@@ -1,4 +1,4 @@
-import type { Client, InStatement } from "../sql-client"
+import type { Client, InStatement, ReadClient } from "../sql-client"
 import { sha256Hex } from "../crypto"
 import { selectStudyUnits, type StudyUnitRow } from "./post-study-unit-service"
 
@@ -7,6 +7,13 @@ import { selectStudyUnits, type StudyUnitRow } from "./post-study-unit-service"
 export const STUDY_CLOZE_GENERATION_VERSION = 3
 export const STUDY_CLOZE_MAX_ATTEMPTS = 2
 const STUDY_CLOZE_MIN_WORD_LENGTH = 3
+
+export async function hasStudyClozeSchema(client: Pick<ReadClient, "execute">): Promise<boolean> {
+  const result = await client.execute({
+    sql: "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'song_study_unit_cloze' LIMIT 1",
+  })
+  return result.rows.length > 0
+}
 
 export type StudyClozeSegment =
   | { kind: "text"; text: string }
@@ -291,6 +298,10 @@ function clozeUpsertStatement(input: {
 }
 
 export async function ensureStudyClozeRows(client: Client, postId: string): Promise<void> {
+  // Fleet quarantines and pre-allocation pools can legitimately lag the
+  // community template. Fill-blank is enrichment, so a missing 1156 table
+  // degrades to the established exercise types instead of breaking Study.
+  if (!await hasStudyClozeSchema(client)) return
   // Always load the complete persisted song. Distractors must never depend on
   // which caller happened to provide the first in-memory slice.
   const units = await selectStudyUnits(client, postId)

@@ -5,7 +5,59 @@ import {
   readExerciseType,
   type StudyExerciseRow,
 } from "./post-study-attempt-store"
-import { STUDY_CLOZE_GENERATION_VERSION } from "./post-study-cloze-service"
+import { hasStudyClozeSchema, STUDY_CLOZE_GENERATION_VERSION } from "./post-study-cloze-service"
+
+const FILL_BLANK_EXERCISE_SELECT = `
+      UNION ALL
+      SELECT ('stu:' || u.id || ':fill_blank:v' || c.cloze_version || ':'
+                 || c.source_fingerprint || ':' || u.source_language) AS id,
+             u.line_id, u.line_index, 'fill_blank' AS exercise_type,
+             'Fill in the lyric.' AS prompt_text, NULL AS question,
+             NULL AS reference_text, NULL AS translation_text,
+             NULL AS options_json, NULL AS correct_option_id,
+             c.segments_json, c.tokens_json, c.correct_placements_json,
+             c.max_attempts,
+             COALESCE(u.source_language, 'source') AS review_language,
+             c.cloze_version AS study_pack_version,
+             2 AS sort_order, 0 AS qualifies_for_reward,
+             CASE WHEN ?7 = 1 AND s.user_id IS NOT NULL AND s.due_at <= ?8 THEN 0 ELSE 1 END AS due_rank
+      FROM song_study_unit u
+      JOIN song_study_unit_cloze c ON c.unit_id = u.id
+      LEFT JOIN song_study_review_state s
+        ON s.user_id = ?6
+       AND s.post_id = u.post_id
+       AND s.line_id = u.line_id
+       AND s.exercise_type = 'fill_blank'
+       AND s.target_language = COALESCE(u.source_language, 'source')
+      WHERE u.post_id = ?1
+        AND u.source_language IS NOT NULL
+        AND c.cloze_version = ?10
+        AND c.status = 'ready'
+        AND c.segments_json IS NOT NULL
+        AND c.tokens_json IS NOT NULL
+        AND c.correct_placements_json IS NOT NULL
+        AND (
+          ?6 IS NULL
+          OR s.user_id IS NULL
+          OR (?7 = 1 AND s.due_at <= ?8)
+        )
+`
+
+const FILL_BLANK_DUE_SELECT = `
+        UNION ALL
+        SELECT s.due_at
+        FROM song_study_review_state s
+        JOIN song_study_unit u
+          ON u.post_id = s.post_id
+         AND u.line_id = s.line_id
+        JOIN song_study_unit_cloze c ON c.unit_id = u.id
+        WHERE s.user_id = ?1
+          AND s.post_id = ?2
+          AND s.exercise_type = 'fill_blank'
+          AND s.target_language = COALESCE(u.source_language, 'source')
+          AND s.due_at > ?4
+          AND c.status = 'ready'
+`
 
 export async function listExercises(input: {
   client: DbExecutor
@@ -19,6 +71,7 @@ export async function listExercises(input: {
   userId?: string | null
   limit?: number
 }): Promise<{ rows: StudyExerciseRow[]; totalCount: number }> {
+  const includeFillBlank = input.includeFillBlank && await hasStudyClozeSchema(input.client)
   const result = await input.client.execute({
     sql: `
       SELECT exercises.*, COUNT(*) OVER () AS total_count
@@ -78,40 +131,7 @@ export async function listExercises(input: {
           OR s.user_id IS NULL
           OR (?7 = 1 AND s.due_at <= ?8)
         )
-      UNION ALL
-      SELECT ('stu:' || u.id || ':fill_blank:v' || c.cloze_version || ':'
-                 || c.source_fingerprint || ':' || u.source_language) AS id,
-             u.line_id, u.line_index, 'fill_blank' AS exercise_type,
-             'Fill in the lyric.' AS prompt_text, NULL AS question,
-             NULL AS reference_text, NULL AS translation_text,
-             NULL AS options_json, NULL AS correct_option_id,
-             c.segments_json, c.tokens_json, c.correct_placements_json,
-             c.max_attempts,
-             COALESCE(u.source_language, 'source') AS review_language,
-             c.cloze_version AS study_pack_version,
-             2 AS sort_order, 0 AS qualifies_for_reward,
-             CASE WHEN ?7 = 1 AND s.user_id IS NOT NULL AND s.due_at <= ?8 THEN 0 ELSE 1 END AS due_rank
-      FROM song_study_unit u
-      JOIN song_study_unit_cloze c ON c.unit_id = u.id
-      LEFT JOIN song_study_review_state s
-        ON s.user_id = ?6
-       AND s.post_id = u.post_id
-       AND s.line_id = u.line_id
-       AND s.exercise_type = 'fill_blank'
-       AND s.target_language = COALESCE(u.source_language, 'source')
-      WHERE u.post_id = ?1
-        AND ?5 = 1
-        AND u.source_language IS NOT NULL
-        AND c.cloze_version = ?10
-        AND c.status = 'ready'
-        AND c.segments_json IS NOT NULL
-        AND c.tokens_json IS NOT NULL
-        AND c.correct_placements_json IS NOT NULL
-        AND (
-          ?6 IS NULL
-          OR s.user_id IS NULL
-          OR (?7 = 1 AND s.due_at <= ?8)
-        )
+      ${includeFillBlank ? FILL_BLANK_EXERCISE_SELECT : ""}
       ) exercises
       ORDER BY due_rank ASC, line_index ASC, sort_order ASC, id ASC
       LIMIT ?9
@@ -121,12 +141,12 @@ export async function listExercises(input: {
       input.targetLanguage,
       input.includeSayItBack ? 1 : 0,
       input.includeTranslation ? 1 : 0,
-      input.includeFillBlank ? 1 : 0,
+      includeFillBlank ? 1 : 0,
       input.userId ?? null,
       input.dueReviewServing ? 1 : 0,
       input.now,
       input.limit ?? -1,
-      STUDY_CLOZE_GENERATION_VERSION,
+      ...(includeFillBlank ? [STUDY_CLOZE_GENERATION_VERSION] : []),
     ],
   })
   return {
@@ -168,6 +188,7 @@ export async function getNextDueAt(input: {
   targetLanguage: string
   userId: string
 }): Promise<string | null> {
+  const includeFillBlank = input.includeFillBlank && await hasStudyClozeSchema(input.client)
   const row = await executeFirst(input.client, {
     sql: `
       SELECT MIN(due_at) AS next_due_at
@@ -203,20 +224,7 @@ export async function getNextDueAt(input: {
           AND l.translation_text IS NOT NULL
           AND l.options_json IS NOT NULL
           AND l.correct_option_id IS NOT NULL
-        UNION ALL
-        SELECT s.due_at
-        FROM song_study_review_state s
-        JOIN song_study_unit u
-          ON u.post_id = s.post_id
-         AND u.line_id = s.line_id
-        JOIN song_study_unit_cloze c ON c.unit_id = u.id
-        WHERE s.user_id = ?1
-          AND s.post_id = ?2
-          AND s.exercise_type = 'fill_blank'
-          AND s.target_language = COALESCE(u.source_language, 'source')
-          AND s.due_at > ?4
-          AND ?7 = 1
-          AND c.status = 'ready'
+        ${includeFillBlank ? FILL_BLANK_DUE_SELECT : ""}
       )
     `,
     args: [
@@ -226,7 +234,7 @@ export async function getNextDueAt(input: {
       input.now,
       input.includeSayItBack ? 1 : 0,
       input.includeTranslation ? 1 : 0,
-      input.includeFillBlank ? 1 : 0,
+      ...(includeFillBlank ? [1] : []),
     ],
   }) as Record<string, unknown> | null
   return readString(row?.next_due_at)

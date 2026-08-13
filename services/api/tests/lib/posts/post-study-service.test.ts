@@ -1129,6 +1129,29 @@ describe("post study service", () => {
     expect(serialized).not.toContain("correct_option_id")
   })
 
+  test("keeps established Study exercises available when fill-blank schema is absent", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+    await client!.execute("DROP TABLE song_study_unit_cloze")
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_FILL_BLANK_ENABLED: "true" }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercise_count).toBe(3)
+    expect(payload.exercises.map((exercise) => exercise.type)).toEqual([
+      "say_it_back",
+      "say_it_back",
+      "translation_choice",
+    ])
+  })
+
   test("caps long first-learn study sessions while reporting total eligible exercises", async () => {
     await seedSongPost()
     await seedLongReadyPack()
