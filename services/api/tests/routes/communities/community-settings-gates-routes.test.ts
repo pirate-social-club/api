@@ -483,6 +483,11 @@ describe("community settings gates routes", () => {
       },
       ctx.env,
     ))
-    expect(duplicateGenderGates.status).toBe(200)
+    expect(duplicateGenderGates.status).toBe(403)
+    const duplicateGenderBody = await json(duplicateGenderGates) as { code: string; message: string }
+    expect(duplicateGenderBody.code).toBe("eligibility_failed")
+    expect(duplicateGenderBody.message).toBe(
+      "gate_policy cannot require gender more than once through an AND path until multi-provider evidence is supported",
+    )
   })
 })

@@ -1200,11 +1200,12 @@ membership_mode: "request",
       },
       ctx.env,
     ))
-    expect(duplicateGenderGates.status).toBe(200)
-    const duplicateGenderBody = await json(duplicateGenderGates) as {
-      gate_policy?: { expression?: { children?: Array<{ gate?: { type?: string } }> } } | null
-    }
-    expect(duplicateGenderBody.gate_policy?.expression?.children?.map((child) => child.gate?.type)).toEqual(["gender", "gender"])
+    expect(duplicateGenderGates.status).toBe(403)
+    const duplicateGenderBody = await json(duplicateGenderGates) as { code: string; message: string }
+    expect(duplicateGenderBody.code).toBe("eligibility_failed")
+    expect(duplicateGenderBody.message).toBe(
+      "gate_policy cannot require gender more than once through an AND path until multi-provider evidence is supported",
+    )
   })
 
   test("community owner can persist agent moderation settings", async () => {
