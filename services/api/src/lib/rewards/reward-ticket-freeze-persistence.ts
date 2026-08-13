@@ -32,6 +32,10 @@ function hash(value: string, key: string): string {
   return normalized
 }
 
+function sameAddress(left: string, right: string): boolean {
+  return left.replace(/^0x/u, "").toLowerCase() === right.replace(/^0x/u, "").toLowerCase()
+}
+
 function validateCommitment(input: RewardTicketPoolCommitment): void {
   if (!input.poolDrawingId.trim()) throw new Error("reward ticket freeze pool drawing is invalid")
   if (input.beneficiaries.length === 0) throw new Error("reward ticket freeze beneficiaries are empty")
@@ -51,6 +55,7 @@ function validateCommitment(input: RewardTicketPoolCommitment): void {
   }
   hash(input.snapshotHash, "snapshot hash")
   hash(input.leafHash, "leaf hash")
+  hash(input.termsHash, "terms hash")
 }
 
 /**
@@ -129,6 +134,12 @@ export async function persistRewardTicketPoolFreeze(input: Readonly<{
     const chainId = Number(required(drawing, "chain_id"))
     positiveInteger(chainId, "chain id")
     if (BigInt(drawingId) < 0n) throw new Error("reward ticket freeze drawing id is invalid")
+    if (input.commitment.chainId !== chainId
+      || input.commitment.drawingId !== BigInt(drawingId)
+      || !sameAddress(input.commitment.jackpotAddress, required(drawing, "jackpot_address"))
+      || hash(input.commitment.termsHash, "terms hash") !== hash(required(drawing, "terms_hash"), "terms hash")) {
+      throw new Error("reward ticket freeze commitment terms mismatch")
+    }
 
     const commitmentBatchId = makeId("rtcb")
     await tx.execute({
