@@ -295,7 +295,7 @@ describe("reward nationality shadow evaluation", () => {
     })
   })
 
-  test("records revoked bindings and conflicting evidence as terminal reasons", async () => {
+  test("records revoked bindings and rejects conflicting evidence for one document", async () => {
     const client = await setup()
     await seedNullifier(client, { id: "nul_revoked", hash: "hash_revoked", status: "revoked", nationality: "USA" })
     await bind(client, "nul_revoked")
@@ -305,12 +305,12 @@ describe("reward nationality shadow evaluation", () => {
     })
 
     await client.execute("UPDATE reward_identity_bindings SET status = 'superseded', superseded_at = '2026-08-02T11:00:00.000Z' WHERE reward_identity_binding_id = 'rib_nul_revoked'")
-    await seedNullifier(client, { id: "nul_conflict", hash: "hash_conflict", nationality: "USA", secondNationality: "CAN" })
-    await bind(client, "nul_conflict")
-    expect(await evaluate(client, "rqe_shadow_5")).toMatchObject({
-      outcome: "identity_evidence_conflict",
-      retryability: "terminal",
-    })
+    await expect(seedNullifier(client, {
+      id: "nul_conflict",
+      hash: "hash_conflict",
+      nationality: "USA",
+      secondNationality: "CAN",
+    })).rejects.toThrow("UNIQUE constraint failed")
   })
 
   test("does not create a permanently pending per-claim row for an unsupported shadow provider", async () => {

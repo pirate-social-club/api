@@ -136,18 +136,20 @@ function matchesAtom(evidence: IdentityEvidence, atom: IdentityEvidenceAtom): bo
   }
 }
 
-/** Read durable, currently valid evidence. The projection is never consulted. */
+/** Read durable evidence, optionally retaining expired rows for explicit binding reads. The projection is never consulted. */
 export async function readActiveIdentityEvidence(input: {
   client: Executor
   userId: string
   now?: Date
   capabilities?: readonly ProviderKeyedEvidenceCapability[]
+  includeExpired?: boolean
 }): Promise<IdentityEvidence[]> {
   const now = input.now ?? new Date()
   const capabilities = input.capabilities?.length
     ? [...new Set(input.capabilities)]
     : [...PROVIDER_KEYED_EVIDENCE_CAPABILITIES]
   const placeholders = capabilities.map((_, index) => `?${index + 3}`).join(", ")
+  const expiryClause = input.includeExpired ? "" : "AND (a.expires_at IS NULL OR a.expires_at > ?2)"
   const result = await input.client.execute({
     sql: `
       SELECT
@@ -180,7 +182,7 @@ export async function readActiveIdentityEvidence(input: {
         AND a.revoked_at IS NULL
         AND a.verified_at IS NOT NULL
         AND a.verified_at <= ?2
-        AND (a.expires_at IS NULL OR a.expires_at > ?2)
+        ${expiryClause}
         AND a.capability_key IN (${placeholders})
       ORDER BY a.verified_at DESC, a.user_attestation_id ASC
     `,

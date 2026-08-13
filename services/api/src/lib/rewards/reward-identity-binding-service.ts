@@ -33,7 +33,14 @@ async function listBoundDocuments(
   userId: string,
 ): Promise<BoundDocument[]> {
   const grouped = new Map<string, BoundDocument[]>()
-  const evidence = await readActiveIdentityEvidence({ client, userId, capabilities: ["nationality"] })
+  const evidence = await readActiveIdentityEvidence({
+    client,
+    userId,
+    capabilities: ["nationality"],
+    // Existing bindings remain readable after evidence expiry; selection below
+    // still filters expired documents before allowing a new binding.
+    includeExpired: true,
+  })
   for (const item of evidence) {
     if (item.provider !== "self") continue
     const identityNullifierId = item.sourceIdentityNullifierId
