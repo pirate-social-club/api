@@ -1379,6 +1379,8 @@ export type CommunityHandleProtocolIssuance = {
 
 export type CommunityHandleClaimRequest = {
   quote: string;
+  claim_intent?: string | null;
+  action_authorization?: string | null;
   settlement_wallet_attachment?: string | null;
   protocol_owner_wallet_attachment?: string | null;
   funding_tx_ref?: string | null;
@@ -1454,6 +1456,8 @@ export type CommunityHandleQuote = {
   availability: "available" | "taken" | "reserved" | "already_claimed_by_viewer" | "viewer_has_claim" | "namespace_unavailable";
   reason: string | null;
   claim_gate?: CommunityHandleQuoteClaimGate | null;
+  claim_intent?: string | null;
+  action_authorization?: string | null;
   price_cents: number;
   currency: "USD";
   pricing_model: "free" | "flat_by_length" | "custom_curve" | "gated_then_flat" | null;
@@ -1470,6 +1474,8 @@ export type CommunityHandleQuote = {
 export type CommunityHandleQuoteRequest = {
   desired_label: string;
   namespace_verification?: string | null;
+  claim_intent?: string | null;
+  altcha?: string | null;
 };
 
 export type CommunityHandleReserveRequest = {

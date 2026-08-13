@@ -136,6 +136,17 @@ import {
 import type { ContentSecurityScanMessage } from "./lib/content-security/content-security-types"
 import { runWithRewardReconciliationLock } from "./lib/rewards/reward-reconciliation-lock"
 import { reconcileRewardFundingRefunds } from "./lib/rewards/reward-funding-refund-reconciler"
+import {
+  classifyHandleClaimFinalizationError,
+  reconcileFundedHandleClaimIntents,
+} from "./lib/communities/handles/handle-claim-finalization-reconciler"
+import { reconcileHandleClaimRefunds } from "./lib/communities/handles/handle-claim-refund-reconciler"
+import {
+  finalizeFundedHandleClaimOnShard,
+  finalizedHandleId,
+} from "./lib/communities/handles/handle-claim-intent-finalizer"
+import { resolveFundedHandleReservationSeconds } from "./lib/communities/handles/handle-claim-intent-config"
+import { openCommunityWriteClient } from "./lib/communities/community-read-access"
 import { reconcileConfirmingRewardCampaignFunding } from "./lib/rewards/reward-funding-confirmation-reconciler"
 import {
   dispatchDueDanceReferences,
@@ -1763,6 +1774,71 @@ async function reconcileScheduledRewardFundingRefunds(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledHandleClaims(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  try {
+    const finalization = await reconcileFundedHandleClaimIntents({
+      env,
+      limit: 25,
+      finalize: async (candidate) => {
+        const database = await openCommunityWriteClient(env, communityRepository, candidate.communityId)
+        try {
+          const now = new Date().toISOString()
+          const handle = await finalizeFundedHandleClaimOnShard({
+            client: database.client,
+            finalization: candidate,
+            now,
+            reservationHoldUntil: new Date(
+              Date.parse(now) + resolveFundedHandleReservationSeconds(env) * 1000,
+            ).toISOString(),
+          })
+          return { kind: "completed", handleId: finalizedHandleId(handle) }
+        } catch (error) {
+          return classifyHandleClaimFinalizationError(error)
+        } finally {
+          database.close()
+        }
+      },
+    })
+    const refunds = await reconcileHandleClaimRefunds({ env, limit: 25 })
+    if (
+      finalization.scanned > 0 || finalization.errors > 0
+      || refunds.queued > 0 || refunds.errors > 0 || refunds.rejected_finality > 0
+      || refunds.custody_mismatch > 0
+      || refunds.operator_attention > 0
+    ) {
+      console.info("[handle-claim-recovery] reconciled", JSON.stringify({ finalization, refunds }))
+    }
+    if (!refunds.enabled && refunds.queued > 0) {
+      await captureScheduledWarning(
+        env,
+        "Handle claim refunds are queued while automatic refunds are disabled",
+        "handle_claim_refunds_disabled_backlog",
+        refunds,
+        { urgency: "high" },
+      )
+    }
+    if (
+      finalization.errors > 0 || finalization.retryable > 0 || refunds.errors > 0
+      || refunds.rejected_finality > 0 || refunds.custody_mismatch > 0
+      || refunds.operator_attention > 0
+    ) {
+      await captureScheduledWarning(
+        env,
+        "Funded handle claims require operator attention",
+        "handle_claim_reconciliation",
+        { finalization, refunds },
+        { urgency: "high" },
+      )
+    }
+  } catch (error) {
+    console.error("[handle-claim-recovery] reconciliation failed", error)
+    await captureScheduledError(env, error, "handle_claim_reconciliation")
+  } finally {
+    await communityRepository.close?.()
+  }
+}
+
 async function revalidateScheduledHnsNamespaces(env: Env): Promise<void> {
   try {
     const summary = await sweepHnsNamespaceRevalidations({
@@ -1877,7 +1953,7 @@ const COMMUNITY_JOB_PRELUDE_DEADLINE_MS = 20_000
 // 13% waited more than ten minutes and the worst waited ~8 hours. A song whose
 // publish-finalize attempt fails backs off 30s and then waits on this job to get
 // a start, which is why "Preparing song features" could linger for half an hour.
-export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 12
+export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 13
 const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
@@ -1908,6 +1984,7 @@ type ScheduledPriorityJobName =
   | "reconcile_royalty_allocation_verifications"
   | "reconcile_reward_campaigns"
   | "reconcile_reward_funding_refunds"
+  | "reconcile_handle_claims"
   | "reconcile_song_artifact_head_verifications"
   | "monitor_reward_campaign_treasury_solvency"
   | "process_community_jobs"
@@ -1930,6 +2007,7 @@ export function scheduledPriorityJobNames(
     "reconcile_royalty_allocation_verifications",
     "reconcile_reward_campaigns",
     "reconcile_reward_funding_refunds",
+    "reconcile_handle_claims",
     "reconcile_song_artifact_head_verifications",
     // Funded reward campaigns must retain their solvency and lifecycle
     // watchdogs even when community D1 work consumes the nominal batch budget.
@@ -2071,6 +2149,7 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
       reconcile_royalty_allocation_verifications: () => reconcileScheduledRoyaltyAllocationVerifications(env),
       reconcile_reward_campaigns: () => reconcileScheduledRewardCampaigns(env),
       reconcile_reward_funding_refunds: () => reconcileScheduledRewardFundingRefunds(env),
+      reconcile_handle_claims: () => reconcileScheduledHandleClaims(env),
       reconcile_song_artifact_head_verifications: () => reconcileScheduledSongArtifactHeadVerifications(env),
       monitor_reward_campaign_treasury_solvency: () => monitorScheduledRewardCampaignTreasurySolvency(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),

@@ -94,12 +94,14 @@ export async function assertClaimQuoteStillClaimable(input: {
   paymentVerified: boolean
   env: Env
   userRepository: UserRepository
+  skipGateEligibility?: boolean
 }): Promise<{
   policy: NamespacePolicyRow
   labelNormalized: string
   labelDisplay: string
   priceCents: number
   protocolIssuanceRequired: boolean
+  gateEligibility: Awaited<ReturnType<typeof requireNamespaceHandleClaimEligibility>> | null
 }> {
   const status = requiredString(input.quote, "status")
   await expireStaleHandleQuotes({
@@ -137,15 +139,17 @@ export async function assertClaimQuoteStillClaimable(input: {
   const labelNormalized = requiredString(input.quote, "label_normalized")
   const labelDisplay = requiredString(input.quote, "label_display")
   await requireHandleClaimAccess({ client: input.executor, communityId: input.communityId, userId: input.userId })
-  await requireNamespaceHandleClaimEligibility({
-    env: input.env,
-    client: input.executor,
-    communityId: input.communityId,
-    userId: input.userId,
-    userRepository: input.userRepository,
-    policy,
-    labelNormalized,
-  })
+  const gateEligibility = input.skipGateEligibility
+    ? null
+    : await requireNamespaceHandleClaimEligibility({
+      env: input.env,
+      client: input.executor,
+      communityId: input.communityId,
+      userId: input.userId,
+      userRepository: input.userRepository,
+      policy,
+      labelNormalized,
+      })
 
   if (isReservedHandleLabel(labelNormalized, settings)) {
     const reason = "Desired label is reserved"
@@ -191,5 +195,6 @@ export async function assertClaimQuoteStillClaimable(input: {
     labelDisplay,
     priceCents,
     protocolIssuanceRequired: requireProtocolIssuanceSupport(policy, settings),
+    gateEligibility,
   }
 }
