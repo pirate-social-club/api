@@ -534,6 +534,48 @@ function canonicalStoryRegistrationValue(value: unknown): unknown {
   return result
 }
 
+function restoreCanonicalStoryRegistrationValue(value: unknown): unknown {
+  if (value == null || typeof value !== "object") return value
+  if (Array.isArray(value)) return value.map(restoreCanonicalStoryRegistrationValue)
+  const source = value as Record<string, unknown>
+  if (Object.keys(source).length === 1 && typeof source.bigint === "string" && /^\d+$/u.test(source.bigint)) {
+    return BigInt(source.bigint)
+  }
+  return Object.fromEntries(
+    Object.entries(source).map(([key, item]) => [key, restoreCanonicalStoryRegistrationValue(item)]),
+  )
+}
+
+type DurableStoryRegistrationRequestV1 = {
+  version: 1
+  registrationKind: StoryRoyaltyRightsBasis
+  chainId: number
+  signerAddress: string
+  creatorWalletAddress: string
+  primaryContentHash: string
+  callDataHash: string
+  request: Record<string, unknown>
+  metadata: {
+    ipMetadataUri: string
+    ipMetadataHash: `0x${string}`
+    nftMetadataUri: string
+    nftMetadataHash: `0x${string}`
+  }
+  derivativeParentIpIds: `0x${string}`[] | null
+}
+
+function parseDurableStoryRegistrationRequest(value: string): DurableStoryRegistrationRequestV1 {
+  const restored = restoreCanonicalStoryRegistrationValue(JSON.parse(value)) as DurableStoryRegistrationRequestV1
+  if (
+    restored.version !== 1
+    || !restored.request
+    || typeof restored.request !== "object"
+    || !restored.metadata?.ipMetadataUri
+    || !restored.metadata?.nftMetadataUri
+  ) throw new Error("story_registration_durable_request_invalid")
+  return restored
+}
+
 async function storyRegistrationCallDataHash(value: unknown): Promise<string> {
   return `0x${await sha256Hex(JSON.stringify(canonicalStoryRegistrationValue(value)))}`
 }
@@ -1001,6 +1043,24 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     registrationKind: rightsBasis,
     request: registrationRequest,
   })
+  const proposedDurableRequest = {
+    version: 1 as const,
+    registrationKind: rightsBasis,
+    chainId,
+    signerAddress: operator.value.address.toLowerCase(),
+    creatorWalletAddress: input.creatorWalletAddress.toLowerCase(),
+    primaryContentHash: input.primaryContentHash.toLowerCase(),
+    callDataHash,
+    request: registrationRequest,
+    metadata: {
+      ipMetadataUri: metadata.ipMetadataUri,
+      ipMetadataHash: metadata.ipMetadataHash,
+      nftMetadataUri: metadata.nftMetadataUri,
+      nftMetadataHash: metadata.nftMetadataHash,
+    },
+    derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,
+  }
+  const proposedDurableRequestJson = JSON.stringify(canonicalStoryRegistrationValue(proposedDurableRequest))
   const resolveVault = async (ipId: `0x${string}`): Promise<string | null> => {
     try {
       const vault = await storyClient.royalty?.getRoyaltyVaultAddress(ipId)
@@ -1026,16 +1086,21 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     creatorWalletAddress: input.creatorWalletAddress,
     primaryContentHash: input.primaryContentHash,
     callDataHash,
+    durableRequestJson: proposedDurableRequestJson,
     now: nowIso(),
   })
   if (reserved.kind === "confirmed") return reserved.result
+  const durableRequest = parseDurableStoryRegistrationRequest(
+    reserved.durableRequestJson ?? proposedDurableRequestJson,
+  )
+  const executionRequest = durableRequest.request as typeof registrationRequest
 
   let providerTxRef: string | null = null
   try {
     let result: StoryRoyaltyRegistrationResult
     if (rightsBasis === "derivative") {
       const derivativeResponse = await withStoryRegistrationRetry(() =>
-        storyClient.ipAsset.registerDerivativeIpAsset(derivativeRequest!),
+        storyClient.ipAsset.registerDerivativeIpAsset(executionRequest as NonNullable<typeof derivativeRequest>),
       )
       const derivativeIpId = derivativeResponse.ipId!
       providerTxRef = String(derivativeResponse.txHash || "").trim() || null
@@ -1044,15 +1109,15 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
         storyIpId: derivativeIpId,
         storyIpNftContract: spgNftContract,
         storyIpNftTokenId: derivativeResponse.tokenId!.toString(),
-        storyIpMetadataUri: metadata.ipMetadataUri,
-        storyIpMetadataHash: metadata.ipMetadataHash,
-        storyNftMetadataUri: metadata.nftMetadataUri,
-        storyNftMetadataHash: metadata.nftMetadataHash,
+        storyIpMetadataUri: durableRequest.metadata.ipMetadataUri,
+        storyIpMetadataHash: durableRequest.metadata.ipMetadataHash,
+        storyNftMetadataUri: durableRequest.metadata.nftMetadataUri,
+        storyNftMetadataHash: durableRequest.metadata.nftMetadataHash,
         ipRoyaltyVault,
         storyLicenseTermsId: null,
         storyLicenseTemplate: null,
         storyRoyaltyPolicy: royaltyPolicy,
-        storyDerivativeParentIpIds: derivativeParents!.map((parent) => parent.ipId),
+        storyDerivativeParentIpIds: durableRequest.derivativeParentIpIds,
         storyRevenueToken: WIP_TOKEN_ADDRESS,
         storyRoyaltyRegistrationStatus: "registered",
         storyDerivativeRegisteredAt: nowIso(),
@@ -1060,17 +1125,17 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
       }
     } else {
       const originalResponse = await withStoryRegistrationRetry(() =>
-        storyClient.ipAsset.registerIpAsset(originalRequest!),
+        storyClient.ipAsset.registerIpAsset(executionRequest as NonNullable<typeof originalRequest>),
       )
       providerTxRef = String(originalResponse.txHash || "").trim() || null
       result = {
         storyIpId: originalResponse.ipId!,
         storyIpNftContract: spgNftContract,
         storyIpNftTokenId: originalResponse.tokenId!.toString(),
-        storyIpMetadataUri: metadata.ipMetadataUri,
-        storyIpMetadataHash: metadata.ipMetadataHash,
-        storyNftMetadataUri: metadata.nftMetadataUri,
-        storyNftMetadataHash: metadata.nftMetadataHash,
+        storyIpMetadataUri: durableRequest.metadata.ipMetadataUri,
+        storyIpMetadataHash: durableRequest.metadata.ipMetadataHash,
+        storyNftMetadataUri: durableRequest.metadata.nftMetadataUri,
+        storyNftMetadataHash: durableRequest.metadata.nftMetadataHash,
         ipRoyaltyVault: String(originalResponse.ipRoyaltyVault || "").trim() || await resolveVault(originalResponse.ipId!),
         storyLicenseTermsId: originalResponse.licenseTermsIds?.[0]?.toString() ?? null,
         storyLicenseTemplate: null,

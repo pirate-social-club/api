@@ -14,6 +14,7 @@ export type StoryRegistrationEffect = {
   creatorWalletAddress: string
   primaryContentHash: string
   callDataHash: string
+  durableRequestJson: string | null
   status: EffectStatus
   providerTxRef: string | null
   errorCode: string | null
@@ -23,7 +24,7 @@ export type StoryRegistrationEffect = {
 
 const SELECT_COLUMNS = `
   operation_id, registration_kind, chain_id, signer_address, creator_wallet_address,
-  primary_content_hash, call_data_hash,
+  primary_content_hash, call_data_hash, durable_request_json,
   status, provider_tx_ref, error_code, result_json, attempt_count
 `
 
@@ -40,12 +41,27 @@ function toRow(row: unknown): StoryRegistrationEffect {
     creatorWalletAddress: requiredString(row, "creator_wallet_address"),
     primaryContentHash: requiredString(row, "primary_content_hash"),
     callDataHash: requiredString(row, "call_data_hash"),
+    durableRequestJson: stringOrNull(rowValue(row, "durable_request_json")),
     status: requiredString(row, "status") as EffectStatus,
     providerTxRef: stringOrNull(rowValue(row, "provider_tx_ref")),
     errorCode: stringOrNull(rowValue(row, "error_code")),
     resultJson: stringOrNull(rowValue(row, "result_json")),
     attemptCount: requiredNumber(row, "attempt_count"),
   }
+}
+
+function assertStableReplayIdentity(row: StoryRegistrationEffect, input: {
+  registrationKind: RegistrationKind
+  chainId: number
+  signerAddress: string
+  primaryContentHash: string
+}): void {
+  if (
+    row.registrationKind !== input.registrationKind
+    || row.chainId !== input.chainId
+    || row.signerAddress.toLowerCase() !== input.signerAddress.toLowerCase()
+    || row.primaryContentHash.toLowerCase() !== input.primaryContentHash.toLowerCase()
+  ) throw new Error("story_registration_effect_request_conflict")
 }
 
 async function loadEffect(client: DbExecutor, key: string): Promise<StoryRegistrationEffect> {
@@ -196,8 +212,12 @@ export async function reserveStoryRegistrationEffect<T>(input: {
   creatorWalletAddress: string
   primaryContentHash: string
   callDataHash: string
+  durableRequestJson?: string
   now: string
-}): Promise<{ kind: "execute"; operationId: string } | { kind: "confirmed"; result: T }> {
+}): Promise<
+  { kind: "execute"; operationId: string; durableRequestJson: string | null }
+  | { kind: "confirmed"; result: T }
+> {
   const key = effectKey(input.communityId, input.assetId)
   const operationId = `sro_${crypto.randomUUID()}`
   const inserted = await input.client.execute({
@@ -205,19 +225,22 @@ export async function reserveStoryRegistrationEffect<T>(input: {
       INSERT OR IGNORE INTO story_registration_effects (
         story_registration_effect_id, community_id, asset_id, effect_key, operation_id,
         registration_kind, chain_id, signer_address, creator_wallet_address,
-        primary_content_hash, call_data_hash, status, created_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'executing', ?12, ?12)
+        primary_content_hash, call_data_hash, durable_request_json, status, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'executing', ?13, ?13)
     `,
     args: [
       makeId("sre"), input.communityId, input.assetId, key, operationId,
       input.registrationKind, input.chainId, input.signerAddress, input.creatorWalletAddress,
-      input.primaryContentHash, input.callDataHash, input.now,
+      input.primaryContentHash, input.callDataHash, input.durableRequestJson ?? null, input.now,
     ],
   })
-  if ((inserted.rowsAffected ?? 0) > 0) return { kind: "execute", operationId }
+  if ((inserted.rowsAffected ?? 0) > 0) {
+    return { kind: "execute", operationId, durableRequestJson: input.durableRequestJson ?? null }
+  }
 
   let existing = await loadEffect(input.client, key)
-  assertSameRequest(existing, input)
+  if (existing.durableRequestJson) assertStableReplayIdentity(existing, input)
+  else assertSameRequest(existing, input)
   if (existing.status === "confirmed") {
     if (!existing.resultJson) throw new Error("story_registration_effect_confirmed_without_result")
     return { kind: "confirmed", result: JSON.parse(existing.resultJson) as T }
@@ -232,7 +255,9 @@ export async function reserveStoryRegistrationEffect<T>(input: {
       `,
       args: [key, operationId, input.now, existing.operationId],
     })
-    if ((claimed.rowsAffected ?? 0) > 0) return { kind: "execute", operationId }
+    if ((claimed.rowsAffected ?? 0) > 0) {
+      return { kind: "execute", operationId, durableRequestJson: existing.durableRequestJson }
+    }
     existing = await loadEffect(input.client, key)
     if (existing.status === "confirmed" && existing.resultJson) {
       return { kind: "confirmed", result: JSON.parse(existing.resultJson) as T }
