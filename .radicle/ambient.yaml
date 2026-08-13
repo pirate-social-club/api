@@ -32,13 +32,26 @@ plan:
             echo "incomplete Bun cache entry exists: $target" >&2
             exit 1
           }
+          local archive_path="/ci/deps/bun/$root/$archive"
+          if [[ "$integrity" == sha512-* ]]; then
+            local actual_integrity
+            actual_integrity="sha512-$(openssl dgst -sha512 -binary "$archive_path" | base64 -w0)"
+            [[ "$actual_integrity" == "$integrity" ]] || {
+              echo "Bun cache integrity mismatch: $archive" >&2
+              exit 1
+            }
+          fi
           local temp
           temp=$(mktemp -d "$cache/.extract.XXXXXX")
-          tar -xzf "/ci/deps/bun/$root/$archive" -C "$temp"
-          test -f "$temp/package/package.json"
+          tar -xzf "$archive_path" -C "$temp"
+          local package_json
+          package_json=$(find "$temp" -mindepth 1 -maxdepth 3 -type f -name package.json -print -quit)
+          [[ -n "$package_json" ]]
+          local package_dir="${package_json%/package.json}"
+          [[ "$package_dir" != "$temp" ]]
           mkdir -p "$(dirname "$target")"
-          mv "$temp/package" "$target"
-          rmdir "$temp"
+          mv "$package_dir" "$target"
+          rm -rf -- "$temp"
         done < "$manifest"
       }
 
