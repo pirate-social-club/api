@@ -20,6 +20,11 @@ jobs:
   hns-verifier-contract:
     name: HNS verifier raw-record contract
     runs-on: blacksmith-2vcpu-ubuntu-2404
+    # The production Infisical identity trusts the Web production environment
+    # subject. This is a read-only probe, but it reads the production verifier
+    # credential and must therefore use the same OIDC environment boundary as
+    # the Web production migration lane.
+    environment: production
     # This probe is independent of the staging deployment. Keep it in its own
     # reusable workflow so a dead production verifier fails quickly instead of
     # waiting for the full staging promotion lane.

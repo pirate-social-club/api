@@ -13,6 +13,7 @@ describe("HNS verifier contract gate workflow", () => {
     expect(workflow).toContain("name: hns-verifier-contract-gate")
     expect(workflow).toContain("name: HNS verifier raw-record contract")
     expect(workflow).toContain("timeout-minutes: 5")
+    expect(workflow).toContain("environment: production")
     expect(workflow).not.toMatch(/^\s+needs:/mu)
     expect(workflow).toContain("HNS_VERIFIER_BASE_URL: https://verifier.pirate.sc/hns")
     expect(workflow).toContain("HNS_VERIFIER_CONTRACT_ROOT_LABEL: tame_impala")
