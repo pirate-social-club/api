@@ -69,6 +69,42 @@ export type ActiveIdentityNullifier = {
 
 type NullifierScopedStatementBuilder = (sourceIdentityNullifierId: string) => InStatement
 
+export class VerificationSessionClaimLostError extends Error {
+  constructor() {
+    super("Verification session was finalized concurrently")
+    this.name = "VerificationSessionClaimLostError"
+  }
+}
+
+export class VerificationAttestationConflictError extends Error {
+  constructor(cause: unknown) {
+    super("Verification attestation was finalized concurrently", { cause })
+    this.name = "VerificationAttestationConflictError"
+  }
+}
+
+function isUserAttestationUniqueConflict(error: unknown): boolean {
+  let current: unknown = error
+  while (current && typeof current === "object") {
+    const record = current as Record<string, unknown>
+    const code = typeof record.code === "string" ? record.code : ""
+    const constraint = typeof record.constraint === "string" ? record.constraint : ""
+    const message = typeof record.message === "string" ? record.message : ""
+    const isUnique = code === "23505"
+      || code === "SQLITE_CONSTRAINT_UNIQUE"
+      || /unique constraint|duplicate key/iu.test(message)
+    if (
+      isUnique
+      && (
+        constraint.startsWith("idx_user_attestations_accepted_")
+        || message.includes("user_attestations")
+      )
+    ) return true
+    current = record.cause
+  }
+  return false
+}
+
 export function isActiveIdentityNullifierUniqueConflict(error: unknown): boolean {
   let current: unknown = error
   while (current && typeof current === "object") {
@@ -121,6 +157,7 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
   activeNullifier: ActiveIdentityNullifier | null
   buildBatchStatements: (activeNullifier: ActiveIdentityNullifier | null) => InStatement[]
   activeNullifierRefreshStatementIndex?: number
+  sessionClaimStatementIndex?: number
 }): Promise<void> {
   const writeBatch = async (activeNullifier: ActiveIdentityNullifier | null): Promise<void> => {
     const statements = input.buildBatchStatements(activeNullifier)
@@ -133,6 +170,12 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
     try {
       const results = await transaction.batch(statements, "write")
       if (
+        input.sessionClaimStatementIndex !== undefined
+        && results[input.sessionClaimStatementIndex]?.rowsAffected !== 1
+      ) {
+        throw new VerificationSessionClaimLostError()
+      }
+      if (
         activeNullifier
         && results[input.activeNullifierRefreshStatementIndex]?.rowsAffected !== 1
       ) {
@@ -144,6 +187,9 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
         await transaction.rollback()
       } catch (rollbackError) {
         console.error("[verification] identity batch rollback failed", rollbackError)
+      }
+      if (isUserAttestationUniqueConflict(error)) {
+        throw new VerificationAttestationConflictError(error)
       }
       throw error
     } finally {
@@ -166,6 +212,79 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
   }
 }
 
+const SINGLE_SLOT_ATTESTATION_CAPABILITIES = ["unique_human", "minimum_age", "age_over_18", "gender"] as const
+
+function buildAttestationLifecycleStatements(input: {
+  userId: string
+  provider: string
+  sourceIdentityNullifierId: string
+  capabilities: readonly string[]
+  updatedAt: string
+}): InStatement[] {
+  const singleSlotCapabilities = input.capabilities.filter((capability) =>
+    (SINGLE_SLOT_ATTESTATION_CAPABILITIES as readonly string[]).includes(capability)
+  )
+  const statements: InStatement[] = []
+  if (singleSlotCapabilities.length > 0) {
+    const placeholders = singleSlotCapabilities.map((_, index) => `?${index + 4}`).join(", ")
+    const args = [input.userId, input.provider, input.updatedAt, ...singleSlotCapabilities]
+    statements.push({
+      sql: `
+        UPDATE user_attestations
+        SET status = 'expired', updated_at = ?3
+        WHERE user_id = ?1
+          AND provider = ?2
+          AND status = 'accepted'
+          AND expires_at IS NOT NULL
+          AND expires_at <= ?3
+          AND capability_key IN (${placeholders})
+      `,
+      args,
+    })
+    statements.push({
+      sql: `
+        UPDATE user_attestations
+        SET status = 'superseded', updated_at = ?3
+        WHERE user_id = ?1
+          AND provider = ?2
+          AND status = 'accepted'
+          AND capability_key IN (${placeholders})
+      `,
+      args,
+    })
+  }
+  if (input.capabilities.includes("nationality")) {
+    const args = [input.userId, input.provider, input.updatedAt, input.sourceIdentityNullifierId]
+    statements.push({
+      sql: `
+        UPDATE user_attestations
+        SET status = 'expired', updated_at = ?3
+        WHERE user_id = ?1
+          AND provider = ?2
+          AND capability_key = 'nationality'
+          AND source_identity_nullifier_id = ?4
+          AND status = 'accepted'
+          AND expires_at IS NOT NULL
+          AND expires_at <= ?3
+      `,
+      args,
+    })
+    statements.push({
+      sql: `
+        UPDATE user_attestations
+        SET status = 'superseded', updated_at = ?3
+        WHERE user_id = ?1
+          AND provider = ?2
+          AND capability_key = 'nationality'
+          AND source_identity_nullifier_id = ?4
+          AND status = 'accepted'
+      `,
+      args,
+    })
+  }
+  return statements
+}
+
 async function approvePendingTelegramJoinGrantsAfterVerification(input: {
   env: Env
   userId: string
@@ -181,6 +300,17 @@ async function approvePendingTelegramJoinGrantsAfterVerification(input: {
       error: error instanceof Error ? error.message : String(error),
     })
   }
+}
+
+async function returnCommittedVerificationAfterRace(input: {
+  client: Client
+  verificationSessionId: string
+  userId: string
+  error: unknown
+}): Promise<VerificationSession> {
+  const session = await getVerificationSession(input.client, input.verificationSessionId, input.userId)
+  if (session && session.status !== "pending") return session
+  throw input.error
 }
 
 function resolveProviderMode(provider: VerificationProvider, providerMode: VerificationProviderMode | null | undefined): VerificationProviderMode {
@@ -1093,6 +1223,7 @@ async function finalizeZkPassportDocumentVerification(
   const uniqueHumanAttestationId = makeId("att")
   const candidateNullifierId = makeId("nul")
   const documentAttestationBuilders: NullifierScopedStatementBuilder[] = []
+  const documentAttestationCapabilities: string[] = []
   capabilities.unique_human = {
     state: "verified",
     provider: "zkpassport",
@@ -1114,6 +1245,7 @@ async function finalizeZkPassportDocumentVerification(
     valueJson: Record<string, unknown>
   }): void => {
     const attestationId = makeId("att")
+    documentAttestationCapabilities.push(attestation.capabilityKey)
     documentAttestationBuilders.push((sourceIdentityNullifierId) => (
       attestation.capabilityKey === "nationality"
         ? {
@@ -1210,6 +1342,7 @@ async function finalizeZkPassportDocumentVerification(
           completed_at = ?3,
           updated_at = ?3
       WHERE verification_session_id = ?1
+        AND status = 'pending'
     `,
     args: [verificationSessionId, resultRef, updatedAt],
   }
@@ -1228,6 +1361,13 @@ async function finalizeZkPassportDocumentVerification(
   }
   const buildBatchStatements = (resolvedNullifier: ActiveIdentityNullifier | null): InStatement[] => {
     const sourceIdentityNullifierId = resolvedNullifier?.identityNullifierId ?? candidateNullifierId
+    const lifecycleStatements = buildAttestationLifecycleStatements({
+      userId: input.userId,
+      provider: "zkpassport",
+      sourceIdentityNullifierId,
+      capabilities: ["unique_human", ...documentAttestationCapabilities],
+      updatedAt,
+    })
     const identityNullifierInsert: InStatement[] = resolvedNullifier ? [] : [{
       sql: `
         INSERT INTO identity_nullifiers (
@@ -1265,6 +1405,7 @@ async function finalizeZkPassportDocumentVerification(
     }] : []
     return [
       verificationSessionUpdate,
+      ...lifecycleStatements,
       uniqueHumanAttestationInsert,
       ...identityNullifierInsert,
       ...identityNullifierRefresh,
@@ -1273,14 +1414,28 @@ async function finalizeZkPassportDocumentVerification(
     ]
   }
 
-  await writeVerificationBatchWithNullifierRetry({
-    client,
-    userId: input.userId,
-    identityNullifier,
-    activeNullifier,
-    buildBatchStatements,
-    activeNullifierRefreshStatementIndex: 2,
-  })
+  const lifecycleStatementCount = 2 + (documentAttestationCapabilities.includes("nationality") ? 2 : 0)
+  try {
+    await writeVerificationBatchWithNullifierRetry({
+      client,
+      userId: input.userId,
+      identityNullifier,
+      activeNullifier,
+      buildBatchStatements,
+      activeNullifierRefreshStatementIndex: 2 + lifecycleStatementCount,
+      sessionClaimStatementIndex: 0,
+    })
+  } catch (error) {
+    if (error instanceof VerificationSessionClaimLostError || error instanceof VerificationAttestationConflictError) {
+      return returnCommittedVerificationAfterRace({
+        client,
+        verificationSessionId: input.verificationSessionId,
+        userId: input.userId,
+        error,
+      })
+    }
+    throw error
+  }
 
   await approvePendingTelegramJoinGrantsAfterVerification({
     env,
@@ -1335,6 +1490,7 @@ async function finalizeVerification(
   const uniqueHumanAttestationId = makeId("att")
   const candidateNullifierId = makeId("nul")
   const capabilityAttestationBuilders: NullifierScopedStatementBuilder[] = []
+  const capabilityAttestationKeys: string[] = []
 
   capabilities.unique_human = {
     state: "verified",
@@ -1361,6 +1517,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
+    capabilityAttestationKeys.push("age_over_18")
     capabilityAttestationBuilders.push(() => ({
       sql: `
         INSERT INTO user_attestations (
@@ -1381,6 +1538,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
+    capabilityAttestationKeys.push("minimum_age")
     capabilityAttestationBuilders.push(() => ({
       sql: `
         INSERT INTO user_attestations (
@@ -1402,6 +1560,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
+    capabilityAttestationKeys.push("nationality")
     capabilityAttestationBuilders.push((sourceIdentityNullifierId) => ({
       sql: `
         INSERT INTO user_attestations (
@@ -1433,6 +1592,7 @@ async function finalizeVerification(
       mechanism: "self_disclosure",
       verified_at: unixSeconds(updatedAt),
     }
+    capabilityAttestationKeys.push("gender")
     capabilityAttestationBuilders.push(() => ({
       sql: `
         INSERT INTO user_attestations (
@@ -1455,6 +1615,7 @@ async function finalizeVerification(
           completed_at = ?3,
           updated_at = ?3
       WHERE verification_session_id = ?1
+        AND status = 'pending'
     `,
     args: [input.verificationSessionId, resultRef, updatedAt],
   }
@@ -1473,6 +1634,13 @@ async function finalizeVerification(
   }
   const buildBatchStatements = (resolvedNullifier: ActiveIdentityNullifier | null): InStatement[] => {
     const sourceIdentityNullifierId = resolvedNullifier?.identityNullifierId ?? candidateNullifierId
+    const lifecycleStatements = buildAttestationLifecycleStatements({
+      userId: input.userId,
+      provider: row.provider,
+      sourceIdentityNullifierId,
+      capabilities: ["unique_human", ...capabilityAttestationKeys],
+      updatedAt,
+    })
     const identityNullifierInsert: InStatement[] = resolvedNullifier ? [] : [{
       sql: `
         INSERT INTO identity_nullifiers (
@@ -1515,6 +1683,7 @@ async function finalizeVerification(
     ))
     return [
       verificationSessionUpdate,
+      ...lifecycleStatements,
       uniqueHumanAttestationInsert,
       ...identityNullifierInsert,
       ...identityNullifierRefresh,
@@ -1523,14 +1692,28 @@ async function finalizeVerification(
     ]
   }
 
-  await writeVerificationBatchWithNullifierRetry({
-    client,
-    userId: input.userId,
-    identityNullifier,
-    activeNullifier,
-    buildBatchStatements,
-    activeNullifierRefreshStatementIndex: 2,
-  })
+  const lifecycleStatementCount = 2 + (capabilityAttestationKeys.includes("nationality") ? 2 : 0)
+  try {
+    await writeVerificationBatchWithNullifierRetry({
+      client,
+      userId: input.userId,
+      identityNullifier,
+      activeNullifier,
+      buildBatchStatements,
+      activeNullifierRefreshStatementIndex: 2 + lifecycleStatementCount,
+      sessionClaimStatementIndex: 0,
+    })
+  } catch (error) {
+    if (error instanceof VerificationSessionClaimLostError || error instanceof VerificationAttestationConflictError) {
+      return returnCommittedVerificationAfterRace({
+        client,
+        verificationSessionId: input.verificationSessionId,
+        userId: input.userId,
+        error,
+      })
+    }
+    throw error
+  }
 
   await approvePendingTelegramJoinGrantsAfterVerification({
     env,
