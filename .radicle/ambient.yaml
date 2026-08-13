@@ -13,6 +13,7 @@ plan:
   - action: shell
     shell: |
       set -euo pipefail
+      grep -q 'node_modules/typescript/bin/tsc' /ci/src/.radicle/ambient.yaml
       cache=/ci/cache/bun
       bun_runtime="${cache}-runtime/bun"
       mkdir -p "$cache"
