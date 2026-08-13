@@ -1,7 +1,7 @@
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { ProfileRepository } from "../auth/repositories"
 import type { Client } from "../sql-client"
-import type { Asset, DerivativeSourceKind, LocalizedPostResponse, PostDerivativeSource } from "../../types"
+import type { Asset, DerivativeSourceKind, LocalizedPostResponse, PostDerivativeSource, Profile } from "../../types"
 import type { Env } from "../../env"
 import { findStoryRegisteredAssetProjectionSources } from "../communities/commerce/derivative-source-projection"
 import {
@@ -218,13 +218,27 @@ type CreatorProfile = Awaited<ReturnType<ProfileRepository["getProfileByUserId"]
 async function loadCreatorProfiles(
   profileRepository: ProfileRepository | null | undefined,
   creatorUserIds: string[],
+  prefetchedProfilesByUserId?: ReadonlyMap<string, Profile | null>,
 ): Promise<{ degraded: boolean; profilesByUserId: Map<string, CreatorProfile> }> {
-  if (!profileRepository || creatorUserIds.length === 0) {
+  if (creatorUserIds.length === 0) {
     return { degraded: false, profilesByUserId: new Map() }
   }
 
+  const profilesByUserId = new Map<string, CreatorProfile>()
+  const missingUserIds: string[] = []
+  for (const userId of creatorUserIds) {
+    if (prefetchedProfilesByUserId?.has(userId)) {
+      profilesByUserId.set(userId, prefetchedProfilesByUserId.get(userId) ?? null)
+    } else {
+      missingUserIds.push(userId)
+    }
+  }
+  if (!profileRepository || missingUserIds.length === 0) {
+    return { degraded: false, profilesByUserId }
+  }
+
   if (profileRepository.listProfilesByUserIds) {
-    const batched = await profileRepository.listProfilesByUserIds(creatorUserIds).catch(
+    const batched = await profileRepository.listProfilesByUserIds(missingUserIds).catch(
       (error: unknown) => {
         console.warn("[derivative-hydration] creator profile batch failed", error)
         return null
@@ -232,18 +246,22 @@ async function loadCreatorProfiles(
     )
     return {
       degraded: batched === null,
-      profilesByUserId: new Map(
-        creatorUserIds.map((userId) => [userId, batched?.get(userId) ?? null] as const),
-      ),
+      profilesByUserId: new Map([
+        ...profilesByUserId,
+        ...missingUserIds.map((userId) => [userId, batched?.get(userId) ?? null] as const),
+      ]),
     }
   }
 
   return {
     degraded: false,
-    profilesByUserId: new Map(await Promise.all(creatorUserIds.map(async (userId) => [
-      userId,
-      await profileRepository.getProfileByUserId(userId).catch(() => null),
-    ] as const))),
+    profilesByUserId: new Map([
+      ...profilesByUserId,
+      ...await Promise.all(missingUserIds.map(async (userId) => [
+        userId,
+        await profileRepository.getProfileByUserId(userId).catch(() => null),
+      ] as const)),
+    ]),
   }
 }
 
@@ -253,6 +271,7 @@ export async function hydrateDerivativeSourcesForResponses(input: {
   env?: Env | null
   responses: LocalizedPostResponse[]
   profileRepository?: ProfileRepository | null
+  prefetchedProfilesByUserId?: ReadonlyMap<string, Profile | null>
 }, dependencies: UpstreamSourceHydrationDependencies = upstreamSourceHydrationDependencies): Promise<DerivativeSourceHydrationTiming> {
   const refs = Array.from(new Set(input.responses.flatMap((response) => response.post.upstream_asset_refs ?? [])))
     .map(parseUpstreamRef)
@@ -294,6 +313,7 @@ export async function hydrateDerivativeSourcesForResponses(input: {
   const { degraded: profilesDegraded, profilesByUserId } = await loadCreatorProfiles(
     input.profileRepository,
     creatorUserIds,
+    input.prefetchedProfilesByUserId,
   )
   const profilesMs = elapsedMs(profilesStartedAt)
 

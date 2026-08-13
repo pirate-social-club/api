@@ -303,3 +303,62 @@ request wrapper per post. The approved second slice therefore batches song
 artifact bundles and upload proofs per community slice. Keep derivative
 hydration as the next measured target after this batch is deployed and the same
 50-request probe is repeated.
+
+### Song-artifact batch result and profile-prefetch decision
+
+Release `31645026923` deployed the song-artifact batch. The first production
+attempt completed deployment and metadata verification but failed the final HNS
+smoke on a transient missing apex redirect; an immediate direct probe passed,
+and attempt 2 completed green. The deployed version pair was coherent before
+and after the rerun.
+
+The retained 50-request post-change sample was:
+
+| Metric | Before p50/p95 | After p50/p95 | p95 change |
+| --- | ---: | ---: | ---: |
+| `home-feed` | 12.060s / 14.345s | 11.283s / 13.447s | -6.3% |
+| `community-fanout` | 11.177s / 13.126s | 10.455s / 12.474s | -5.0% |
+| `community-total-max` | 8.850s / 10.298s | 4.424s / 5.801s | -43.7% |
+| `community-localize-max` | 7.520s / 8.893s | 2.501s / 3.753s | -57.8% |
+| `community-derivatives-max` | 2.364s / 2.757s | 2.519s / 2.994s | +8.6% |
+
+The batch fixed its direct N+1 but did not satisfy the overall acceptance gate;
+audit item #8 remains open. A seven-page mixed-`best` walk returned 174 unique
+posts with zero duplicates.
+
+A targeted production Worker trace then showed that derivative local-D1 reads
+took only 8–47ms, global derivative projection reads took 382–767ms, and
+derivative creator-profile hydration took 0.5–1.76s. Separate author-handle
+profile hydration took another 1.27–1.84s in the same community slices, while
+control-plane slow logs showed repeated profile-related reads. The next slice
+therefore prefetches page-author profiles once into a request-scoped map and
+reuses it in both author-handle and derivative enrichment. It exposes
+`community-profile-prefetch` timing so the trade remains falsifiable. Do not
+increase community concurrency or rewrite shard routing until this profile
+duplication is removed and the same production gate is repeated.
+
+Two #8 batching slices have now shipped without a material endpoint result:
+the first produced no distinguishable change in the observed latency range,
+and the song-artifact slice reduced p95 `home-feed` by only 6.3%. Treating the
+number of landed slices as progress would therefore be misleading; #8 remains
+open until the endpoint gate passes.
+
+The profile-prefetch slice makes its direct phases probe-visible as
+`community-profile-prefetch`, `community-author-handles-{sum,max}`,
+`community-derivative-{local-rows,global-rows,profiles}-{sum,max}`, alongside
+the existing localization, aggregate derivative, and unaccounted timings.
+Evaluate at least 50 cache-busted mixed-`best` first pages and report p50/p95,
+not a latency range. The slice-specific production gate is:
+
+1. p95 `community-author-handles-max` is at most 250ms, demonstrating that
+   page-author handle hydration consumes the request-scoped prefetch rather
+   than repeating remote profile reads.
+2. p95 `community-fanout` falls at least 20% from 12.474s to at most 9.979s.
+3. p50 `home-feed` does not regress by more than 10% from 11.283s.
+4. A seven-page mixed-`best` walk contains no repeated `source_post_id`.
+
+These are acceptance criteria for this slice, not a relaxation of #8's overall
+40% / 5-second fanout gate. If the direct author-handle criterion passes but
+the endpoint criterion does not, retain the deduplication only if it has no
+measurable regression and use the newly exposed derivative-profile and
+unaccounted p95 values to select the next target.
