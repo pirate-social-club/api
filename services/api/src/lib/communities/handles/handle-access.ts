@@ -8,6 +8,7 @@ import { getMembershipGatePolicy } from "../membership/gate-policy-store"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
 import { normalizeStoredGatePolicy } from "../membership/gate-policy-validation"
 import type { GatePolicy, GatePolicyEvaluation } from "../membership/gate-types"
+import type { AltchaProofInput, AltchaScope, VerifiedAltchaProof } from "../../verification/altcha-provider"
 import type { NamespacePolicyRow } from "./handle-policy-service"
 import {
   findMatchingLabelClaimRule,
@@ -48,6 +49,9 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
   policy: NamespacePolicyRow
   labelNormalized?: string | null
   mode?: "preview" | "enforce"
+  altchaScope?: AltchaScope
+  altchaProof?: AltchaProofInput
+  verifiedAltchaProof?: VerifiedAltchaProof
 }): Promise<HandleClaimEligibility> {
   let gateSource: "namespace" | "label_rule" = "namespace"
   let matchedRuleId: string | null = null
@@ -87,6 +91,9 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
     user,
     walletAttachments: await input.userRepository.getWalletAttachmentsByUserId(input.userId),
     mode: input.mode ?? "preview",
+    altchaScope: input.altchaScope,
+    altchaProof: input.altchaProof,
+    verifiedAltchaProof: input.verifiedAltchaProof,
   })
   return {
     satisfied: evaluation.satisfied,
@@ -104,7 +111,7 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
 
 export async function requireNamespaceHandleClaimEligibility(
   input: Parameters<typeof evaluateNamespaceHandleClaimEligibility>[0],
-): Promise<void> {
+): Promise<HandleClaimEligibility> {
   const eligibility = await evaluateNamespaceHandleClaimEligibility({ ...input, mode: "enforce" })
   if (!eligibility.satisfied) {
     throw eligibilityFailed(eligibility.reason ?? "Namespace eligibility requirements are not satisfied", {
@@ -113,6 +120,7 @@ export async function requireNamespaceHandleClaimEligibility(
       gate_evaluation: eligibility.evaluation,
     })
   }
+  return eligibility
 }
 
 function parseExplicitClaimGatePolicy(policy: NamespacePolicyRow) {

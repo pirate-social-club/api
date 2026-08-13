@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { readAltchaProof } from "../../../src/lib/verification/altcha-provider"
+import { isAltchaScope, readAltchaProof } from "../../../src/lib/verification/altcha-provider"
+
+test("accepts the intent-bound namespace handle claim scope", () => {
+  expect(isAltchaScope("namespace_handle_claim")).toBe(true)
+})
 
 describe("readAltchaProof", () => {
   test("prefers header value over body altcha", () => {

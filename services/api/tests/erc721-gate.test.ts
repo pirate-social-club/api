@@ -23,14 +23,18 @@ type CommunityGateRuleRow = {
   status: "active" | "disabled"
 }
 
-function makeErc721Rule(contractAddress: string, config: Record<string, unknown> = {}): CommunityGateRuleRow {
+function makeErc721Rule(
+  contractAddress: string,
+  config: Record<string, unknown> = {},
+  chainNamespace = "eip155:1",
+): CommunityGateRuleRow {
   return {
     gate_rule_id: "gr_erc721",
     scope: "membership",
     gate_family: "token_holding",
     gate_type: "erc721_holding",
     proof_requirements_json: null,
-    chain_namespace: "eip155:1",
+    chain_namespace: chainNamespace,
     gate_config_json: JSON.stringify({ contract_address: contractAddress, ...config }),
     status: "active",
   }
@@ -163,6 +167,33 @@ describe("erc721 gate evaluation", () => {
 
     expect(result.satisfied).toBe(true)
     expect(result.mismatchReasons).toEqual([])
+  })
+
+  test("evaluates Base ERC-721 holdings through the configured Base transport", async () => {
+    const checkedWallets: string[] = []
+    setErc721OwnershipCheckerForTests(async ({ walletAddress }) => {
+      checkedWallets.push(walletAddress)
+      return true
+    })
+
+    const result = await evaluateMembershipGateRules({
+      env: { BASE_MAINNET_RPC_URL: "https://base.example.invalid" },
+      rules: [makeErc721Rule(
+        "0x1111111111111111111111111111111111111111",
+        {},
+        "eip155:8453",
+      )],
+      user: makeUser(),
+      walletAttachments: [{
+        wallet_attachment: "wal_base",
+        chain_namespace: "eip155:8453",
+        wallet_address: "0x5555555555555555555555555555555555555555",
+        is_primary: true,
+      }],
+    })
+
+    expect(result.satisfied).toBe(true)
+    expect(checkedWallets).toEqual(["0x5555555555555555555555555555555555555555"])
   })
 
   test("returns satisfied when attached wallets aggregate enough ERC-721 collection balance", async () => {
@@ -685,8 +716,15 @@ describe("erc721 gate evaluation", () => {
       const first = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
       const second = await evaluateErc721InventoryMatch({ env: {}, walletAttachments, config })
 
-      expect(first).toEqual({ matchedQuantity: 1, unavailable: false })
-      expect(second).toEqual({ matchedQuantity: 1, unavailable: false })
+      const expected = {
+        matchedQuantity: 1,
+        matchedTokenKeys: [
+          "eip155:137:0x251BE3A17Af4892035C37ebf5890F4a4D889dcAD:cached-token",
+        ],
+        unavailable: false,
+      }
+      expect(first).toEqual(expected)
+      expect(second).toEqual(expected)
     })
     expect(fetchCount).toBe(1)
   })
@@ -833,7 +871,7 @@ describe("erc721 gate evaluation", () => {
     }
   })
 
-  test("caps Courtyard gate evaluation pagination per wallet", async () => {
+  test("treats an exhausted Courtyard gate pagination cap as unavailable", async () => {
     const rule = makeCourtyardInventoryRule({ min_quantity: 1 })
     const seenUrls: string[] = []
     await withMockedFetch(() => async (input) => {
@@ -862,15 +900,31 @@ describe("erc721 gate evaluation", () => {
       })
 
       expect(evaluation.satisfied).toBe(false)
-      expect(evaluation.mismatchReasons).toContain("erc721_inventory_match_required")
+      expect(evaluation.mismatchReasons).toContain("token_inventory_unavailable")
     })
 
-    expect(seenUrls).toHaveLength(2)
+    expect(seenUrls).toHaveLength(1)
     for (const seenUrl of seenUrls) {
       const url = new URL(seenUrl)
       expect(url.searchParams.get("limit")).toBe("1")
       expect(url.searchParams.get("offset")).toBe("0")
     }
+  })
+
+  test("treats malformed successful Courtyard pages as unavailable", async () => {
+    await withMockedFetch(() => async () => new Response(JSON.stringify({
+      assets: [],
+    })) as Response, async () => {
+      const evaluation = await evaluateMembershipGateRules({
+        env: { COURTYARD_INVENTORY_CACHE_TTL_MS: "0" },
+        user: makeUser(),
+        walletAttachments,
+        rules: [makeCourtyardInventoryRule({ min_quantity: 1 })],
+      })
+
+      expect(evaluation.satisfied).toBe(false)
+      expect(evaluation.mismatchReasons).toContain("token_inventory_unavailable")
+    })
   })
 
   test("bounds the Courtyard inventory match cache", async () => {

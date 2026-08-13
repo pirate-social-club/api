@@ -1,6 +1,6 @@
 import { eligibilityFailed } from "../../errors"
 import type { Env } from "../../../env"
-import { evaluateErc721ContractSupport } from "../community-token-gates"
+import { evaluateErc721ContractSupport, type EvmChainNamespace } from "../community-token-gates"
 import { isAssetBalanceEvaluable, resolveAssetBalanceDescriptor } from "./asset-balance-registry"
 import { flattenGatePolicyAtoms } from "./gate-summary"
 import type { GatePolicy } from "./gate-types"
@@ -11,14 +11,23 @@ export async function assertGatePolicyContractsValid(input: {
 }): Promise<void> {
   assertAssetBalanceAssetsEvaluable(input)
 
-  const erc721Contracts = Array.from(new Set(
-    flattenGatePolicyAtoms(input.policy ?? null)
-      .filter((atom) => atom.type === "erc721_holding")
-      .map((atom) => atom.contract_address),
-  ))
+  const contractMap = new Map<string, { chainNamespace: EvmChainNamespace; contractAddress: string }>()
+  for (const atom of flattenGatePolicyAtoms(input.policy ?? null)) {
+    if (atom.type !== "erc721_holding" && atom.type !== "erc721_inventory_match") continue
+    // Polygon inventory is evaluated by Courtyard and has no configured RPC
+    // transport here. Its address shape is enforced by policy validation; do
+    // the live ERC-165 check wherever this service has a chain transport.
+    if (atom.chain_namespace !== "eip155:1" && atom.chain_namespace !== "eip155:8453") continue
+    contractMap.set(`${atom.chain_namespace}:${atom.contract_address.toLowerCase()}`, {
+      chainNamespace: atom.chain_namespace,
+      contractAddress: atom.contract_address,
+    })
+  }
+  const erc721Contracts = [...contractMap.values()]
 
-  for (const contractAddress of erc721Contracts) {
+  for (const { chainNamespace, contractAddress } of erc721Contracts) {
     const result = await evaluateErc721ContractSupport({
+      chainNamespace,
       contractAddress,
       env: input.env,
     })

@@ -4,6 +4,7 @@ import { internalError, rateLimited } from "../errors"
 import { sha256Hex } from "../crypto"
 import { getControlPlaneClient } from "../runtime-deps"
 import type { Env } from "../../env"
+import type { Client, Transaction } from "../sql-client"
 
 export const ALTCHA_HEADER = "x-pirate-altcha"
 
@@ -12,6 +13,7 @@ export type AltchaScope =
   | "post_create"
   | "comment_create"
   | "vote"
+  | "namespace_handle_claim"
 
 export type AltchaProofInput = {
   payload: string
@@ -35,6 +37,7 @@ const ALTCHA_SCOPES = new Set<AltchaScope>([
   "post_create",
   "comment_create",
   "vote",
+  "namespace_handle_claim",
 ])
 
 function parseIntegerEnv(value: string | undefined, fallback: number): number {
@@ -194,39 +197,49 @@ function readChallengeData(challenge: Challenge): { actor: string | null; scope:
   }
 }
 
-async function consumeAltchaChallenge(input: {
-  env: Env
+export type VerifiedAltchaChallenge = {
+  actorUserId: string
+  scope: AltchaScope
+  action: string
+  challengeHash: string
+  expiresAt: string
+}
+
+export async function consumeVerifiedAltchaChallenge(input: {
+  executor: Client | Transaction
   actorUserId: string
   proof: AltchaProofInput
-  challenge: Challenge
+  verified: VerifiedAltchaChallenge
 }): Promise<boolean> {
-  const replayMaterial = [
-    input.challenge.parameters.nonce,
-    input.challenge.signature ?? "",
-    input.challenge.parameters.keyPrefix,
-  ].join(":")
-  const challengeHash = await sha256Hex(replayMaterial)
   const now = new Date().toISOString()
-  const expiresAtSeconds = input.challenge.parameters.expiresAt
-  const expiresAt = typeof expiresAtSeconds === "number"
-    ? new Date(expiresAtSeconds * 1000).toISOString()
-    : new Date(Date.now() + 20 * 60 * 1000).toISOString()
-  const result = await getControlPlaneClient(input.env).execute({
+  if (
+    input.verified.actorUserId !== input.actorUserId
+    || input.verified.scope !== input.proof.scope
+    || input.verified.action !== input.proof.action
+  ) return false
+  const result = await input.executor.execute({
     sql: `
       INSERT OR IGNORE INTO altcha_used_challenges (
         challenge_hash, actor_user_id, scope, action_ref, used_at, expires_at
       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
     `,
-    args: [challengeHash, input.actorUserId, input.proof.scope, input.proof.action, now, expiresAt],
+    args: [
+      input.verified.challengeHash,
+      input.actorUserId,
+      input.proof.scope,
+      input.proof.action,
+      now,
+      input.verified.expiresAt,
+    ],
   })
   return result.rowsAffected === 1
 }
 
-export async function verifyAndConsumeAltchaProof(input: {
+export async function verifyAltchaProof(input: {
   env: Env
   actorUserId: string
   proof?: AltchaProofInput
-}): Promise<AltchaVerificationResult> {
+}): Promise<AltchaVerificationResult & { challenge?: VerifiedAltchaChallenge }> {
   if (!input.proof?.payload) {
     return { verified: false, reason: "missing_proof" }
   }
@@ -257,11 +270,38 @@ export async function verifyAndConsumeAltchaProof(input: {
     return { verified: false, reason: "binding_mismatch" }
   }
 
-  const consumed = await consumeAltchaChallenge({
-    env: input.env,
+  const replayMaterial = [
+    payload.challenge.parameters.nonce,
+    payload.challenge.signature ?? "",
+    payload.challenge.parameters.keyPrefix,
+  ].join(":")
+  const expiresAtSeconds = payload.challenge.parameters.expiresAt
+  return {
+    verified: true,
+    challenge: {
+      actorUserId: input.actorUserId,
+      scope: input.proof.scope,
+      action: input.proof.action,
+      challengeHash: await sha256Hex(replayMaterial),
+      expiresAt: typeof expiresAtSeconds === "number"
+        ? new Date(expiresAtSeconds * 1000).toISOString()
+        : new Date(Date.now() + 20 * 60 * 1000).toISOString(),
+    },
+  }
+}
+
+export async function verifyAndConsumeAltchaProof(input: {
+  env: Env
+  actorUserId: string
+  proof?: AltchaProofInput
+}): Promise<AltchaVerificationResult> {
+  const verification = await verifyAltchaProof(input)
+  if (!verification.verified || !verification.challenge || !input.proof) return verification
+  const consumed = await consumeVerifiedAltchaChallenge({
+    executor: getControlPlaneClient(input.env),
     actorUserId: input.actorUserId,
     proof: input.proof,
-    challenge: payload.challenge,
+    verified: verification.challenge,
   })
   return consumed ? { verified: true } : { verified: false, reason: "replayed" }
 }

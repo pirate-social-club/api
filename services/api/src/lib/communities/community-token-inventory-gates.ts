@@ -95,6 +95,7 @@ type NormalizedInventoryFacts = Omit<
 
 type CourtyardInventoryCacheEntry = {
   matchedQuantity: number
+  matchedTokenKeys: string[]
   expiresAtMs: number
 }
 
@@ -107,7 +108,7 @@ let erc721InventoryMatcherForTests: ((input: {
   env: Env
   walletAddresses: string[]
   config: Erc721InventoryMatchConfig
-}) => Promise<{ matchedQuantity: number; unavailable?: boolean }>) | null = null
+}) => Promise<{ matchedQuantity: number; matchedTokenKeys?: string[]; unavailable?: boolean }>) | null = null
 
 const courtyardInventoryMatchCache = new Map<string, CourtyardInventoryCacheEntry>()
 const courtyardWalletInventoryGroupCache = new Map<string, CourtyardWalletInventoryGroupCacheEntry>()
@@ -123,7 +124,7 @@ export function setErc721InventoryMatcherForTests(
     env: Env
     walletAddresses: string[]
     config: Erc721InventoryMatchConfig
-  }) => Promise<{ matchedQuantity: number; unavailable?: boolean }>) | null,
+  }) => Promise<{ matchedQuantity: number; matchedTokenKeys?: string[]; unavailable?: boolean }>) | null,
 ): void {
   erc721InventoryMatcherForTests = matcher
 }
@@ -619,9 +620,18 @@ async function fetchCourtyardOwnershipPage(input: {
     throw new Error(`Courtyard ownership lookup failed with ${response.status}`)
   }
   const body = await response.json() as { assets?: CourtyardAsset[]; total?: number }
+  const total = body.total
+  if (
+    !Array.isArray(body.assets)
+    || !Number.isSafeInteger(total)
+    || (total ?? -1) < 0
+    || (total ?? -1) < input.offset + body.assets.length
+  ) {
+    throw new Error("Courtyard ownership lookup returned a malformed page")
+  }
   return {
-    assets: Array.isArray(body.assets) ? body.assets : [],
-    total: typeof body.total === "number" ? body.total : 0,
+    assets: body.assets,
+    total: total as number,
   }
 }
 
@@ -629,7 +639,7 @@ async function countCourtyardInventoryMatches(input: {
   env: Env
   walletAddresses: string[]
   config: Erc721InventoryMatchConfig
-}): Promise<number> {
+}): Promise<{ matchedQuantity: number; matchedTokenKeys: string[] }> {
   let matchedQuantity = 0
   const seenTokenKeys = new Set<string>()
   const pageLimit = 100
@@ -655,17 +665,23 @@ async function countCourtyardInventoryMatches(input: {
         seenTokenKeys.add(tokenKey)
         matchedQuantity += 1
         if (matchedQuantity >= input.config.minQuantity) {
-          return matchedQuantity
+          return { matchedQuantity, matchedTokenKeys: [...seenTokenKeys] }
         }
       }
       offset += page.assets.length
-      if (page.assets.length === 0 || offset >= page.total || offset >= maxAssetsPerWallet) {
+      if (offset >= page.total) {
         break
+      }
+      if (page.assets.length === 0) {
+        throw new Error("Courtyard ownership pagination made no progress")
+      }
+      if (offset >= maxAssetsPerWallet) {
+        throw new Error("Courtyard ownership pagination cap was exhausted before eligibility was determined")
       }
     }
   }
 
-  return matchedQuantity
+  return { matchedQuantity, matchedTokenKeys: [...seenTokenKeys] }
 }
 
 function resolveCourtyardInventoryCacheTtlMs(env: Env): number {
@@ -732,10 +748,10 @@ export async function evaluateErc721InventoryMatch(input: {
   env: Env
   walletAttachments: WalletAttachmentSummary[]
   config: Erc721InventoryMatchConfig
-}): Promise<{ matchedQuantity: number; unavailable: boolean }> {
+}): Promise<{ matchedQuantity: number; matchedTokenKeys: string[]; unavailable: boolean }> {
   const walletAddresses = listAttachedEvmWalletAddresses(input.walletAttachments)
   if (walletAddresses.length === 0) {
-    return { matchedQuantity: 0, unavailable: false }
+    return { matchedQuantity: 0, matchedTokenKeys: [], unavailable: false }
   }
 
   const cacheKey = buildInventoryMatchCacheKey({ walletAddresses, config: input.config })
@@ -743,7 +759,11 @@ export async function evaluateErc721InventoryMatch(input: {
   const cached = courtyardInventoryMatchCache.get(cacheKey)
   const nowMs = Date.now()
   if (cacheTtlMs > 0 && cached && cached.expiresAtMs > nowMs) {
-    return { matchedQuantity: cached.matchedQuantity, unavailable: false }
+    return {
+      matchedQuantity: cached.matchedQuantity,
+      matchedTokenKeys: [...cached.matchedTokenKeys],
+      unavailable: false,
+    }
   }
 
   try {
@@ -753,29 +773,36 @@ export async function evaluateErc721InventoryMatch(input: {
         walletAddresses,
         config: input.config,
       })
-      : {
-        matchedQuantity: await countCourtyardInventoryMatches({
+      : await countCourtyardInventoryMatches({
           env: input.env,
           walletAddresses,
           config: input.config,
-        }),
+        })
+    if ("unavailable" in result && result.unavailable === true) {
+      return {
+        matchedQuantity: result.matchedQuantity,
+        matchedTokenKeys: result.matchedTokenKeys ?? [],
+        unavailable: true,
       }
-    if (result.unavailable === true) {
-      return { matchedQuantity: result.matchedQuantity, unavailable: true }
     }
     if (cacheTtlMs > 0) {
       setCourtyardInventoryCacheEntry(cacheKey, {
         matchedQuantity: result.matchedQuantity,
+        matchedTokenKeys: result.matchedTokenKeys ?? [],
         expiresAtMs: nowMs + cacheTtlMs,
       }, nowMs)
     }
-    return { matchedQuantity: result.matchedQuantity, unavailable: false }
+    return {
+      matchedQuantity: result.matchedQuantity,
+      matchedTokenKeys: result.matchedTokenKeys ?? [],
+      unavailable: false,
+    }
   } catch (error) {
     logCourtyardInventoryProviderError({
       error,
       walletCount: walletAddresses.length,
       contractAddress: input.config.contractAddress,
     })
-    return { matchedQuantity: 0, unavailable: true }
+    return { matchedQuantity: 0, matchedTokenKeys: [], unavailable: true }
   }
 }

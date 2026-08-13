@@ -18,6 +18,21 @@ const erc721Policy: GatePolicy = {
   },
 }
 
+const courtyardPolicy: GatePolicy = {
+  version: 1,
+  expression: {
+    op: "gate",
+    gate: {
+      type: "erc721_inventory_match",
+      provider: "courtyard",
+      chain_namespace: "eip155:1",
+      contract_address: "0x2222222222222222222222222222222222222222",
+      min_quantity: 1,
+      match: { category: "watch" },
+    },
+  },
+}
+
 function assetBalancePolicy(assetId: string): GatePolicy {
   return {
     version: 1,
@@ -71,6 +86,21 @@ describe("gate policy contract validation", () => {
       message: "erc721_holding contract validation is temporarily unavailable. Check RPC availability and try again.",
       status: 403,
     } satisfies Partial<HttpError>)
+  })
+
+  test("validates Courtyard inventory contracts on configured EVM transports", async () => {
+    const checkedContracts: string[] = []
+    setErc721ContractSupportCheckerForTests(async ({ contractAddress }) => {
+      checkedContracts.push(contractAddress)
+      return true
+    })
+
+    await expect(assertGatePolicyContractsValid({
+      env: {} as Env,
+      policy: courtyardPolicy,
+    })).resolves.toBeUndefined()
+
+    expect(checkedContracts).toEqual(["0x2222222222222222222222222222222222222222"])
   })
 
   test("accepts an asset balance gate when the asset's chain transport is configured", async () => {

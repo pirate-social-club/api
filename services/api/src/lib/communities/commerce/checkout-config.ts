@@ -1,8 +1,14 @@
 import { Wallet, getAddress } from "ethers"
 import type { Env } from "../../../env"
 import { badRequestError } from "../../errors"
-import { parseExpectedEvmAddress } from "../../evm-signer"
+import { assertPrivateKeyMatchesExpectedAddress, parseExpectedEvmAddress } from "../../evm-signer"
 import { normalizeDirectSignerPrivateKey } from "../../story/story-direct-signer"
+import {
+  resolveBookingSettlementChainId,
+  resolveBookingSettlementOperatorAddress,
+  resolveRewardsSettlementChainId,
+  resolveRewardsSettlementOperatorAddress,
+} from "../bookings/booking-chain-config"
 
 const BASE_MAINNET_CHAIN_ID = 8453
 const BASE_SEPOLIA_CHAIN_ID = 84532
@@ -89,12 +95,104 @@ export function resolvePirateCheckoutRpcUrl(env: Env): string {
 
 export function resolvePirateCheckoutOperatorAddress(env: Env): string {
   const explicit = parseExpectedEvmAddress(env.PIRATE_CHECKOUT_OPERATOR_ADDRESS)
-  if (explicit) return getAddress(explicit)
-
   const privateKey = normalizeDirectSignerPrivateKey(env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY)
+  if (explicit) {
+    const expected = getAddress(explicit)
+    if (privateKey) {
+      assertPrivateKeyMatchesExpectedAddress({
+        privateKey,
+        expectedAddress: expected,
+        expectedField: "PIRATE_CHECKOUT_OPERATOR_ADDRESS",
+      })
+    }
+    return expected
+  }
+
   if (privateKey) return getAddress(new Wallet(privateKey).address)
 
   throw badRequestError("PIRATE_CHECKOUT_OPERATOR_ADDRESS is not configured")
+}
+
+export function resolvePirateCheckoutOperatorPrivateKey(env: Env): string {
+  const privateKey = normalizeDirectSignerPrivateKey(env.PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY)
+  if (!privateKey) throw badRequestError("PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY is required for checkout refunds")
+  const operatorAddress = resolvePirateCheckoutOperatorAddress(env)
+  assertPrivateKeyMatchesExpectedAddress({
+    privateKey,
+    expectedAddress: operatorAddress,
+    expectedField: "PIRATE_CHECKOUT_OPERATOR_ADDRESS",
+  })
+  return privateKey
+}
+
+function assertCheckoutSignerDomainIsDistinct(env: Env, checkoutAddress: string, checkoutChainId: number): void {
+  const domains = [
+    {
+      configured: Boolean(
+        String(env.PIRATE_BOOKING_SETTLEMENT_CHAIN_ID ?? "").trim()
+        && (
+          String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS ?? "").trim()
+          || String(env.PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY ?? "").trim()
+        )
+      ),
+      chainId: () => resolveBookingSettlementChainId(env),
+      address: () => resolveBookingSettlementOperatorAddress(env),
+      label: "booking",
+    },
+    {
+      configured: Boolean(
+        String(env.PIRATE_REWARDS_SETTLEMENT_CHAIN_ID ?? "").trim()
+        && (
+          String(env.PIRATE_REWARDS_SETTLEMENT_OPERATOR_ADDRESS ?? "").trim()
+          || String(env.PIRATE_REWARDS_SETTLEMENT_OPERATOR_PRIVATE_KEY ?? "").trim()
+        )
+      ),
+      chainId: () => resolveRewardsSettlementChainId(env),
+      address: () => resolveRewardsSettlementOperatorAddress(env),
+      label: "rewards",
+    },
+  ]
+  for (const domain of domains) {
+    if (!domain.configured || domain.chainId() !== checkoutChainId) continue
+    if (domain.address() === checkoutAddress) {
+      throw badRequestError(`Checkout and ${domain.label} settlement must use distinct operator signers on the same chain`)
+    }
+  }
+}
+
+export function resolvePirateCheckoutCustodyKeyEpoch(env: Env): string {
+  const epoch = String(env.PIRATE_CHECKOUT_CUSTODY_KEY_EPOCH ?? "").trim()
+  if (!epoch || epoch.length > 100) {
+    throw badRequestError("PIRATE_CHECKOUT_CUSTODY_KEY_EPOCH is not configured")
+  }
+  return epoch
+}
+
+/**
+ * Dark readiness gate for outbound checkout refunds. Paid-claim admission must
+ * call this before the funded-intent path is enabled; ordinary inbound checkout
+ * remains unchanged during the spike.
+ */
+export function assertPirateCheckoutRefundReadiness(env: Env): {
+  chainId: number
+  custodyAccountId: string
+  custodyKeyEpoch: string
+  operatorAddress: string
+  rpcUrl: string
+  tokenAddress: string
+} {
+  const operatorAddress = resolvePirateCheckoutOperatorAddress(env)
+  resolvePirateCheckoutOperatorPrivateKey(env)
+  const chainId = resolvePirateCheckoutSourceChainId(env)
+  assertCheckoutSignerDomainIsDistinct(env, operatorAddress, chainId)
+  return {
+    chainId,
+    custodyAccountId: `pirate_checkout:${operatorAddress.toLowerCase()}`,
+    custodyKeyEpoch: resolvePirateCheckoutCustodyKeyEpoch(env),
+    operatorAddress,
+    rpcUrl: resolvePirateCheckoutRpcUrl(env),
+    tokenAddress: resolvePirateCheckoutUsdcTokenAddress(env),
+  }
 }
 
 export function resolvePirateCheckoutTxWaitTimeoutMs(env: Env): number {

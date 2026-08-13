@@ -2,7 +2,7 @@ import type { Env } from "../../../env"
 import type { User, WalletAttachmentSummary } from "../../../types"
 import type { CommunityGateRuleRow, DocumentProofProvider, GateAtom, GateEvaluationOutcome, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
-import { evaluateTokenGateRule } from "./token-gate-evaluation"
+import { evaluateTokenGateRuleDetailed } from "./token-gate-evaluation"
 import { verifyAndConsumeAltchaProof, type AltchaProofInput, type AltchaScope, type VerifiedAltchaProof } from "../../verification/altcha-provider"
 import { evaluateAttachedWalletAssetBalance } from "../community-asset-balance"
 
@@ -420,11 +420,12 @@ async function evaluateTokenAtom(input: {
   walletAttachments: WalletAttachmentSummary[]
 }): Promise<AtomEvaluation> {
   const row = buildTokenRow(input.atom)
-  const mismatchReasons = await evaluateTokenGateRule({
+  const tokenResult = await evaluateTokenGateRuleDetailed({
     env: input.env,
     rule: row,
     walletAttachments: input.walletAttachments,
   })
+  const mismatchReasons = tokenResult.mismatchReasons
   const passed = mismatchReasons.length === 0
   const reason = mismatchReasons[0] ?? "wallet_verification_required"
   const unavailable = reason === "ethereum_rpc_not_configured"
@@ -441,6 +442,7 @@ async function evaluateTokenAtom(input: {
       provider: input.atom.type === "erc721_inventory_match" ? "courtyard" : "wallet",
       passed,
       reason: passed ? undefined : reason,
+      token_keys: tokenResult.matchedTokenKeys,
     },
     requiredAction: passed || unavailable ? null : input.atom.type === "erc721_holding"
       ? {

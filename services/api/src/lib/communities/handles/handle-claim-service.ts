@@ -7,7 +7,8 @@ import type { UserRepository } from "../../auth/repositories"
 import { conflictError, badRequestError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import type { Client, QueryResultRow } from "../../sql-client"
-import { requiredString, rowValue, stringOrNull } from "../../sql-row"
+import { numberOrNull, requiredString, rowValue, stringOrNull } from "../../sql-row"
+import { withStandaloneControlPlaneClient } from "../../runtime-deps"
 import { openCommunityWriteClient } from "../community-read-access"
 import type { HandleCommunityRepository } from "./handle-policy-service"
 import {
@@ -19,6 +20,7 @@ import {
 import {
   addHandleQuoteSeconds,
   handleAvailabilityDetails,
+  serializeHandleQuote,
 } from "./handle-quote-domain"
 import {
   acquireHandleLabelReservation,
@@ -34,6 +36,21 @@ import {
   getClaimQuote,
   getExistingHandleForQuote,
 } from "./handle-claim-validation"
+import { handleClaimIntentsEnabled } from "./handle-claim-intent-config"
+import { claimCommunityHandleWithFundedIntent } from "./handle-funded-claim-service"
+import {
+  completeFundedHandleClaimIntent,
+  consumeAuthorizedFreeHandleClaimIntent,
+  requireHandleClaimIntentBinding,
+} from "./handle-claim-intent-ledger"
+import { attachHandleClaimIntentToQuote } from "./handle-claim-intent-quote"
+
+async function completeFreeHandleClaimIntent(env: Env, intentId: string | null): Promise<void> {
+  if (!intentId) return
+  await withStandaloneControlPlaneClient(env, async (client) => {
+    await completeFundedHandleClaimIntent({ client, intentId, now: nowIso() })
+  })
+}
 
 export async function claimCommunityHandle(input: {
   env: Env
@@ -57,11 +74,52 @@ export async function claimCommunityHandle(input: {
   if (!quoteId.trim()) {
     throw badRequestError("quote is required")
   }
+  let consumedFreeIntentId: string | null = null
+  if (handleClaimIntentsEnabled(input.env) && input.body.claim_intent?.trim()) {
+    const intentId = input.body.claim_intent.trim()
+    const authorizationId = input.body.action_authorization?.trim()
+    if (!authorizationId) throw badRequestError("action_authorization is required for handle claim intents")
+    const intent = await withStandaloneControlPlaneClient(input.env, async (client) => {
+      return await requireHandleClaimIntentBinding({
+        actorUserId: input.userId,
+        client,
+        communityId: input.communityId,
+        intentId,
+      })
+    })
+    if (requiredString(intent, "latest_quote_id") !== quoteId) {
+      throw conflictError("Handle claim intent does not belong to this quote")
+    }
+    if ((numberOrNull(rowValue(intent, "price_cents")) ?? 0) > 0) {
+      return await claimCommunityHandleWithFundedIntent({
+        body: input.body,
+        communityId: input.communityId,
+        communityRepository: input.communityRepository,
+        env: input.env,
+        quoteId,
+        userId: input.userId,
+        userRepository: input.userRepository,
+      })
+    }
+    await withStandaloneControlPlaneClient(input.env, async (client) => {
+      await consumeAuthorizedFreeHandleClaimIntent({
+        actorUserId: input.userId,
+        authorizationId,
+        client,
+        communityId: input.communityId,
+        intentId,
+        now: nowIso(),
+        quoteId,
+      })
+    })
+    consumedFreeIntentId = intentId
+  }
 
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   let priceCents = 0
   let requiresProtocolIssuance = false
   let protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null = null
+  let adoptedFundedBody: CommunityHandleClaimRequest | null = null
   try {
     const quote = await getClaimQuote(db.client, {
       quoteId,
@@ -70,6 +128,7 @@ export async function claimCommunityHandle(input: {
     })
     const existing = await getExistingHandleForQuote(db.client, quoteId)
     if (existing) {
+      await completeFreeHandleClaimIntent(input.env, consumedFreeIntentId)
       return serializeHandle(existing)
     }
     const checked = await assertClaimQuoteStillClaimable({
@@ -80,13 +139,71 @@ export async function claimCommunityHandle(input: {
       quote,
       now: nowIso(),
       paymentVerified: false,
+      skipGateEligibility: consumedFreeIntentId != null,
       env: input.env,
       userRepository: input.userRepository,
     })
     priceCents = checked.priceCents
     requiresProtocolIssuance = checked.protocolIssuanceRequired
+    if (
+      priceCents > 0
+      && handleClaimIntentsEnabled(input.env)
+      && !input.body.claim_intent?.trim()
+    ) {
+      if (!checked.gateEligibility) {
+        throw internalError("Legacy paid handle quote gate eligibility was not evaluated")
+      }
+      if (requiresProtocolIssuance) {
+        protocolOwner = await requireProtocolOwnerWalletForClaim({
+          body: input.body,
+          userId: input.userId,
+          userRepository: input.userRepository,
+        })
+      }
+      const attached = await attachHandleClaimIntentToQuote({
+        communityId: input.communityId,
+        env: input.env,
+        gateEligibility: checked.gateEligibility,
+        now: nowIso(),
+        policy: checked.policy,
+        protocolOwnerScriptPubkeyHex: protocolOwner?.scriptPubkeyHex ?? null,
+        protocolOwnerWalletAttachmentId: protocolOwner?.walletAttachmentId ?? null,
+        quote: serializeHandleQuote(quote, {
+          env: input.env,
+          availability: "available",
+          desiredLabel: checked.labelDisplay,
+          eligible: true,
+          reason: null,
+          protocolIssuanceEligible: !requiresProtocolIssuance || protocolOwner != null,
+          protocolIssuanceRequired: requiresProtocolIssuance,
+        }),
+        quoteRow: quote,
+        shardClient: db.client,
+        userId: input.userId,
+      })
+      if (!attached.claim_intent || !attached.action_authorization) {
+        throw internalError("Legacy paid handle quote adoption did not issue an authorization")
+      }
+      adoptedFundedBody = {
+        ...input.body,
+        claim_intent: attached.claim_intent,
+        action_authorization: attached.action_authorization,
+      }
+    }
   } finally {
     db.close()
+  }
+
+  if (adoptedFundedBody) {
+    return await claimCommunityHandleWithFundedIntent({
+      body: adoptedFundedBody,
+      communityId: input.communityId,
+      communityRepository: input.communityRepository,
+      env: input.env,
+      quoteId,
+      userId: input.userId,
+      userRepository: input.userRepository,
+    })
   }
 
   if (requiresProtocolIssuance) {
@@ -125,6 +242,7 @@ export async function claimCommunityHandle(input: {
 
     const existingForQuote = await getExistingHandleForQuote(writeDb.client, quoteId)
     if (existingForQuote) {
+      await completeFreeHandleClaimIntent(input.env, consumedFreeIntentId)
       return serializeHandle(existingForQuote)
     }
 
@@ -137,6 +255,7 @@ export async function claimCommunityHandle(input: {
       quote,
       now,
       paymentVerified,
+      skipGateEligibility: consumedFreeIntentId != null,
       env: input.env,
       userRepository: input.userRepository,
     })
@@ -149,7 +268,7 @@ export async function claimCommunityHandle(input: {
       ? protocolOwner?.walletAttachmentId ?? null
       : null
 
-    return serializeHandle(await applyHandleClaimWrites(writeDb.client, {
+    const handle = serializeHandle(await applyHandleClaimWrites(writeDb.client, {
       communityId: input.communityId,
       userId: input.userId,
       quoteId,
@@ -166,8 +285,11 @@ export async function claimCommunityHandle(input: {
       settlementTxRef: input.body.settlement_tx_ref?.trim() || input.body.funding_tx_ref?.trim() || null,
       protocolIssuanceRequired: checked.protocolIssuanceRequired,
       protocolOwner,
+      handleClaimIntentId: consumedFreeIntentId,
       now,
     }))
+    await completeFreeHandleClaimIntent(input.env, consumedFreeIntentId)
+    return handle
   } finally {
     writeDb.close()
   }
@@ -200,6 +322,7 @@ export async function applyHandleClaimWrites(
     settlementTxRef: string | null
     protocolIssuanceRequired: boolean
     protocolOwner: { walletAttachmentId: string; scriptPubkeyHex: string } | null
+    handleClaimIntentId?: string | null
     now: string
   },
 ): Promise<QueryResultRow> {
@@ -231,14 +354,14 @@ export async function applyHandleClaimWrites(
       sql: `
         INSERT INTO community_handles (
           community_handle_id, community_id, user_id, namespace_id, handle_claim_quote_id,
-          label_normalized, label_display, status, issuance_source, price_cents, currency,
+          handle_claim_intent_id, label_normalized, label_display, status, issuance_source, price_cents, currency,
           pricing_model, pricing_tier, settlement_wallet_attachment_id, protocol_owner_wallet_attachment_id, funding_tx_ref, settlement_tx_ref,
           lease_started_at, lease_expires_at, created_at, updated_at
         ) VALUES (
           ?1, ?2, ?3, ?4, ?5,
-          ?6, ?7, 'active', 'claim', ?8, 'USD',
-          ?9, ?10, ?11, ?12, ?13, ?14,
-          ?15, NULL, ?15, ?15
+          ?6, ?7, ?8, 'active', 'claim', ?9, 'USD',
+          ?10, ?11, ?12, ?13, ?14, ?15,
+          ?16, NULL, ?16, ?16
         )
       `,
       args: [
@@ -247,6 +370,7 @@ export async function applyHandleClaimWrites(
         input.userId,
         input.namespaceId,
         input.quoteId,
+        input.handleClaimIntentId ?? null,
         input.labelNormalized,
         input.labelDisplay,
         input.priceCents,

@@ -11,11 +11,13 @@ import {
   resolveRewardsSettlementUsdcTokenAddress,
 } from "../communities/bookings/booking-chain-config"
 import {
+  assertPirateCheckoutRefundReadiness,
   resolvePirateCheckoutOperatorAddress,
   resolvePirateCheckoutRpcUrl,
   resolvePirateCheckoutSourceChainId,
   resolvePirateCheckoutUsdcTokenAddress,
 } from "../communities/commerce/checkout-config"
+import { handleClaimIntentsEnabled } from "../communities/handles/handle-claim-intent-config"
 import { normalizeDirectSignerPrivateKey } from "../story/story-direct-signer"
 import { withRequestControlPlaneClients } from "../runtime-deps"
 import {
@@ -191,15 +193,18 @@ export function listRuntimeWalletFundingSpecs(env: Env): RuntimeWalletFundingSpe
   append("story-contract-owner", () => storyContractOwnerSpec(env))
 
   if (hasAny(env, ["PIRATE_CHECKOUT_OPERATOR_ADDRESS", "PIRATE_CHECKOUT_OPERATOR_PRIVATE_KEY"])) {
-    append("base-checkout-operator", () => baseSpec({
-      name: "base-checkout-operator",
-      address: resolvePirateCheckoutOperatorAddress(env),
-      chainId: resolvePirateCheckoutSourceChainId(env),
-      rpcUrl: resolvePirateCheckoutRpcUrl(env),
-      usdcAddress: resolvePirateCheckoutUsdcTokenAddress(env),
-      nativeMinWei,
-      usdcMinAtomic,
-    }))
+    append("base-checkout-operator", () => {
+      const readiness = handleClaimIntentsEnabled(env) ? assertPirateCheckoutRefundReadiness(env) : null
+      return baseSpec({
+        name: "base-checkout-operator",
+        address: readiness?.operatorAddress ?? resolvePirateCheckoutOperatorAddress(env),
+        chainId: readiness?.chainId ?? resolvePirateCheckoutSourceChainId(env),
+        rpcUrl: readiness?.rpcUrl ?? resolvePirateCheckoutRpcUrl(env),
+        usdcAddress: readiness?.tokenAddress ?? resolvePirateCheckoutUsdcTokenAddress(env),
+        nativeMinWei,
+        usdcMinAtomic,
+      })
+    })
   }
   if (hasAny(env, ["PIRATE_BOOKING_SETTLEMENT_OPERATOR_ADDRESS", "PIRATE_BOOKING_SETTLEMENT_OPERATOR_PRIVATE_KEY"])) {
     append("base-booking-operator", () => baseSpec({

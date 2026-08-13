@@ -1,6 +1,6 @@
 import type { CommunityHandleQuote, CommunityHandleQuoteRequest, Env } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
-import { conflictError, eligibilityFailed, internalError, notFoundError } from "../../errors"
+import { badRequestError, conflictError, eligibilityFailed, internalError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 import { openCommunityWriteClient } from "../community-read-access"
@@ -8,6 +8,14 @@ import { getCommunityMoneyPolicy } from "../commerce/policy-service"
 import { evaluateNamespaceHandleClaimEligibility, requireHandleClaimAccess } from "./handle-access"
 import { expireStaleHandleQuotes } from "./handle-claim-validation"
 import { buildMembershipGateSummariesFromPolicy } from "../membership/gate-summary"
+import {
+  HANDLE_CLAIM_AUTHORIZATION_SCOPE,
+  requireHandleClaimIntentBinding,
+} from "./handle-claim-intent-ledger"
+import { attachHandleClaimIntentToQuote } from "./handle-claim-intent-quote"
+import { handleClaimIntentsEnabled } from "./handle-claim-intent-config"
+import { verifyAltchaProof, type AltchaProofInput } from "../../verification/altcha-provider"
+import { withStandaloneControlPlaneClient } from "../../runtime-deps"
 import {
   type HandleCommunityRepository,
   getNamespacePolicy,
@@ -63,6 +71,37 @@ export async function quoteCommunityHandle(input: {
     }
     const settings = parseHandleClaimSettings(policy.settings_json)
     const claimAccess = await requireHandleClaimAccess({ client: db.client, communityId: input.communityId, userId: input.userId })
+    const requestedIntentId = handleClaimIntentsEnabled(input.env)
+      ? input.body.claim_intent?.trim() || null
+      : null
+    const altchaPayload = input.body.altcha?.trim() || null
+    if (altchaPayload && !requestedIntentId) {
+      throw badRequestError("claim_intent is required for a handle-claim ALTCHA proof")
+    }
+    const altchaProof: AltchaProofInput | undefined = requestedIntentId && altchaPayload
+      ? {
+          payload: altchaPayload,
+          scope: HANDLE_CLAIM_AUTHORIZATION_SCOPE,
+          action: `handle-claim-intent:${requestedIntentId}`,
+        }
+      : undefined
+    const altchaVerification = altchaProof
+      ? await verifyAltchaProof({ env: input.env, actorUserId: input.userId, proof: altchaProof })
+      : null
+    const verifiedAltchaChallenge = altchaVerification?.verified ? altchaVerification.challenge : undefined
+    const requestedQuoteId = requestedIntentId
+      ? await withStandaloneControlPlaneClient(input.env, async (client) => {
+          const intent = await requireHandleClaimIntentBinding({
+            actorUserId: input.userId,
+            client,
+            communityId: input.communityId,
+            intentId: requestedIntentId,
+            labelNormalized: desired.labelNormalized,
+            namespaceId: policy.namespace_id,
+          })
+          return requiredString(intent, "latest_quote_id")
+        })
+      : null
     const gateEligibility = await evaluateNamespaceHandleClaimEligibility({
       env: input.env,
       client: db.client,
@@ -71,6 +110,10 @@ export async function quoteCommunityHandle(input: {
       userRepository: input.userRepository,
       policy,
       labelNormalized: desired.labelNormalized,
+      mode: verifiedAltchaChallenge ? "enforce" : "preview",
+      altchaScope: HANDLE_CLAIM_AUTHORIZATION_SCOPE,
+      altchaProof,
+      verifiedAltchaProof: verifiedAltchaChallenge,
     })
     const claimGate: CommunityHandleQuote["claim_gate"] = gateEligibility.gate
       ? {
@@ -144,11 +187,16 @@ export async function quoteCommunityHandle(input: {
                 AND hlr.status = 'active'
                 AND hlr.expires_at > ?5
             )
+            OR community_handle_claim_quotes.handle_claim_intent_id = ?7
+            OR community_handle_claim_quotes.handle_claim_quote_id = ?8
           )
         ORDER BY created_at DESC
         LIMIT 8
       `,
-      args: [input.communityId, input.userId, policy.namespace_id, desired.labelNormalized, quotedAt, price.priceCents],
+      args: [
+        input.communityId, input.userId, policy.namespace_id, desired.labelNormalized,
+        quotedAt, price.priceCents, requestedIntentId, requestedQuoteId,
+      ],
     })).rows.find((row) => {
       return requiredNumber(row, "price_cents") === price.priceCents
         && stringOrNull(rowValue(row, "currency")) === "USD"
@@ -156,7 +204,7 @@ export async function quoteCommunityHandle(input: {
         && stringOrNull(rowValue(row, "pricing_tier")) === price.pricingTier
     })
     if (existingQuote) {
-      return serializeHandleQuote(existingQuote, {
+      const serialized = serializeHandleQuote(existingQuote, {
         env: input.env,
         desiredLabel: desired.labelDisplay,
         eligible,
@@ -166,6 +214,23 @@ export async function quoteCommunityHandle(input: {
         protocolIssuanceEligible,
         protocolIssuanceReason,
         claimGate,
+      })
+      return await attachHandleClaimIntentToQuote({
+        ...(altchaProof && verifiedAltchaChallenge
+          ? { altcha: { proof: altchaProof, verified: verifiedAltchaChallenge } }
+          : {}),
+        communityId: input.communityId,
+        env: input.env,
+        gateEligibility,
+        now: quotedAt,
+        policy,
+        protocolOwnerScriptPubkeyHex: protocolOwner?.parsed.scriptPubkeyHex ?? null,
+        protocolOwnerWalletAttachmentId: protocolOwner?.wallet.wallet_attachment ?? null,
+        quote: serialized,
+        quoteRow: existingQuote,
+        requestedIntentId,
+        shardClient: db.client,
+        userId: input.userId,
       })
     }
 
@@ -295,7 +360,7 @@ export async function quoteCommunityHandle(input: {
     if (!row) {
       throw internalError("Created handle quote row is missing")
     }
-    return serializeHandleQuote(row, {
+    const serialized = serializeHandleQuote(row, {
       env: input.env,
       desiredLabel: desired.labelDisplay,
       eligible,
@@ -305,6 +370,23 @@ export async function quoteCommunityHandle(input: {
       protocolIssuanceEligible,
       protocolIssuanceReason,
       claimGate,
+    })
+    return await attachHandleClaimIntentToQuote({
+      ...(altchaProof && verifiedAltchaChallenge
+        ? { altcha: { proof: altchaProof, verified: verifiedAltchaChallenge } }
+        : {}),
+      communityId: input.communityId,
+      env: input.env,
+      gateEligibility,
+      now: quotedAt,
+      policy,
+      protocolOwnerScriptPubkeyHex: protocolOwner?.parsed.scriptPubkeyHex ?? null,
+      protocolOwnerWalletAttachmentId: protocolOwner?.wallet.wallet_attachment ?? null,
+      quote: serialized,
+      quoteRow: row,
+      requestedIntentId,
+      shardClient: db.client,
+      userId: input.userId,
     })
   } finally {
     db.close()

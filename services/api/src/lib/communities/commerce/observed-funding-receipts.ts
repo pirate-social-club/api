@@ -2,8 +2,8 @@ import { getAddress } from "ethers"
 
 import { conflictError } from "../../errors"
 import { makeId } from "../../helpers"
-import type { Client, QueryResultRow } from "../../sql-client"
-import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
+import type { Client, QueryResultRow, Transaction } from "../../sql-client"
+import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
 
 const TX_HASH_RE = /^0x[0-9a-fA-F]{64}$/
 
@@ -15,6 +15,7 @@ export type ObservedFundingReceipt = {
   logIndex: number
   blockNumber: number
   blockHash: string
+  blockTimestamp: number | null
   senderAddress: string
   recipientAddress: string
   amountAtomic: string
@@ -44,6 +45,7 @@ function decode(row: QueryResultRow): ObservedFundingReceipt {
     logIndex: requiredNumber(row, "log_index"),
     blockNumber: requiredNumber(row, "block_number"),
     blockHash: requiredString(row, "block_hash"),
+    blockTimestamp: numberOrNull(rowValue(row, "block_timestamp")),
     senderAddress: requiredString(row, "sender_address"),
     recipientAddress: requiredString(row, "recipient_address"),
     amountAtomic: requiredString(row, "amount_atomic"),
@@ -57,7 +59,7 @@ function decode(row: QueryResultRow): ObservedFundingReceipt {
 
 const COLUMNS = `
   observed_funding_receipt_id, chain_id, token_address, tx_hash, log_index,
-  block_number, block_hash, sender_address, recipient_address,
+  block_number, block_hash, block_timestamp, sender_address, recipient_address,
   CAST(amount_atomic AS TEXT) AS amount_atomic, finality_status, match_status,
   consumer_rail, consumer_id, quote_id
 `
@@ -79,13 +81,14 @@ export async function listFundingReceiptsForRefundReview(input: {
 }
 
 export async function observeFundingReceipt(input: {
-  client: Client
+  client: Client | Transaction
   chainId: number
   tokenAddress: string
   txHash: string
   logIndex: number
   blockNumber: number
   blockHash: string
+  blockTimestamp?: number | null
   senderAddress: string
   recipientAddress: string
   amountAtomic: string
@@ -99,6 +102,7 @@ export async function observeFundingReceipt(input: {
     logIndex: input.logIndex,
     blockNumber: input.blockNumber,
     blockHash: normalizedHash(input.blockHash, "Funding block hash"),
+    blockTimestamp: input.blockTimestamp ?? null,
     senderAddress: normalizedAddress(input.senderAddress),
     recipientAddress: normalizedAddress(input.recipientAddress),
     amountAtomic: BigInt(input.amountAtomic).toString(),
@@ -106,22 +110,25 @@ export async function observeFundingReceipt(input: {
   if (!Number.isSafeInteger(immutable.chainId) || immutable.chainId <= 0) throw conflictError("Funding chain id is invalid")
   if (!Number.isSafeInteger(immutable.logIndex) || immutable.logIndex < 0) throw conflictError("Funding log index is invalid")
   if (!Number.isSafeInteger(immutable.blockNumber) || immutable.blockNumber < 0) throw conflictError("Funding block number is invalid")
+  if (immutable.blockTimestamp != null && (!Number.isSafeInteger(immutable.blockTimestamp) || immutable.blockTimestamp <= 0)) {
+    throw conflictError("Funding block timestamp is invalid")
+  }
   if (BigInt(immutable.amountAtomic) <= 0n) throw conflictError("Funding amount is invalid")
 
   await input.client.execute({
     sql: `
       INSERT INTO observed_funding_receipts (
         observed_funding_receipt_id, chain_id, token_address, tx_hash, log_index,
-        block_number, block_hash, sender_address, recipient_address, amount_atomic,
+        block_number, block_hash, block_timestamp, sender_address, recipient_address, amount_atomic,
         observed_source, finality_status, match_status, observed_at, updated_at
-      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'observed', 'unmatched', ?12, ?12)
+      ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 'observed', 'unmatched', ?13, ?13)
       ON CONFLICT (chain_id, token_address, tx_hash, log_index) DO NOTHING
     `,
     args: [
       makeId("ofr"), immutable.chainId, immutable.tokenAddress, immutable.txHash,
       immutable.logIndex, immutable.blockNumber, immutable.blockHash,
-      immutable.senderAddress, immutable.recipientAddress, immutable.amountAtomic,
-      input.source, input.observedAt,
+      immutable.blockTimestamp, immutable.senderAddress, immutable.recipientAddress,
+      immutable.amountAtomic, input.source, input.observedAt,
     ],
   })
   const result = await input.client.execute({
@@ -134,6 +141,8 @@ export async function observeFundingReceipt(input: {
   if (
     receipt.senderAddress !== immutable.senderAddress || receipt.recipientAddress !== immutable.recipientAddress
     || receipt.amountAtomic !== immutable.amountAtomic
+    || (receipt.blockTimestamp != null && immutable.blockTimestamp != null
+      && receipt.blockTimestamp !== immutable.blockTimestamp)
   ) {
     throw conflictError("Observed funding receipt identity reused with different event data")
   }
@@ -141,18 +150,18 @@ export async function observeFundingReceipt(input: {
     const reIncluded = await input.client.execute({
       sql: `
         UPDATE observed_funding_receipts
-        SET block_number = ?2, block_hash = ?3, observed_source = ?4,
+        SET block_number = ?2, block_hash = ?3, block_timestamp = ?4, observed_source = ?5,
             finality_status = 'observed', canonical_at = NULL,
             match_status = CASE WHEN match_status = 'ignored' THEN 'unmatched' ELSE match_status END,
-            updated_at = ?5
+            updated_at = ?6
         WHERE observed_funding_receipt_id = ?1
           AND finality_status = 'orphaned'
-          AND block_number = ?6 AND block_hash = ?7
+          AND block_number = ?7 AND block_hash = ?8
         RETURNING ${COLUMNS}
       `,
       args: [
-        receipt.id, immutable.blockNumber, immutable.blockHash, input.source,
-        input.observedAt, receipt.blockNumber, receipt.blockHash,
+        receipt.id, immutable.blockNumber, immutable.blockHash, immutable.blockTimestamp,
+        input.source, input.observedAt, receipt.blockNumber, receipt.blockHash,
       ],
     })
     if (!reIncluded.rows[0]) {
@@ -164,7 +173,7 @@ export async function observeFundingReceipt(input: {
 }
 
 export async function setObservedFundingReceiptFinality(input: {
-  client: Client
+  client: Client | Transaction
   receiptId: string
   status: "canonical" | "orphaned"
   now: string
@@ -191,7 +200,7 @@ export async function setObservedFundingReceiptFinality(input: {
 }
 
 export async function claimObservedFundingReceipt(input: {
-  client: Client
+  client: Client | Transaction
   receiptId: string
   consumerRail: string
   consumerId: string
@@ -221,13 +230,14 @@ export async function claimObservedFundingReceipt(input: {
 }
 
 export async function claimCanonicalFundingReceipt(input: {
-  client: Client
+  client: Client | Transaction
   chainId: number
   tokenAddress: string
   txHash: string
   logIndex: number
   blockNumber: number
   blockHash: string
+  blockTimestamp?: number | null
   senderAddress: string
   recipientAddress: string
   amountAtomic: string
@@ -244,6 +254,7 @@ export async function claimCanonicalFundingReceipt(input: {
     logIndex: input.logIndex,
     blockNumber: input.blockNumber,
     blockHash: input.blockHash,
+    blockTimestamp: input.blockTimestamp,
     senderAddress: input.senderAddress,
     recipientAddress: input.recipientAddress,
     amountAtomic: input.amountAtomic,

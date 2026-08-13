@@ -16,8 +16,13 @@ const BROADCAST_LIVENESS_POLL_DELAYS_MS = [0, 250, 750] as const
 const EVM_ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
 const OPERATION_ID_RE = /^0x[0-9a-f]{64}$/
 
-export type OperatorKind = "booking" | "rewards"
-export type OperatorEffectKind = "booking_payout" | "booking_refund" | "reward_cashout" | "reward_funding_refund"
+export type OperatorKind = "booking" | "checkout" | "rewards"
+export type OperatorEffectKind =
+  | "booking_payout"
+  | "booking_refund"
+  | "handle_claim_refund"
+  | "reward_cashout"
+  | "reward_funding_refund"
 export type RewardRehearsalScenario =
   | "eoa_first_payout"
   | "replay"
@@ -31,9 +36,14 @@ export function operatorSigningCoordinatorName(operatorAddress: string, chainId:
   if (!EVM_ADDRESS_RE.test(a)) throw badRequestError("Operator signer address is invalid")
   // Lowercase (not EIP-55 checksum) so the DO name needs no ethers dependency; deterministic per wallet.
   // v1 became unreachable in staging before it ever produced a transaction hash.
-  // A versioned name gives rewards a clean coordinator instance; nonce allocation
-  // remains safe because every instance samples the chain pending nonce first.
-  const prefix = operatorKind === "rewards" ? "rewards-operator-signer-v2" : "booking-operator-signer"
+  // A versioned name gives each wallet domain one coordinator instance. Distinct
+  // instances MUST NOT share an address on the same chain: their local nonce
+  // journals are disjoint even though each samples the chain pending nonce.
+  const prefix = operatorKind === "rewards"
+    ? "rewards-operator-signer-v2"
+    : operatorKind === "checkout"
+      ? "checkout-operator-signer-v1"
+      : "booking-operator-signer"
   return `${prefix}:${a.toLowerCase()}:${chainId}`
 }
 
@@ -429,7 +439,13 @@ function shouldParkUnsentPreparation(
     && DETERMINISTIC_LIT_PREPARATION_TOKENS.has(diagnostic.litErrorToken)
 }
 function requestOperatorKind(req: OperatorSettleRequest): OperatorKind {
-  return req.operatorKind ?? (req.effectKind === "reward_cashout" || req.effectKind === "reward_funding_refund" ? "rewards" : "booking")
+  return req.operatorKind ?? (
+    req.effectKind === "reward_cashout" || req.effectKind === "reward_funding_refund"
+      ? "rewards"
+      : req.effectKind === "handle_claim_refund"
+        ? "checkout"
+        : "booking"
+  )
 }
 function canonicalFields(req: OperatorSettleRequest): { communityId: string; bookingId: string; effectKind: OperatorEffectKind } {
   const kind = requestOperatorKind(req)
@@ -441,6 +457,12 @@ function canonicalFields(req: OperatorSettleRequest): { communityId: string; boo
       return { communityId: "reward_funding", bookingId: req.fundingEffectId, effectKind: req.effectKind }
     }
     throw badRequestError("Rewards settlement request is missing effect identity or idempotency data")
+  }
+  if (kind === "checkout") {
+    if (req.effectKind !== "handle_claim_refund" || !req.fundingEffectId || !req.idempotencyKey) {
+      throw badRequestError("Checkout refund request is missing intent identity or idempotency data")
+    }
+    return { communityId: "community_handle_claim", bookingId: req.fundingEffectId, effectKind: req.effectKind }
   }
   if (!req.communityId || !req.bookingId || (req.effectKind !== "booking_payout" && req.effectKind !== "booking_refund")) {
     throw badRequestError("Operator settlement request is missing community/booking/effect kind")
@@ -1185,6 +1207,21 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         recipientAddress: row.recipient_address,
       }
     }
+    if (row.effect_kind === "handle_claim_refund") {
+      const parsed = JSON.parse(row.idempotency_key) as unknown
+      if (!Array.isArray(parsed) || parsed.length !== 2 || parsed[0] !== "handle_claim_refund" || typeof parsed[1] !== "string") {
+        throw new Error("handle claim refund has invalid durable idempotency key")
+      }
+      if (!row.amount_atomic) throw new Error("handle claim refund is missing atomic amount")
+      return {
+        operatorKind: "checkout",
+        fundingEffectId: row.booking_id,
+        idempotencyKey: parsed[1],
+        effectKind: "handle_claim_refund",
+        amountAtomic: row.amount_atomic,
+        recipientAddress: row.recipient_address,
+      }
+    }
     if (row.effect_kind === "booking_refund" && row.amount_atomic != null) {
       return {
         operatorKind: "booking",
@@ -1206,7 +1243,11 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   }
 
   private operatorKind(row: EffectRow): OperatorKind {
-    return row.effect_kind === "reward_cashout" || row.effect_kind === "reward_funding_refund" ? "rewards" : "booking"
+    return row.effect_kind === "reward_cashout" || row.effect_kind === "reward_funding_refund"
+      ? "rewards"
+      : row.effect_kind === "handle_claim_refund"
+        ? "checkout"
+        : "booking"
   }
 
   private usesRewardVault(): boolean {
@@ -1240,6 +1281,7 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
   private assertAmount(req: OperatorSettleRequest): void {
     if (
       req.effectKind === "reward_funding_refund"
+      || req.effectKind === "handle_claim_refund"
       || (req.effectKind === "booking_refund" && req.amountAtomic != null)
     ) {
       if (req.amountCents != null || normalizeAtomicAmount(req.amountAtomic) == null) {
@@ -1396,8 +1438,8 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
       if (operatorKind === "rewards" && (!operationId || !OPERATION_ID_RE.test(operationId))) {
         throw new Error("verified rewards signing result is missing a canonical operation ID")
       }
-      if (operatorKind === "booking" && operationId != null) {
-        throw new Error("booking signing result must not contain a rewards operation ID")
+      if (operatorKind !== "rewards" && operationId != null) {
+        throw new Error("non-rewards signing result must not contain a rewards operation ID")
       }
       // CAS guarded by version AND our claim token — a stolen/expired claim cannot overwrite.
       const updated = this.casClaimed(row.idempotency_key, claimedRow.version, token, {
@@ -1486,6 +1528,10 @@ export class OperatorSigningCoordinatorDO extends DurableObject<Env> {
         req.effectKind === "reward_funding_refund" ? "reward_funding_refund" : "reward_payout",
         req.idempotencyKey,
       ])
+    }
+    if (operatorKind === "checkout") {
+      canonicalFields(req)
+      return JSON.stringify(["handle_claim_refund", req.idempotencyKey])
     }
     // Unambiguous encoding — a colon (or any char) inside an id cannot collide another effect.
     canonicalFields(req)
