@@ -60,6 +60,7 @@ describe("reward ticket daily freeze", () => {
   test("filters the entry window, activity, and karaoke score before freezing", () => {
     const result = freezeRewardTicketPool({
       ...base,
+      qualifyingActivity: "karaoke",
       candidates: [
         candidate(),
         candidate({ rewardIdentityId: "too_early", eventId: "event_early", qualifiedAt: "2026-08-12T23:59:59.000Z" }),
