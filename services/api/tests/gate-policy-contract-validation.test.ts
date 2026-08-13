@@ -72,7 +72,7 @@ describe("gate policy contract validation", () => {
       policy: erc721Policy,
     })).rejects.toMatchObject({
       code: "eligibility_failed",
-      message: "ERC-721 gate contract must support ERC-721",
+      message: "erc721_holding gate contract must support ERC-721",
       status: 403,
     } satisfies Partial<HttpError>)
   })
@@ -83,7 +83,7 @@ describe("gate policy contract validation", () => {
       policy: erc721Policy,
     })).rejects.toMatchObject({
       code: "eligibility_failed",
-      message: "ERC-721 gate contract validation is temporarily unavailable. Check RPC availability and try again.",
+      message: "erc721_holding contract validation is temporarily unavailable. Check RPC availability and try again.",
       status: 403,
     } satisfies Partial<HttpError>)
   })

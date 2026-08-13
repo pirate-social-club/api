@@ -32,10 +32,10 @@ export async function assertGatePolicyContractsValid(input: {
       env: input.env,
     })
     if (result.unavailable) {
-      throw eligibilityFailed("ERC-721 gate contract validation is temporarily unavailable. Check RPC availability and try again.")
+      throw eligibilityFailed("erc721_holding contract validation is temporarily unavailable. Check RPC availability and try again.")
     }
     if (!result.supported) {
-      throw eligibilityFailed("ERC-721 gate contract must support ERC-721")
+      throw eligibilityFailed("erc721_holding gate contract must support ERC-721")
     }
   }
 }
