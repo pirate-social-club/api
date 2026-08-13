@@ -544,6 +544,21 @@ async function setUserNationality(input: {
   const nullifierId = `nul_telegram_test_nationality_${input.userId}`
   await input.client.execute({
     sql: `
+      INSERT INTO identity_nullifiers (
+        identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+        source_verification_session_id, source_user_attestation_id, status,
+        first_seen_at, revoked_at, created_at, updated_at
+      ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, NULL, NULL, 'active', ?4, NULL, ?4, ?4)
+      ON CONFLICT(identity_nullifier_id) DO UPDATE SET
+        user_id = excluded.user_id,
+        nullifier_hash = excluded.nullifier_hash,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `,
+    args: [nullifierId, input.userId, `telegram-test-${input.userId}`, now],
+  })
+  await input.client.execute({
+    sql: `
       INSERT INTO user_attestations (
         user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
         capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at,
@@ -566,19 +581,11 @@ async function setUserNationality(input: {
   })
   await input.client.execute({
     sql: `
-      INSERT INTO identity_nullifiers (
-        identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
-        source_verification_session_id, source_user_attestation_id, status,
-        first_seen_at, revoked_at, created_at, updated_at
-      ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, NULL, ?4, 'active', ?5, NULL, ?5, ?5)
-      ON CONFLICT(identity_nullifier_id) DO UPDATE SET
-        user_id = excluded.user_id,
-        nullifier_hash = excluded.nullifier_hash,
-        source_user_attestation_id = excluded.source_user_attestation_id,
-        status = excluded.status,
-        updated_at = excluded.updated_at
+      UPDATE identity_nullifiers
+      SET source_user_attestation_id = ?2, updated_at = ?3
+      WHERE identity_nullifier_id = ?1
     `,
-    args: [nullifierId, input.userId, `telegram-test-${input.userId}`, attestationId, now],
+    args: [nullifierId, attestationId, now],
   })
 }
 
