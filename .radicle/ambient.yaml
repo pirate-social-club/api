@@ -22,6 +22,7 @@ plan:
         local manifest="/ci/deps/bun/$root/manifest.tsv"
         while IFS=$'\t' read -r name version archive integrity; do
           [[ "$name" == "name" ]] && continue
+          : "$integrity"
           [[ -n "$name" && -n "$version" && -n "$archive" ]]
           local target="$cache/$name@$version@@@1"
           if [[ -f "$target/package.json" ]]; then
