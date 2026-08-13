@@ -1,4 +1,8 @@
 pre_plan:
+  - action: http_get
+    items:
+      - url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64.zip
+        filename: bun-runtime.zip
   - action: bun_get
     path: services/shared
     output: shared
@@ -10,8 +14,20 @@ plan:
     shell: |
       set -euo pipefail
       cache=/ci/cache/bun
+      bun_runtime="${cache}-runtime/bun"
       bunfig=/ci/bunfig.toml
       mkdir -p "$cache"
+      if [[ ! -x "$bun_runtime" ]]; then
+        runtime_sha256=f57bc0187e39623de716ba3a389fda5486b2d7be7131a980ba54dc7b733d2e08
+        echo "$runtime_sha256  /ci/deps/bun-runtime.zip" | sha256sum -c -
+        temp=$(mktemp -d "$cache/.bun-runtime.XXXXXX")
+        unzip -q /ci/deps/bun-runtime.zip -d "$temp"
+        install -d "$(dirname "$bun_runtime")"
+        install -m 0755 "$temp/bun-linux-x64/bun" "$bun_runtime"
+        rm -rf -- "$temp"
+      fi
+      bun="$bun_runtime"
+      "$bun" --version | grep -Fxq 1.3.10
       cat > "$bunfig" <<'EOF'
       [install]
       prefer = "offline"
@@ -59,9 +75,9 @@ plan:
       import_bun_cache contracts
 
       cd /ci/src/services/shared
-      bun install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
-      bun run check
+      "$bun" install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
+      "$bun" run check
 
       cd /ci/src/services/contracts
-      bun install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
-      bun run check
+      "$bun" install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
+      "$bun" run check
