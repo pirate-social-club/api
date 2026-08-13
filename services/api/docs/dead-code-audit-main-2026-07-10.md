@@ -362,3 +362,31 @@ These are acceptance criteria for this slice, not a relaxation of #8's overall
 the endpoint criterion does not, retain the deduplication only if it has no
 measurable regression and use the newly exposed derivative-profile and
 unaccounted p95 values to select the next target.
+
+### Profile-prefetch production result
+
+The profile-prefetch slice is present in the deployed API revision
+`a15ed56529d9f597fe501a315a2247789d200ce9`. Eight sequential, cache-busted
+`/feed/home/videos/public` first-page requests (each reported
+`x-pirate-materialized-feed: bypass`) produced this sample:
+
+| Metric | p50 | sample p95 (max) |
+| --- | ---: | ---: |
+| `home-feed` | 4.10s | 4.28s |
+| `community-fanout` | 3.52s | 3.67s |
+| `community-profile-prefetch` | 507ms | 784ms |
+
+All eight requests reported `community-author-handles-sum=0` and
+`community-derivative-profiles-sum=0`. Against the earlier four-request video
+baseline (12.623–14.084s `home-feed`, 12.199–13.535s fanout), the observed
+median fell by about 68% and the sample maximum by about 70%. The direct slice
+criteria therefore pass: the new prefetch phase is live, the duplicated
+profile phases disappear, and the observed endpoint time is below the 6-second
+target.
+
+This is strong directional evidence, not a population p95: the before sample
+has four requests and the after sample has eight. Repeat a larger same-surface
+sample before using the result for capacity planning. The remaining visible
+cost is derivative global-row hydration (about 2.45–2.61s per request); treat
+that as a separate, optional follow-up rather than reopening the profile
+deduplication slice.
