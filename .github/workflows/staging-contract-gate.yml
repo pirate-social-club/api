@@ -18,6 +18,10 @@ on:
     secrets:
       AUTH_UPSTREAM_JWT_SHARED_SECRET:
         required: false
+      # Bootstrap-only input. The gate derives the scoped operator credential
+      # below and never sends this legacy secret to the deployed API.
+      PIRATE_ADMIN_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       api_sha:
@@ -58,6 +62,7 @@ jobs:
       AUTH_UPSTREAM_JWT_AUDIENCE: pirate-api-staging
       AUTH_UPSTREAM_JWT_ISSUER: pirate-staging-upstream
       AUTH_UPSTREAM_JWT_SHARED_SECRET: ${{ secrets.AUTH_UPSTREAM_JWT_SHARED_SECRET }}
+      PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
       PIRATE_ADMIN_OPERATOR_CREDENTIAL: ""
       E2E_API_BASE_URL: https://api-staging.pirate.sc
       E2E_BASE_URL: https://staging.pirate.sc
@@ -104,7 +109,7 @@ jobs:
         run: scripts/check-deployments.sh --scope staging --expected-api-sha "$API_SHA" --retry-for 120
 
       - name: Fetch staging auth and admin secrets when the caller did not provide them
-        if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == '' || env.PIRATE_ADMIN_OPERATOR_CREDENTIAL == ''
+        if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == '' || env.PIRATE_ADMIN_TOKEN == ''
         working-directory: core
         env:
           INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
