@@ -18,13 +18,8 @@ describe("HNS verifier contract gate workflow", () => {
     expect(workflow).toContain("HNS_VERIFIER_CONTRACT_ROOT_LABEL: tame_impala")
     expect(workflow).toContain("SECRET_NAMES: HNS_VERIFIER_AUTH_TOKEN")
     expect(workflow).toContain(
-      "INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_WEB_PROD_MIGRATION_IDENTITY_ID }}",
-    )
-    expect(workflow).not.toContain(
       "INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06",
     )
-    expect(workflow).toContain(
-      "Set repository variable INFISICAL_WEB_PROD_MIGRATION_IDENTITY_ID",
-    )
+    expect(workflow).not.toContain("INFISICAL_WEB_PROD_MIGRATION_IDENTITY_ID")
   })
 })

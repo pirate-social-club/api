@@ -47,22 +47,15 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
 
-      # The verifier host is shared with production. Fetch its observer
-      # credential from the production Infisical environment; the staging
-      # browser/API deployment is unrelated to this read-only external probe.
-      - name: Require dedicated Web production migration identity
-        shell: bash
-        env:
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_WEB_PROD_MIGRATION_IDENTITY_ID }}
-        run: |
-          if [[ -z "$INFISICAL_IDENTITY_ID" ]]; then
-            echo "::error::Set repository variable INFISICAL_WEB_PROD_MIGRATION_IDENTITY_ID to the production-authorized GitHub Web migration identity ID."
-            exit 1
-          fi
+      # The verifier host is shared with production, but this reusable gate is
+      # invoked by Web's staging release lane. Use that lane's identity to
+      # read the production-environment observer secret; the production
+      # migration identity has a different OIDC subject and must not be used
+      # from this staging caller.
       - name: Fetch the production HNS verifier observer credential
         working-directory: core
         env:
-          INFISICAL_IDENTITY_ID: ${{ vars.INFISICAL_WEB_PROD_MIGRATION_IDENTITY_ID }}
+          INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
           INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
           INFISICAL_ENV: prod
           INFISICAL_SECRET_PATH: /services/api
