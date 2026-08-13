@@ -75,6 +75,7 @@ function serializeModerationAction(row: unknown): ModerationAction {
     community_id: requiredString(row, "community_id"),
     post_id: stringOrNull(rowValue(row, "post_id")),
     comment_id: stringOrNull(rowValue(row, "comment_id")),
+    asset_id: stringOrNull(rowValue(row, "asset_id")),
     actor_user_id: requiredString(row, "actor_user_id"),
     action_type: requiredString(row, "action_type") as ModerationAction["action_type"],
     note: stringOrNull(rowValue(row, "note")),
@@ -83,6 +84,10 @@ function serializeModerationAction(row: unknown): ModerationAction {
     previous_age_gate_policy: stringOrNull(rowValue(row, "previous_age_gate_policy")) as ModerationAction["previous_age_gate_policy"],
     next_age_gate_policy: stringOrNull(rowValue(row, "next_age_gate_policy")) as ModerationAction["next_age_gate_policy"],
     evidence_ref: stringOrNull(rowValue(row, "evidence_ref")),
+    previous_post_status: stringOrNull(rowValue(row, "previous_post_status")) as ModerationAction["previous_post_status"],
+    next_post_status: stringOrNull(rowValue(row, "next_post_status")) as ModerationAction["next_post_status"],
+    previous_asset_enforcement_state: stringOrNull(rowValue(row, "previous_asset_enforcement_state")) as ModerationAction["previous_asset_enforcement_state"],
+    next_asset_enforcement_state: stringOrNull(rowValue(row, "next_asset_enforcement_state")) as ModerationAction["next_asset_enforcement_state"],
     created_at: requiredString(row, "created_at"),
   }
 }
@@ -408,18 +413,41 @@ export async function listModerationActionsForCase(input: {
   executor: DbExecutor
   moderationCaseId: string
 }): Promise<ModerationAction[]> {
-  const result = await input.executor.execute({
-    sql: `
+  let result
+  try {
+    result = await input.executor.execute({
+      sql: `
       SELECT moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
-             actor_user_id, action_type, note, created_at,
+             asset_id, actor_user_id, action_type, note, created_at,
+             previous_post_status, next_post_status,
+             previous_asset_enforcement_state, next_asset_enforcement_state,
              previous_content_safety_state, next_content_safety_state,
              previous_age_gate_policy, next_age_gate_policy, evidence_ref
       FROM moderation_actions
       WHERE moderation_case_id = ?1
       ORDER BY created_at ASC, moderation_action_id ASC
     `,
-    args: [input.moderationCaseId],
-  })
+      args: [input.moderationCaseId],
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    if (!/(?:no such column|unknown column).*(?:asset_id|asset_enforcement_state)/iu.test(message)) {
+      throw error
+    }
+    result = await input.executor.execute({
+      sql: `
+        SELECT moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
+               actor_user_id, action_type, note, created_at,
+               previous_post_status, next_post_status,
+               previous_content_safety_state, next_content_safety_state,
+               previous_age_gate_policy, next_age_gate_policy, evidence_ref
+        FROM moderation_actions
+        WHERE moderation_case_id = ?1
+        ORDER BY created_at ASC, moderation_action_id ASC
+      `,
+      args: [input.moderationCaseId],
+    })
+  }
   return result.rows.map((row) => serializeModerationAction(row))
 }
 
@@ -429,26 +457,32 @@ export async function createModerationAction(input: {
   actorUserId: string
   body: CreateModerationActionRequest
   now: string
-  previousStatus?: string | null
-  nextStatus?: string | null
+  previousStatus?: ModerationAction["previous_post_status"]
+  nextStatus?: ModerationAction["next_post_status"]
   previousAgeGatePolicy?: "none" | "18_plus" | null
   nextAgeGatePolicy?: "none" | "18_plus" | null
   previousContentSafetyState?: "pending" | "safe" | "sensitive" | "adult" | null
   nextContentSafetyState?: "safe" | "sensitive" | "adult" | null
   evidenceRef?: string | null
+  assetId?: string | null
+  previousAssetEnforcementState?: "active" | "quarantined" | "blocked" | null
+  nextAssetEnforcementState?: "active" | "quarantined" | "blocked" | null
 }): Promise<ModerationAction> {
   const moderationActionId = makeId("mac")
-  await input.executor.execute({
+  if (input.assetId) {
+    await input.executor.execute({
     sql: `
       INSERT INTO moderation_actions (
         moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
         actor_user_id, action_type, note, created_at, previous_post_status, next_post_status,
         previous_age_gate_policy, next_age_gate_policy,
-        previous_content_safety_state, next_content_safety_state, evidence_ref
+        previous_content_safety_state, next_content_safety_state, evidence_ref,
+        asset_id, previous_asset_enforcement_state, next_asset_enforcement_state
       ) VALUES (
         ?1, ?2, ?3, ?4, ?5,
         ?6, ?7, ?8, ?9, ?10, ?11,
-        ?12, ?13, ?14, ?15, ?16
+        ?12, ?13, ?14, ?15, ?16,
+        ?17, ?18, ?19
       )
     `,
     args: [
@@ -468,8 +502,45 @@ export async function createModerationAction(input: {
       input.previousContentSafetyState ?? null,
       input.nextContentSafetyState ?? null,
       input.evidenceRef?.trim() || null,
+      input.assetId ?? null,
+      input.previousAssetEnforcementState ?? null,
+      input.nextAssetEnforcementState ?? null,
     ],
-  })
+    })
+  } else {
+    await input.executor.execute({
+      sql: `
+        INSERT INTO moderation_actions (
+          moderation_action_id, moderation_case_id, community_id, post_id, comment_id,
+          actor_user_id, action_type, note, created_at, previous_post_status, next_post_status,
+          previous_age_gate_policy, next_age_gate_policy,
+          previous_content_safety_state, next_content_safety_state, evidence_ref
+        ) VALUES (
+          ?1, ?2, ?3, ?4, ?5,
+          ?6, ?7, ?8, ?9, ?10, ?11,
+          ?12, ?13, ?14, ?15, ?16
+        )
+      `,
+      args: [
+        moderationActionId,
+        input.moderationCase.moderation_case_id,
+        input.moderationCase.community_id,
+        input.moderationCase.post_id,
+        input.moderationCase.comment_id,
+        input.actorUserId,
+        input.body.action_type,
+        input.body.note?.trim() || null,
+        input.now,
+        input.previousStatus ?? null,
+        input.nextStatus ?? null,
+        input.previousAgeGatePolicy ?? null,
+        input.nextAgeGatePolicy ?? null,
+        input.previousContentSafetyState ?? null,
+        input.nextContentSafetyState ?? null,
+        input.evidenceRef?.trim() || null,
+      ],
+    })
+  }
   // Deterministic projection of the inserted row — buffer-safe (no in-tx readback).
   return {
     moderation_action_id: moderationActionId,
@@ -477,6 +548,7 @@ export async function createModerationAction(input: {
     community_id: input.moderationCase.community_id,
     post_id: input.moderationCase.post_id,
     comment_id: input.moderationCase.comment_id,
+    asset_id: input.assetId ?? null,
     actor_user_id: input.actorUserId,
     action_type: input.body.action_type,
     note: input.body.note?.trim() || null,
@@ -485,8 +557,46 @@ export async function createModerationAction(input: {
     previous_age_gate_policy: input.previousAgeGatePolicy ?? null,
     next_age_gate_policy: input.nextAgeGatePolicy ?? null,
     evidence_ref: input.evidenceRef?.trim() || null,
+    previous_post_status: input.previousStatus ?? null,
+    next_post_status: input.nextStatus ?? null,
+    previous_asset_enforcement_state: input.previousAssetEnforcementState ?? null,
+    next_asset_enforcement_state: input.nextAssetEnforcementState ?? null,
     created_at: input.now,
   }
+}
+
+export async function setAssetModerationEnforcement(input: {
+  executor: DbExecutor
+  assetId: string
+  moderationActionId: string
+  enforcementState: "active" | "quarantined" | "blocked"
+  reasonCode: string
+  evidenceRef: string
+  now: string
+}): Promise<void> {
+  await input.executor.execute({
+    sql: `
+      UPDATE asset_enforcement
+      SET enforcement_state = ?2,
+          reason_code = ?3,
+          authority_kind = 'moderation_action',
+          authority_ref = ?4,
+          moderation_action_id = ?4,
+          actor_role = 'community_moderator',
+          evidence_ref = ?5,
+          decided_at = ?6,
+          updated_at = ?6
+      WHERE asset_id = ?1
+    `,
+    args: [
+      input.assetId,
+      input.enforcementState,
+      input.reasonCode,
+      input.moderationActionId,
+      input.evidenceRef,
+      input.now,
+    ],
+  })
 }
 
 export async function setPostModerationStatus(input: {
