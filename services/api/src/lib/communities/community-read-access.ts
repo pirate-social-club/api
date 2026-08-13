@@ -237,6 +237,12 @@ export type CommunityBulkOperation = {
 
 type RoutedBulkOperation = ShardBulkReadOperation
 
+export type CommunityBulkReadDeps = {
+  resolver?: Pick<CommunityBindingResolver, "resolve">
+  controlPlane?: DbExecutor
+  resolveShard?: typeof resolveCommunityShardRpc
+}
+
 function bulkGroupKey(shardWorkerId: string | null): string {
   return shardWorkerId ?? "__legacy_single_shard__"
 }
@@ -252,6 +258,7 @@ export async function bulkCommunityRead(
   repo: CommunityDatabaseBindingRepository,
   operations: CommunityBulkOperation[],
   observeRouting?: (operationCount: number, shardGroupCount: number) => void,
+  deps: CommunityBulkReadDeps = {},
 ): Promise<Map<string, QueryResult[]>> {
   if (operations.length === 0) {
     observeRouting?.(0, 0)
@@ -270,15 +277,23 @@ export async function bulkCommunityRead(
     return new Map(values)
   }
 
-  const resolver = getResolver()
-  const controlPlane = getControlPlaneClient(env)
+  const resolver = deps.resolver ?? getResolver()
+  const controlPlane = deps.controlPlane ?? getControlPlaneClient(env)
+  const resolveShard = deps.resolveShard ?? resolveCommunityShardRpc
   const groups = new Map<string, { shard: ReturnType<typeof resolveCommunityShardRpc>; operations: RoutedBulkOperation[] }>()
-  for (const operation of operations) {
-    const binding = await resolver.resolve(controlPlane, operation.communityId)
+  // Resolve the page's routing directory concurrently. These are independent
+  // control-plane reads; serial resolution put every community's lookup on the
+  // critical path before the shard fan-out could begin.
+  const bindings = await Promise.all(
+    operations.map((operation) => resolver.resolve(controlPlane, operation.communityId)),
+  )
+  for (const [index, operation] of operations.entries()) {
+    const binding = bindings[index]
+    if (!binding) throw new Error(`Missing resolved binding for ${operation.communityId}`)
     if (!binding.bindingName) {
       throw new HttpError(500, "binding_not_found", `d1 routing row for ${binding.communityId} has no binding_name`)
     }
-    const shard = resolveCommunityShardRpc(env, binding.shardWorkerId)
+    const shard = resolveShard(env, binding.shardWorkerId)
     const key = bulkGroupKey(binding.shardWorkerId)
     const group = groups.get(key) ?? { shard, operations: [] }
     group.operations.push({
@@ -292,19 +307,21 @@ export async function bulkCommunityRead(
   observeRouting?.(operations.length, groups.size)
 
   const values = new Map<string, QueryResult[]>()
-  for (const group of groups.values()) {
+  // Shard groups are independent too. Awaiting them one by one turned a page
+  // spread over multiple workers back into serial network round trips.
+  await Promise.all([...groups.values()].map(async (group) => {
     if (group.shard.bulkRead) {
       const response = await group.shard.bulkRead({ operations: group.operations })
       for (const item of response.operations) {
         values.set(item.communityId, unwrap(item.result))
       }
-      continue
+      return
     }
-    for (const operation of group.operations) {
+    await Promise.all(group.operations.map(async (operation) => {
       const result = await group.shard.batch(operation)
       values.set(operation.communityId, unwrap(result))
-    }
-  }
+    }))
+  }))
   return values
 }
 

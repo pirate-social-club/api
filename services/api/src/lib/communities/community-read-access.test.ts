@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { createClient, type Client } from "@libsql/client"
 import { CommunityBindingResolver } from "./community-binding-resolver"
 import {
+  bulkCommunityRead,
   resolveCommunityReadHandle,
   resolveCommunityWriteHandle,
   openShardReadClientNotProvisioned,
@@ -13,6 +14,7 @@ import type { CommunityReadInvoker } from "./community-read-router"
 import type { ResolvedCommunityBinding } from "./community-binding-resolver"
 import { HttpError } from "../errors"
 import type { Client as ApiClient, ReadClient } from "../sql-client"
+import type { DbExecutor } from "../db-helpers"
 
 let cp: Client
 
@@ -156,6 +158,65 @@ test("makeShardReadClient dispatches execute/batch to the shard RPC with communi
   await expect(client.batch([{ sql: "INSERT INTO t VALUES (1)" }], "write")).rejects.toMatchObject({
     code: "read_only_violation",
   })
+})
+
+test("bulkCommunityRead resolves bindings and shard groups concurrently", async () => {
+  let activeResolutions = 0
+  let maxActiveResolutions = 0
+  const resolver = {
+    resolve: async (_executor: DbExecutor, communityId: string) => {
+      activeResolutions += 1
+      maxActiveResolutions = Math.max(maxActiveResolutions, activeResolutions)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      activeResolutions -= 1
+      return {
+        communityId,
+        provisioningState: "ready" as const,
+        shardWorkerId: communityId === "cmty_b" ? "shard_b" : "shard_a",
+        bindingName: `DB_${communityId}`,
+        region: null,
+        decommissionedAt: null,
+      }
+    },
+  }
+  const starts: string[] = []
+  const finishes: string[] = []
+  const makeShard = (shard: string) => ({
+    bulkRead: async (input: { operations: Array<{ communityId: string }> }) => {
+      starts.push(shard)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      finishes.push(shard)
+      return {
+        operations: input.operations.map((operation) => ({
+          communityId: operation.communityId,
+          result: { ok: true as const, value: [{ rows: [{ community_id: operation.communityId }] }] },
+        })),
+      }
+    },
+  })
+  const shards = new Map([
+    ["shard_a", makeShard("shard_a")],
+    ["shard_b", makeShard("shard_b")],
+  ])
+  const result = await bulkCommunityRead(
+    {} as never,
+    {} as never,
+    [
+      { communityId: "cmty_a", statements: [{ sql: "SELECT 1" }] },
+      { communityId: "cmty_b", statements: [{ sql: "SELECT 1" }] },
+    ],
+    undefined,
+    {
+      resolver,
+      controlPlane: {} as DbExecutor,
+      resolveShard: (_env, shardWorkerId) => shards.get(shardWorkerId ?? "") as never,
+    },
+  )
+
+  expect(maxActiveResolutions).toBe(2)
+  expect(starts.sort()).toEqual(["shard_a", "shard_b"])
+  expect(finishes.sort()).toEqual(["shard_a", "shard_b"])
+  expect([...result.keys()].sort()).toEqual(["cmty_a", "cmty_b"])
 })
 
 test("makeShardReadClient preserves shard error codes across the boundary (step 2.5)", async () => {
