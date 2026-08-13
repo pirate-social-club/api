@@ -50,7 +50,7 @@ describe("parseCommunitySchemaGuarantees", () => {
   test("rejects feature policies without an explicit runtime flag", () => {
     expect(() => parseCommunitySchemaGuarantees({
       unconditional: [],
-      features: { generic_digital_goods: { migrations: ["1157_generic_assets_learning_foundation.sql"] } },
+      features: { generic_digital_goods: { migrations: ["1158_generic_assets_learning_foundation.sql"] } },
     })).toThrow(/array of flags/u)
   })
 })

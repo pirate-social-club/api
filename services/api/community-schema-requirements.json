@@ -62,7 +62,7 @@
         "GENERIC_DIGITAL_GOODS_ENABLED"
       ],
       "migrations": [
-        "1157_generic_assets_learning_foundation.sql"
+        "1158_generic_assets_learning_foundation.sql"
       ]
     }
   },
