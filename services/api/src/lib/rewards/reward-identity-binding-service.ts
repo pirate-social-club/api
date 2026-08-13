@@ -10,6 +10,7 @@ import type { Client, InStatement, QueryResult } from "../sql-client"
 import { rowValue, stringOrNull } from "../sql-row"
 import { codedConflictError } from "../errors"
 import { resolveRewardIdentityProvider } from "../verification/unique-human-eligibility"
+import { normalizeIdentityEvidenceValue, readActiveIdentityEvidence } from "../verification/provider-keyed-identity-evidence"
 import { unixSeconds } from "../../serializers/time"
 
 type Executor = { execute(statement: InStatement | string): Promise<QueryResult> }
@@ -27,55 +28,25 @@ function isEvidenceCurrent(document: BoundDocument, now: string): boolean {
   return Number.isFinite(expiresAtMs) && Number.isFinite(nowMs) && expiresAtMs > nowMs
 }
 
-function parseNationality(value: unknown): string | null {
-  let parsed = value
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed)
-    } catch {
-      return null
-    }
-  }
-  if (!parsed || typeof parsed !== "object") return null
-  const nationality = String((parsed as Record<string, unknown>).nationality ?? "").trim().toUpperCase()
-  return /^[A-Z]{3}$/.test(nationality) ? nationality : null
-}
-
 async function listBoundDocuments(
   client: Executor,
   userId: string,
 ): Promise<BoundDocument[]> {
-  const result = await client.execute({
-    sql: `
-      SELECT n.identity_nullifier_id, a.value_json, a.verified_at, a.expires_at
-      FROM identity_nullifiers n
-      JOIN user_attestations a
-        ON a.source_identity_nullifier_id = n.identity_nullifier_id
-       AND a.user_id = n.user_id
-       AND a.provider = n.provider
-       AND a.capability_key = 'nationality'
-       AND a.status = 'accepted'
-       AND a.revoked_at IS NULL
-      WHERE n.user_id = ?1
-        AND n.provider = 'self'
-        AND n.status = 'active'
-      ORDER BY n.first_seen_at ASC, n.identity_nullifier_id ASC, a.verified_at DESC
-    `,
-    args: [userId],
-  })
-
   const grouped = new Map<string, BoundDocument[]>()
-  for (const row of result.rows) {
-    const identityNullifierId = stringOrNull(rowValue(row, "identity_nullifier_id"))
-    const nationality = parseNationality(rowValue(row, "value_json"))
-    const verifiedAt = stringOrNull(rowValue(row, "verified_at"))
+  const evidence = await readActiveIdentityEvidence({ client, userId, capabilities: ["nationality"] })
+  for (const item of evidence) {
+    if (item.provider !== "self") continue
+    const identityNullifierId = item.sourceIdentityNullifierId
+    const nationalityValue = normalizeIdentityEvidenceValue(item)
+    const nationality = typeof nationalityValue === "string" ? nationalityValue : null
+    const verifiedAt = item.verifiedAt
     if (!identityNullifierId || !nationality || !verifiedAt) continue
     const entry: BoundDocument = {
       identity_nullifier_id: identityNullifierId,
       provider: "self",
       nationality,
       verified_at: unixSeconds(verifiedAt),
-      expiresAt: stringOrNull(rowValue(row, "expires_at")),
+      expiresAt: item.expiresAt,
     }
     grouped.set(identityNullifierId, [...(grouped.get(identityNullifierId) ?? []), entry])
   }

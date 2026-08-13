@@ -92,6 +92,22 @@ function genderValue(evidence: IdentityEvidence): string | null {
   return typeof value === "string" ? value : null
 }
 
+/** Return the canonical value used by policy evaluators and reward consumers. */
+export function normalizeIdentityEvidenceValue(evidence: IdentityEvidence): string | number | boolean | null {
+  switch (evidence.capability) {
+    case "nationality":
+      return countryValue(evidence)
+    case "minimum_age":
+      return minimumAgeValue(evidence)
+    case "age_over_18":
+      return minimumAgeValue(evidence) != null && minimumAgeValue(evidence)! >= 18
+    case "gender":
+      return genderValue(evidence)
+    case "unique_human":
+      return true
+  }
+}
+
 function normalizedCountries(values: readonly string[] | undefined): string[] {
   return (values ?? [])
     .map((value) => normalizeIdentityCountryCode(value))
