@@ -1257,15 +1257,16 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
   sqliteCompat = sqliteCompat.replace(/::(?:jsonb|text)\b/gi, "")
   // PostgreSQL's `~` operator is unavailable in the SQLite test mirror. Preserve
-  // fixed-length lowercase-hex checks, including the equivalent [0-9a-f] and
-  // [a-f0-9] spellings and fixed prefixes such as 0x or sha256:.
+  // fixed-length hexadecimal checks, including equivalent lowercase and
+  // mixed-case spellings and fixed prefixes such as 0x or sha256:.
   sqliteCompat = sqliteCompat.replace(
-    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^([a-z0-9:]*)\[(?:0-9a-f|a-f0-9)\]\{(\d+)\}\$'/g,
-    (_match, column: string, prefix: string, hexLength: string) => {
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^([a-z0-9:]*)\[(0-9a-f|a-f0-9|0-9a-fA-F|a-fA-F0-9)\]\{(\d+)\}\$'/g,
+    (_match, column: string, prefix: string, hexClass: string, hexLength: string) => {
       const expectedLength = prefix.length + Number(hexLength)
+      const globClass = hexClass.includes("A") ? "0-9a-fA-F" : "0-9a-f"
       const hexCheck = prefix
-        ? `substr(${column}, ${prefix.length + 1}) NOT GLOB '*[^0-9a-f]*'`
-        : `${column} NOT GLOB '*[^0-9a-f]*'`
+        ? `substr(${column}, ${prefix.length + 1}) NOT GLOB '*[^${globClass}]*'`
+        : `${column} NOT GLOB '*[^${globClass}]*'`
       if (!prefix) return `length(${column}) = ${expectedLength} AND ${hexCheck}`
       return `length(${column}) = ${expectedLength} AND substr(${column}, 1, ${prefix.length}) = '${prefix}' AND ${hexCheck}`
     },

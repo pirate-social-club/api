@@ -527,6 +527,21 @@ describe("sql migration helpers", () => {
     expect(statement).not.toContain(" ~ ")
   })
 
+  test("rewrites mixed-case fixed-length hex regex checks for sqlite", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_ticket_pools (
+        jackpot_address TEXT NOT NULL CHECK (jackpot_address ~ '^0x[0-9a-fA-F]{40}$'),
+        terms_hash TEXT NOT NULL CHECK (terms_hash ~ '^[0-9a-f]{64}$')
+      );
+    `)
+
+    expect(statement).toContain("length(jackpot_address) = 42")
+    expect(statement).toContain("substr(jackpot_address, 1, 2) = '0x'")
+    expect(statement).toContain("substr(jackpot_address, 3) NOT GLOB '*[^0-9a-fA-F]*'")
+    expect(statement).toContain("length(terms_hash) = 64")
+    expect(statement).not.toContain(" ~ ")
+  })
+
   test("builds the local reward funding mirror with the refund-pending custody state", () => {
     const statement = toSqliteCompatibleStatement(`
       CREATE TABLE reward_campaign_funding_effects (

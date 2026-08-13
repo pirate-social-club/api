@@ -53,7 +53,8 @@
     "1153_dance_attempt_start_cue_evidence.sql",
     "1154_commerce_integer_money.sql",
     "1155_listings_asset_unique_index.sql",
-    "1156_song_study_fill_blank.sql"
+    "1156_song_study_fill_blank.sql",
+    "1157_community_handle_claim_intents.sql"
   ],
   "features": {},
   "transitional": {
