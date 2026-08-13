@@ -11,7 +11,7 @@ const RUNTIME_ROOT = fileURLToPath(new URL("../src/", import.meta.url))
 
 type RequirementsManifest = {
   unconditional: string[]
-  features: Record<string, { migrations: string[] }>
+  features: Record<string, { flags: string[]; migrations: string[] }>
   transitional: Record<string, {
     rationale?: unknown
     promotion_condition?: unknown

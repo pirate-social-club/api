@@ -368,6 +368,9 @@ describe("createAssetForPost existing asset resume", () => {
       }],
       song_artifact_bundle_id: null,
     } as Post
+    if (!existing.primary_content_ref) {
+      throw new Error("test fixture requires legacy primary content")
+    }
 
     await createAssetForPost({
       assetKind: "video_file",

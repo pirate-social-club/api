@@ -19,7 +19,7 @@ export type AssetRow = {
   access_mode: Asset["access_mode"]
   license_preset: Asset["license_preset"] | null
   commercial_rev_share_pct: number | null
-  primary_content_ref: string
+  primary_content_ref: string | null
   primary_content_hash: string | null
   publication_status: Asset["publication_status"]
   story_status: Asset["story_status"]
@@ -57,6 +57,36 @@ export type AssetRow = {
   locked_delivery_storage_ref: string | null
   locked_delivery_secret_json: string | null
   created_at: string
+  updated_at: string
+}
+
+export type AssetPayloadRow = {
+  asset_payload_id: string
+  asset_id: string
+  role: "primary" | "preview" | "supplementary"
+  payload_version: number
+  status: "active" | "superseded" | "withdrawn"
+  content_blob_ref: string
+  payload_format: string
+  delivery_behavior: "download" | "app_native" | "audio" | "video"
+  display_filename: string | null
+  mime_type: string
+  size_bytes: number
+  content_hash: string
+  created_at: string
+  updated_at: string
+}
+
+export type AssetEnforcementRow = {
+  asset_id: string
+  enforcement_state: "active" | "quarantined" | "blocked"
+  reason_code: string | null
+  authority_kind: "asset_create" | "analysis_result" | "moderation_action" | "legal_hold"
+  authority_ref: string
+  moderation_action_id: string | null
+  actor_role: string | null
+  evidence_ref: string | null
+  decided_at: string
   updated_at: string
 }
 

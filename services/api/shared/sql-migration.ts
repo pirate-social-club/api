@@ -48,7 +48,7 @@ export function splitSqlStatements(sql: string): string[] {
       }
     }
 
-    if (!inSingleQuote && !inTrigger && current.trimStart().toUpperCase().startsWith("CREATE TRIGGER")) {
+    if (!inSingleQuote && !inTrigger && startsWithCreateTrigger(current)) {
       inTrigger = true
     }
 
@@ -91,6 +91,10 @@ export function splitSqlStatements(sql: string): string[] {
   }
 
   return statements
+}
+
+function startsWithCreateTrigger(sql: string): boolean {
+  return /^(?:(?:\s+)|(?:--[^\n]*(?:\n|$))|(?:\/\*[\s\S]*?\*\/))*CREATE\s+TRIGGER\b/i.test(sql)
 }
 
 function isSqlCommentOnly(statement: string): boolean {

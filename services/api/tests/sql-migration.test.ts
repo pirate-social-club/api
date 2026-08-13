@@ -1038,4 +1038,15 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
     const sql = `/* note: run as owner; then grant */ CREATE TABLE t (id TEXT);`
     expect(splitSqlStatements(sql)).toEqual([sql])
   })
+
+  test("keeps a trigger preceded by comments as one statement", () => {
+    const sql = `-- Preserve immutable published rows.
+CREATE TRIGGER published_rows_no_update
+BEFORE UPDATE ON published_rows
+BEGIN
+  SELECT RAISE(ABORT, 'published rows are immutable');
+END;`
+
+    expect(splitSqlStatements(sql)).toEqual([sql])
+  })
 })

@@ -16,7 +16,16 @@ type UserReportReasonCode =
   | "graphic_content"
   | "misleading"
   | "other"
-type ModerationActionType = "dismiss" | "hide" | "remove" | "restore" | "age_gate" | "set_content_rating"
+type ModerationActionType =
+  | "dismiss"
+  | "hide"
+  | "remove"
+  | "restore"
+  | "age_gate"
+  | "set_content_rating"
+  | "quarantine_asset"
+  | "block_asset"
+  | "restore_asset"
 
 export type CreateUserReportRequest = ApiCreateUserReportRequest
 export type CreateModerationActionRequest = ApiCreateModerationActionRequest
@@ -53,6 +62,7 @@ export type ModerationAction = {
   community_id: string
   post_id: string | null
   comment_id: string | null
+  asset_id?: string | null
   actor_user_id: string
   action_type: ModerationActionType
   note?: string | null
@@ -61,6 +71,10 @@ export type ModerationAction = {
   previous_age_gate_policy?: Post["age_gate_policy"] | null
   next_age_gate_policy?: Post["age_gate_policy"] | null
   evidence_ref?: string | null
+  previous_post_status?: Post["status"] | null
+  next_post_status?: Post["status"] | null
+  previous_asset_enforcement_state?: "active" | "quarantined" | "blocked" | null
+  next_asset_enforcement_state?: "active" | "quarantined" | "blocked" | null
   created_at: string
 }
 

@@ -11,6 +11,9 @@ import { nowIso } from "../helpers"
 import { withTransaction } from "../transactions"
 import { logPipelineInfo } from "../observability/pipeline-log"
 import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
+import { getAssetEnforcement } from "../communities/commerce/generic-asset-repository"
+import { isGenericAssetKind } from "../communities/commerce/asset-kind-policy"
+import { getAssetRow } from "../communities/commerce/queries"
 import { getPostById } from "../posts/community-post-query-store"
 import { getCommentById } from "../comments/community-comment-store"
 import type { Env } from "../../env"
@@ -31,6 +34,7 @@ import {
   setPostAgeGatePolicy,
   setPostContentRating,
   setPostModerationStatus,
+  setAssetModerationEnforcement,
   approveReviewHeldPost,
   updateModerationCaseOpenedBy,
 } from "./community-moderation-store"
@@ -364,21 +368,50 @@ export async function getModerationCaseDetail(input: {
 }
 
 type ModerationActionMutation = {
-  previousStatus?: string | null
-  nextStatus?: string | null
+  previousStatus?: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted" | null
+  nextStatus?: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted" | null
   previousAgeGatePolicy?: "none" | "18_plus" | null
   nextAgeGatePolicy?: "none" | "18_plus" | null
   previousContentSafetyState?: "pending" | "safe" | "sensitive" | "adult" | null
   nextContentSafetyState?: "safe" | "sensitive" | "adult" | null
   evidenceRef?: string | null
   publicReadPostId?: string | null
+  assetId?: string | null
+  previousAssetEnforcementState?: "active" | "quarantined" | "blocked" | null
+  nextAssetEnforcementState?: "active" | "quarantined" | "blocked" | null
 }
 
 type ModerationActionPlan = {
   mutation: ModerationActionMutation
   /** Write-only — safe to run inside a buffered D1 write tx. */
-  applyWrites: (executor: DbExecutor) => Promise<void>
+  applyWrites: (executor: DbExecutor, moderationActionId: string) => Promise<void>
 }
+
+async function applyPostStatusTransition(input: {
+  executor: DbExecutor
+  postId: string
+  previousStatus: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted"
+  analysisState: "pending" | "allow" | "allow_with_required_reference" | "review_required" | "blocked"
+  nextStatus: "hidden" | "removed" | "published"
+  now: string
+}): Promise<void> {
+  if (
+    input.nextStatus === "published"
+    && input.previousStatus === "draft"
+    && input.analysisState === "review_required"
+  ) {
+    await approveReviewHeldPost({ executor: input.executor, postId: input.postId, now: input.now })
+    return
+  }
+  await setPostModerationStatus({
+    executor: input.executor,
+    postId: input.postId,
+    status: input.nextStatus,
+    now: input.now,
+  })
+}
+
+export const moderationServiceTestOnly = { applyPostStatusTransition }
 
 /**
  * Reads the target post/comment and validates/decides the action on the BASE client
@@ -399,6 +432,85 @@ async function planModerationAction(input: {
       throw notFoundError("Post not found")
     }
     const postId = post.post_id
+    const asset = post.asset_id
+      ? await getAssetRow(input.dbClient, input.caseRow.community_id, post.asset_id)
+      : null
+    const genericAsset = asset && isGenericAssetKind(asset.asset_kind) ? asset : null
+    const enforcement = genericAsset
+      ? await getAssetEnforcement(input.dbClient, genericAsset.asset_id)
+      : null
+    const planPostAndAssetTransition = (
+      nextPostStatus: "hidden" | "removed" | "published",
+      nextAssetEnforcementState: "quarantined" | "blocked" | "active",
+    ): ModerationActionPlan => {
+      if (!genericAsset) {
+        throw badRequestError("Asset moderation actions require a generic asset post")
+      }
+      const restrictive = nextAssetEnforcementState !== "active"
+      if (!enforcement && !restrictive) {
+        throw internalError("Generic asset enforcement state is missing")
+      }
+      const evidenceRef = input.body.evidence_ref?.trim()
+      if (!evidenceRef) {
+        throw badRequestError("evidence_ref is required when moderating a generic asset")
+      }
+      return {
+        mutation: {
+          previousStatus: post.status,
+          nextStatus: nextPostStatus,
+          publicReadPostId: postId,
+          evidenceRef,
+          assetId: genericAsset.asset_id,
+          previousAssetEnforcementState: enforcement?.enforcement_state ?? null,
+          nextAssetEnforcementState,
+        },
+        applyWrites: async (executor, moderationActionId) => {
+          await applyPostStatusTransition({
+            executor,
+            postId,
+            previousStatus: post.status,
+            analysisState: post.analysis_state,
+            nextStatus: nextPostStatus,
+            now: input.now,
+          })
+          await setAssetModerationEnforcement({
+            executor,
+            assetId: genericAsset.asset_id,
+            moderationActionId,
+            enforcementState: nextAssetEnforcementState,
+            reasonCode: input.body.action_type,
+            evidenceRef,
+            expectedEnforcementState: enforcement?.enforcement_state ?? null,
+            allowMissingInsert: restrictive,
+            now: input.now,
+          })
+        },
+      }
+    }
+
+    const planPostTransition = (
+      nextPostStatus: "hidden" | "removed" | "published",
+    ): ModerationActionPlan => {
+      if (genericAsset) {
+        const nextEnforcement = nextPostStatus === "hidden"
+          ? "quarantined"
+          : nextPostStatus === "removed"
+            ? "blocked"
+            : "active"
+        return planPostAndAssetTransition(nextPostStatus, nextEnforcement)
+      }
+      return {
+        mutation: { previousStatus: post.status, nextStatus: nextPostStatus, publicReadPostId: postId },
+        applyWrites: (executor) => applyPostStatusTransition({
+          executor,
+          postId,
+          previousStatus: post.status,
+          analysisState: post.analysis_state,
+          nextStatus: nextPostStatus,
+          now: input.now,
+        }),
+      }
+    }
     switch (input.body.action_type) {
       case "dismiss":
         if (post.status === "draft") {
@@ -406,24 +518,18 @@ async function planModerationAction(input: {
         }
         return { mutation: { publicReadPostId: postId }, applyWrites: noWrites }
       case "hide":
-        return {
-          mutation: { previousStatus: post.status, nextStatus: "hidden", publicReadPostId: postId },
-          applyWrites: (executor) => setPostModerationStatus({ executor, postId, status: "hidden", now: input.now }),
-        }
+        return planPostTransition("hidden")
+      case "quarantine_asset":
+        return planPostAndAssetTransition("hidden", "quarantined")
       case "remove":
-        return {
-          mutation: { previousStatus: post.status, nextStatus: "removed", publicReadPostId: postId },
-          applyWrites: (executor) => setPostModerationStatus({ executor, postId, status: "removed", now: input.now }),
-        }
+        return planPostTransition("removed")
+      case "block_asset":
+        return planPostAndAssetTransition("removed", "blocked")
       case "restore": {
-        const useApprove = post.status === "draft" && post.analysis_state === "review_required"
-        return {
-          mutation: { previousStatus: post.status, nextStatus: "published", publicReadPostId: postId },
-          applyWrites: (executor) => useApprove
-            ? approveReviewHeldPost({ executor, postId, now: input.now })
-            : setPostModerationStatus({ executor, postId, status: "published", now: input.now }),
-        }
+        return planPostTransition("published")
       }
+      case "restore_asset":
+        return planPostAndAssetTransition("published", "active")
       case "age_gate":
         return {
           mutation: { previousAgeGatePolicy: post.age_gate_policy, nextAgeGatePolicy: "18_plus", publicReadPostId: postId },
@@ -531,8 +637,8 @@ export async function resolveModerationCaseWithAction(input: {
     const now = nowIso()
     // Read the target + decide the action on the base client BEFORE the tx — a
     // buffered D1 write tx can't read post/comment back or branch on it mid-flight.
-    // The plan's applyWrites + createModerationAction + resolveModerationCase are all
-    // write-only, so the tx body below is buffer-safe.
+    // The complete audit action, planned target writes, and case resolution are all
+    // write-only, so the tx body below is buffer-safe and commits as one batch.
     const plan = await planModerationAction({
       caseRow,
       dbClient: db.client,
@@ -541,8 +647,7 @@ export async function resolveModerationCaseWithAction(input: {
     })
     const mutation = plan.mutation
     await withTransaction(db.client, "write", async (tx) => {
-      await plan.applyWrites(tx)
-      await createModerationAction({
+      const action = await createModerationAction({
         executor: tx,
         moderationCase: caseRow,
         actorUserId: input.userId,
@@ -555,7 +660,11 @@ export async function resolveModerationCaseWithAction(input: {
         previousContentSafetyState: mutation.previousContentSafetyState,
         nextContentSafetyState: mutation.nextContentSafetyState,
         evidenceRef: mutation.evidenceRef,
+        assetId: mutation.assetId,
+        previousAssetEnforcementState: mutation.previousAssetEnforcementState,
+        nextAssetEnforcementState: mutation.nextAssetEnforcementState,
       })
+      await plan.applyWrites(tx, action.moderation_action_id)
       await resolveModerationCase({
         executor: tx,
         moderationCaseId: caseRow.moderation_case_id,
