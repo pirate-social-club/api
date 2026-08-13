@@ -111,6 +111,7 @@ export async function resolveActiveRewardIdentity(
       .map((item) => item.sourceIdentityNullifierId)
       .filter((value): value is string => value !== null),
   )
+  if (durableEvidenceIds.size === 0) return null
   const result = await client.execute({
     sql: `
       SELECT identity_nullifier_id, mechanism, nullifier_hash

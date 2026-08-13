@@ -17,18 +17,6 @@ mock.module("jose", () => ({
   createRemoteJWKSet: () => {},
   jwtVerify: async () => ({ payload: {} }),
 }))
-mock.module("../errors", () => ({
-  badRequestError: (message: string) => new Error(message),
-  conflictError: (message: string) => new Error(message),
-  eligibilityFailed: (message: string) => new Error(message),
-  HttpError: class HttpError extends Error {},
-  internalError: (message: string) => new Error(message),
-  providerUnavailable: (message: string) => new Error(message),
-}))
-mock.module("../helpers", () => ({
-  isProductionEnv: () => false,
-  makeId: (prefix: string) => `${prefix}_test`,
-}))
 mock.module("../crypto", () => ({ sha256Hex: async () => "hash_test" }))
 mock.module("../auth/auth-db-user-queries", () => ({ getUserRow: async () => null }))
 mock.module("../auth/auth-serializers", () => ({
@@ -54,12 +42,6 @@ mock.module("./zkpassport-provider", () => ({ getZkPassportProvider: () => ({}) 
 mock.module("./verification-logging", () => ({ logVerificationDebug: () => {} }))
 mock.module("../telegram/onboarding-service", () => ({ approvePendingTelegramJoinGrantsForUser: async () => {} }))
 mock.module("./verification-capabilities", () => ({ interactiveVerificationExpiresAt: () => "2026-01-02T00:00:00.000Z" }))
-mock.module("./verification-shared", () => ({
-  getAttestationsBySourceSessionId: async () => [attestationRow],
-  getVerificationSessionRow: async () => null,
-  getVerificationSessionRowForUser: async () => sessionRow,
-}))
-
 const {
   VerificationAttestationConflictError,
   VerificationSessionClaimLostError,
