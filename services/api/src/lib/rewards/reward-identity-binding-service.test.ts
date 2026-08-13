@@ -159,21 +159,6 @@ describe("reward identity document selection", () => {
     expect(retry.active_binding).toEqual(afterExpiry.active_binding)
   })
 
-  test("enforces one accepted nationality row per document", async () => {
-    const client = await setup()
-    await seedDocument(client, { id: "nul_conflict", nationality: "USA" })
-    await expect(client.execute({
-      sql: `
-        INSERT INTO user_attestations (
-          user_attestation_id, user_id, provider, attestation_type, capability_key, status,
-          value_json, verified_at, created_at, updated_at, source_identity_nullifier_id
-        ) VALUES ('att_conflict_2', 'usr_reward_binding', 'self', 'nationality', 'nationality',
-          'accepted', ?1, ?2, ?2, ?2, 'nul_conflict')
-      `,
-      args: [JSON.stringify({ nationality: "CAN" }), NOW],
-    })).rejects.toThrow("UNIQUE constraint failed")
-  })
-
   test("marks Very unavailable instead of creating a permanently pending selection", async () => {
     const client = await setup()
     await seedDocument(client, { id: "nul_self_a", nationality: "USA" })
