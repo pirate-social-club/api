@@ -271,6 +271,7 @@ async function evaluateAtom(input: {
           provider: getPreferredDocumentProvider(acceptedProviders),
           accepted_providers: acceptedProviders,
           capability: "gender",
+          allowed_markers: input.atom.allowed,
         })
       }
     case "wallet_score":

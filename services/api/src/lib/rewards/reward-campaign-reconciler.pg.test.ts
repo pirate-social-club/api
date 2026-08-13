@@ -1556,7 +1556,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     }
   })
 
-  test("fails closed when accepted nationality evidence conflicts for the selected identity", async () => {
+  test("keeps reward nationality evidence bound to the selected document", async () => {
     const seed = connect(TEST_DB, 1)
     await seed.unsafe(`INSERT INTO users VALUES (
       'usr_evidence_conflict_pg',
@@ -1572,6 +1572,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       'passport', 'evidence-conflict-nullifier', 'active', $1,
       'att_evidence_conflict_unique_human_pg'
     )`, [NOW])
+    await seed.unsafe(`INSERT INTO identity_nullifiers VALUES (
+      'idn_evidence_other_pg', 'usr_evidence_conflict_pg', 'zkpassport',
+      'passport', 'evidence-other-nullifier', 'active', $1, NULL
+    )`, ["2026-07-10T12:00:01.000Z"])
     await seed.unsafe(`INSERT INTO reward_identity_bindings VALUES (
       'rib_evidence_conflict_pg', 'usr_evidence_conflict_pg',
       'idn_evidence_conflict_pg', 'active', $1, NULL
@@ -1580,8 +1584,9 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       await seed.unsafe(`INSERT INTO user_attestations VALUES (
         $1, 'usr_evidence_conflict_pg', NULL, 'zkpassport',
         'nationality', 'nationality', 'accepted', $2::jsonb,
-        $3, NULL, NULL, 'idn_evidence_conflict_pg'
-      )`, [`att_evidence_conflict_${suffix}_pg`, JSON.stringify({ nationality }), NOW])
+        $3, NULL, NULL, $4
+      )`, [`att_evidence_conflict_${suffix}_pg`, JSON.stringify({ nationality }), NOW,
+        suffix === "jpn" ? "idn_evidence_conflict_pg" : "idn_evidence_other_pg"])
     }
     await seed.unsafe(`INSERT INTO reward_qualification_events (
       reward_qualification_event_id, user_id, community_id, post_id,
@@ -1605,7 +1610,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       'rcp_evidence_conflict_pg', 'usr_reward_pg', 'evidence-conflict-pg',
       'cmt_reward_pg', 'pst_evidence_conflict_pg', 'sab_evidence_conflict_pg',
       'usr_reward_pg', 'zkpassport', 'active', 'study', 7000, 40, 0, 0,
-      40, 100, 100, 0, 0, 0, 0, 4, 'evidence-conflict-terms',
+      80, 100, 100, 0, 0, 0, 0, 4, 'evidence-conflict-terms',
       '2026-07-01T00:00:00.000Z', '2026-07-31T23:59:59.999Z', $1,
       40, 70, '[{"nationalities":["JPN"],"amount_cents":70}]'::jsonb
     )`, [NOW])
@@ -1642,7 +1647,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
             policyVersion: "study-completed-set-v1",
           },
         })
-        expect(result).toEqual({ result: "identity", amountCents: 0 })
+        expect(result).toEqual({ result: "credited", amountCents: 70 })
         const accounting = await client.execute(`SELECT
           (SELECT COUNT(*)::int FROM reward_campaign_reservations
             WHERE reward_campaign_id = 'rcp_evidence_conflict_pg') AS reservations,
@@ -1656,11 +1661,11 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
             WHERE reward_qualification_event_id = 'rqe_evidence_conflict_pg') AS retryability
         `)
         expect(accounting.rows[0]).toEqual({
-          reservations: 0,
-          events: 0,
+          reservations: 1,
+          events: 1,
           enforcements: 0,
-          outcome: "identity_evidence_conflict",
-          retryability: "terminal",
+          outcome: "resolved",
+          retryability: "resolved",
         })
       })
     } finally {
@@ -1676,7 +1681,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         await client.execute(`DELETE FROM reward_identity_bindings
           WHERE reward_identity_binding_id = 'rib_evidence_conflict_pg'`)
         await client.execute(`DELETE FROM identity_nullifiers
-          WHERE identity_nullifier_id = 'idn_evidence_conflict_pg'`)
+          WHERE identity_nullifier_id IN ('idn_evidence_conflict_pg', 'idn_evidence_other_pg')`)
         await client.execute(`DELETE FROM users
           WHERE user_id = 'usr_evidence_conflict_pg'`)
       })

@@ -107,6 +107,7 @@ describe("verification finalization race recovery", () => {
     const client = {
       transaction: async () => {
         const transaction: Transaction = {
+          execute: async () => ({ rows: [] }),
           batch: async (_statements: InStatement[]) => {
             if (!claimTaken) {
               claimTaken = true

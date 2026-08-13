@@ -87,7 +87,7 @@ function makeTestEvidenceClient(user: User): DbExecutor {
 
   const addEvidence = (input: {
     capability: string
-    provider: string | null
+    provider: string | null | undefined
     value: Record<string, unknown>
     requiresNullifier?: boolean
   }) => {

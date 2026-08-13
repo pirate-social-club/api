@@ -107,7 +107,8 @@ describe("provider-keyed identity evidence evaluator", () => {
       userId: "user_1",
       now: new Date("2026-01-02T00:00:00.000Z"),
     })
-    expect(typeof statement === "string" ? statement : statement?.sql).toContain("a.expires_at > ?2")
+    const capturedStatement = statement as InStatement | string
+    expect(typeof capturedStatement === "string" ? capturedStatement : capturedStatement.sql).toContain("a.expires_at > ?2")
     expect(result.map((item) => item.capability)).toEqual(["unique_human", "nationality", "gender"])
     expect(result[0]?.sourceIdentityNullifierId).toBe("nullifier_1")
     expect(result[2]?.sourceIdentityNullifierId).toBe("nullifier_gender")

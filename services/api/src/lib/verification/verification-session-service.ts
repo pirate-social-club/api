@@ -180,6 +180,7 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
       }
       if (
         activeNullifier
+        && input.activeNullifierRefreshStatementIndex !== undefined
         && results[input.activeNullifierRefreshStatementIndex]?.rowsAffected !== 1
       ) {
         throw conflictError("Active identity changed during verification; please try again")
