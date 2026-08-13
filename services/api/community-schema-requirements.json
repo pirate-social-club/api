@@ -39,6 +39,7 @@
     "1136_community_handle_label_reservations.sql",
     "1137_community_handle_payment_reservation_cap.sql",
     "1138_namespace_handle_label_claim_rules.sql",
+    "1139_story_registration_durable_request.sql",
     "1140_karaoke_attempts_schema_repair.sql",
     "1141_namespace_handle_policy_revision.sql",
     "1142_song_study_sessions.sql",
@@ -117,9 +118,6 @@
     }
   },
   "deferred": {
-    "1139_story_registration_durable_request.sql": {
-      "rationale": "Core prepares durable_request_json for persist-and-replay Story registration, but this API commit does not read or write that column. Require it when the durable registration runtime lands."
-    },
     "1148_post_age_gate_provenance.sql": {
       "rationale": "Core prepares post age-gate provenance columns, but this API commit deliberately rolls back all runtime reads and writes until migration 1148 is applied across the production shard fleet."
     }
