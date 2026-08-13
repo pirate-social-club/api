@@ -380,9 +380,9 @@ All eight requests reported `community-author-handles-sum=0` and
 `community-derivative-profiles-sum=0`. Against the earlier four-request video
 baseline (12.623–14.084s `home-feed`, 12.199–13.535s fanout), the observed
 median fell by about 68% and the sample maximum by about 70%. The direct slice
-criteria therefore pass: the new prefetch phase is live, the duplicated
-profile phases disappear, and the observed endpoint time is below the 6-second
-target.
+criteria therefore pass for the video route: the new prefetch phase is live,
+the duplicated profile phases disappear there, and the observed endpoint time
+is below the 6-second target. This does not close the primary mixed Home gate.
 
 This is strong directional evidence, not a population p95: the before sample
 has four requests and the after sample has eight. Repeat a larger same-surface
@@ -390,3 +390,13 @@ sample before using the result for capacity planning. The remaining visible
 cost is derivative global-row hydration (about 2.45–2.61s per request); treat
 that as a separate, optional follow-up rather than reopening the profile
 deduplication slice.
+
+A subsequent 50-request cache-busted mixed `best` first-page probe reported
+`x-pirate-materialized-feed: bypass` on every response, but
+`community-profile-prefetch=0` on every response while author-handle and
+derivative-profile phases remained in the multi-second sums. The mixed
+projection SQL did not select `author_user_id` or `identity_mode`, so the
+request-scoped prefetch had no IDs to load. API PR #1297 adds those existing
+columns to both sides of the mixed keyset query and extends the PostgreSQL
+fixture to pin the contract. Re-run the mixed 50-request gate only after that
+fix is deployed.
