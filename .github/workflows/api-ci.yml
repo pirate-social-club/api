@@ -573,6 +573,9 @@ jobs:
           fi
           echo "Using Core commit $actual_core_sha"
 
+      - name: Link Core workspace dependencies
+        run: ln -sfn "$GITHUB_WORKSPACE/core" "$GITHUB_WORKSPACE/../core"
+
       - name: Check generated contracts freshness against core spec
         working-directory: services/contracts
         env:

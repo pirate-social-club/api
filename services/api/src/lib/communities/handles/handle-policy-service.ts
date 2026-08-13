@@ -13,7 +13,7 @@ import { numberOrNull, requiredNumber, requiredString, rowValue, stringOrNull } 
 import { openCommunityWriteClient } from "../community-read-access"
 import type { CommunityDatabaseBindingRepository, CommunityReadRepository } from "../db-community-repository"
 import { requireCommunityOwner } from "../commerce/access"
-import { validateGatePolicy } from "../membership/gate-policy-validation"
+import { normalizeStoredGatePolicy, validateGatePolicy } from "../membership/gate-policy-validation"
 import type { GatePolicy } from "../membership/gate-types"
 import {
   type LabelClaimRuleRow,
@@ -262,7 +262,7 @@ function isRevisionGuardFailure(error: unknown): boolean {
 function parseClaimGateExpression(raw: string | null): GatePolicy | null {
   if (!raw?.trim()) return null
   try {
-    return validateGatePolicy(JSON.parse(raw))
+    return normalizeStoredGatePolicy(JSON.parse(raw))
   } catch {
     throw internalError("Community handle claim gate expression is malformed")
   }

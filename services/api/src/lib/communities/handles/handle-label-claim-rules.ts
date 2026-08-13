@@ -4,7 +4,7 @@ type CommunityHandleLabelClaimRule = NonNullable<CommunityHandlePolicy["label_cl
 import type { DbExecutor } from "../../db-helpers"
 import { badRequestError, internalError } from "../../errors"
 import { requiredNumber, requiredString, rowValue, stringOrNull } from "../../sql-row"
-import { validateGatePolicy } from "../membership/gate-policy-validation"
+import { normalizeStoredGatePolicy, validateGatePolicy } from "../membership/gate-policy-validation"
 import type { GatePolicy } from "../membership/gate-types"
 
 export const MAX_LABEL_CLAIM_RULES = 20
@@ -95,7 +95,7 @@ export function resolveLabelClaimGatePolicy(rule: LabelClaimRuleRow, labelNormal
     throw internalError("Community handle label claim rule binds {label} outside inventory facet values")
   }
   try {
-    return validateGatePolicy(substituted)
+    return normalizeStoredGatePolicy(substituted)
   } catch {
     throw internalError("Community handle label claim rule expression is malformed")
   }
@@ -143,7 +143,7 @@ export function serializeLabelClaimRules(
 
 function parseStoredRuleExpression(rule: LabelClaimRuleRow): GatePolicy {
   try {
-    return validateGatePolicy(JSON.parse(rule.expression_json))
+    return normalizeStoredGatePolicy(JSON.parse(rule.expression_json))
   } catch {
     throw internalError("Community handle label claim rule expression is malformed")
   }

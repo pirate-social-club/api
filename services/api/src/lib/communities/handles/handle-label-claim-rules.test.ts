@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import type { DbExecutor } from "../../db-helpers"
-import { listNamespaceLabelClaimRules } from "./handle-label-claim-rules"
+import {
+  listNamespaceLabelClaimRules,
+  resolveLabelClaimGatePolicy,
+  serializeLabelClaimRules,
+} from "./handle-label-claim-rules"
 
 function throwingExecutor(message: string): DbExecutor {
   return {
@@ -31,5 +35,28 @@ describe("listNamespaceLabelClaimRules", () => {
       throwingExecutor("no such table: namespace_handle_policies"),
       "nhp_1",
     )).rejects.toThrow("namespace_handle_policies")
+  })
+
+  test("keeps stored legacy multi-provider conjunctions readable", () => {
+    const rule = {
+      label_claim_rule_id: "rule_1",
+      position: 0,
+      selector_type: "any" as const,
+      selector_labels_json: null,
+      expression_json: JSON.stringify({
+        version: 1,
+        expression: {
+          op: "and",
+          children: [
+            { op: "gate", gate: { type: "unique_human", provider: "self" } },
+            { op: "gate", gate: { type: "unique_human", provider: "zkpassport" } },
+          ],
+        },
+      }),
+    }
+
+    expect(resolveLabelClaimGatePolicy(rule, "label").expression.op).toBe("and")
+    expect(serializeLabelClaimRules([rule], (prefix, value) => `${prefix}_${value}`)[0]
+      ?.claim_gate_expression.expression.op).toBe("and")
   })
 })
