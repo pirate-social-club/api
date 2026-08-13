@@ -358,13 +358,13 @@ describe("debug pipeline routes", () => {
   })
 
   test("POST /admin/debug/staging-d1/reclaim is absent outside staging", async () => {
-    const ctx = await createRouteTestContext({ ENVIRONMENT: "production", PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    const ctx = await createRouteTestContext({ ENVIRONMENT: "production" })
     cleanup = ctx.cleanup
     const response = await app.request(
       "http://pirate.test/admin/debug/staging-d1/reclaim",
       {
         method: "POST",
-        headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ community_ids: ["cmt_smoke"] }),
       },
       ctx.env,
@@ -373,13 +373,13 @@ describe("debug pipeline routes", () => {
   })
 
   test("POST /admin/debug/staging-d1/archive-smoke is absent outside staging", async () => {
-    const ctx = await createRouteTestContext({ ENVIRONMENT: "production", PIRATE_ADMIN_TOKEN: ADMIN_TOKEN })
+    const ctx = await createRouteTestContext({ ENVIRONMENT: "production" })
     cleanup = ctx.cleanup
     const response = await app.request(
       "http://pirate.test/admin/debug/staging-d1/archive-smoke",
       {
         method: "POST",
-        headers: { "content-type": "application/json", "x-admin-token": ADMIN_TOKEN },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ community_ids: ["cmt_smoke"] }),
       },
       ctx.env,

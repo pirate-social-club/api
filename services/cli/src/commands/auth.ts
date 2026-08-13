@@ -64,10 +64,10 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
     }
     case "admin-login": {
       const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
-      const adminToken = getFlag(args, "admin-token") || process.env.PIRATE_ADMIN_TOKEN
+      const adminCredential = getFlag(args, "operator-credential") || process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL
       const asUserId = getFlag(args, "as-user") || getFlag(args, "as-user-id") || process.env.PIRATE_ADMIN_AS_USER_ID
-      if (!adminToken) {
-        exitWithUsage("Missing admin token. Use --admin-token <token> or PIRATE_ADMIN_TOKEN.")
+      if (!adminCredential) {
+        exitWithUsage("Missing operator credential. Use --operator-credential <opc_...>.<secret> or PIRATE_ADMIN_OPERATOR_CREDENTIAL.")
       }
       if (!asUserId) {
         exitWithUsage("Missing acting user. Use --as-user <usr_...> or PIRATE_ADMIN_AS_USER_ID.")
@@ -77,7 +77,7 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
         await apiRequest<unknown>({
           baseUrl,
           path: apiRoutes.communitiesAdminHealth,
-          adminToken,
+          adminCredential,
           adminAsUserId: asUserId,
         })
       } catch (error) {
@@ -88,7 +88,7 @@ export async function runAuth(action: string | undefined, args: ParsedArgs): Pro
         mode: "admin",
         base_url: baseUrl,
         access_token: "",
-        admin_token: adminToken,
+        admin_credential: adminCredential,
         admin_as_user_id: asUserId,
         user_id: asUserId,
         issued_at: null,

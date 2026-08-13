@@ -44,6 +44,7 @@ export type Env = {
   /** Sample percentage (0-100) for non-blocking owned-vs-hosted EFP read comparisons. */
   EFP_FOLLOW_SHADOW_SAMPLE_PERCENT?: string
   EFP_HOSTED_API_URL?: string
+  /** Test/staging fixture compatibility only; production auth rejects this credential. */
   PIRATE_ADMIN_TOKEN?: string
   OPS_ALERT_DEDUPE?: KVNamespace
   OPS_ALERT_EMAIL?: SendEmail

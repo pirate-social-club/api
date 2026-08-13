@@ -15,7 +15,7 @@ Inspect the fenced journal row:
 
 ```bash
 curl -sS \
-  -H "x-admin-token: ${PIRATE_ADMIN_TOKEN}" \
+  -H "Authorization: Operator ${PIRATE_ADMIN_OPERATOR_CREDENTIAL}" \
   "${API_BASE_URL}/admin/debug/story-registration-effect?community_id=${COMMUNITY_ID}&asset_id=${ASSET_ID}"
 ```
 
@@ -55,7 +55,7 @@ content hash, rights basis, and creator against the fenced journal request.
 ```bash
 curl -sS -X POST \
   -H "content-type: application/json" \
-  -H "x-admin-token: ${PIRATE_ADMIN_TOKEN}" \
+  -H "Authorization: Operator ${PIRATE_ADMIN_OPERATOR_CREDENTIAL}" \
   "${API_BASE_URL}/admin/debug/story-registration-effect/confirm-receipt" \
   --data-binary @story-registration-resolution.json
 ```
@@ -105,7 +105,7 @@ the effect retryable.
 ```bash
 curl -sS -X POST \
   -H "content-type: application/json" \
-  -H "x-admin-token: ${PIRATE_ADMIN_TOKEN}" \
+  -H "Authorization: Operator ${PIRATE_ADMIN_OPERATOR_CREDENTIAL}" \
   "${API_BASE_URL}/admin/debug/story-registration-effect/confirm-reverted" \
   --data-binary "{
     \"community_id\": \"${COMMUNITY_ID}\",
@@ -124,7 +124,7 @@ provider traces prove that no transaction was accepted.
 ```bash
 curl -sS -X POST \
   -H "content-type: application/json" \
-  -H "x-admin-token: ${PIRATE_ADMIN_TOKEN}" \
+  -H "Authorization: Operator ${PIRATE_ADMIN_OPERATOR_CREDENTIAL}" \
   "${API_BASE_URL}/admin/debug/story-registration-effect/confirm-no-broadcast" \
   --data-binary "{
     \"community_id\": \"${COMMUNITY_ID}\",

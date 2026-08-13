@@ -182,6 +182,15 @@ describe("authenticateOperatorCredential", () => {
     })).rejects.toMatchObject({ status: 403, code: "eligibility_failed" })
   })
 
+  test("rejects the legacy shared token in production", async () => {
+    await expect(authenticateAdminAccessOnly({
+      env: { ENVIRONMENT: "production", PIRATE_ADMIN_TOKEN: "admin-secret" } as Env,
+      authorization: undefined,
+      legacyToken: "admin-secret",
+      requiredScope: ADMIN_USERS_MANAGE_SCOPE,
+    })).resolves.toBeNull()
+  })
+
   test("authenticates when the best-effort last_used_at touch fails", async () => {
     const executor: DbExecutor = {
       execute: async (query) => {

@@ -253,12 +253,12 @@ describe("CLI args parsing for admin commands", () => {
   test("parses auth admin-login args", () => {
     const args = parseArgs([
       "auth", "admin-login",
-      "--admin-token", "secret",
+      "--operator-credential", "opc_admin_automation.secret",
       "--as-user", "usr_123",
       "--base-url", "https://api.pirate.sc",
     ])
     expect(args.positionals).toEqual(["auth", "admin-login"])
-    expect(getFlag(args, "admin-token")).toBe("secret")
+    expect(getFlag(args, "operator-credential")).toBe("opc_admin_automation.secret")
     expect(getFlag(args, "as-user")).toBe("usr_123")
     expect(getFlag(args, "base-url")).toBe("https://api.pirate.sc")
   })

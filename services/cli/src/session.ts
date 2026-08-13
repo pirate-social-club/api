@@ -14,7 +14,7 @@ export function requireStoredSession(): {
   baseUrl: string
   mode: "user" | "admin"
   accessToken: string | null
-  adminToken: string | null
+  adminCredential: string | null
   adminAsUserId: string | null
   userId: string
 } {
@@ -23,8 +23,8 @@ export function requireStoredSession(): {
     throw new Error("No stored Pirate session. Run `pirate auth login --jwt <token>` first.")
   }
   const mode = state.mode === "admin" ? "admin" : "user"
-  if (mode === "admin" && !state.admin_token) {
-    throw new Error("Stored Pirate admin session is missing admin_token. Run `pirate auth admin-login --admin-token <token>` first.")
+  if (mode === "admin" && !state.admin_credential) {
+    throw new Error("Stored Pirate admin session is missing admin_credential. Run `pirate auth admin-login --operator-credential <opc_...>.<secret>` first.")
   }
   if (mode === "user" && !state.access_token) {
     throw new Error("Stored Pirate user session is missing access_token. Run `pirate auth login --jwt <token>` first.")
@@ -33,7 +33,7 @@ export function requireStoredSession(): {
     baseUrl: state.base_url,
     mode,
     accessToken: state.access_token ?? null,
-    adminToken: state.admin_token ?? null,
+    adminCredential: state.admin_credential ?? null,
     adminAsUserId: state.admin_as_user_id ?? null,
     userId: state.user_id,
   }
@@ -41,12 +41,12 @@ export function requireStoredSession(): {
 
 export function apiAuthHeadersForSession(session: ReturnType<typeof requireStoredSession>, asUserId?: string | null): {
   accessToken?: string | null
-  adminToken?: string | null
+  adminCredential?: string | null
   adminAsUserId?: string | null
 } {
   if (session.mode === "admin") {
     return {
-      adminToken: session.adminToken,
+      adminCredential: session.adminCredential,
       adminAsUserId: asUserId ?? session.adminAsUserId ?? session.userId,
     }
   }

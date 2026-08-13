@@ -20,6 +20,7 @@ concurrency:
 permissions:
   contents: read
   packages: read
+  id-token: write
 
 jobs:
   cron-telegram-delivery:
@@ -27,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}
+      PIRATE_ADMIN_OPERATOR_CREDENTIAL: ""
       PIRATE_SMOKE_API_BASE_URL: https://api-staging.pirate.sc
       PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID: ${{ inputs.community_id || vars.PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID }}
       PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS: "1200000"
@@ -55,6 +56,22 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.3.10
+
+      - name: Fetch staging admin secret material
+        working-directory: core
+        env:
+          INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
+          INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
+          INFISICAL_ENV: staging
+          INFISICAL_SECRET_PATH: /services/api
+          SECRET_NAMES: PIRATE_ADMIN_TOKEN
+        run: scripts/ci/fetch-infisical-secrets.sh
+      - name: Build scoped admin credential
+        shell: bash
+        run: |
+          credential="opc_admin_automation.${PIRATE_ADMIN_TOKEN}"
+          echo "::add-mask::$credential"
+          printf 'PIRATE_ADMIN_OPERATOR_CREDENTIAL=%s\n' "$credential" >> "$GITHUB_ENV"
 
       - name: Install shared dependencies
         working-directory: api/services/shared

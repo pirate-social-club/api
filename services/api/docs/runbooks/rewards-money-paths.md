@@ -25,7 +25,7 @@ no-store` data. Keep the token out of shell history and captured incident logs.
 
 ```bash
 curl --fail-with-body --silent --show-error \
-  -H "x-admin-token: ${PIRATE_ADMIN_TOKEN:?}" \
+  -H "Authorization: Operator ${PIRATE_ADMIN_OPERATOR_CREDENTIAL:?}" \
   "https://api.pirate.sc/admin/ops/wallets"
 ```
 
@@ -49,7 +49,7 @@ URL-encode the complete JSON value as the `coordinator_ref` query parameter.
 
 ```bash
 curl --fail-with-body --silent --show-error \
-  -H "x-admin-token: ${PIRATE_ADMIN_TOKEN:?}" \
+  -H "Authorization: Operator ${PIRATE_ADMIN_OPERATOR_CREDENTIAL:?}" \
   "https://api.pirate.sc/admin/ops/rewards-settlement-diagnostics?coordinator_ref=<url-encoded-json>"
 ```
 

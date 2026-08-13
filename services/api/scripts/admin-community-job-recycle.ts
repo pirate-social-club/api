@@ -4,7 +4,7 @@ export {}
 
 type Options = {
   baseUrl: string
-  adminToken: string
+  adminCredential: string
   communityId: string
   jobId: string
   reason: string | null
@@ -12,12 +12,12 @@ type Options = {
 
 function usage(exitCode = 1): never {
   console.error(`Usage:
-  PIRATE_API_BASE_URL=https://api.example.com PIRATE_ADMIN_TOKEN=... \\
+  PIRATE_API_BASE_URL=https://api.example.com PIRATE_ADMIN_OPERATOR_CREDENTIAL=opc_admin_automation.... \\
     bun run scripts/admin-community-job-recycle.ts --community-id com_... --job-id job_cjb_... [--reason "operator retry"]
 
 Options:
   --base-url URL       Overrides PIRATE_API_BASE_URL.
-  --admin-token TOKEN  Overrides PIRATE_ADMIN_TOKEN.
+  --operator-credential CREDENTIAL  Overrides PIRATE_ADMIN_OPERATOR_CREDENTIAL.
   --community-id ID    Raw cmt_... or public com_cmt_... community id.
   --job-id ID          Raw cjb_... or public job_cjb_... community job id.
   --reason TEXT        Optional short audit reason.`)
@@ -39,7 +39,7 @@ function parseArgs(argv: string[]): Options {
   }
 
   let baseUrl = process.env.PIRATE_API_BASE_URL?.trim() ?? ""
-  let adminToken = process.env.PIRATE_ADMIN_TOKEN?.trim() ?? ""
+  let adminCredential = process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL?.trim() ?? ""
   let communityId = ""
   let jobId = ""
   let reason: string | null = null
@@ -51,8 +51,8 @@ function parseArgs(argv: string[]): Options {
         baseUrl = readValue(argv, index, arg)
         index += 2
         break
-      case "--admin-token":
-        adminToken = readValue(argv, index, arg)
+      case "--operator-credential":
+        adminCredential = readValue(argv, index, arg)
         index += 2
         break
       case "--community-id":
@@ -77,8 +77,8 @@ function parseArgs(argv: string[]): Options {
     console.error("missing --base-url or PIRATE_API_BASE_URL")
     usage()
   }
-  if (!adminToken) {
-    console.error("missing --admin-token or PIRATE_ADMIN_TOKEN")
+  if (!adminCredential) {
+    console.error("missing --operator-credential or PIRATE_ADMIN_OPERATOR_CREDENTIAL")
     usage()
   }
   if (!communityId || !jobId) {
@@ -88,7 +88,7 @@ function parseArgs(argv: string[]): Options {
 
   return {
     baseUrl: baseUrl.replace(/\/+$/u, ""),
-    adminToken,
+    adminCredential,
     communityId,
     jobId,
     reason,
@@ -100,7 +100,7 @@ const response = await fetch(`${options.baseUrl}/admin/debug/community-job/recyc
   method: "POST",
   headers: {
     "content-type": "application/json",
-    "x-admin-token": options.adminToken,
+    Authorization: `Operator ${options.adminCredential}`,
   },
   body: JSON.stringify({
     community_id: options.communityId,

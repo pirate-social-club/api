@@ -13,15 +13,10 @@ migrator database URL. Multi-scope credentials require an explicit environment
 variable name. Send the resulting credential in the `Authorization` header.
 Never put it in query parameters or logs.
 
-The shared `X-Admin-Token` path remains temporarily available for migration.
-Every use emits `legacy_admin_token_used`; production configuration emits
-`legacy_admin_token_configured_in_production`. Before 2026-10-01:
-
-1. Issue short-lived, least-privilege credentials for each operator identity.
-2. Move callers to the `Operator` authorization scheme.
-3. Confirm both legacy telemetry codes remain at zero for an agreed observation
-   window.
-4. Remove `PIRATE_ADMIN_TOKEN`, then delete the compatibility path.
+Production rejects `X-Admin-Token` outright. The legacy comparison remains only
+for test and staging fixtures that have not yet been rewritten; it is never
+reachable by a production Worker. All production and scheduled callers use the
+operator scheme, and `PIRATE_ADMIN_TOKEN` is no longer read by production auth.
 
 Audit records use the credential's `operator_actor_id`; expiry and throttled
 `last_used_at` updates come from `operator_credentials`.

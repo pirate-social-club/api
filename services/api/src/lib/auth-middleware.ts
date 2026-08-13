@@ -136,12 +136,6 @@ export async function authenticateAdminAccessOnly(input: {
   legacyToken: string | undefined
   requiredScope: OperatorScope
 }): Promise<AdminActorContext["adminOverride"] | null> {
-  if (input.env.ENVIRONMENT === "production" && String(input.env.PIRATE_ADMIN_TOKEN || "").trim()) {
-    console.error("[admin-auth] deprecated production shared token remains configured", {
-      code: "legacy_admin_token_configured_in_production",
-      removal_after: "2026-10-01",
-    })
-  }
   if (input.authorization?.startsWith("Operator ")) {
     const operator = await authenticateOperatorCredential({
       env: input.env,
@@ -154,15 +148,22 @@ export async function authenticateAdminAccessOnly(input: {
     }
   }
 
-  // TODO(security-deprecation-2026-10-01): remove the shared-token fallback
-  // after production telemetry confirms zero legacy requests.
+  // The shared token is retained only for non-production test/staging fixtures
+  // while those fixtures finish their operator-credential migration. It is
+  // never accepted by a production Worker.
+  if (input.env.ENVIRONMENT === "production") {
+    if (input.legacyToken?.trim()) {
+      console.error("[admin-auth] legacy shared token rejected in production", {
+        code: "legacy_admin_token_rejected_in_production",
+      })
+    }
+    return null
+  }
   const legacy = authenticateAdminTokenOnly({ env: input.env, token: input.legacyToken })
   if (legacy) {
-    const production = input.env.ENVIRONMENT === "production"
-    console[production ? "error" : "warn"]("[admin-auth] legacy shared token used", {
+    console.warn("[admin-auth] legacy shared token used outside production", {
       code: "legacy_admin_token_used",
       environment: input.env.ENVIRONMENT ?? "unknown",
-      removal_after: "2026-10-01",
     })
   }
   return legacy
