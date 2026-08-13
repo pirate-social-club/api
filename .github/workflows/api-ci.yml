@@ -64,6 +64,8 @@ on:
         required: false
         type: string
 
+# Keep the main-push check suite visible to release compatibility verification.
+
 permissions:
   actions: read
   contents: read
