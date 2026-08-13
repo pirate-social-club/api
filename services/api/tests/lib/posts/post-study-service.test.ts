@@ -775,6 +775,7 @@ async function reachFillBlankExercise(idempotencyPrefix: string) {
   }
   const prompt = lesson.next?.prompt
   if (!prompt || prompt.type !== "fill_blank") throw new Error("fill-blank test did not reach enrichment")
+  expect(prompt.prompt_text).toBe("Fill in the lyric.")
   const row = await client!.execute({
     sql: "SELECT correct_placements_json FROM song_study_unit_cloze WHERE unit_id = ?1",
     args: [/^stu:([^:]+):/u.exec(prompt.id)?.[1] ?? ""],

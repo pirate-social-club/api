@@ -1,6 +1,7 @@
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import type { ReadClient } from "../sql-client"
 import {
+  FILL_BLANK_PROMPT_TEXT,
   readString,
   readExerciseType,
   type StudyExerciseRow,
@@ -12,7 +13,7 @@ const FILL_BLANK_EXERCISE_SELECT = `
       SELECT ('stu:' || u.id || ':fill_blank:v' || c.cloze_version || ':'
                  || c.source_fingerprint || ':' || u.source_language) AS id,
              u.line_id, u.line_index, 'fill_blank' AS exercise_type,
-             'Fill in the lyric.' AS prompt_text, NULL AS question,
+             '${FILL_BLANK_PROMPT_TEXT}' AS prompt_text, NULL AS question,
              NULL AS reference_text, NULL AS translation_text,
              NULL AS options_json, NULL AS correct_option_id,
              c.segments_json, c.tokens_json, c.correct_placements_json,
