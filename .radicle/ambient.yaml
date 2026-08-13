@@ -29,6 +29,7 @@ plan:
       export PATH="$(dirname "$bun_runtime"):$PATH"
 
       import_bun_cache() {
+        # cache_version is Bun's hashed prerelease directory name.
         local root="$1"
         local manifest="/ci/deps/bun/$root/manifest.tsv"
         while IFS=$'\t' read -r name version cache_version archive integrity; do
