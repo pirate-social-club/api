@@ -103,14 +103,24 @@ async function verifyUser(ctx: RouteContext, userId: string, key: string, now: s
       },
     })],
   })
+  const attestationId = `att_${key}_unique_human`
+  await ctx.client.execute({
+    sql: `
+      INSERT INTO user_attestations (
+        user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+        capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+      ) VALUES (?1, ?2, NULL, 'self', 'unique_human', 'unique_human', 'accepted', ?3, ?4, NULL, NULL, ?4, ?4)
+    `,
+    args: [attestationId, userId, JSON.stringify({ state: "verified" }), now],
+  })
   await ctx.client.execute({
     sql: `
       INSERT INTO identity_nullifiers (
         identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
-        status, first_seen_at, created_at, updated_at
-      ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, 'active', ?4, ?4, ?4)
+        status, source_user_attestation_id, first_seen_at, created_at, updated_at
+      ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, 'active', ?4, ?5, ?5, ?5)
     `,
-    args: [`idn_${key}`, userId, `nullifier_${key}`, now],
+    args: [`idn_${key}`, userId, `nullifier_${key}`, attestationId, now],
   })
 }
 
