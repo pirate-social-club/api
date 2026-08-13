@@ -26,6 +26,7 @@ plan:
         rm -rf -- "$temp"
       fi
       bun="$bun_runtime"
+      export PATH="$(dirname "$bun_runtime"):$PATH"
 
       import_bun_cache() {
         local root="$1"
