@@ -747,7 +747,7 @@ async function completeVerySession(
   const sessionExpiresAt = row.expires_at
   if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, new Date().toISOString()],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -802,7 +802,7 @@ async function completeVerySession(
     })
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, outcome.failureReason, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -816,7 +816,7 @@ async function completeVerySession(
     })
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -840,7 +840,7 @@ async function completeVeryNativeSession(
   const sessionExpiresAt = row.expires_at
   if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, new Date().toISOString()],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -886,7 +886,7 @@ async function completeVeryNativeSession(
   if (outcome.status === "failed") {
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, outcome.failureReason, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -896,7 +896,7 @@ async function completeVeryNativeSession(
   if (outcome.status === "expired") {
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -920,7 +920,7 @@ async function completeSelfSession(
       failureReason: "provider_expired",
     })
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, new Date().toISOString()],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -991,7 +991,7 @@ async function completeSelfSession(
       })
       const updatedAt = new Date().toISOString()
       await client.execute({
-        sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+        sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1 AND status = 'pending'`,
         args: [input.verificationSessionId, `missing_required_claims:${missingClaims.join(",")}`, updatedAt],
       })
       const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -1025,7 +1025,7 @@ async function completeSelfSession(
     })
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, outcome.failureReason, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -1040,7 +1040,7 @@ async function completeSelfSession(
     })
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -1064,7 +1064,7 @@ async function completeZkPassportSession(
   if (sessionExpiresAt && new Date(sessionExpiresAt) < new Date()) {
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -1109,7 +1109,7 @@ async function completeZkPassportSession(
     })
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'failed', failure_code = ?2, updated_at = ?3 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, outcome.failureReason, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
@@ -1119,7 +1119,7 @@ async function completeZkPassportSession(
   if (outcome.status === "expired") {
     const updatedAt = new Date().toISOString()
     await client.execute({
-      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1`,
+      sql: `UPDATE verification_sessions SET status = 'expired', failure_code = 'provider_expired', updated_at = ?2 WHERE verification_session_id = ?1 AND status = 'pending'`,
       args: [input.verificationSessionId, updatedAt],
     })
     const updatedRow = await getVerificationSessionRowForUser(client, input.verificationSessionId, input.userId)
