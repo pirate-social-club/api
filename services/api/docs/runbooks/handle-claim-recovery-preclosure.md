@@ -69,12 +69,29 @@ The focused tests and staging matrix must include all of these cases:
 7. A key rotation rehearsal with an outstanding old-epoch funded intent is
    blocked (or uses an epoch-indexed keyring). The drain-to-zero path proves
    there are no funded/refund-pending intents before the active epoch changes.
+8. A buyer pays a finalized quote and never submits the claim. The staging
+   evidence must show that no receipt row, intent transition, refund
+   obligation, or first-receipt alert exists until a claim request supplies
+   the buyer proof. Record this as the current buyer-submitted-proof blind
+   spot; it is expected residual behavior, not evidence that the payment was
+   safely recovered.
 
 The broader money-path matrix still covers late payment, missing inclusion
 timestamp, replay, duplicate finalization, provider retry, worker eviction,
 reconciler crash windows, refund confirmation, wrong/excess/multiple transfers,
 unexpected senders, and reorg/finality behavior. The finality and custody
 classification cases are release-blocking, not informational coverage.
+
+## Non-blocking observation follow-up
+
+The observation ledger reserves `observed_source = 'indexer'`, but the current
+production path has no independent indexer caller; receipts arrive through
+`buyer_hint` during claim submission. A future observer should discover
+finalized transfers into configured custody addresses, persist them before a
+buyer returns, and reconcile them to quotes/intents without trusting client
+input. Designing and operating that observer is a separate commerce follow-up,
+not a prerequisite for this handle rollout once the explicit blind-spot test
+and evidence are accepted.
 
 ## Rollout order
 
