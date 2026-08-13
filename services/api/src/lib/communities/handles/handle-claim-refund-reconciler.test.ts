@@ -46,7 +46,8 @@ beforeAll(async () => {
         observed_funding_receipt_id TEXT PRIMARY KEY,
         amount_atomic TEXT NOT NULL,
         sender_address TEXT NOT NULL,
-        recipient_address TEXT NOT NULL
+        recipient_address TEXT NOT NULL,
+        match_status TEXT NOT NULL DEFAULT 'claimed'
       )` },
       { sql: `CREATE TABLE community_handle_claim_intents (
         community_handle_claim_intent_id TEXT PRIMARY KEY,
