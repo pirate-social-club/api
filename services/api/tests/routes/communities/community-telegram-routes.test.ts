@@ -538,6 +538,55 @@ async function setUserNationality(input: {
     `,
     args: [input.userId, JSON.stringify(capabilities), new Date().toISOString()],
   })
+
+  const now = new Date().toISOString()
+  const attestationId = `att_telegram_test_nationality_${input.userId}`
+  const nullifierId = `nul_telegram_test_nationality_${input.userId}`
+  await input.client.execute({
+    sql: `
+      INSERT INTO identity_nullifiers (
+        identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+        source_verification_session_id, source_user_attestation_id, status,
+        first_seen_at, revoked_at, created_at, updated_at
+      ) VALUES (?1, ?2, 'self', 'zk-nullifier', ?3, NULL, NULL, 'active', ?4, NULL, ?4, ?4)
+      ON CONFLICT(identity_nullifier_id) DO UPDATE SET
+        user_id = excluded.user_id,
+        nullifier_hash = excluded.nullifier_hash,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `,
+    args: [nullifierId, input.userId, `telegram-test-${input.userId}`, now],
+  })
+  await input.client.execute({
+    sql: `
+      INSERT INTO user_attestations (
+        user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+        capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at,
+        source_identity_nullifier_id
+      ) VALUES (?1, ?2, NULL, 'self', 'nationality', 'nationality', 'accepted', ?3, ?4, NULL, NULL, ?4, ?4, ?5)
+      ON CONFLICT(user_attestation_id) DO UPDATE SET
+        status = excluded.status,
+        value_json = excluded.value_json,
+        verified_at = excluded.verified_at,
+        source_identity_nullifier_id = excluded.source_identity_nullifier_id,
+        updated_at = excluded.updated_at
+    `,
+    args: [
+      attestationId,
+      input.userId,
+      JSON.stringify({ state: "verified", nationality: input.countryCode }),
+      now,
+      nullifierId,
+    ],
+  })
+  await input.client.execute({
+    sql: `
+      UPDATE identity_nullifiers
+      SET source_user_attestation_id = ?2, updated_at = ?3
+      WHERE identity_nullifier_id = ?1
+    `,
+    args: [nullifierId, attestationId, now],
+  })
 }
 
 async function getTelegramAssistantEvent(input: {

@@ -7,6 +7,11 @@ import {
   resolveRewardIdentityProvider,
   type RewardIdentityProvider,
 } from "../verification/unique-human-eligibility"
+import {
+  evaluateIdentityEvidenceAtom,
+  normalizeIdentityEvidenceValue,
+  readActiveIdentityEvidence,
+} from "../verification/provider-keyed-identity-evidence"
 
 type Executor = { execute(statement: InStatement | string): Promise<QueryResult> }
 
@@ -105,20 +110,6 @@ function plusDays(value: string, days: number): string {
   const parsed = Date.parse(value)
   if (!Number.isFinite(parsed)) throw new Error("reward nationality decision timestamp is invalid")
   return new Date(parsed + days * 24 * 60 * 60 * 1_000).toISOString()
-}
-
-function parseNationality(value: unknown): string | null {
-  let parsed = value
-  if (typeof parsed === "string") {
-    try {
-      parsed = JSON.parse(parsed)
-    } catch {
-      return null
-    }
-  }
-  if (!parsed || typeof parsed !== "object") return null
-  const nationality = String((parsed as Record<string, unknown>).nationality ?? "").trim().toUpperCase()
-  return /^[A-Z]{3}$/.test(nationality) ? nationality : null
 }
 
 function unresolved(
@@ -237,44 +228,36 @@ async function resolveBoundEvidence(input: {
   bindingId: string | null
   bindingSelectedAt: string | null
 }): Promise<CandidateDecision> {
-  const evidence = await input.client.execute({
-    sql: `
-      SELECT user_attestation_id, source_verification_session_id, value_json, verified_at
-      FROM user_attestations
-      WHERE user_id = ?1
-        AND provider = ?2
-        AND capability_key = 'nationality'
-        AND status = 'accepted'
-        AND revoked_at IS NULL
-        AND source_identity_nullifier_id = ?3
-      ORDER BY verified_at DESC, user_attestation_id ASC
-    `,
-    args: [input.userId, input.provider, input.identityNullifierId],
+  const evidence = await readActiveIdentityEvidence({
+    client: input.client,
+    userId: input.userId,
+    capabilities: ["nationality"],
   })
-  if (evidence.rows.length === 0) {
+  const selectedEvidence = evidence.filter((item) =>
+    item.provider === input.provider
+    && item.sourceIdentityNullifierId === input.identityNullifierId
+  )
+  const evaluated = evaluateIdentityEvidenceAtom({
+    evidence: selectedEvidence,
+    atom: { capability: "nationality", acceptedProviders: [input.provider] },
+  })
+  if (evaluated.outcome === "action_required") {
     return unresolved("nationality_evidence_missing", "retryable", {
       rewardIdentityBindingId: input.bindingId,
       identityNullifierId: input.identityNullifierId,
       bindingSelectedAt: input.bindingSelectedAt,
     })
   }
-
-  const parsed = evidence.rows.map((row) => ({
-    userAttestationId: stringOrNull(rowValue(row, "user_attestation_id")),
-    verificationSessionId: stringOrNull(rowValue(row, "source_verification_session_id")),
-    nationality: parseNationality(rowValue(row, "value_json")),
-    verifiedAt: stringOrNull(rowValue(row, "verified_at")),
-  }))
-  const nationalities = new Set(parsed.map((entry) => entry.nationality).filter((value): value is string => value !== null))
-  if (nationalities.size !== 1 || parsed.some((entry) => !entry.nationality)) {
+  if (evaluated.outcome !== "passed") {
     return unresolved("identity_evidence_conflict", "terminal", {
       rewardIdentityBindingId: input.bindingId,
       identityNullifierId: input.identityNullifierId,
       bindingSelectedAt: input.bindingSelectedAt,
     })
   }
-  const selectedEvidence = parsed[0]!
-  if (!selectedEvidence.userAttestationId || !selectedEvidence.verifiedAt) {
+  const witness = evaluated.witnesses[0]
+  const nationality = witness ? normalizeIdentityEvidenceValue(witness) : null
+  if (!witness || typeof nationality !== "string") {
     return unresolved("identity_evidence_conflict", "terminal", {
       rewardIdentityBindingId: input.bindingId,
       identityNullifierId: input.identityNullifierId,
@@ -286,12 +269,12 @@ async function resolveBoundEvidence(input: {
     retryability: "resolved",
     rewardIdentityBindingId: input.bindingId,
     identityNullifierId: input.identityNullifierId,
-    userAttestationId: selectedEvidence.userAttestationId,
-    nationality: selectedEvidence.nationality,
+    userAttestationId: witness.evidenceId,
+    nationality,
     rewardIdentityId: await deriveRewardIdentityId(input.provider, input.mechanism, input.nullifierHash),
     bindingSelectedAt: input.bindingSelectedAt,
-    evidenceVerificationSessionId: selectedEvidence.verificationSessionId,
-    evidenceVerifiedAt: selectedEvidence.verifiedAt,
+    evidenceVerificationSessionId: witness.sourceVerificationSessionId,
+    evidenceVerifiedAt: witness.verifiedAt,
   }
 }
 

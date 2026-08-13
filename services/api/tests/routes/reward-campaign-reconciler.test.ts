@@ -531,11 +531,21 @@ describe("reward campaign reconciler", () => {
     })
     await ctx.client.execute({
       sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES ('att_pending_verification_unique_human', ?1, NULL, 'very', 'unique_human',
+          'unique_human', 'accepted', ?2, ?3, NULL, NULL, ?3, ?3)
+      `,
+      args: [session.userId, JSON.stringify({ state: "verified" }), now],
+    })
+    await ctx.client.execute({
+      sql: `
         INSERT INTO identity_nullifiers (
           identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
-          status, first_seen_at, created_at, updated_at
+          source_user_attestation_id, status, first_seen_at, created_at, updated_at
         ) VALUES ('idn_pending_verification', ?1, 'very', 'zk-nullifier',
-          'pending-verification-human', 'active', ?2, ?2, ?2)
+          'pending-verification-human', 'att_pending_verification_unique_human', 'active', ?2, ?2, ?2)
       `,
       args: [session.userId, now],
     })
@@ -758,10 +768,21 @@ describe("reward campaign reconciler", () => {
     })
     await ctx.client.execute({
       sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES ('att_campaign_reconcile', ?1, NULL, 'self', 'unique_human', 'unique_human',
+          'accepted', ?2, ?3, NULL, NULL, ?3, ?3)
+      `,
+      args: [session.userId, JSON.stringify({ state: "verified" }), now],
+    })
+    await ctx.client.execute({
+      sql: `
         INSERT INTO identity_nullifiers (
           identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
-          status, first_seen_at, created_at, updated_at
-        ) VALUES ('idn_campaign', ?1, 'self', 'zk-nullifier', 'campaign-human', 'active', ?2, ?2, ?2)
+          source_user_attestation_id, status, first_seen_at, created_at, updated_at
+        ) VALUES ('idn_campaign', ?1, 'self', 'zk-nullifier', 'campaign-human', 'att_campaign_reconcile',
+          'active', ?2, ?2, ?2)
       `,
       args: [session.userId, now],
     })

@@ -347,6 +347,58 @@ export async function setUniqueHumanVerificationProvider(
       verified_at: Math.floor(Date.now() / 1000),
     }
 
+    const now = new Date().toISOString()
+    const attestationId = `att_route_test_${userId}`
+    const nullifierId = `nul_route_test_${userId}`
+    const mechanism = provider === "very" ? "palm-nullifier" : "zk-nullifier"
+    await client.execute({
+      sql: `
+        INSERT INTO user_attestations (
+          user_attestation_id, user_id, source_verification_session_id, provider, attestation_type,
+          capability_key, status, value_json, verified_at, expires_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, NULL, ?3, 'unique_human', 'unique_human', 'accepted', ?4, ?5, NULL, NULL, ?5, ?5)
+        ON CONFLICT(user_attestation_id) DO UPDATE SET
+          provider = excluded.provider,
+          status = excluded.status,
+          value_json = excluded.value_json,
+          verified_at = excluded.verified_at,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        attestationId,
+        userId,
+        provider,
+        JSON.stringify({ state: "verified" }),
+        now,
+      ],
+    })
+    await client.execute({
+      sql: `
+        INSERT INTO identity_nullifiers (
+          identity_nullifier_id, user_id, provider, mechanism, nullifier_hash,
+          source_verification_session_id, source_user_attestation_id, status,
+          first_seen_at, revoked_at, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, 'active', ?7, NULL, ?7, ?7)
+        ON CONFLICT(identity_nullifier_id) DO UPDATE SET
+          user_id = excluded.user_id,
+          provider = excluded.provider,
+          mechanism = excluded.mechanism,
+          nullifier_hash = excluded.nullifier_hash,
+          source_user_attestation_id = excluded.source_user_attestation_id,
+          status = excluded.status,
+          updated_at = excluded.updated_at
+      `,
+      args: [
+        nullifierId,
+        userId,
+        provider,
+        mechanism,
+        `route-test-${userId}`,
+        attestationId,
+        now,
+      ],
+    })
+
     await client.execute({
       sql: `
         UPDATE users

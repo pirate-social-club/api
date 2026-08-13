@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { evaluateMembershipGatePolicy } from "../src/lib/communities/membership/gate-policy-evaluation"
+import { evaluateMembershipGatePolicy as evaluateMembershipGatePolicyImpl } from "../src/lib/communities/membership/gate-policy-evaluation"
 import {
   normalizeStoredGatePolicy,
   validateGatePolicy,
@@ -7,6 +7,7 @@ import {
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { GateAtom, GatePolicy } from "../src/lib/communities/membership/gate-types"
 import type { User } from "../src/types"
+import type { DbExecutor } from "../src/lib/db-helpers"
 import { setAssetBalanceReaderForTests } from "../src/lib/communities/community-asset-balance"
 import { buildMembershipGateSummariesFromPolicy } from "../src/lib/communities/membership/gate-summary"
 
@@ -76,7 +77,83 @@ function orPolicy(...atoms: GateAtom[]): GatePolicy {
   }
 }
 
-type RequiredActionNode = NonNullable<Awaited<ReturnType<typeof evaluateMembershipGatePolicy>>["requiredActionSet"]>["items"][number]
+type RequiredActionNode = NonNullable<Awaited<ReturnType<typeof evaluateMembershipGatePolicyImpl>>["requiredActionSet"]>["items"][number]
+
+type GatePolicyEvaluationInput = Parameters<typeof evaluateMembershipGatePolicyImpl>[0]
+function makeTestEvidenceClient(user: User): DbExecutor {
+  const capabilities = user.verification_capabilities
+  const rows: Record<string, unknown>[] = []
+  const verifiedAt = "2026-01-01T00:00:00.000Z"
+
+  const addEvidence = (input: {
+    capability: string
+    provider: string | null | undefined
+    value: Record<string, unknown>
+    requiresNullifier?: boolean
+  }) => {
+    if (!input.provider) return
+    rows.push({
+      user_attestation_id: `attestation_${input.capability}`,
+      user_id: user.user_id,
+      source_verification_session_id: "session_policy_test",
+      source_identity_nullifier_id: input.requiresNullifier ? `nullifier_${input.capability}` : null,
+      provider: input.provider,
+      attestation_type: input.capability,
+      capability_key: input.capability,
+      value_json: JSON.stringify(input.value),
+      verified_at: verifiedAt,
+      expires_at: null,
+      active_nullifier_id: input.requiresNullifier ? `nullifier_${input.capability}` : null,
+      nullifier_mechanism: "test",
+    })
+  }
+
+  if (capabilities.unique_human.state === "verified") {
+    addEvidence({
+      capability: "unique_human",
+      provider: capabilities.unique_human.provider,
+      value: { state: "verified" },
+      requiresNullifier: true,
+    })
+  }
+  if (capabilities.minimum_age.state === "verified" && typeof capabilities.minimum_age.value === "number") {
+    addEvidence({
+      capability: "minimum_age",
+      provider: capabilities.minimum_age.provider,
+      value: { minimum_age: capabilities.minimum_age.value },
+    })
+  }
+  if (capabilities.age_over_18.state === "verified") {
+    addEvidence({
+      capability: "age_over_18",
+      provider: capabilities.age_over_18.provider,
+      value: { age_over_18: true },
+    })
+  }
+  if (capabilities.nationality.state === "verified" && typeof capabilities.nationality.value === "string") {
+    addEvidence({
+      capability: "nationality",
+      provider: capabilities.nationality.provider,
+      value: { nationality: capabilities.nationality.value },
+      requiresNullifier: true,
+    })
+  }
+  if (capabilities.gender.state === "verified" && typeof capabilities.gender.value === "string") {
+    addEvidence({
+      capability: "gender",
+      provider: capabilities.gender.provider,
+      value: { gender: capabilities.gender.value },
+    })
+  }
+
+  return { execute: async () => ({ rows }) }
+}
+
+function evaluateMembershipGatePolicy(
+  input: Omit<GatePolicyEvaluationInput, "evidenceClient">,
+): ReturnType<typeof evaluateMembershipGatePolicyImpl> {
+  return evaluateMembershipGatePolicyImpl({ ...input, evidenceClient: makeTestEvidenceClient(input.user) })
+}
 
 function flattenActionNodes(items: RequiredActionNode[]): RequiredActionNode[] {
   return items.flatMap((item) => item.kind === "set" ? flattenActionNodes(item.items as RequiredActionNode[]) : [item])

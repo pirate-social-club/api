@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { Client, InStatement, Transaction } from "../sql-client"
 import {
+  VerificationAttestationConflictError,
+  VerificationSessionClaimLostError,
   isActiveIdentityNullifierUniqueConflict,
   writeVerificationBatchWithNullifierRetry,
   type ActiveIdentityNullifier,
@@ -33,6 +35,46 @@ describe("active identity nullifier conflict classification", () => {
 })
 
 describe("writeVerificationBatchWithNullifierRetry", () => {
+  test("rolls back when the verification session claim was lost", async () => {
+    let rolledBack = false
+    const transaction = {
+      batch: async () => [{ rows: [], rowsAffected: 0 }],
+      commit: async () => { throw new Error("must not commit") },
+      rollback: async () => { rolledBack = true },
+      close: () => {},
+    } as unknown as Transaction
+    const client = { transaction: async () => transaction } as unknown as Client
+
+    await expect(writeVerificationBatchWithNullifierRetry({
+      client,
+      userId: "usr_1",
+      identityNullifier,
+      activeNullifier: null,
+      buildBatchStatements: (): InStatement[] => [{ sql: "UPDATE verification_sessions" }],
+      sessionClaimStatementIndex: 0,
+    })).rejects.toBeInstanceOf(VerificationSessionClaimLostError)
+    expect(rolledBack).toBe(true)
+  })
+
+  test("classifies an attestation uniqueness race for idempotent session replay", async () => {
+    const transaction = {
+      batch: async () => { throw conflict("idx_user_attestations_accepted_session") },
+      commit: async () => { throw new Error("must not commit") },
+      rollback: async () => {},
+      close: () => {},
+    } as unknown as Transaction
+    const client = { transaction: async () => transaction } as unknown as Client
+
+    await expect(writeVerificationBatchWithNullifierRetry({
+      client,
+      userId: "usr_1",
+      identityNullifier,
+      activeNullifier: null,
+      buildBatchStatements: (): InStatement[] => [{ sql: "INSERT INTO user_attestations" }],
+      activeNullifierRefreshStatementIndex: 0,
+    })).rejects.toBeInstanceOf(VerificationAttestationConflictError)
+  })
+
   test("rolls back when the active nullifier repoint matches no row", async () => {
     let committed = false
     let rolledBack = false

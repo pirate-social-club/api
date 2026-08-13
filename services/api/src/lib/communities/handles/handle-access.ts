@@ -3,6 +3,7 @@ import type { Env } from "../../../env"
 import type { UserRepository } from "../../auth/repositories"
 import { eligibilityFailed, internalError } from "../../errors"
 import type { Client } from "../../sql-client"
+import { getControlPlaneClient } from "../../runtime-deps"
 import { evaluateMembershipGatePolicy } from "../membership/gate-policy-evaluation"
 import { getMembershipGatePolicy } from "../membership/gate-policy-store"
 import { canAccessCommunity, getCommunityMembershipState } from "../membership/membership-state-store"
@@ -87,6 +88,7 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
   if (!user) throw internalError("Resolved user row is missing for handle eligibility")
   const evaluation = await evaluateMembershipGatePolicy({
     env: input.env,
+    evidenceClient: getControlPlaneClient(input.env),
     policy: gatePolicy,
     user,
     walletAttachments: await input.userRepository.getWalletAttachmentsByUserId(input.userId),
