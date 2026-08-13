@@ -1,5 +1,12 @@
 import type { Env } from "../../../env"
 import type { User, WalletAttachmentSummary } from "../../../types"
+import type { DbExecutor } from "../../db-helpers"
+import {
+  evaluateIdentityEvidenceAtom,
+  readActiveIdentityEvidence,
+  type IdentityEvidence,
+  type IdentityEvidenceAtom,
+} from "../../verification/provider-keyed-identity-evidence"
 import type { CommunityGateRuleRow, DocumentProofProvider, GateAtom, GateEvaluationOutcome, GateExpression, GatePolicy, GatePolicyEvaluation, GateTraceNode, RequiredAction, RequiredActionNode, RequiredActionSet } from "./gate-types"
 import { evaluateIdentityGateRule } from "./identity-gate-evaluation"
 import { evaluateTokenGateRuleDetailed } from "./token-gate-evaluation"
@@ -34,6 +41,7 @@ function getPreferredDocumentProvider(providers: readonly DocumentProofProvider[
 
 export async function evaluateMembershipGatePolicy(input: {
   env: Env
+  client?: DbExecutor
   policy: GatePolicy | null
   user: User
   walletAttachments: WalletAttachmentSummary[]
@@ -60,6 +68,9 @@ export async function evaluateMembershipGatePolicy(input: {
     altchaScope: input.altchaScope ?? input.altchaProof?.scope ?? "community_join",
     altchaProof: input.altchaProof,
     verifiedAltchaProof: input.verifiedAltchaProof,
+    durableEvidence: input.client
+      ? await readActiveIdentityEvidence({ client: input.client, userId: input.user.user_id })
+      : undefined,
   })
 
   return {
@@ -79,6 +90,7 @@ async function evaluateExpression(input: {
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
   verifiedAltchaProof?: VerifiedAltchaProof
+  durableEvidence?: IdentityEvidence[]
 }): Promise<ExpressionEvaluation> {
   const { expression } = input
   if (expression.op === "gate") {
@@ -144,6 +156,7 @@ async function evaluateChildrenForEnforcement(input: {
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
   verifiedAltchaProof?: VerifiedAltchaProof
+  durableEvidence?: IdentityEvidence[]
 }): Promise<ExpressionEvaluation[]> {
   const children: ExpressionEvaluation[] = []
   for (const [index, childExpression] of input.expression.children.entries()) {
@@ -202,11 +215,22 @@ async function evaluateAtom(input: {
   altchaScope: AltchaScope
   altchaProof?: AltchaProofInput
   verifiedAltchaProof?: VerifiedAltchaProof
+  durableEvidence?: IdentityEvidence[]
 }): Promise<AtomEvaluation> {
   switch (input.atom.type) {
     case "altcha_pow":
       return evaluateAltchaAtom({ ...input, atom: input.atom })
     case "unique_human":
+      if (input.durableEvidence) {
+        return evaluateDurableIdentityAtom(input, {
+          capability: "unique_human",
+          acceptedProviders: [input.atom.provider],
+        }, {
+          kind: "action",
+          provider: input.atom.provider,
+          capability: "unique_human",
+        })
+      }
       return evaluateIdentityAtom(input, [{
         proof_type: "unique_human",
         accepted_providers: [input.atom.provider],
@@ -219,6 +243,19 @@ async function evaluateAtom(input: {
       {
         const acceptedProviders = getDocumentAcceptedProviders(input.atom)
         const preferredProvider = getPreferredDocumentProvider(acceptedProviders)
+        if (input.durableEvidence) {
+          return evaluateDurableIdentityAtom(input, {
+            capability: "minimum_age",
+            acceptedProviders,
+            minimumAge: input.atom.minimum_age,
+          }, {
+            kind: "action",
+            provider: preferredProvider,
+            accepted_providers: acceptedProviders,
+            capability: "minimum_age",
+            required_age: input.atom.minimum_age,
+          }, { required_age: input.atom.minimum_age })
+        }
         return evaluateIdentityAtom(input, [{
           proof_type: "minimum_age",
           accepted_providers: acceptedProviders,
@@ -235,6 +272,19 @@ async function evaluateAtom(input: {
       {
         const acceptedProviders = getDocumentAcceptedProviders(input.atom)
         const preferredProvider = getPreferredDocumentProvider(acceptedProviders)
+        if (input.durableEvidence) {
+          return evaluateDurableIdentityAtom(input, {
+            capability: "nationality",
+            acceptedProviders,
+            requiredCountries: input.atom.allowed,
+          }, {
+            kind: "action",
+            provider: preferredProvider,
+            accepted_providers: acceptedProviders,
+            capability: "nationality",
+            allowed_countries: input.atom.allowed,
+          })
+        }
         return evaluateIdentityAtom(input, [{
           proof_type: "nationality",
           accepted_providers: acceptedProviders,
@@ -248,6 +298,19 @@ async function evaluateAtom(input: {
         })
       }
     case "gender":
+      if (input.durableEvidence) {
+        const acceptedProviders = getDocumentAcceptedProviders(input.atom)
+        return evaluateDurableIdentityAtom(input, {
+          capability: "gender",
+          acceptedProviders,
+          allowedGenders: input.atom.allowed,
+        }, {
+          kind: "action",
+          provider: getPreferredDocumentProvider(acceptedProviders),
+          accepted_providers: acceptedProviders,
+          capability: "gender",
+        })
+      }
       return evaluateGenderAtom({ atom: input.atom, user: input.user })
     case "wallet_score":
       return evaluateIdentityAtom(input, [{
@@ -348,6 +411,36 @@ async function evaluateAltchaAtom(input: {
       capability: "altcha_pow",
       scope: input.altchaScope,
     },
+  }
+}
+
+function evaluateDurableIdentityAtom(
+  input: {
+    atom: GateAtom
+    user: User
+    durableEvidence: IdentityEvidence[]
+  },
+  evidenceAtom: IdentityEvidenceAtom,
+  requiredAction: RequiredAction,
+  traceFields: Partial<Extract<GateTraceNode, { kind: "gate" }>> = {},
+): AtomEvaluation {
+  const result = evaluateIdentityEvidenceAtom({ evidence: input.durableEvidence, atom: evidenceAtom })
+  const passed = result.outcome === "passed"
+  const actionRequired = result.outcome === "action_required"
+  return {
+    outcome: passed ? "passed" : actionRequired ? "action_required" : "terminal_mismatch",
+    passed,
+    trace: {
+      kind: "gate",
+      gate_type: input.atom.type,
+      provider: "provider" in input.atom ? input.atom.provider : undefined,
+      passed,
+      reason: passed
+        ? undefined
+        : (result.mismatchReasons[0] ?? result.missingCapabilities[0] ?? "missing_verification"),
+      ...traceFields,
+    },
+    requiredAction: actionRequired ? requiredAction : null,
   }
 }
 

@@ -32,6 +32,7 @@ export type IdentityEvidenceAtom = {
   excludedCountries?: readonly string[]
   minimumAge?: number
   requiredGender?: string
+  allowedGenders?: readonly string[]
 }
 
 export type IdentityEvidenceAtomEvaluation = {
@@ -114,7 +115,8 @@ function matchesAtom(evidence: IdentityEvidence, atom: IdentityEvidenceAtom): bo
     case "age_over_18":
       return (minimumAgeValue(evidence) ?? -1) >= 18
     case "gender":
-      return atom.requiredGender == null || genderValue(evidence) === atom.requiredGender
+      return (atom.requiredGender == null || genderValue(evidence) === atom.requiredGender)
+        && (atom.allowedGenders == null || atom.allowedGenders.includes(genderValue(evidence) ?? ""))
   }
 }
 
@@ -210,6 +212,15 @@ export function evaluateIdentityEvidenceAtom(input: {
   const witnesses = candidates.filter((evidence) => matchesAtom(evidence, input.atom))
   if (witnesses.length > 0) {
     return { outcome: "passed", witnesses, missingCapabilities: [], mismatchReasons: [] }
+  }
+  const acceptedCandidates = candidates.filter((evidence) => input.atom.acceptedProviders.includes(evidence.provider))
+  if (acceptedCandidates.length === 0 && candidates.length > 0) {
+    return {
+      outcome: "action_required",
+      witnesses: [],
+      missingCapabilities: [input.atom.capability],
+      mismatchReasons: ["provider_not_accepted"],
+    }
   }
   if (candidates.length === 0) {
     return { outcome: "action_required", witnesses: [], missingCapabilities: [input.atom.capability], mismatchReasons: [] }

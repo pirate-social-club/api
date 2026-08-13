@@ -169,6 +169,7 @@ export async function joinCommunity(input: {
     const policy = await getMembershipGatePolicy(db.client, input.communityId)
     const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
+      client: db.client,
       user,
       userRepository: input.userRepository,
       communityId: input.communityId,

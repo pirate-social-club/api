@@ -87,6 +87,7 @@ export async function evaluateNamespaceHandleClaimEligibility(input: {
   if (!user) throw internalError("Resolved user row is missing for handle eligibility")
   const evaluation = await evaluateMembershipGatePolicy({
     env: input.env,
+    client: input.client,
     policy: gatePolicy,
     user,
     walletAttachments: await input.userRepository.getWalletAttachmentsByUserId(input.userId),
