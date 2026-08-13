@@ -386,6 +386,18 @@ surfaces now meet the sub-six-second target in direct probes.
 
 A seven-page mixed first-page walk after the #1297 release returned 174 rows,
 174 unique `source_post_id` values, and zero duplicate rows. The remaining
-visible tier is derivative global-row hydration (roughly 2.45–3.39s per
-request in these probes); treat it as the next optional optimization rather
-than reopening profile deduplication.
+derivative-global-row sum is a cross-community aggregate: its max, not its
+sum, is the wall-clock opportunity. In the latest probes, prefetch plus the
+per-community max plus profile-prefetch decomposed exactly to fanout; the
+global-row max was about 753ms while its sum was 3.2s. Do not target the sum.
+
+The next ranking is therefore:
+
+1. `community-prefetch` (~1.1s, serial page-level routing/shard work).
+2. `top-communities` (~423ms, post-hydration identity/aggregate work).
+3. `community-derivative-global-rows-max` (~753ms ceiling, already parallel).
+
+API PR #1304 parallelizes the first item’s binding resolution and shard-group
+reads. Its pre-release target is to move serial prefetch toward ~500ms and
+uncached Home toward ~2.5–3s, with the same four-surface probes and clean
+seven-page walk used above.
