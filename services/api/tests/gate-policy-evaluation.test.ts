@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { evaluateMembershipGatePolicy } from "../src/lib/communities/membership/gate-policy-evaluation"
+import { evaluateMembershipGatePolicy as evaluateMembershipGatePolicyImpl } from "../src/lib/communities/membership/gate-policy-evaluation"
 import {
   normalizeStoredGatePolicy,
   validateGatePolicy,
@@ -7,6 +7,7 @@ import {
 import { buildDefaultVerificationCapabilities } from "../src/lib/verification/verification-capabilities"
 import type { GateAtom, GatePolicy } from "../src/lib/communities/membership/gate-types"
 import type { User } from "../src/types"
+import type { DbExecutor } from "../src/lib/db-helpers"
 import { setAssetBalanceReaderForTests } from "../src/lib/communities/community-asset-balance"
 import { buildMembershipGateSummariesFromPolicy } from "../src/lib/communities/membership/gate-summary"
 
@@ -76,7 +77,18 @@ function orPolicy(...atoms: GateAtom[]): GatePolicy {
   }
 }
 
-type RequiredActionNode = NonNullable<Awaited<ReturnType<typeof evaluateMembershipGatePolicy>>["requiredActionSet"]>["items"][number]
+type RequiredActionNode = NonNullable<Awaited<ReturnType<typeof evaluateMembershipGatePolicyImpl>>["requiredActionSet"]>["items"][number]
+
+type GatePolicyEvaluationInput = Parameters<typeof evaluateMembershipGatePolicyImpl>[0]
+const testEvidenceClient: DbExecutor = {
+  execute: async () => ({ rows: [] }),
+}
+
+function evaluateMembershipGatePolicy(
+  input: Omit<GatePolicyEvaluationInput, "evidenceClient">,
+): ReturnType<typeof evaluateMembershipGatePolicyImpl> {
+  return evaluateMembershipGatePolicyImpl({ ...input, evidenceClient: testEvidenceClient })
+}
 
 function flattenActionNodes(items: RequiredActionNode[]): RequiredActionNode[] {
   return items.flatMap((item) => item.kind === "set" ? flattenActionNodes(item.items as RequiredActionNode[]) : [item])
