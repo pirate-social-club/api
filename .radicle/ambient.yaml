@@ -27,7 +27,8 @@ plan:
         rm -rf -- "$temp"
       fi
       bun="$bun_runtime"
-      export PATH="$(dirname "$bun_runtime"):$PATH"
+      bun_bin_dir=$(dirname "$bun_runtime")
+      export PATH="$bun_bin_dir:$PATH"
 
       import_bun_cache() {
         # cache_version is Bun's hashed prerelease directory name.
