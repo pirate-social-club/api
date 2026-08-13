@@ -56,7 +56,16 @@
     "1156_song_study_fill_blank.sql",
     "1157_community_handle_claim_intents.sql"
   ],
-  "features": {},
+  "features": {
+    "generic_digital_goods": {
+      "flags": [
+        "GENERIC_DIGITAL_GOODS_ENABLED"
+      ],
+      "migrations": [
+        "1158_generic_assets_learning_foundation.sql"
+      ]
+    }
+  },
   "transitional": {
     "1143_lyrics_language.sql": {
       "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",

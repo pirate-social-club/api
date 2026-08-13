@@ -7,7 +7,7 @@ import {
 } from "@pirate/hns-delegation"
 import { decodePublicNamespaceVerificationId, publicCommunityId, publicId } from "../lib/public-ids"
 import { getControlPlaneClient } from "../lib/runtime-deps"
-import { notFoundError } from "../lib/errors"
+import { namespaceUnavailableError, notFoundError } from "../lib/errors"
 import { normalizeRootLabel } from "../lib/verification/labels"
 import type { Env } from "../env"
 
@@ -117,6 +117,26 @@ function publicNamespaceSelectSql(
   `
 }
 
+async function hasKnownVerifiedHnsRoot(
+  client: ReturnType<typeof getControlPlaneClient>,
+  rootLabel: string,
+  now: string,
+): Promise<boolean> {
+  const result = await client.execute({
+    sql: `
+      SELECT 1 AS known
+      FROM namespace_verifications
+      WHERE family = 'hns'
+        AND status = 'verified'
+        AND expires_at > ?2
+        AND normalized_root_label = ?1
+      LIMIT 1
+    `,
+    args: [rootLabel, now],
+  })
+  return result.rows.length > 0
+}
+
 publicNamespaces.get("/", async (c) => {
   const client = getControlPlaneClient(c.env)
   const now = new Date().toISOString()
@@ -164,18 +184,22 @@ publicNamespaces.get("/:rootLabel", async (c) => {
 
   const row = result.rows[0]
   if (row && useRootDelegationState && !rootDelegationAllowsRouting(row, nowMs)) {
-    throw notFoundError("Namespace not found")
+    throw namespaceUnavailableError()
   }
   const body = row ? serializePublicNamespaceRow(row, rootLabel) : null
-  if (!body) {
-    throw notFoundError("Namespace not found")
+  if (body) {
+    return c.json(body, 200, {
+      // The gateway consumes this endpoint as the wallet-interactivity authority.
+      // Do not let a CDN or browser retain an enabled answer after hard denial.
+      "cache-control": "no-store",
+    })
   }
 
-  return c.json(body, 200, {
-    // The gateway consumes this endpoint as the wallet-interactivity authority.
-    // Do not let a CDN or browser retain an enabled answer after hard denial.
-    "cache-control": "no-store",
-  })
+  if (await hasKnownVerifiedHnsRoot(client, rootLabel, now)) {
+    throw namespaceUnavailableError()
+  }
+
+  throw notFoundError("Namespace not found")
 })
 
 export default publicNamespaces

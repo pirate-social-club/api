@@ -167,7 +167,7 @@ export async function getAssetRow(
     access_mode: requiredString(row, "access_mode") as Asset["access_mode"],
     license_preset: stringOrNull(row, "license_preset") as Asset["license_preset"] | null,
     commercial_rev_share_pct: numberOrNull(row, "commercial_rev_share_pct"),
-    primary_content_ref: requiredString(row, "primary_content_ref"),
+    primary_content_ref: stringOrNull(row, "primary_content_ref"),
     primary_content_hash: stringOrNull(row, "primary_content_hash"),
     publication_status: requiredString(row, "publication_status") as Asset["publication_status"],
     story_status: requiredString(row, "story_status") as Asset["story_status"],

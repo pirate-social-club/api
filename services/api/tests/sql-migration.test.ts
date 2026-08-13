@@ -349,6 +349,22 @@ describe("sql migration helpers", () => {
     `)).toEqual([])
   })
 
+  test("keeps sqlite triggers intact when a leading comment precedes CREATE TRIGGER", () => {
+    const statements = splitSqlStatements(`
+      -- Published rows are immutable.
+      CREATE TRIGGER published_row_guard
+      BEFORE UPDATE ON published_rows
+      WHEN OLD.status = 'published'
+      BEGIN
+        SELECT RAISE(ABORT, 'published rows are immutable');
+      END;
+    `)
+
+    expect(statements).toHaveLength(1)
+    expect(statements[0]).toContain("CREATE TRIGGER published_row_guard")
+    expect(statements[0]).toContain("END;")
+  })
+
   test("rewrites the PostgreSQL dance cue hash backfill for sqlite", () => {
     const [statement] = toSqliteCompatibleStatements(`
       UPDATE dance_attempt_sessions
@@ -1036,6 +1052,17 @@ ALTER TABLE booking_profiles OWNER TO control_plane_migrator;`)).toBeNull()
 
   test("a ';' inside a block comment does not split the statement", () => {
     const sql = `/* note: run as owner; then grant */ CREATE TABLE t (id TEXT);`
+    expect(splitSqlStatements(sql)).toEqual([sql])
+  })
+
+  test("keeps a trigger preceded by comments as one statement", () => {
+    const sql = `-- Preserve immutable published rows.
+CREATE TRIGGER published_rows_no_update
+BEFORE UPDATE ON published_rows
+BEGIN
+  SELECT RAISE(ABORT, 'published rows are immutable');
+END;`
+
     expect(splitSqlStatements(sql)).toEqual([sql])
   })
 })

@@ -133,7 +133,14 @@ function resolveCommunityTemplateMigrationsDir(): string {
 }
 
 function parseConnectionPragmaStatement(statement: string): ConnectionPragmaStatement | null {
-  const match = statement.trim().match(CONNECTION_PRAGMA_PATTERN)
+  let candidate = statement
+  while (true) {
+    const withoutLineComment = candidate.replace(/^\s*--[^\r\n]*(?:\r?\n|$)/, "")
+    const withoutBlockComment = withoutLineComment.replace(/^\s*\/\*[\s\S]*?\*\//, "")
+    if (withoutBlockComment === candidate) break
+    candidate = withoutBlockComment
+  }
+  const match = candidate.trim().match(CONNECTION_PRAGMA_PATTERN)
   if (!match) {
     return null
   }
@@ -147,7 +154,7 @@ function parseConnectionPragmaStatement(statement: string): ConnectionPragmaStat
   }
 }
 
-function splitConnectionPragmas(statements: string[]): {
+export function splitConnectionPragmas(statements: string[]): {
   leadingPragmas: ConnectionPragmaStatement[]
   bodyStatements: string[]
   trailingPragmas: ConnectionPragmaStatement[]
@@ -226,8 +233,10 @@ async function applyMigrationTransaction(input: {
   checksum: string
 }): Promise<void> {
   const tx = await input.client.transaction("write")
+  let statementIndex = -1
   try {
-    for (const statement of input.statements) {
+    for (const [index, statement] of input.statements.entries()) {
+      statementIndex = index
       await tx.execute(statement)
     }
     await tx.execute({
@@ -244,7 +253,10 @@ async function applyMigrationTransaction(input: {
     } catch (rollbackError) {
       console.error("[community-local-db] rollback failed while initializing local community database", rollbackError)
     }
-    throw error
+    throw new Error(
+      `Community migration ${input.migrationName} failed at statement ${statementIndex + 1}/${input.statements.length}`,
+      { cause: error },
+    )
   } finally {
     tx.close()
   }

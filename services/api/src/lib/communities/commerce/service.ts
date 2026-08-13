@@ -26,6 +26,7 @@ import {
   type StoryLicensePreset,
 } from "../../story/story-royalty-registration-service"
 import type { AssetRow } from "./row-types"
+import { assertLegacyMediaAsset } from "./asset-kind-policy"
 import { prepareLockedAssetDelivery } from "./asset-delivery"
 import {
   classifyStoryRegistrationFailure,
@@ -69,6 +70,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
   userRepository: UserRepository
 }): Promise<AssetRow> {
   const asset = input.asset
+  assertLegacyMediaAsset(asset)
   const resolvedPrimaryContentHash = (asset.primary_content_hash?.trim() || `0x${await sha256Hex(asset.primary_content_ref)}`) as `0x${string}`
   let storyError: string | null = asset.story_error
   let storyStatus: Asset["story_status"] = asset.story_status
@@ -321,6 +323,9 @@ export async function createAssetForPost(input: {
   requireStoryRoyaltyRegistration?: boolean
   userRepository: UserRepository
 }): Promise<Asset> {
+  if (input.assetKind !== "song_audio" && input.assetKind !== "video_file") {
+    throw badRequestError("Legacy media asset creation does not support this asset kind")
+  }
   if (!input.post.asset_id?.trim()) {
     throw badRequestError("Post is missing asset_id")
   }

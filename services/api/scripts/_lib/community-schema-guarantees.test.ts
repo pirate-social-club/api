@@ -24,7 +24,7 @@ describe("parseCommunitySchemaGuarantees", () => {
     // enabled, so runtime code must still tolerate absence.
     const guarantees = parseCommunitySchemaGuarantees({
       unconditional: [],
-      features: { rewards: { migrations: ["1126_reward_qualification_outbox.sql"] } },
+      features: { rewards: { flags: ["REWARDS_ENABLED"], migrations: ["1126_reward_qualification_outbox.sql"] } },
     })
     expect(guarantees.featureGated.has("1126_reward_qualification_outbox.sql")).toBe(true)
     expect(isAttestedGuaranteedMigration(guarantees, "1126_reward_qualification_outbox.sql")).toBe(false)
@@ -42,9 +42,16 @@ describe("parseCommunitySchemaGuarantees", () => {
     expect(() =>
       parseCommunitySchemaGuarantees({
         unconditional: ["1126_reward_qualification_outbox.sql"],
-        features: { rewards: { migrations: ["1126_reward_qualification_outbox.sql"] } },
+        features: { rewards: { flags: ["REWARDS_ENABLED"], migrations: ["1126_reward_qualification_outbox.sql"] } },
       }),
     ).toThrow(/one classification only/u)
+  })
+
+  test("rejects feature policies without an explicit runtime flag", () => {
+    expect(() => parseCommunitySchemaGuarantees({
+      unconditional: [],
+      features: { generic_digital_goods: { migrations: ["1158_generic_assets_learning_foundation.sql"] } },
+    })).toThrow(/array of flags/u)
   })
 })
 
