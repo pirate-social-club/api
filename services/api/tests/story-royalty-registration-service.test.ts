@@ -593,6 +593,7 @@ describe("story royalty registration service", () => {
           coverArtRef,
         }),
         primaryContentHash: "0xdef456",
+        metadataCreatedAt: now,
         royaltyShares: [
           { walletAddressNormalized: testWallet, shareBps: 9000, percentage: 90 },
           { walletAddressNormalized: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", shareBps: 1000, percentage: 10 },
@@ -695,6 +696,7 @@ describe("story royalty registration service", () => {
         accessMode: "public",
         bundle: buildBundle({ id: "sab_original_shares", title: "Original shares" }),
         primaryContentHash: "0xabc123",
+        metadataCreatedAt: "2026-07-18T00:00:00.000Z",
         royaltyShares: [
           { walletAddressNormalized: testWallet, shareBps: 6667, percentage: 66.67 },
           { walletAddressNormalized: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", shareBps: 3333, percentage: 33.33 },
@@ -718,6 +720,100 @@ describe("story royalty registration service", () => {
       })
       expect(result?.storyIpMetadataUri).toContain("/ip.json")
       expect(result?.storyNftMetadataUri).toContain("/nft.json")
+    } finally {
+      db.close()
+    }
+  })
+
+  test("retries an async asset with byte-identical immutable registration metadata", async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), "pirate-story-registration-retry-"))
+    cleanupPaths.push(rootDir)
+    const env = {
+      LOCAL_COMMUNITY_DB_ROOT: rootDir,
+      STORY_ROYALTY_SPG_NFT_CONTRACT: "0x8888888888888888888888888888888888888888",
+      STORY_OPERATOR_PRIVATE_KEY: "0x0000000000000000000000000000000000000000000000000000000000000001",
+    } as Env
+    const repo = buildRepository()
+    const communityId = "cmt_story_registration_retry"
+    const userId = "usr_story_registration_retry"
+    const assetId = "ast_story_registration_retry"
+    const metadataCreatedAt = "2026-07-18T12:34:56.000Z"
+    let registrationAttempt = 0
+    const publishedPayloads: unknown[] = []
+
+    await seedStoryCommunity({ env, repo, communityId, userId })
+    setStoryRuntimeFundingAssertionForTests(async () => {})
+    setStoryJsonMetadataPublisherForTests(async (input) => {
+      publishedPayloads.push(input.payload)
+      const bytes = new TextEncoder().encode(JSON.stringify(input.payload))
+      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))
+      const hash = `0x${Array.from(digest, (value) => value.toString(16).padStart(2, "0")).join("")}` as `0x${string}`
+      return { uri: `ipfs://metadata/${input.path}`, hash }
+    })
+    setStoryRoyaltySdkClientFactoryForTests(() => ({
+      ipAsset: {
+        async registerDerivativeIpAsset() {
+          throw new Error("derivative registration should not run")
+        },
+        async registerIpAsset() {
+          registrationAttempt += 1
+          if (registrationAttempt === 1) {
+            const transport = new Error("execution reverted: prebroadcast fixture") as Error & { metaMessages: string[] }
+            transport.name = "RpcRequestError"
+            transport.metaMessages = ['Request body: {"method":"eth_call","params":[]}']
+            const stage = new Error("Story SDK call failed", { cause: transport })
+            stage.name = "CallExecutionError"
+            throw stage
+          }
+          return {
+            ipId: "0x3333333333333333333333333333333333333333",
+            tokenId: 123n,
+            txHash: `0x${"a".repeat(64)}`,
+            ipRoyaltyVault: "0x4444444444444444444444444444444444444444",
+            licenseTermsIds: [17n],
+          }
+        },
+      },
+      royalty: {
+        async getRoyaltyVaultAddress() {
+          return "0x4444444444444444444444444444444444444444"
+        },
+      },
+    }))
+
+    const db = await openCommunityDb(env, repo, communityId)
+    try {
+      const request = {
+        env,
+        client: db.client,
+        communityId,
+        assetId,
+        creatorWalletAddress: testWallet,
+        title: "Retry fixture",
+        rightsBasis: "original" as const,
+        licensePreset: "commercial-remix" as const,
+        commercialRevSharePct: 10,
+        upstreamAssetRefs: null,
+        assetKind: "song_audio" as const,
+        accessMode: "locked" as const,
+        bundle: buildBundle({ id: "sab_story_registration_retry", title: "Retry fixture" }),
+        primaryContentHash: `0x${"d".repeat(64)}` as `0x${string}`,
+        metadataCreatedAt,
+      }
+      await expect(maybeRegisterStoryRoyaltyForAsset(request)).rejects.toThrow("Story SDK call failed")
+      let retryError: string | null = null
+      const retryResult = await maybeRegisterStoryRoyaltyForAsset(request).catch((error) => {
+        retryError = error instanceof Error ? error.message : String(error)
+        return null
+      })
+      expect(retryError).toBeNull()
+      expect(retryResult).toMatchObject({
+        storyRoyaltyRegistrationStatus: "registered",
+      })
+      expect(registrationAttempt).toBe(2)
+      expect(publishedPayloads).toHaveLength(4)
+      expect(publishedPayloads[0]).toEqual(publishedPayloads[2])
+      expect(publishedPayloads[1]).toEqual(publishedPayloads[3])
     } finally {
       db.close()
     }

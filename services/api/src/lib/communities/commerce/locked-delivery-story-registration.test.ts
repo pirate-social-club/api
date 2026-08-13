@@ -61,6 +61,7 @@ describe("registerLockedStoryRoyalty", () => {
       primary_content_hash: `0x${"a".repeat(64)}`,
       primary_content_ref: "https://dweb.link/ipfs/video",
       rights_basis: "original",
+      created_at: "2026-07-18T12:34:56.000Z",
     } as AssetRow
 
     const result = await registerLockedStoryRoyalty({
@@ -86,6 +87,7 @@ describe("registerLockedStoryRoyalty", () => {
     })
     expect(captured).toMatchObject({
       media: expectedMedia,
+      metadataCreatedAt: "2026-07-18T12:34:56.000Z",
     })
   })
 })

@@ -718,13 +718,13 @@ async function buildStoryRoyaltyMetadata(input: {
   mediaHashVerified: boolean
   derivativeParentIpIds: string[] | null
   royaltyShares: StoryRoyaltyShareRow[]
+  createdAt: string
 }): Promise<{
   ipMetadataUri: string
   ipMetadataHash: `0x${string}`
   nftMetadataUri: string
   nftMetadataHash: `0x${string}`
 }> {
-  const createdAt = nowIso()
   const { ipPayload, nftPayload } = buildStoryRoyaltyMetadataPayloads({
     communityId: input.communityId,
     assetId: input.assetId,
@@ -739,7 +739,7 @@ async function buildStoryRoyaltyMetadata(input: {
     mediaHashVerified: input.mediaHashVerified,
     derivativeParentIpIds: input.derivativeParentIpIds,
     royaltyShares: input.royaltyShares,
-    createdAt,
+    createdAt: input.createdAt,
   })
   if (
     input.accessMode === "public"
@@ -827,6 +827,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   bundle: SongArtifactBundle | null
   media?: StoryRoyaltyMetadataMedia | null
   primaryContentHash: `0x${string}`
+  metadataCreatedAt: string
   royaltyShares?: StoryRoyaltyShareRow[] | null
 }): Promise<StoryRoyaltyRegistrationResult | null> {
   if (testRoyaltyRegistrar) {
@@ -925,6 +926,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     mediaHashVerified,
     derivativeParentIpIds: derivativeParents?.map((parent) => parent.ipId) ?? null,
     royaltyShares: allocationRows,
+    createdAt: input.metadataCreatedAt,
   })
 
   const storyClient = createStoryRoyaltySdkClient({
