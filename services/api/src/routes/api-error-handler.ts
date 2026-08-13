@@ -31,6 +31,9 @@ export function apiErrorHandler(error: Error, c: Context): Response {
     headers: {
       "content-type": "application/json",
       "x-request-id": requestId,
+      ...(error instanceof HttpError && error.code === "namespace_unavailable"
+        ? { "cache-control": "no-store" }
+        : {}),
     },
   })
 }

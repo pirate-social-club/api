@@ -115,6 +115,12 @@ export function notFoundError(message: string): HttpError {
   return new HttpError(404, "not_found", message)
 }
 
+export function namespaceUnavailableError(
+  message = "Namespace routing is temporarily unavailable",
+): HttpError {
+  return new HttpError(503, "namespace_unavailable", message, true)
+}
+
 export function structuredSurfaceDisabled(message: string, details: Record<string, unknown> | null = null): HttpError {
   return new HttpError(403, "structured_surface_disabled", message, false, details)
 }

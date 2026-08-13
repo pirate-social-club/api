@@ -120,6 +120,15 @@ async function insertSecureRootDelegation(
   })
 }
 
+async function expectNamespaceUnavailable(response: Response): Promise<void> {
+  expect(response.status).toBe(503)
+  expect(response.headers.get("cache-control")).toBe("no-store")
+  expect(await json(response)).toMatchObject({
+    code: "namespace_unavailable",
+    retryable: true,
+  })
+}
+
 describe("public namespace routes", () => {
   test("resolves verified Pirate-routed HNS roots to their community", async () => {
     const ctx = await createRouteTestContext()
@@ -232,7 +241,7 @@ describe("public namespace routes", () => {
     })
   })
 
-  test("does not resolve roots that are not delegated to Pirate DNS for web routing", async () => {
+  test("reports a verified root as unavailable when it is not delegated to Pirate DNS for web routing", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     await insertVerifiedHnsNamespace({
@@ -242,10 +251,10 @@ describe("public namespace routes", () => {
     })
 
     const response = await app.request("http://pirate.test/public-namespaces/xn--pokmon-dva", {}, ctx.env)
-    expect(response.status).toBe(404)
+    await expectNamespaceUnavailable(response)
   })
 
-  test("does not resolve roots when Pirate web routing is not allowed", async () => {
+  test("reports a verified root as unavailable when Pirate web routing is not allowed", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     await insertVerifiedHnsNamespace({
@@ -255,10 +264,10 @@ describe("public namespace routes", () => {
     })
 
     const response = await app.request("http://pirate.test/public-namespaces/xn--pokmon-dva", {}, ctx.env)
-    expect(response.status).toBe(404)
+    await expectNamespaceUnavailable(response)
   })
 
-  test("does not resolve expired namespace verifications", async () => {
+  test("keeps an expired verified namespace as not found", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
     await insertVerifiedHnsNamespace({
@@ -269,6 +278,29 @@ describe("public namespace routes", () => {
 
     const response = await app.request("http://pirate.test/public-namespaces/xn--pokmon-dva", {}, ctx.env)
     expect(response.status).toBe(404)
+    expect(await json(response)).toMatchObject({ code: "not_found" })
+  })
+
+  test("reports a verified root without an active community mapping as unavailable", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+    await insertVerifiedHnsNamespace({
+      ctx,
+      rootLabel: "xn--pokmon-dva",
+      communityStatus: "draft",
+    })
+
+    const response = await app.request("http://pirate.test/public-namespaces/xn--pokmon-dva", {}, ctx.env)
+    await expectNamespaceUnavailable(response)
+  })
+
+  test("keeps an unknown root as a typed not-found response", async () => {
+    const ctx = await createRouteTestContext()
+    cleanup = ctx.cleanup
+
+    const response = await app.request("http://pirate.test/public-namespaces/unknown-root", {}, ctx.env)
+    expect(response.status).toBe(404)
+    expect(await json(response)).toMatchObject({ code: "not_found" })
   })
 
   test("root delegation gate fails closed when enabled without root state", async () => {
@@ -283,7 +315,7 @@ describe("public namespace routes", () => {
       {},
       ctx.env,
     )
-    expect(response.status).toBe(404)
+    await expectNamespaceUnavailable(response)
   })
 
   test("root delegation gate routes only a secure fresh root", async () => {
@@ -343,7 +375,7 @@ describe("public namespace routes", () => {
       {},
       ctx.env,
     )
-    expect(response.status).toBe(404)
+    await expectNamespaceUnavailable(response)
   })
 
   test("root delegation gate filters the public namespace list", async () => {
@@ -393,6 +425,6 @@ describe("public namespace routes", () => {
       {},
       ctx.env,
     )
-    expect(response.status).toBe(404)
+    await expectNamespaceUnavailable(response)
   })
 })
