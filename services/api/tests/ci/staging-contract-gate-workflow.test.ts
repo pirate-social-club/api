@@ -28,16 +28,10 @@ describe("staging contract gate workflow", () => {
     )
   })
 
-  test("uses the production verifier credential for the shared verifier host", async () => {
+  test("keeps the production verifier probe in its dedicated workflow", async () => {
     const workflow = await readFile(workflowPath, "utf8")
-    const verifierBlock = workflow
-      .split("- name: Fetch the production HNS verifier observer credential")[1]
-      ?.split("- name: Require the deployed HNS verifier raw-record contract")[0]
-
-    expect(verifierBlock, "production verifier credential block").toBeTruthy()
-    expect(verifierBlock).toContain("INFISICAL_ENV: prod")
-    expect(workflow).toContain("HNS_VERIFIER_BASE_URL: https://verifier.pirate.sc/hns")
-    expect(workflow).not.toContain("Fetch the staging HNS verifier observer credential")
+    expect(workflow).not.toContain("Fetch the production HNS verifier observer credential")
+    expect(workflow).not.toContain("HNS_VERIFIER_BASE_URL: https://verifier.pirate.sc/hns")
   })
 
   test("keeps public-comment inventory and execution titles aligned", async () => {
