@@ -4,6 +4,7 @@ import type { Env } from "../../../env"
 import type { Community, JoinEligibility, User } from "../../../types"
 import type { Client } from "../../sql-client"
 import type { DbExecutor } from "../../db-helpers"
+import { getControlPlaneClient } from "../../runtime-deps"
 import { openCommunityReadClient } from "../community-read-access"
 import { isCommunityLive } from "../community-status"
 import {
@@ -87,7 +88,7 @@ function buildWalletScoreStatus(
 
 export async function evaluateGatedMembership(input: {
   env: Env
-  client?: DbExecutor
+  identityEvidenceClient?: DbExecutor
   user: User
   userRepository: Pick<UserRepository, "getWalletAttachmentsByUserId">
   communityId: string
@@ -108,7 +109,7 @@ export async function evaluateGatedMembership(input: {
   const walletAttachments = await input.userRepository.getWalletAttachmentsByUserId(input.user.user_id)
   const evaluation = await evaluateMembershipGatePolicy({
     env: input.env,
-    client: input.client,
+    evidenceClient: input.identityEvidenceClient,
     policy: input.policy,
     user: input.user,
     walletAttachments,
@@ -144,7 +145,7 @@ export async function enforceCommunityActionGate(input: {
   }
   const { gateSummaries, gateExpression, walletScoreStatus, evaluation } = await evaluateGatedMembership({
     env: input.env,
-    client: input.client,
+    identityEvidenceClient: getControlPlaneClient(input.env),
     user,
     userRepository: input.userRepository,
     communityId: input.communityId,
@@ -244,7 +245,7 @@ export async function getJoinEligibility(input: {
     const policy = await getMembershipGatePolicy(db.client, input.communityId)
     const { gateSummaries, gateExpression, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
-      client: db.client,
+      identityEvidenceClient: getControlPlaneClient(input.env),
       user,
       userRepository: input.userRepository,
       communityId: input.communityId,

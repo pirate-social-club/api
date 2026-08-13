@@ -11,6 +11,7 @@ import type {
   MembershipRequestSummary,
 } from "../../../types"
 import { openCommunityReadClient, openCommunityWriteClient } from "../community-read-access"
+import { getControlPlaneClient } from "../../runtime-deps"
 import { isCommunityLive } from "../community-status"
 import {
   canAccessCommunity,
@@ -169,7 +170,7 @@ export async function joinCommunity(input: {
     const policy = await getMembershipGatePolicy(db.client, input.communityId)
     const { gateSummaries, walletScoreStatus, evaluation } = await evaluateGatedMembership({
       env: input.env,
-      client: db.client,
+      identityEvidenceClient: getControlPlaneClient(input.env),
       user,
       userRepository: input.userRepository,
       communityId: input.communityId,

@@ -41,7 +41,7 @@ function getPreferredDocumentProvider(providers: readonly DocumentProofProvider[
 
 export async function evaluateMembershipGatePolicy(input: {
   env: Env
-  client?: DbExecutor
+  evidenceClient?: DbExecutor
   policy: GatePolicy | null
   user: User
   walletAttachments: WalletAttachmentSummary[]
@@ -68,8 +68,8 @@ export async function evaluateMembershipGatePolicy(input: {
     altchaScope: input.altchaScope ?? input.altchaProof?.scope ?? "community_join",
     altchaProof: input.altchaProof,
     verifiedAltchaProof: input.verifiedAltchaProof,
-    durableEvidence: input.client
-      ? await readActiveIdentityEvidence({ client: input.client, userId: input.user.user_id })
+    durableEvidence: input.evidenceClient
+      ? await readActiveIdentityEvidence({ client: input.evidenceClient, userId: input.user.user_id })
       : undefined,
   })
 
