@@ -292,6 +292,7 @@ describe("maybeRegisterStoryRoyaltyForAsset rights holds", () => {
       accessMode: "public",
       bundle: null,
       primaryContentHash: `0x${"1".repeat(64)}`,
+      metadataCreatedAt: "2026-07-18T00:00:00.000Z",
     })).rejects.toThrow("rights_hold_blocked")
   })
 })

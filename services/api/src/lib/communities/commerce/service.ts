@@ -118,6 +118,7 @@ async function retryExistingStoryRoyaltyRegistration(input: {
           contentHash: asset.primary_content_hash,
         }),
         primaryContentHash: resolvedPrimaryContentHash,
+        metadataCreatedAt: asset.created_at,
       })
       if (royaltyRegistration) {
         applyRoyaltyRegistrationFields(storyRegistration, royaltyRegistration)
@@ -554,6 +555,7 @@ export async function createAssetForPost(input: {
               contentHash: input.contentHash,
             }),
             primaryContentHash: resolvedPrimaryContentHash,
+            metadataCreatedAt: createdAt,
             royaltyShares: storyRoyaltySharesForRegistration,
           })
         : null

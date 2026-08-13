@@ -88,6 +88,7 @@ export async function registerLockedStoryRoyalty(input: {
       contentHash: input.asset.primary_content_hash,
     }),
     primaryContentHash: input.resolvedPrimaryContentHash,
+    metadataCreatedAt: input.asset.created_at,
   })
 }
 
