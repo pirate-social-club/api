@@ -161,7 +161,10 @@ export async function writeVerificationBatchWithNullifierRetry(input: {
 }): Promise<void> {
   const writeBatch = async (activeNullifier: ActiveIdentityNullifier | null): Promise<void> => {
     const statements = input.buildBatchStatements(activeNullifier)
-    if (input.activeNullifierRefreshStatementIndex === undefined) {
+    if (
+      input.activeNullifierRefreshStatementIndex === undefined
+      && input.sessionClaimStatementIndex === undefined
+    ) {
       await input.client.batch(statements, "write")
       return
     }
