@@ -365,38 +365,27 @@ unaccounted p95 values to select the next target.
 
 ### Profile-prefetch production result
 
-The profile-prefetch slice is present in the deployed API revision
-`a15ed56529d9f597fe501a315a2247789d200ce9`. Eight sequential, cache-busted
-`/feed/home/videos/public` first-page requests (each reported
-`x-pirate-materialized-feed: bypass`) produced this sample:
+API PR #1297 landed as `fd1733920f13f139e67dc677545fad83f3689ba1` and was
+deployed in Web release `31738708630` (release ID
+`b6b5284fa98d57f714b0513d04a75704632d84d6ff00752c03e416cf7228595c`). Four
+cache-busted production probes, each reporting
+`x-pirate-materialized-feed: bypass`, show the sort-specific result:
 
-| Metric | p50 | sample p95 (max) |
-| --- | ---: | ---: |
-| `home-feed` | 4.10s | 4.28s |
-| `community-fanout` | 3.52s | 3.67s |
-| `community-profile-prefetch` | 507ms | 784ms |
+| Surface | `home-feed` | `community-profile-prefetch` | author/derivative profile phases |
+| --- | ---: | ---: | ---: |
+| video, default (`best`) | 4.35s | 520ms | 0 / 0 |
+| video, `sort=new` | 12.49s | 0ms | 15.1s / 13.9s |
+| mixed, default (`best`) | 4.66s | 491ms | 0 / 0 |
+| mixed, `sort=new` | 5.13s | 487ms | 0 / 0 |
 
-All eight requests reported `community-author-handles-sum=0` and
-`community-derivative-profiles-sum=0`. Against the earlier four-request video
-baseline (12.623–14.084s `home-feed`, 12.199–13.535s fanout), the observed
-median fell by about 68% and the sample maximum by about 70%. The direct slice
-criteria therefore pass for the video route: the new prefetch phase is live,
-the duplicated profile phases disappear there, and the observed endpoint time
-is below the 6-second target. This does not close the primary mixed Home gate.
+The default video surface was already selecting identity columns through its
+best-scoring path; the explicit video `sort=new` path still shadow-gated them
+with projected payloads. API PR #1299 addresses that narrower case and remains
+queued for a follow-up release. The primary default video and mixed Home
+surfaces now meet the sub-six-second target in direct probes.
 
-This is strong directional evidence, not a population p95: the before sample
-has four requests and the after sample has eight. Repeat a larger same-surface
-sample before using the result for capacity planning. The remaining visible
-cost is derivative global-row hydration (about 2.45–2.61s per request); treat
-that as a separate, optional follow-up rather than reopening the profile
-deduplication slice.
-
-A subsequent 50-request cache-busted mixed `best` first-page probe reported
-`x-pirate-materialized-feed: bypass` on every response, but
-`community-profile-prefetch=0` on every response while author-handle and
-derivative-profile phases remained in the multi-second sums. The mixed
-projection SQL did not select `author_user_id` or `identity_mode`, so the
-request-scoped prefetch had no IDs to load. API PR #1297 adds those existing
-columns to both sides of the mixed keyset query and extends the PostgreSQL
-fixture to pin the contract. Re-run the mixed 50-request gate only after that
-fix is deployed.
+A seven-page mixed first-page walk after the #1297 release returned 174 rows,
+174 unique `source_post_id` values, and zero duplicate rows. The remaining
+visible tier is derivative global-row hydration (roughly 2.45–3.39s per
+request in these probes); treat it as the next optional optimization rather
+than reopening profile deduplication.
