@@ -88,7 +88,7 @@ function buildWalletScoreStatus(
 
 export async function evaluateGatedMembership(input: {
   env: Env
-  identityEvidenceClient?: DbExecutor
+  identityEvidenceClient: DbExecutor
   user: User
   userRepository: Pick<UserRepository, "getWalletAttachmentsByUserId">
   communityId: string

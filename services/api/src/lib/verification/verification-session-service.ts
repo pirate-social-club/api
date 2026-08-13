@@ -305,7 +305,7 @@ async function approvePendingTelegramJoinGrantsAfterVerification(input: {
   }
 }
 
-async function returnCommittedVerificationAfterRace(input: {
+export async function returnCommittedVerificationAfterRace(input: {
   client: Client
   verificationSessionId: string
   userId: string
