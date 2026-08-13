@@ -199,6 +199,9 @@ export async function readActiveIdentityEvidence(input: {
     const activeNullifierId = stringOrNull(rowValue(row, "active_nullifier_id"))
     const requiresNullifier = capability === "unique_human" || capability === "nationality"
     if (requiresNullifier && !activeNullifierId) continue
+    const sourceIdentityNullifierId = requiresNullifier
+      ? activeNullifierId
+      : stringOrNull(rowValue(row, "source_identity_nullifier_id"))
     evidence.push({
       evidenceId,
       userId,
@@ -211,9 +214,7 @@ export async function readActiveIdentityEvidence(input: {
       verifiedAt,
       expiresAt: rowTime(rowValue(row, "expires_at")),
       sourceVerificationSessionId: stringOrNull(rowValue(row, "source_verification_session_id")),
-      sourceIdentityNullifierId: capability === "unique_human" || capability === "nationality"
-        ? activeNullifierId
-        : null,
+      sourceIdentityNullifierId,
     })
   }
   return evidence

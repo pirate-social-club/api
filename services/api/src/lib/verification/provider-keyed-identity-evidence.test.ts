@@ -90,7 +90,7 @@ describe("provider-keyed identity evidence evaluator", () => {
         user_attestation_id: "att_gender",
         user_id: "user_1",
         source_verification_session_id: "session_1",
-        source_identity_nullifier_id: null,
+        source_identity_nullifier_id: "nullifier_gender",
         provider: "self",
         attestation_type: "gender",
         capability_key: "gender",
@@ -110,7 +110,7 @@ describe("provider-keyed identity evidence evaluator", () => {
     expect(typeof statement === "string" ? statement : statement?.sql).toContain("a.expires_at > ?2")
     expect(result.map((item) => item.capability)).toEqual(["unique_human", "nationality", "gender"])
     expect(result[0]?.sourceIdentityNullifierId).toBe("nullifier_1")
-    expect(result[2]?.sourceIdentityNullifierId).toBeNull()
+    expect(result[2]?.sourceIdentityNullifierId).toBe("nullifier_gender")
   })
 
   test("matches minimum age and gender inside the shared evaluator", () => {
