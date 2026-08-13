@@ -58,7 +58,7 @@ CREATE TABLE community_handle_claim_intents (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (observed_funding_receipt_id)
         REFERENCES observed_funding_receipts(observed_funding_receipt_id),
-    CHECK (
+    CONSTRAINT community_handle_claim_intents_paid_fields_check CHECK (
         price_cents = 0 OR (
             chain_id IS NOT NULL AND token_address IS NOT NULL
             AND funding_destination_address IS NOT NULL
@@ -98,7 +98,7 @@ CREATE TABLE community_handle_action_authorizations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     FOREIGN KEY (community_handle_claim_intent_id)
         REFERENCES community_handle_claim_intents(community_handle_claim_intent_id),
-    CHECK (
+    CONSTRAINT community_handle_action_authorizations_consumption_check CHECK (
         (consumed_at IS NULL AND consumed_by_intent_id IS NULL)
         OR (consumed_at IS NOT NULL AND consumed_by_intent_id = community_handle_claim_intent_id)
     )
