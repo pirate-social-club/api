@@ -44,20 +44,30 @@ const activeEnforcement = {
 describe("generic asset read policy", () => {
   test("does not query 1157 tables for legacy kinds", async () => {
     const client = executor({})
-    await expect(assertAssetDeliveryAllowed({ client, asset: asset("song_audio") })).resolves.toBeUndefined()
-    await expect(resolveAssetPayloadDescriptor({ client, asset: asset("video_file") })).resolves.toBeNull()
+    await expect(assertAssetDeliveryAllowed({
+      client,
+      asset: asset("song_audio"),
+      notFoundMessage: "Asset not found",
+    })).resolves.toBeUndefined()
+    await expect(resolveAssetPayloadDescriptor({
+      client,
+      asset: asset("video_file"),
+      notFoundMessage: "Asset not found",
+    })).resolves.toBeNull()
   })
 
   test("fails closed when generic enforcement is missing or non-active", async () => {
     await expect(assertAssetDeliveryAllowed({
       client: executor({}),
       asset: asset("download_file"),
-    })).rejects.toMatchObject({ status: 404 })
+      notFoundMessage: "Asset not found",
+    })).rejects.toMatchObject({ status: 404, message: "Asset not found" })
 
     await expect(assertAssetDeliveryAllowed({
       client: executor({ enforcement: { ...activeEnforcement, enforcement_state: "quarantined", reason_code: "malware" } }),
       asset: asset("download_file"),
-    })).rejects.toMatchObject({ status: 404 })
+      notFoundMessage: "Asset not found",
+    })).rejects.toMatchObject({ status: 404, message: "Asset not found" })
   })
 
   test("returns only authoritative active payload metadata", async () => {
@@ -80,8 +90,16 @@ describe("generic asset read policy", () => {
         updated_at: "2026-08-13T00:00:00.000Z",
       },
     })
-    await expect(assertAssetDeliveryAllowed({ client, asset: asset("download_file") })).resolves.toBeUndefined()
-    await expect(resolveAssetPayloadDescriptor({ client, asset: asset("download_file") })).resolves.toEqual({
+    await expect(assertAssetDeliveryAllowed({
+      client,
+      asset: asset("download_file"),
+      notFoundMessage: "Asset not found",
+    })).resolves.toBeUndefined()
+    await expect(resolveAssetPayloadDescriptor({
+      client,
+      asset: asset("download_file"),
+      notFoundMessage: "Asset not found",
+    })).resolves.toEqual({
       delivery_behavior: "download",
       display_filename: "data.csv",
       mime_type: "text/csv",
@@ -89,5 +107,13 @@ describe("generic asset read policy", () => {
       content_hash: "sha256:payload",
       payload_format: "opaque_file_v1",
     })
+  })
+
+  test("masks a missing payload with the caller's ordinary not-found response", async () => {
+    await expect(resolveAssetPayloadDescriptor({
+      client: executor({}),
+      asset: asset("download_file"),
+      notFoundMessage: "Asset content not found",
+    })).rejects.toMatchObject({ status: 404, message: "Asset content not found" })
   })
 })

@@ -8,12 +8,13 @@ import type { AssetRow } from "./row-types"
 export async function resolveAssetPayloadDescriptor(input: {
   client: DbExecutor
   asset: AssetRow
+  notFoundMessage: string
 }): Promise<AssetPayloadDescriptor | null> {
   if (!isGenericAssetKind(input.asset.asset_kind)) return null
 
   const payload = await getActivePrimaryAssetPayload(input.client, input.asset.asset_id)
   if (!payload) {
-    throw notFoundError("Asset payload is unavailable")
+    throw notFoundError(input.notFoundMessage)
   }
   const descriptor: AssetPayloadDescriptor = {
     delivery_behavior: payload.delivery_behavior,
@@ -30,11 +31,12 @@ export async function resolveAssetPayloadDescriptor(input: {
 export async function assertAssetDeliveryAllowed(input: {
   client: DbExecutor
   asset: AssetRow
+  notFoundMessage: string
 }): Promise<void> {
   if (!isGenericAssetKind(input.asset.asset_kind)) return
 
   const enforcement = await getAssetEnforcement(input.client, input.asset.asset_id)
   if (!enforcement || enforcement.enforcement_state !== "active") {
-    throw notFoundError("Asset is unavailable")
+    throw notFoundError(input.notFoundMessage)
   }
 }

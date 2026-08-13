@@ -91,7 +91,11 @@ async function authorizeAssetAccess(input: {
   if (!asset) {
     throw notFoundError(input.notFoundMessage)
   }
-  await assertAssetDeliveryAllowed({ client: input.client, asset })
+  await assertAssetDeliveryAllowed({
+    client: input.client,
+    asset,
+    notFoundMessage: input.notFoundMessage,
+  })
 
   const post = await getPostById(input.client, asset.source_post_id)
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
@@ -160,7 +164,11 @@ export async function resolveCommunityAssetAccess(input: {
       assetId: input.assetId,
       notFoundMessage: "Asset not found",
     })
-    const payload = await resolveAssetPayloadDescriptor({ client: db.client, asset })
+    const payload = await resolveAssetPayloadDescriptor({
+      client: db.client,
+      asset,
+      notFoundMessage: "Asset not found",
+    })
 
     if (asset.access_mode === "public") {
       return {
@@ -299,12 +307,20 @@ export async function resolvePublicCommunityAssetAccess(input: {
     if (!asset) {
       throw notFoundError("Asset not found")
     }
-    await assertAssetDeliveryAllowed({ client: db.client, asset })
+    await assertAssetDeliveryAllowed({
+      client: db.client,
+      asset,
+      notFoundMessage: "Asset not found",
+    })
     const post = await getPostById(db.client, asset.source_post_id)
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Asset not found")
     }
-    const payload = await resolveAssetPayloadDescriptor({ client: db.client, asset })
+    const payload = await resolveAssetPayloadDescriptor({
+      client: db.client,
+      asset,
+      notFoundMessage: "Asset not found",
+    })
 
     if (asset.access_mode === "public") {
       return {
@@ -397,7 +413,11 @@ export async function fetchPublicCommunityAssetContent(input: {
     if (!asset) {
       throw notFoundError("Asset content not found")
     }
-    await assertAssetDeliveryAllowed({ client: db.client, asset })
+    await assertAssetDeliveryAllowed({
+      client: db.client,
+      asset,
+      notFoundMessage: "Asset content not found",
+    })
     const post = await getPostById(db.client, asset.source_post_id)
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Asset content not found")
@@ -474,4 +494,3 @@ export async function fetchCommunityAssetContent(input: {
     db.close()
   }
 }
-
