@@ -141,7 +141,62 @@ CREATE TABLE posts_next (
     FOREIGN KEY (parent_post_id) REFERENCES posts_next(post_id)
 );
 
-INSERT INTO posts_next SELECT * FROM posts;
+INSERT INTO posts_next (
+    post_id, community_id, author_user_id, identity_mode, anonymous_scope,
+    anonymous_label, disclosed_qualifiers_json, label_id, post_type, status,
+    song_mode, title, body, caption, lyrics, link_url, media_refs_json,
+    song_artifact_bundle_id, source_language, translation_policy, rights_basis,
+    asset_id, parent_post_id, analysis_state, analysis_result_ref,
+    content_safety_state, age_gate_policy, created_at, updated_at,
+    idempotency_key, idempotency_body_hash, publish_failure_code,
+    publish_failure_message, publish_failure_retryable, publish_failed_at,
+    flair_id, access_mode, upstream_asset_refs_json, comment_count,
+    top_level_comment_count, last_comment_at, visibility, authorship_mode,
+    agent_id, agent_ownership_record_id, agent_display_name_snapshot,
+    agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+    label_assignment_status, label_assigned_by, label_assigned_at,
+    label_ai_confidence, label_assignment_error, label_assignment_model,
+    label_assignment_result_json, agent_handle_snapshot, link_og_image_url,
+    link_og_title, embeds_json, link_enrichment_snapshot_json,
+    link_enrichment_synced_at, song_title, song_cover_art_ref, song_duration_ms,
+    crosspost_source_json, song_annotations_url, source_start_ms,
+    source_duration_ms, sync_offset_ms, source_language_confidence,
+    source_language_reliable, source_language_detector,
+    source_language_detected_at, source_language_source_hash,
+    song_instrumental_audio_json, song_vocal_audio_json, lyrics_language,
+    lyrics_language_confidence, lyrics_language_reliable,
+    lyrics_language_detector, lyrics_language_detected_at,
+    lyrics_language_source_hash, age_gate_source, age_gate_evidence_ref,
+    age_gate_set_at
+)
+SELECT
+    post_id, community_id, author_user_id, identity_mode, anonymous_scope,
+    anonymous_label, disclosed_qualifiers_json, label_id, post_type, status,
+    song_mode, title, body, caption, lyrics, link_url, media_refs_json,
+    song_artifact_bundle_id, source_language, translation_policy, rights_basis,
+    asset_id, parent_post_id, analysis_state, analysis_result_ref,
+    content_safety_state, age_gate_policy, created_at, updated_at,
+    idempotency_key, idempotency_body_hash, publish_failure_code,
+    publish_failure_message, publish_failure_retryable, publish_failed_at,
+    flair_id, access_mode, upstream_asset_refs_json, comment_count,
+    top_level_comment_count, last_comment_at, visibility, authorship_mode,
+    agent_id, agent_ownership_record_id, agent_display_name_snapshot,
+    agent_owner_handle_snapshot, agent_ownership_provider_snapshot,
+    label_assignment_status, label_assigned_by, label_assigned_at,
+    label_ai_confidence, label_assignment_error, label_assignment_model,
+    label_assignment_result_json, agent_handle_snapshot, link_og_image_url,
+    link_og_title, embeds_json, link_enrichment_snapshot_json,
+    link_enrichment_synced_at, song_title, song_cover_art_ref, song_duration_ms,
+    crosspost_source_json, song_annotations_url, source_start_ms,
+    source_duration_ms, sync_offset_ms, source_language_confidence,
+    source_language_reliable, source_language_detector,
+    source_language_detected_at, source_language_source_hash,
+    song_instrumental_audio_json, song_vocal_audio_json, lyrics_language,
+    lyrics_language_confidence, lyrics_language_reliable,
+    lyrics_language_detector, lyrics_language_detected_at,
+    lyrics_language_source_hash, age_gate_source, age_gate_evidence_ref,
+    age_gate_set_at
+FROM posts;
 DROP TABLE posts;
 ALTER TABLE posts_next RENAME TO posts;
 
@@ -249,7 +304,56 @@ CREATE TABLE assets_next (
     )
 );
 
-INSERT INTO assets_next SELECT * FROM assets;
+INSERT INTO assets_next (
+    asset_id, community_id, source_post_id, song_artifact_bundle_id,
+    creator_user_id, asset_kind, rights_basis, access_mode,
+    primary_content_ref, primary_content_hash, preview_audio_json,
+    cover_art_json, canvas_video_json, publication_status, story_status,
+    story_error, story_ip_id, story_publish_tx_ref, story_asset_version_id,
+    story_cdr_vault_uuid, story_namespace, story_entitlement_token_id,
+    story_read_condition, story_write_condition, story_ip_nft_contract,
+    story_ip_nft_token_id, story_publish_model, story_license_terms_id,
+    story_license_template, story_royalty_policy,
+    story_derivative_registered_at, story_revenue_token,
+    story_cdr_encrypted_cid, story_cdr_allocate_tx_ref,
+    story_cdr_write_tx_ref, story_royalty_policy_id,
+    story_derivative_parent_ip_ids_json, story_royalty_registration_status,
+    license_preset, commercial_rev_share_pct, locked_delivery_status,
+    locked_delivery_ref, locked_delivery_error, locked_delivery_payload_json,
+    locked_delivery_storage_ref, locked_delivery_secret_json, display_title,
+    created_at, updated_at, royalty_allocation_status,
+    royalty_allocation_fingerprint, royalty_allocation_version,
+    royalty_allocation_effect_key, royalty_allocation_tx_hash,
+    ip_royalty_vault, royalty_vault_total_supply, royalty_vault_decimals,
+    royalty_allocation_registered_at, royalty_allocation_projection_synced,
+    story_ip_metadata_uri, story_ip_metadata_hash, story_nft_metadata_uri,
+    story_nft_metadata_hash
+)
+SELECT
+    asset_id, community_id, source_post_id, song_artifact_bundle_id,
+    creator_user_id, asset_kind, rights_basis, access_mode,
+    primary_content_ref, primary_content_hash, preview_audio_json,
+    cover_art_json, canvas_video_json, publication_status, story_status,
+    story_error, story_ip_id, story_publish_tx_ref, story_asset_version_id,
+    story_cdr_vault_uuid, story_namespace, story_entitlement_token_id,
+    story_read_condition, story_write_condition, story_ip_nft_contract,
+    story_ip_nft_token_id, story_publish_model, story_license_terms_id,
+    story_license_template, story_royalty_policy,
+    story_derivative_registered_at, story_revenue_token,
+    story_cdr_encrypted_cid, story_cdr_allocate_tx_ref,
+    story_cdr_write_tx_ref, story_royalty_policy_id,
+    story_derivative_parent_ip_ids_json, story_royalty_registration_status,
+    license_preset, commercial_rev_share_pct, locked_delivery_status,
+    locked_delivery_ref, locked_delivery_error, locked_delivery_payload_json,
+    locked_delivery_storage_ref, locked_delivery_secret_json, display_title,
+    created_at, updated_at, royalty_allocation_status,
+    royalty_allocation_fingerprint, royalty_allocation_version,
+    royalty_allocation_effect_key, royalty_allocation_tx_hash,
+    ip_royalty_vault, royalty_vault_total_supply, royalty_vault_decimals,
+    royalty_allocation_registered_at, royalty_allocation_projection_synced,
+    story_ip_metadata_uri, story_ip_metadata_hash, story_nft_metadata_uri,
+    story_nft_metadata_hash
+FROM assets;
 DROP TABLE assets;
 ALTER TABLE assets_next RENAME TO assets;
 
@@ -301,7 +405,16 @@ CREATE TABLE post_publish_requests_next (
     UNIQUE (community_id, post_id)
 );
 
-INSERT INTO post_publish_requests_next SELECT * FROM post_publish_requests;
+INSERT INTO post_publish_requests_next (
+    post_publish_request_id, community_id, post_id, publish_mode,
+    request_body_hash, listing_draft_json, publish_options_json, status,
+    failure_code, failure_message, created_at, updated_at
+)
+SELECT
+    post_publish_request_id, community_id, post_id, publish_mode,
+    request_body_hash, listing_draft_json, publish_options_json, status,
+    failure_code, failure_message, created_at, updated_at
+FROM post_publish_requests;
 DROP TABLE post_publish_requests;
 ALTER TABLE post_publish_requests_next RENAME TO post_publish_requests;
 CREATE INDEX idx_post_publish_requests_status
