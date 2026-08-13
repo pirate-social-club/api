@@ -42,6 +42,8 @@ describe.skipIf(!RUN)("home feed pagination (production PostgreSQL path)", () =>
       CREATE TABLE community_post_projections (
         community_id TEXT NOT NULL,
         source_post_id TEXT NOT NULL,
+        author_user_id TEXT,
+        identity_mode TEXT,
         source_created_at TIMESTAMPTZ NOT NULL,
         visibility TEXT NOT NULL,
         upvote_count INTEGER NOT NULL,
@@ -55,10 +57,11 @@ describe.skipIf(!RUN)("home feed pagination (production PostgreSQL path)", () =>
     for (let index = 0; index < 27; index += 1) {
       await database.unsafe(`
         INSERT INTO community_post_projections (
-          community_id, source_post_id, source_created_at, visibility,
+          community_id, source_post_id, author_user_id, identity_mode,
+          source_created_at, visibility,
           upvote_count, downvote_count, comment_count, like_count,
           projection_version, status
-        ) VALUES ($1, $2, $3, 'public', $4, 0, $5, $6, 1, 'published')
+        ) VALUES ($1, $2, 'usr_feed_operator', 'public', $3, 'public', $4, 0, $5, $6, 1, 'published')
       `, [
         "cmt_feed",
         `pst_${String(index).padStart(2, "0")}`,
@@ -99,6 +102,8 @@ describe.skipIf(!RUN)("home feed pagination (production PostgreSQL path)", () =>
       expect(first.hasMore).toBe(true)
       expect(boundary).toBeDefined()
       expect(typeof boundary?.feed_sort_key).toBe("number")
+      expect(boundary?.author_user_id).toBe("usr_feed_operator")
+      expect(boundary?.identity_mode).toBe("public")
 
       const second = await listHomeFeedProjectionPage({
         ...common,
