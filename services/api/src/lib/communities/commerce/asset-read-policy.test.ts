@@ -42,7 +42,7 @@ const activeEnforcement = {
 }
 
 describe("generic asset read policy", () => {
-  test("does not query 1157 tables for legacy kinds", async () => {
+  test("does not query 1158 tables for legacy kinds", async () => {
     const client = executor({})
     await expect(assertAssetDeliveryAllowed({
       client,
