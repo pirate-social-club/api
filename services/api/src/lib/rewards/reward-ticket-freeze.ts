@@ -39,9 +39,13 @@ export type RewardTicketPoolFreezeInput = Readonly<{
 }>
 
 export type RewardTicketPoolCommitment = Readonly<{
+  chainId: number
+  jackpotAddress: string
+  drawingId: bigint
   beneficiaries: readonly FrozenRewardTicketBeneficiary[]
   snapshotHash: string
   leafHash: string
+  termsHash: string
   poolDrawingId: string
 }>
 
@@ -184,9 +188,13 @@ export function freezeRewardTicketPool(input: RewardTicketPoolFreezeInput): Rewa
       requiredBytes32(input.termsHash, "terms_hash"), beneficiaries.length, snapshotHash],
   ))
   return {
+    chainId: input.chainId,
+    jackpotAddress: input.jackpotAddress,
+    drawingId: input.drawingId,
     beneficiaries,
     snapshotHash: snapshotHash.slice(2),
     leafHash: leafHash.slice(2),
+    termsHash: requiredBytes32(input.termsHash, "terms_hash").slice(2),
     poolDrawingId: input.poolDrawingId,
   }
 }
