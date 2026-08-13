@@ -73,7 +73,7 @@ export function isActiveIdentityNullifierUniqueConflict(error: unknown): boolean
   return false
 }
 
-async function getActiveIdentityNullifier(
+export async function getActiveIdentityNullifier(
   client: Client,
   identityNullifier: IdentityNullifierInput,
 ): Promise<ActiveIdentityNullifier | null> {

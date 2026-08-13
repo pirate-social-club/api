@@ -1,5 +1,5 @@
 import type { Client, InStatement } from "../sql-client"
-import { badRequestError, conflictError, eligibilityFailed, HttpError, internalError, providerUnavailable } from "../errors"
+import { badRequestError, eligibilityFailed, HttpError, internalError, providerUnavailable } from "../errors"
 import { makeId } from "../helpers"
 import { sha256Hex } from "../crypto"
 import {
@@ -39,6 +39,7 @@ import {
 import { interactiveVerificationExpiresAt } from "./verification-capabilities"
 import {
   isActiveIdentityNullifierUniqueConflict,
+  getActiveIdentityNullifier,
   returnCommittedVerificationAfterRace as returnCommittedVerificationAfterRaceHelper,
   VerificationAttestationConflictError,
   VerificationSessionClaimLostError,
