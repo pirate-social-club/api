@@ -875,7 +875,8 @@ export async function listHomeFeedProjectionPage(input: {
   const result = await controlPlaneClient.execute({
     sql: `
       WITH eligible AS (
-        SELECT community_id, source_post_id, source_created_at, visibility,
+        SELECT community_id, source_post_id, author_user_id, identity_mode,
+               source_created_at, visibility,
                upvote_count, downvote_count, comment_count, like_count,
                ${keyExpr ?? "NULL"} AS feed_sort_key
         FROM community_post_projections
@@ -885,7 +886,8 @@ export async function listHomeFeedProjectionPage(input: {
           AND ${visibility.sql}
           ${cutoffSql}
       )
-      SELECT community_id, source_post_id, source_created_at, visibility,
+      SELECT community_id, source_post_id, author_user_id, identity_mode,
+             source_created_at, visibility,
              upvote_count, downvote_count, comment_count, like_count, feed_sort_key
       FROM eligible
       WHERE 1 = 1
