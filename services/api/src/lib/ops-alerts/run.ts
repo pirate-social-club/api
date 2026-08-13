@@ -51,6 +51,24 @@ export type OpsAlertRunSummary = {
   scan_ms: number
 }
 
+export function buildLegacyHandleFundingExposureAlert(input: {
+  row: Record<string, unknown> | undefined
+}): OpsAlert | null {
+  const count = Number(input.row?.receipt_count ?? 0)
+  if (!Number.isSafeInteger(count) || count <= 0) return null
+  return {
+    key: "legacy_handle_funding_exposure",
+    severity: "high",
+    title: "A paid handle claim used the legacy funding path",
+    count,
+    community_ids: [],
+    details: {
+      first_seen: input.row?.first_seen ?? null,
+      last_seen: input.row?.last_seen ?? null,
+    },
+  }
+}
+
 export async function runOpsAlerts(input: {
   env: Env
   communityRepository: CommunityJobRepository
@@ -131,6 +149,15 @@ export async function runOpsAlerts(input: {
   const alerts = buildOpsAlerts(signals)
   const controlPlane = getControlPlaneClient(env)
   try {
+    const legacyHandleFunding = (await controlPlane.execute(`
+      SELECT count(*) AS receipt_count,
+             min(observed_at) AS first_seen,
+             max(observed_at) AS last_seen
+      FROM observed_funding_receipts
+      WHERE consumer_rail = 'community_handle'
+    `)).rows[0] as Record<string, unknown> | undefined
+    const exposureAlert = buildLegacyHandleFundingExposureAlert({ row: legacyHandleFunding })
+    if (exposureAlert) alerts.push(exposureAlert)
     const refundReviews = await listFundingReceiptsForRefundReview({ client: controlPlane, limit: 100 })
     if (refundReviews.length > 0) {
       alerts.push({
