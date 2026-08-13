@@ -133,7 +133,14 @@ function resolveCommunityTemplateMigrationsDir(): string {
 }
 
 function parseConnectionPragmaStatement(statement: string): ConnectionPragmaStatement | null {
-  const match = statement.trim().match(CONNECTION_PRAGMA_PATTERN)
+  let candidate = statement
+  while (true) {
+    const withoutLineComment = candidate.replace(/^\s*--[^\r\n]*(?:\r?\n|$)/, "")
+    const withoutBlockComment = withoutLineComment.replace(/^\s*\/\*[\s\S]*?\*\//, "")
+    if (withoutBlockComment === candidate) break
+    candidate = withoutBlockComment
+  }
+  const match = candidate.trim().match(CONNECTION_PRAGMA_PATTERN)
   if (!match) {
     return null
   }
@@ -147,7 +154,7 @@ function parseConnectionPragmaStatement(statement: string): ConnectionPragmaStat
   }
 }
 
-function splitConnectionPragmas(statements: string[]): {
+export function splitConnectionPragmas(statements: string[]): {
   leadingPragmas: ConnectionPragmaStatement[]
   bodyStatements: string[]
   trailingPragmas: ConnectionPragmaStatement[]
