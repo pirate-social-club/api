@@ -111,19 +111,21 @@ export async function resolveActiveRewardIdentity(
       .map((item) => item.sourceIdentityNullifierId)
       .filter((value): value is string => value !== null),
   )
-  const row = await executeFirst(client, {
+  const result = await client.execute({
     sql: `
       SELECT identity_nullifier_id, mechanism, nullifier_hash
       FROM identity_nullifiers
       WHERE user_id = ?1 AND provider = ?2 AND status = 'active'
       ORDER BY first_seen_at ASC, identity_nullifier_id ASC
-      LIMIT 1
     `,
     args: [userId, requiredProvider],
   })
-  const mechanism = stringOrNull(rowValue(row, "mechanism"))
-  const nullifierHash = stringOrNull(rowValue(row, "nullifier_hash"))
-  const identityNullifierId = stringOrNull(rowValue(row, "identity_nullifier_id"))
-  if (!mechanism || !nullifierHash || !identityNullifierId || !durableEvidenceIds.has(identityNullifierId)) return null
-  return { id: await deriveRewardIdentityId(requiredProvider, mechanism, nullifierHash), provider: requiredProvider }
+  for (const candidate of result.rows) {
+    const mechanism = stringOrNull(rowValue(candidate, "mechanism"))
+    const nullifierHash = stringOrNull(rowValue(candidate, "nullifier_hash"))
+    const identityNullifierId = stringOrNull(rowValue(candidate, "identity_nullifier_id"))
+    if (!mechanism || !nullifierHash || !identityNullifierId || !durableEvidenceIds.has(identityNullifierId)) continue
+    return { id: await deriveRewardIdentityId(requiredProvider, mechanism, nullifierHash), provider: requiredProvider }
+  }
+  return null
 }
