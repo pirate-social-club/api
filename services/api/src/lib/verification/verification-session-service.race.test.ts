@@ -1,54 +1,46 @@
-import { describe, expect, mock, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test"
 import type { Client, InStatement, Transaction } from "../sql-client"
 
-// Keep this concurrency test runnable in the focused fresh worktree. The
-// finalizer module imports provider SDKs at module load time, but this test
-// exercises the shared finalization/CAS boundary without contacting them.
-mock.module("@pirate/api-shared", () => ({
-  makeId: (prefix: string) => `${prefix}_test`,
-  nowIso: () => "2026-01-01T00:00:00.000Z",
-}))
-mock.module("@zkpassport/sdk", () => ({ ZKPassport: class {} }))
-mock.module("@libsql/client", () => ({
-  createClient: () => ({}),
-}))
-mock.module("pg", () => ({ Client: class {} }))
-mock.module("jose", () => ({
-  createRemoteJWKSet: () => {},
-  jwtVerify: async () => ({ payload: {} }),
-}))
-mock.module("../crypto", () => ({ sha256Hex: async () => "hash_test" }))
-mock.module("../auth/auth-db-user-queries", () => ({ getUserRow: async () => null }))
-mock.module("../auth/auth-serializers", () => ({
-  parseVerificationCapabilities: () => ({}),
-  serializeVerificationSession: ({ row, attestationRows }: { row: typeof sessionRow; attestationRows: Array<{ user_attestation_id: string }> }) => ({
-    id: `vs_${row.verification_session_id}`,
-    status: row.status,
-    attestation: attestationRows[0]?.user_attestation_id ?? null,
-  }),
-}))
-mock.module("./very-provider", () => ({
-  assertVeryNativeOAuthConfigured: () => {},
-  buildVerySessionBinding: () => ({}),
-  getVeryProvider: () => ({}),
-  VERY_UNIQUE_HUMAN_DOMAIN: "test-domain",
-}))
-mock.module("./self-provider", () => ({
-  canonicalizeRequestedCapabilities: (capabilities: unknown) => capabilities,
-  getSelfProvider: () => ({}),
-  normalizeVerificationRequirements: (requirements: unknown) => requirements,
-}))
-mock.module("./zkpassport-provider", () => ({ getZkPassportProvider: () => ({}) }))
-mock.module("./verification-logging", () => ({ logVerificationDebug: () => {} }))
-mock.module("../telegram/onboarding-service", () => ({ approvePendingTelegramJoinGrantsForUser: async () => {} }))
-mock.module("./verification-capabilities", () => ({ interactiveVerificationExpiresAt: () => "2026-01-02T00:00:00.000Z" }))
-const {
-  VerificationAttestationConflictError,
-  VerificationSessionClaimLostError,
-  getVerificationSession,
-  returnCommittedVerificationAfterRace,
-  writeVerificationBatchWithNullifierRetry,
-} = await import("./verification-session-service")
+type VerificationSessionService = typeof import("./verification-session-service")
+let service: VerificationSessionService
+
+beforeAll(async () => {
+  // Register these only after the suite has loaded its other modules. Bun's
+  // mock.module is process-global, so top-level registration can contaminate
+  // unrelated tests that happen to import the same dependencies.
+  mock.module("@pirate/api-shared", () => ({
+    makeId: (prefix: string) => `${prefix}_test`,
+    nowIso: () => "2026-01-01T00:00:00.000Z",
+  }))
+  mock.module("../crypto", () => ({ sha256Hex: async () => "hash_test" }))
+  mock.module("../auth/auth-db-user-queries", () => ({ getUserRow: async () => null }))
+  mock.module("../auth/auth-serializers", () => ({
+    parseVerificationCapabilities: () => ({}),
+    serializeVerificationSession: ({ row, attestationRows }: { row: typeof sessionRow; attestationRows: Array<{ user_attestation_id: string }> }) => ({
+      id: `vs_${row.verification_session_id}`,
+      status: row.status,
+      attestation: attestationRows[0]?.user_attestation_id ?? null,
+    }),
+  }))
+  mock.module("./very-provider", () => ({
+    assertVeryNativeOAuthConfigured: () => {},
+    buildVerySessionBinding: () => ({}),
+    getVeryProvider: () => ({}),
+    VERY_UNIQUE_HUMAN_DOMAIN: "test-domain",
+  }))
+  mock.module("./self-provider", () => ({
+    canonicalizeRequestedCapabilities: (capabilities: unknown) => capabilities,
+    getSelfProvider: () => ({}),
+    normalizeVerificationRequirements: (requirements: unknown) => requirements,
+  }))
+  mock.module("./zkpassport-provider", () => ({ getZkPassportProvider: () => ({}) }))
+  mock.module("./verification-logging", () => ({ logVerificationDebug: () => {} }))
+  mock.module("../telegram/onboarding-service", () => ({ approvePendingTelegramJoinGrantsForUser: async () => {} }))
+  mock.module("./verification-capabilities", () => ({ interactiveVerificationExpiresAt: () => "2026-01-02T00:00:00.000Z" }))
+  service = await import("./verification-session-service")
+})
+
+afterAll(() => mock.restore())
 
 const sessionRow = {
   verification_session_id: "vs_race",
@@ -116,7 +108,7 @@ describe("verification finalization race recovery", () => {
 
     const finalizeLikeProduction = async () => {
       try {
-        await writeVerificationBatchWithNullifierRetry({
+        await service.writeVerificationBatchWithNullifierRetry({
           client,
           userId: "usr_race",
           identityNullifier: {
@@ -128,10 +120,10 @@ describe("verification finalization race recovery", () => {
           buildBatchStatements: (): InStatement[] => [{ sql: "UPDATE verification_sessions" }],
           sessionClaimStatementIndex: 0,
         })
-        return await getVerificationSession(client, "vs_race", "usr_race")
+        return await service.getVerificationSession(client, "vs_race", "usr_race")
       } catch (error) {
-        if (error instanceof VerificationSessionClaimLostError || error instanceof VerificationAttestationConflictError) {
-          return returnCommittedVerificationAfterRace({
+        if (error instanceof service.VerificationSessionClaimLostError || error instanceof service.VerificationAttestationConflictError) {
+          return service.returnCommittedVerificationAfterRace({
             client,
             verificationSessionId: "vs_race",
             userId: "usr_race",
@@ -179,7 +171,7 @@ describe("verification finalization race recovery", () => {
 
     const finalizeLikeProduction = async () => {
       try {
-        await writeVerificationBatchWithNullifierRetry({
+        await service.writeVerificationBatchWithNullifierRetry({
           client,
           userId: "usr_race",
           identityNullifier: {
@@ -191,10 +183,10 @@ describe("verification finalization race recovery", () => {
           buildBatchStatements: (): InStatement[] => [{ sql: "INSERT INTO user_attestations" }],
           sessionClaimStatementIndex: 0,
         })
-        return await getVerificationSession(client, "vs_race", "usr_race")
+        return await service.getVerificationSession(client, "vs_race", "usr_race")
       } catch (error) {
-        if (error instanceof VerificationSessionClaimLostError || error instanceof VerificationAttestationConflictError) {
-          return returnCommittedVerificationAfterRace({
+        if (error instanceof service.VerificationSessionClaimLostError || error instanceof service.VerificationAttestationConflictError) {
+          return service.returnCommittedVerificationAfterRace({
             client,
             verificationSessionId: "vs_race",
             userId: "usr_race",
