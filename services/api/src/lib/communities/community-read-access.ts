@@ -237,6 +237,31 @@ export type CommunityBulkOperation = {
 
 type RoutedBulkOperation = ShardBulkReadOperation
 
+// Keep bulk reads below the Workers subrequest/connection ceilings even when a
+// caller supplies an unbounded membership list (for example account merge).
+// The home feed normally has fewer than this many communities, so the cap
+// preserves its parallel fan-out while making the shared helper safe for every
+// caller.
+const COMMUNITY_BULK_READ_CONCURRENCY = 16
+
+async function mapWithConcurrency<T, TResult>(
+  values: readonly T[],
+  worker: (value: T, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (values.length === 0) return []
+  const results = new Array<TResult>(values.length)
+  let nextIndex = 0
+  const workerCount = Math.min(COMMUNITY_BULK_READ_CONCURRENCY, values.length)
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex++
+      if (index >= values.length) return
+      results[index] = await worker(values[index]!, index)
+    }
+  }))
+  return results
+}
+
 export type CommunityBulkReadDeps = {
   resolver?: Pick<CommunityBindingResolver, "resolve">
   controlPlane?: DbExecutor
@@ -266,14 +291,14 @@ export async function bulkCommunityRead(
   }
   if (shouldUseLocalCommunityDb(env)) {
     observeRouting?.(operations.length, new Set(operations.map((operation) => operation.communityId)).size)
-    const values = await Promise.all(operations.map(async (operation) => {
+    const values = await mapWithConcurrency(operations, async (operation) => {
       const db = await openLocalCommunityDb(env, repo, operation.communityId)
       try {
         return [operation.communityId, await db.client.batch(operation.statements, "read")] as const
       } finally {
         await db.close()
       }
-    }))
+    })
     return new Map(values)
   }
 
@@ -284,8 +309,9 @@ export async function bulkCommunityRead(
   // Resolve the page's routing directory concurrently. These are independent
   // control-plane reads; serial resolution put every community's lookup on the
   // critical path before the shard fan-out could begin.
-  const bindings = await Promise.all(
-    operations.map((operation) => resolver.resolve(controlPlane, operation.communityId)),
+  const bindings = await mapWithConcurrency(
+    operations,
+    (operation) => resolver.resolve(controlPlane, operation.communityId),
   )
   for (const [index, operation] of operations.entries()) {
     const binding = bindings[index]
@@ -309,7 +335,7 @@ export async function bulkCommunityRead(
   const values = new Map<string, QueryResult[]>()
   // Shard groups are independent too. Awaiting them one by one turned a page
   // spread over multiple workers back into serial network round trips.
-  await Promise.all([...groups.values()].map(async (group) => {
+  await mapWithConcurrency([...groups.values()], async (group) => {
     if (group.shard.bulkRead) {
       const response = await group.shard.bulkRead({ operations: group.operations })
       for (const item of response.operations) {
@@ -317,11 +343,13 @@ export async function bulkCommunityRead(
       }
       return
     }
-    await Promise.all(group.operations.map(async (operation) => {
+    await mapWithConcurrency(group.operations, async (operation) => {
       const result = await group.shard.batch(operation)
       values.set(operation.communityId, unwrap(result))
-    }))
-  }))
+      return undefined
+    })
+    return undefined
+  })
   return values
 }
 

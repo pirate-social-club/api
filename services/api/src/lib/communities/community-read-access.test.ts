@@ -219,6 +219,62 @@ test("bulkCommunityRead resolves bindings and shard groups concurrently", async 
   expect([...result.keys()].sort()).toEqual(["cmty_a", "cmty_b"])
 })
 
+test("bulkCommunityRead caps large routing and shard fan-out", async () => {
+  let activeResolutions = 0
+  let maxActiveResolutions = 0
+  let activeShardReads = 0
+  let maxActiveShardReads = 0
+  const resolver = {
+    resolve: async (_executor: DbExecutor, communityId: string) => {
+      activeResolutions += 1
+      maxActiveResolutions = Math.max(maxActiveResolutions, activeResolutions)
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      activeResolutions -= 1
+      return {
+        communityId,
+        provisioningState: "ready" as const,
+        shardWorkerId: communityId,
+        bindingName: `DB_${communityId}`,
+        region: null,
+        decommissionedAt: null,
+      }
+    },
+  }
+  const operations = Array.from({ length: 40 }, (_, index) => ({
+    communityId: `cmty_${index}`,
+    statements: [{ sql: "SELECT 1" }],
+  }))
+
+  const result = await bulkCommunityRead(
+    {} as never,
+    {} as never,
+    operations,
+    undefined,
+    {
+      resolver,
+      controlPlane: {} as DbExecutor,
+      resolveShard: () => ({
+        bulkRead: async (input: { operations: Array<{ communityId: string }> }) => {
+          activeShardReads += 1
+          maxActiveShardReads = Math.max(maxActiveShardReads, activeShardReads)
+          await new Promise((resolve) => setTimeout(resolve, 2))
+          activeShardReads -= 1
+          return {
+            operations: input.operations.map((operation) => ({
+              communityId: operation.communityId,
+              result: { ok: true as const, value: [{ rows: [] }] },
+            })),
+          }
+        },
+      } as never),
+    },
+  )
+
+  expect(maxActiveResolutions).toBe(16)
+  expect(maxActiveShardReads).toBe(16)
+  expect(result.size).toBe(40)
+})
+
 test("makeShardReadClient preserves shard error codes across the boundary (step 2.5)", async () => {
   // The shard returns a typed error as a VALUE (ShardResult), not as a thrown
   // Error. The client unwraps it and re-throws as an HttpError with the
