@@ -36,6 +36,10 @@ import {
   resolvePrimaryWalletAddress,
   serializeAsset,
 } from "./shared"
+import {
+  assertAssetDeliveryAllowed,
+  resolveAssetPayloadDescriptor,
+} from "./asset-read-policy"
 
 async function resolveLockedSongPreviewState(input: {
   asset: AssetRow
@@ -87,6 +91,7 @@ async function authorizeAssetAccess(input: {
   if (!asset) {
     throw notFoundError(input.notFoundMessage)
   }
+  await assertAssetDeliveryAllowed({ client: input.client, asset })
 
   const post = await getPostById(input.client, asset.source_post_id)
   const membership = await getCommunityMembershipState(input.client, input.communityId, input.userId)
@@ -155,6 +160,7 @@ export async function resolveCommunityAssetAccess(input: {
       assetId: input.assetId,
       notFoundMessage: "Asset not found",
     })
+    const payload = await resolveAssetPayloadDescriptor({ client: db.client, asset })
 
     if (asset.access_mode === "public") {
       return {
@@ -169,6 +175,7 @@ export async function resolveCommunityAssetAccess(input: {
         decision_reason: privilegedReason ?? "public",
         delivery_kind: "primary_content_ref",
         delivery_ref: buildPublicAssetContentPath(asset.community_id, asset.asset_id),
+        payload,
         story_cdr_access: null,
       }
     }
@@ -198,6 +205,7 @@ export async function resolveCommunityAssetAccess(input: {
         decision_reason: !deliveryReady ? "delivery_pending" : previewState.previewReady ? decisionReason : "preview_pending",
         delivery_kind: accessReady ? "story_cdr_ref" : null,
         delivery_ref: accessReady ? buildAssetContentPath(asset.community_id, asset.asset_id) : null,
+        payload,
         story_cdr_access: accessReady
           ? await buildStoryCdrAccessPackage({
             env: input.env,
@@ -239,6 +247,7 @@ export async function resolveCommunityAssetAccess(input: {
         decision_reason: "purchase_entitlement",
         delivery_kind: "story_cdr_ref",
         delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
+        payload,
         story_cdr_access: await buildStoryCdrAccessPackage({
           env: input.env,
           asset,
@@ -266,6 +275,7 @@ export async function resolveCommunityAssetAccess(input: {
           : "preview_pending",
       delivery_kind: null,
       delivery_ref: null,
+      payload,
       story_cdr_access: null,
     }
   } finally {
@@ -289,10 +299,12 @@ export async function resolvePublicCommunityAssetAccess(input: {
     if (!asset) {
       throw notFoundError("Asset not found")
     }
+    await assertAssetDeliveryAllowed({ client: db.client, asset })
     const post = await getPostById(db.client, asset.source_post_id)
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Asset not found")
     }
+    const payload = await resolveAssetPayloadDescriptor({ client: db.client, asset })
 
     if (asset.access_mode === "public") {
       return {
@@ -307,6 +319,7 @@ export async function resolvePublicCommunityAssetAccess(input: {
         decision_reason: "public",
         delivery_kind: "primary_content_ref",
         delivery_ref: buildAssetContentPath(asset.community_id, asset.asset_id),
+        payload,
         story_cdr_access: null,
       }
     }
@@ -335,6 +348,7 @@ export async function resolvePublicCommunityAssetAccess(input: {
         decision_reason: "purchase_entitlement",
         delivery_kind: "story_cdr_ref",
         delivery_ref: buildPublicAssetContentPath(asset.community_id, asset.asset_id),
+        payload,
         story_cdr_access: await buildStoryCdrAccessPackage({
           env: input.env,
           asset,
@@ -363,6 +377,7 @@ export async function resolvePublicCommunityAssetAccess(input: {
           : "preview_pending",
       delivery_kind: null,
       delivery_ref: null,
+      payload,
       story_cdr_access: null,
     }
   } finally {
@@ -382,6 +397,7 @@ export async function fetchPublicCommunityAssetContent(input: {
     if (!asset) {
       throw notFoundError("Asset content not found")
     }
+    await assertAssetDeliveryAllowed({ client: db.client, asset })
     const post = await getPostById(db.client, asset.source_post_id)
     if (!post || !isPubliclyReadablePost(post)) {
       throw notFoundError("Asset content not found")
@@ -393,6 +409,9 @@ export async function fetchPublicCommunityAssetContent(input: {
       mode: "public",
     })
     if (asset.access_mode === "public") {
+      if (!asset.primary_content_ref) {
+        throw notFoundError("Asset content is not ready")
+      }
       return await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
@@ -435,6 +454,9 @@ export async function fetchCommunityAssetContent(input: {
       asset,
     })
     if (asset.access_mode === "public") {
+      if (!asset.primary_content_ref) {
+        throw notFoundError("Asset content is not ready")
+      }
       return await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
@@ -452,5 +474,4 @@ export async function fetchCommunityAssetContent(input: {
     db.close()
   }
 }
-
 

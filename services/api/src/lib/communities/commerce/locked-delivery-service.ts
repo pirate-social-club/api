@@ -24,6 +24,7 @@ import {
 import { markStoryRoyaltyAllocationRegistrationPendingVerification } from "./royalty-allocations"
 import { syncStoryRoyaltyAllocationProjectionSafely } from "./royalty-allocation-projection"
 import type { AssetRow } from "./row-types"
+import { assertLegacyMediaAsset } from "./asset-kind-policy"
 import {
   assertAssetNotBlockedByRightsHold,
   blockedRightsHoldMessage,
@@ -65,6 +66,7 @@ export async function registerLockedStoryRoyalty(input: {
     registerStoryRoyalty?: typeof maybeRegisterStoryRoyaltyForAsset
   }
 }) {
+  assertLegacyMediaAsset(input.asset)
   const buildVideoMetadataMedia = input.dependencies?.buildVideoMetadataMedia ?? buildStoryVideoMetadataMedia
   const registerStoryRoyalty = input.dependencies?.registerStoryRoyalty ?? maybeRegisterStoryRoyaltyForAsset
   return await registerStoryRoyalty({
@@ -151,6 +153,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   if (!asset) {
     throw notFoundError("Asset not found")
   }
+  assertLegacyMediaAsset(asset)
   if (asset.access_mode !== "locked") {
     return serializeAsset(asset)
   }

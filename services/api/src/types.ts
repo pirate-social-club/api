@@ -1,6 +1,7 @@
 export type {
   Asset,
   AssetAccessResponse,
+  AssetPayloadDescriptor,
   AgentHandle,
   CommunityCreateAcceptedResponse,
   CommunityListing,

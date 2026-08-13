@@ -1,0 +1,93 @@
+import { describe, expect, test } from "bun:test"
+import type { InStatement, QueryResult, QueryResultRow } from "../../sql-client"
+import type { AssetRow } from "./row-types"
+import {
+  assertAssetDeliveryAllowed,
+  resolveAssetPayloadDescriptor,
+} from "./asset-read-policy"
+
+function asset(assetKind: AssetRow["asset_kind"]): AssetRow {
+  return {
+    asset_id: "asset_1",
+    asset_kind: assetKind,
+  } as AssetRow
+}
+
+function executor(rowsByTable: { payload?: QueryResultRow; enforcement?: QueryResultRow }) {
+  return {
+    async execute(statement: InStatement | string): Promise<QueryResult> {
+      const sql = typeof statement === "string" ? statement : statement.sql
+      if (sql.includes("FROM asset_payloads")) {
+        return { rows: rowsByTable.payload ? [rowsByTable.payload] : [] }
+      }
+      if (sql.includes("FROM asset_enforcement")) {
+        return { rows: rowsByTable.enforcement ? [rowsByTable.enforcement] : [] }
+      }
+      throw new Error(`Unexpected query: ${sql}`)
+    },
+  }
+}
+
+const activeEnforcement = {
+  asset_id: "asset_1",
+  enforcement_state: "active",
+  reason_code: null,
+  authority_kind: "asset_create",
+  authority_ref: "asset_1",
+  moderation_action_id: null,
+  actor_role: "system",
+  evidence_ref: null,
+  decided_at: "2026-08-13T00:00:00.000Z",
+  updated_at: "2026-08-13T00:00:00.000Z",
+}
+
+describe("generic asset read policy", () => {
+  test("does not query 1157 tables for legacy kinds", async () => {
+    const client = executor({})
+    await expect(assertAssetDeliveryAllowed({ client, asset: asset("song_audio") })).resolves.toBeUndefined()
+    await expect(resolveAssetPayloadDescriptor({ client, asset: asset("video_file") })).resolves.toBeNull()
+  })
+
+  test("fails closed when generic enforcement is missing or non-active", async () => {
+    await expect(assertAssetDeliveryAllowed({
+      client: executor({}),
+      asset: asset("download_file"),
+    })).rejects.toMatchObject({ status: 404 })
+
+    await expect(assertAssetDeliveryAllowed({
+      client: executor({ enforcement: { ...activeEnforcement, enforcement_state: "quarantined", reason_code: "malware" } }),
+      asset: asset("download_file"),
+    })).rejects.toMatchObject({ status: 404 })
+  })
+
+  test("returns only authoritative active payload metadata", async () => {
+    const client = executor({
+      enforcement: activeEnforcement,
+      payload: {
+        asset_payload_id: "apld_1",
+        asset_id: "asset_1",
+        role: "primary",
+        payload_version: 1,
+        status: "active",
+        content_blob_ref: "cbl_1",
+        payload_format: "opaque_file_v1",
+        delivery_behavior: "download",
+        display_filename: "data.csv",
+        mime_type: "text/csv",
+        size_bytes: 12,
+        content_hash: "sha256:payload",
+        created_at: "2026-08-13T00:00:00.000Z",
+        updated_at: "2026-08-13T00:00:00.000Z",
+      },
+    })
+    await expect(assertAssetDeliveryAllowed({ client, asset: asset("download_file") })).resolves.toBeUndefined()
+    await expect(resolveAssetPayloadDescriptor({ client, asset: asset("download_file") })).resolves.toEqual({
+      delivery_behavior: "download",
+      display_filename: "data.csv",
+      mime_type: "text/csv",
+      size_bytes: 12,
+      content_hash: "sha256:payload",
+      payload_format: "opaque_file_v1",
+    })
+  })
+})
