@@ -64,6 +64,7 @@ import type {
   HomeFeedItem,
   LocalizedPostResponse,
   Post,
+  Profile,
 } from "../../types"
 
 export type HomeFeedWaitUntil = (promise: Promise<void>) => void
@@ -234,8 +235,12 @@ const HOME_FEED_COMMUNITY_PHASES = [
   "open",
   "batched_reads",
   "localize",
+  "author_handles",
   "streaks",
   "derivatives",
+  "derivative_local_rows",
+  "derivative_global_rows",
+  "derivative_profiles",
   "unaccounted",
 ] as const
 
@@ -532,6 +537,7 @@ export async function readHomeFeedCommunityItems(input: {
   memberCommunityIdSet: Set<string>
   communityRepository: HomeFeedCommunityRepository
   profileRepository?: ProfileRepository | null
+  prefetchedProfilesByUserId?: ReadonlyMap<string, Profile | null>
   userId: string | null
   locale?: string | null
   ageGateState: AgeGateViewerState | null
@@ -707,6 +713,7 @@ export async function readHomeFeedCommunityItems(input: {
     const authorHandlesStartedAt = performance.now()
     await hydrateAuthorPublicHandlesForResponses({
       responses: postReadJobs.map((job) => job.response),
+      prefetchedProfilesByUserId: input.prefetchedProfilesByUserId,
       profileRepository: input.profileRepository,
     })
     const authorHandlesMs = elapsedMs(authorHandlesStartedAt)
@@ -732,6 +739,7 @@ export async function readHomeFeedCommunityItems(input: {
         communityId: input.communityId,
         env: input.env,
         responses: derivativeResponses,
+        prefetchedProfilesByUserId: input.prefetchedProfilesByUserId,
         profileRepository: input.profileRepository,
       })
     }

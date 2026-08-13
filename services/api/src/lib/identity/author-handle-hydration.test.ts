@@ -48,19 +48,19 @@ describe("hydratePublicHumanAuthorHandles", () => {
 
     await hydratePublicHumanAuthorHandles({
       authors: [target],
-      profileRepository: profileRepository({ usr_1: "alice.pirate" }),
+      profileRepository: profileRepository({ usr_1: "creator.pirate" }),
       surface: {
         kind: "community",
         client: communityClient([{
           user_id: "usr_1",
-          label_display: "alice",
+          label_display: "creator",
           namespace_label: "dankmeme",
         }]),
         communityId: "cmt_1",
       },
     })
 
-    expect(target.author_public_handle).toBe("alice.dankmeme")
+    expect(target.author_public_handle).toBe("creator.dankmeme")
   })
 
   test("formats Spaces primary handles with at syntax", async () => {
@@ -68,19 +68,19 @@ describe("hydratePublicHumanAuthorHandles", () => {
 
     await hydratePublicHumanAuthorHandles({
       authors: [target],
-      profileRepository: profileRepository({ usr_1: "alice.pirate" }),
+      profileRepository: profileRepository({ usr_1: "creator.pirate" }),
       surface: {
         kind: "community",
         client: communityClient([{
           user_id: "usr_1",
-          label_display: "alice",
+          label_display: "creator",
           namespace_label: "@pokemon",
         }]),
         communityId: "cmt_1",
       },
     })
 
-    expect(target.author_public_handle).toBe("alice@pokemon")
+    expect(target.author_public_handle).toBe("creator@pokemon")
   })
 
   test("falls back to the global handle when no primary handle exists", async () => {
@@ -88,7 +88,7 @@ describe("hydratePublicHumanAuthorHandles", () => {
 
     await hydratePublicHumanAuthorHandles({
       authors: [target],
-      profileRepository: profileRepository({ usr_1: "alice.pirate" }),
+      profileRepository: profileRepository({ usr_1: "creator.pirate" }),
       surface: {
         kind: "community",
         client: communityClient([]),
@@ -96,7 +96,7 @@ describe("hydratePublicHumanAuthorHandles", () => {
       },
     })
 
-    expect(target.author_public_handle).toBe("alice.pirate")
+    expect(target.author_public_handle).toBe("creator.pirate")
   })
 
   test("global surfaces ignore community handles", async () => {
@@ -104,10 +104,56 @@ describe("hydratePublicHumanAuthorHandles", () => {
 
     await hydratePublicHumanAuthorHandles({
       authors: [target],
-      profileRepository: profileRepository({ usr_1: "alice.pirate" }),
+      profileRepository: profileRepository({ usr_1: "creator.pirate" }),
     })
 
-    expect(target.author_public_handle).toBe("alice.pirate")
+    expect(target.author_public_handle).toBe("creator.pirate")
+
+  })
+
+  test("uses request-prefetched profiles without another repository read", async () => {
+    const target = author()
+    let repositoryReads = 0
+    const repository = profileRepository({ usr_1: "wrong.pirate" })
+    const prefetchedProfile = await profileRepository({ usr_1: "creator.pirate" })
+      .getProfileByUserId("usr_1")
+    repository.listProfilesByUserIds = async () => {
+      repositoryReads += 1
+      return new Map()
+    }
+
+    await hydratePublicHumanAuthorHandles({
+      authors: [target],
+      prefetchedProfilesByUserId: new Map([["usr_1", prefetchedProfile]]),
+      profileRepository: repository,
+    })
+
+    expect(repositoryReads).toBe(0)
+    expect(target.author_public_handle).toBe("creator.pirate")
+  })
+
+  test("loads only authors absent from a partial request prefetch", async () => {
+    const prefetchedAuthor = author({ author_user_id: "usr_prefetched" })
+    const missingAuthor = author({ author_user_id: "usr_missing" })
+    const prefetchedProfile = await profileRepository({ usr_prefetched: "prefetched.pirate" })
+      .getProfileByUserId("usr_prefetched")
+    const repository = profileRepository({ usr_missing: "missing.pirate" })
+    const requestedUserIds: string[][] = []
+    const listProfilesByUserIds = repository.listProfilesByUserIds?.bind(repository)
+    repository.listProfilesByUserIds = async (userIds) => {
+      requestedUserIds.push(userIds)
+      return listProfilesByUserIds?.(userIds) ?? new Map()
+    }
+
+    await hydratePublicHumanAuthorHandles({
+      authors: [prefetchedAuthor, missingAuthor],
+      prefetchedProfilesByUserId: new Map([["usr_prefetched", prefetchedProfile]]),
+      profileRepository: repository,
+    })
+
+    expect(requestedUserIds).toEqual([["usr_missing"]])
+    expect(prefetchedAuthor.author_public_handle).toBe("prefetched.pirate")
+    expect(missingAuthor.author_public_handle).toBe("missing.pirate")
   })
 
   test("leaves anonymous and agent identities untouched", async () => {
@@ -116,7 +162,7 @@ describe("hydratePublicHumanAuthorHandles", () => {
 
     await hydratePublicHumanAuthorHandles({
       authors: [anonymous, agent],
-      profileRepository: profileRepository({ usr_1: "alice.pirate" }),
+      profileRepository: profileRepository({ usr_1: "creator.pirate" }),
     })
 
     expect(anonymous.author_public_handle).toBeUndefined()

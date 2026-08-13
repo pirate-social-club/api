@@ -9,6 +9,7 @@ import type {
   HomeFeedItem,
   HomeFeedResponse,
   HomeFeedSort,
+  Profile,
 } from "../../types"
 import {
   prefetchHomeFeedCommunities,
@@ -1217,8 +1218,11 @@ export async function listHomeFeed(input: {
 
   const communityIdentityById = new Map<string, HomeFeedCommunityIdentity | null>()
   const communityPrefetchById = new Map<string, HomeFeedCommunityPrefetch>()
+  const prefetchedProfilesByUserId = new Map<string, Profile | null>()
+  const loadedProfileUserIds = new Set<string>()
   const communityTimings: HomeFeedCommunityTiming[] = []
   let communityPrefetchMs = 0
+  let communityProfilePrefetchMs = 0
   let communityPrefetchBatchCount = 0
   let communityPrefetchOperationCount = 0
   let communityPrefetchShardGroupCount = 0
@@ -1250,6 +1254,24 @@ export async function listHomeFeed(input: {
       communityPrefetchBatchCount += 1
       communityPrefetchMs += elapsedMs(prefetchStartedAt)
     }
+    if (input.profileRepository?.listProfilesByUserIds) {
+      const authorUserIds = [...new Set(rowsToHydrate
+        .filter((row) => row.identity_mode !== "anonymous")
+        .map((row) => row.author_user_id)
+        .filter((userId): userId is string => Boolean(userId)))]
+      const missingProfileUserIds = authorUserIds.filter((userId) => !loadedProfileUserIds.has(userId))
+      if (missingProfileUserIds.length) {
+        const profilePrefetchStartedAt = performance.now()
+        const profiles = await input.profileRepository.listProfilesByUserIds(missingProfileUserIds).catch(() => null)
+        communityProfilePrefetchMs += elapsedMs(profilePrefetchStartedAt)
+        if (profiles) {
+          for (const userId of missingProfileUserIds) {
+            prefetchedProfilesByUserId.set(userId, profiles.get(userId) ?? null)
+            loadedProfileUserIds.add(userId)
+          }
+        }
+      }
+    }
     const communityItemGroups = await mapWithConcurrency([...rowsByCommunityId.entries()], HOME_FEED_COMMUNITY_READ_CONCURRENCY, async ([communityId, rows]) => {
       const prefetch = communityPrefetchById.get(communityId)
       if (!prefetch) {
@@ -1263,6 +1285,7 @@ export async function listHomeFeed(input: {
         memberCommunityIdSet,
         communityRepository: input.communityRepository,
         profileRepository: input.profileRepository,
+        prefetchedProfilesByUserId,
         userId: input.userId,
         locale: input.locale,
         ageGateState,
@@ -1341,6 +1364,7 @@ export async function listHomeFeed(input: {
   }
   phaseTimings.community_fanout_ms = elapsedMs(phaseStartedAt)
   phaseTimings.community_prefetch_ms = communityPrefetchMs
+  phaseTimings.community_profile_prefetch_ms = communityProfilePrefetchMs
   Object.assign(phaseTimings, summarizeHomeFeedCommunityPhaseTimings(communityTimings))
   phaseTimings.order_items_ms = 0
 

@@ -2,6 +2,7 @@ import type { ProfileRepository } from "../auth/repositories"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
 import type { DbExecutor } from "../db-helpers"
 import { rowValue } from "../sql-row"
+import type { Profile } from "../../types"
 
 const COMMUNITY_HANDLE_AUTHOR_CHUNK_SIZE = 80
 
@@ -63,19 +64,41 @@ async function listPrimaryCommunityHandles(input: {
 async function listGlobalHandles(
   profileRepository: ProfileRepository | null | undefined,
   userIds: readonly string[],
+  prefetchedProfilesByUserId?: ReadonlyMap<string, Profile | null>,
 ): Promise<Map<string, string>> {
-  if (!profileRepository) return new Map()
+  const profilesByUserId = new Map<string, Profile | null>()
+  const missingUserIds: string[] = []
+  for (const userId of userIds) {
+    if (prefetchedProfilesByUserId?.has(userId)) {
+      profilesByUserId.set(userId, prefetchedProfilesByUserId.get(userId) ?? null)
+    } else {
+      missingUserIds.push(userId)
+    }
+  }
+  if (!profileRepository || missingUserIds.length === 0) {
+    return handlesFromProfiles(userIds, profilesByUserId)
+  }
 
-  const profilesByUserId = profileRepository.listProfilesByUserIds
-    ? await profileRepository.listProfilesByUserIds([...userIds]).catch(() => new Map())
-    : new Map(await Promise.all(userIds.map(async (userId): Promise<[
+  const loadedProfiles = profileRepository.listProfilesByUserIds
+    ? await profileRepository.listProfilesByUserIds(missingUserIds).catch(() => new Map())
+    : new Map(await Promise.all(missingUserIds.map(async (userId): Promise<[
         string,
         Awaited<ReturnType<ProfileRepository["getProfileByUserId"]>>,
       ]> => [
         userId,
         await profileRepository.getProfileByUserId(userId).catch(() => null),
       ])))
+  for (const userId of missingUserIds) {
+    profilesByUserId.set(userId, loadedProfiles.get(userId) ?? null)
+  }
 
+  return handlesFromProfiles(userIds, profilesByUserId)
+}
+
+function handlesFromProfiles(
+  userIds: readonly string[],
+  profilesByUserId: ReadonlyMap<string, Profile | null>,
+): Map<string, string> {
   const handles = new Map<string, string>()
   for (const userId of userIds) {
     const profile = profilesByUserId.get(userId) ?? null
@@ -91,11 +114,12 @@ async function listGlobalHandles(
  */
 export async function hydratePublicHumanAuthorHandles(input: {
   authors: readonly PublicHumanAuthorHandleTarget[]
+  prefetchedProfilesByUserId?: ReadonlyMap<string, Profile | null>
   profileRepository?: ProfileRepository | null
   surface?: AuthorHandleSurface
 }): Promise<void> {
   const surface = input.surface ?? { kind: "global" as const }
-  if (surface.kind === "global" && !input.profileRepository) return
+  if (surface.kind === "global" && !input.profileRepository && !input.prefetchedProfilesByUserId) return
 
   const eligibleAuthors = input.authors.filter((author): author is PublicHumanAuthorHandleTarget & {
     author_user_id: string
@@ -113,7 +137,7 @@ export async function hydratePublicHumanAuthorHandles(input: {
         userIds,
       }).catch(() => new Map<string, string>())
       : Promise.resolve(new Map<string, string>()),
-    listGlobalHandles(input.profileRepository, userIds),
+    listGlobalHandles(input.profileRepository, userIds, input.prefetchedProfilesByUserId),
   ])
 
   for (const author of eligibleAuthors) {

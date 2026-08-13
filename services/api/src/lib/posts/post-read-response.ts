@@ -23,7 +23,7 @@ import { getPostReadMetrics } from "./community-post-metrics-store"
 import { listPostStreakSummaries } from "./post-study-service"
 import { requireMemberAccess } from "./post-access"
 import { HttpError } from "../errors"
-import type { CommentThreadSnapshot, LocalizedPostResponse, Post } from "../../types"
+import type { CommentThreadSnapshot, LocalizedPostResponse, Post, Profile } from "../../types"
 import type { PublishedLocalizedPostFeedItem } from "./community-post-feed"
 import type { Env } from "../../env"
 
@@ -131,11 +131,13 @@ export async function buildLocalizedPostReadResponse(input: {
  */
 export async function hydrateAuthorPublicHandlesForResponses(input: {
   responses: LocalizedPostResponse[]
+  prefetchedProfilesByUserId?: ReadonlyMap<string, Profile | null>
   profileRepository?: ProfileRepository | null
   surface?: AuthorHandleSurface
 }): Promise<void> {
   await hydratePublicHumanAuthorHandles({
     authors: input.responses.map((response) => response.post),
+    prefetchedProfilesByUserId: input.prefetchedProfilesByUserId,
     profileRepository: input.profileRepository,
     surface: input.surface,
   })
