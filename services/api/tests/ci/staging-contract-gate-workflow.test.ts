@@ -11,6 +11,23 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 describe("staging contract gate workflow", () => {
+  test("accepts the caller admin bootstrap secret before deriving an operator credential", async () => {
+    const workflow = await readFile(workflowPath, "utf8")
+
+    expect(workflow).toMatch(
+      /secrets:\s*[\s\S]*?PIRATE_ADMIN_TOKEN:\s*\n\s+required: false/u,
+    )
+    expect(workflow).toContain(
+      "PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}",
+    )
+    expect(workflow).toContain(
+      "if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == '' || env.PIRATE_ADMIN_TOKEN == ''",
+    )
+    expect(workflow).toContain(
+      'credential="opc_admin_automation.${PIRATE_ADMIN_TOKEN}"',
+    )
+  })
+
   test("keeps public-comment inventory and execution titles aligned", async () => {
     const workflow = await readFile(workflowPath, "utf8")
     const requiredTitles = [
