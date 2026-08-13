@@ -287,9 +287,10 @@ describe("community handle claim intents", () => {
       context.env,
       exchanged.access_token,
     )
-    expect(sweptClaimResponse.status).toBe(409)
-    expect(await json(sweptClaimResponse)).toMatchObject({
-      details: { reason: "handle_label_reservation_expired" },
+    const sweptClaimPayload = await json(sweptClaimResponse)
+    expect({ status: sweptClaimResponse.status, payload: sweptClaimPayload }).toMatchObject({
+      status: 409,
+      payload: { details: { reason: "handle_label_reservation_expired" } },
     })
 
     const sweptIntent = await context.client.execute({

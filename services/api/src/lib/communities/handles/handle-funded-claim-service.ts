@@ -216,6 +216,13 @@ export async function claimCommunityHandleWithFundedIntent(input: {
     )
   }
 
+  if (!handleRow) {
+    throw conflictError(
+      "Payment was verified and this name is pending finalization. Retry the same claim and transaction.",
+      { claim_intent: intentId, funding_tx_ref: fundingTxRef },
+    )
+  }
+
   await withStandaloneControlPlaneClient(input.env, async (client) => {
     await completeFundedHandleClaimIntent({ client, intentId, now: nowIso() })
   })
