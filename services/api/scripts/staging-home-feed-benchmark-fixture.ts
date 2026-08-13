@@ -122,16 +122,16 @@ async function resolveSyntheticUser(apiBase: string, subject: string, secret: st
   return internalId(userId, "usr")
 }
 
-function adminHeaders(adminToken: string, authorUserId: string): Record<string, string> {
+function adminHeaders(adminCredential: string, authorUserId: string): Record<string, string> {
   return {
     "x-admin-as-user-id": authorUserId,
     "x-admin-operation-class": "home_feed_benchmark_fixture",
-    "x-admin-token": adminToken,
+    Authorization: `Operator ${adminCredential}`,
   }
 }
 
 async function joinCommunity(input: {
-  adminToken: string
+  adminCredential: string
   apiBase: string
   authorUserId: string
   communityId: string
@@ -140,7 +140,7 @@ async function joinCommunity(input: {
     apiBase: input.apiBase,
     method: "POST",
     path: `/communities/${encodeURIComponent(publicId(input.communityId, "com"))}/join`,
-    headers: adminHeaders(input.adminToken, input.authorUserId),
+    headers: adminHeaders(input.adminCredential, input.authorUserId),
     body: {},
   })
 }
@@ -151,13 +151,13 @@ async function joinCommunity(input: {
  * complete. Returns the storage_ref the post's media_refs must reference.
  */
 async function uploadVideoArtifact(input: {
-  adminToken: string
+  adminCredential: string
   apiBase: string
   authorUserId: string
   communityId: string
   videoBytes: Uint8Array<ArrayBuffer>
 }): Promise<{ storageRef: string; uploadId: string }> {
-  const headers = adminHeaders(input.adminToken, input.authorUserId)
+  const headers = adminHeaders(input.adminCredential, input.authorUserId)
   const communityPath = encodeURIComponent(publicId(input.communityId, "com"))
   const hashHex = Buffer.from(await crypto.subtle.digest("SHA-256", input.videoBytes)).toString("hex")
   const intent = await requestJson<{
@@ -218,7 +218,7 @@ async function readState(path: string): Promise<FixtureState> {
 }
 
 async function createFixture(input: {
-  adminToken: string
+  adminCredential: string
   apiBase: string
   communityIds: string[]
   statePath: string
@@ -280,7 +280,7 @@ async function createFixture(input: {
       const pairKey = `${authorUserId}\0${communityId}`
       if (!joinedPairs.has(pairKey)) {
         await joinCommunity({
-          adminToken: input.adminToken,
+          adminCredential: input.adminCredential,
           apiBase: input.apiBase,
           authorUserId,
           communityId,
@@ -288,7 +288,7 @@ async function createFixture(input: {
         joinedPairs.add(pairKey)
       }
       const upload = await uploadVideoArtifact({
-        adminToken: input.adminToken,
+          adminCredential: input.adminCredential,
         apiBase: input.apiBase,
         authorUserId,
         communityId,
@@ -298,7 +298,7 @@ async function createFixture(input: {
         apiBase: input.apiBase,
         method: "POST",
         path: `/communities/${encodeURIComponent(publicId(communityId, "com"))}/posts`,
-        headers: adminHeaders(input.adminToken, authorUserId),
+        headers: adminHeaders(input.adminCredential, authorUserId),
         body: {
           idempotency_key: `home-feed-benchmark-v1-${communityIndex + 1}-${postIndex + 1}`,
           identity_mode: "public",
@@ -332,7 +332,7 @@ async function createFixture(input: {
 }
 
 async function verifyFixture(input: {
-  adminToken: string
+  adminCredential: string
   statePath: string
 }): Promise<void> {
   const state = await readState(input.statePath)
@@ -345,7 +345,7 @@ async function verifyFixture(input: {
     apiBase: state.api_base,
     method: "POST",
     path: "/admin/debug/home-feed-benchmark",
-    headers: { "x-admin-token": input.adminToken },
+    headers: { Authorization: `Operator ${input.adminCredential}` },
     body: {
       community_ids: state.community_ids.map((id) => publicId(id, "com")),
       sort: "best",
@@ -368,7 +368,7 @@ async function verifyFixture(input: {
 }
 
 async function recoverFixture(input: {
-  adminToken: string
+  adminCredential: string
   apiBase: string
   communityIds: string[]
   statePath: string
@@ -407,7 +407,7 @@ async function recoverFixture(input: {
       apiBase: input.apiBase,
       method: "POST",
       path: "/admin/debug/home-feed-benchmark",
-      headers: { "x-admin-token": input.adminToken },
+      headers: { Authorization: `Operator ${input.adminCredential}` },
       body: {
         community_ids: input.communityIds.map((id) => publicId(id, "com")),
         cursor,
@@ -470,7 +470,7 @@ async function recoverFixture(input: {
 }
 
 async function benchmarkFixture(input: {
-  adminToken: string
+  adminCredential: string
   iterations: number
   statePath: string
 }): Promise<void> {
@@ -488,7 +488,7 @@ async function benchmarkFixture(input: {
       method: "POST",
       headers: {
         "content-type": "application/json",
-        "x-admin-token": input.adminToken,
+        Authorization: `Operator ${input.adminCredential}`,
       },
       body: JSON.stringify({
         community_ids: state.community_ids.map((id) => publicId(id, "com")),
@@ -537,7 +537,7 @@ async function benchmarkFixture(input: {
 }
 
 async function cleanupFixture(input: {
-  adminToken: string
+  adminCredential: string
   statePath: string
   apply: boolean
 }): Promise<void> {
@@ -560,7 +560,7 @@ async function cleanupFixture(input: {
       path: `/communities/${encodeURIComponent(publicId(post.community_id, "com"))}/posts/${encodeURIComponent(publicId(post.post_id, "post"))}/delete`,
       headers: {
         "x-admin-as-user-id": post.author_user_id,
-        "x-admin-token": input.adminToken,
+        Authorization: `Operator ${input.adminCredential}`,
       },
     })
     state.posts.pop()
@@ -583,9 +583,9 @@ const apiBase = (arg("api-base") ?? "https://api-staging.pirate.sc").replace(/\/
 if (new URL(apiBase).hostname !== "api-staging.pirate.sc") {
   throw new Error("fixture is restricted to https://api-staging.pirate.sc")
 }
-const adminToken = String(process.env.PIRATE_ADMIN_TOKEN ?? "").trim()
-if ((command === "benchmark" || command === "recover" || command === "verify" || flag("apply")) && !adminToken) {
-  throw new Error("PIRATE_ADMIN_TOKEN is required for verification or mutation")
+const adminCredential = String(process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL ?? "").trim()
+if ((command === "benchmark" || command === "recover" || command === "verify" || flag("apply")) && !adminCredential) {
+  throw new Error("PIRATE_ADMIN_OPERATOR_CREDENTIAL is required for verification or mutation")
 }
 const statePath = resolve(arg("state") ?? DEFAULT_STATE_PATH)
 
@@ -595,7 +595,7 @@ if (command === "benchmark") {
     throw new Error("benchmark --iterations must be an integer from 1 to 20")
   }
   await benchmarkFixture({
-    adminToken,
+    adminCredential,
     iterations: parsedIterations,
     statePath,
   })
@@ -604,7 +604,7 @@ if (command === "benchmark") {
   const videoFile = arg("video-file")?.trim()
   if (!videoFile) throw new Error("create requires --video-file")
   await createFixture({
-    adminToken,
+    adminCredential,
     apiBase,
     apply: flag("apply"),
     communityIds,
@@ -616,14 +616,14 @@ if (command === "benchmark") {
   const viewerUserId = arg("viewer-user")?.trim()
   if (!viewerUserId) throw new Error("recover requires --viewer-user")
   await recoverFixture({
-    adminToken,
+    adminCredential,
     apiBase,
     communityIds,
     statePath,
     viewerUserId: internalUserId(viewerUserId),
   })
 } else if (command === "verify") {
-  await verifyFixture({ adminToken, statePath })
+  await verifyFixture({ adminCredential, statePath })
 } else {
-  await cleanupFixture({ adminToken, apply: flag("apply"), statePath })
+  await cleanupFixture({ adminCredential, apply: flag("apply"), statePath })
 }

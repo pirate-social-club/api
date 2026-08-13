@@ -7,11 +7,11 @@ Command-line client for the first executable Pirate API slice.
 Implemented commands:
 
 - `pirate auth login --jwt <token> [--base-url <url>]`
-- `pirate auth admin-login --admin-token <token> --as-user <usr_...> [--base-url <url>]`
+- `pirate auth admin-login --operator-credential <opc_...>.<secret> --as-user <usr_...> [--base-url <url>]`
 - `pirate auth me`
 - `pirate auth logout`
-- `pirate bot-user provision --dir <path> [--admin-token <token>] [--base-url <url>]`
-- `pirate bot-user token --handle <handle.pirate> [--admin-token <token>] [--base-url <url>]`
+- `pirate bot-user provision --dir <path> [--operator-credential <opc_...>.<secret>] [--base-url <url>]`
+- `pirate bot-user token --handle <handle.pirate> [--operator-credential <opc_...>.<secret>] [--base-url <url>]`
 - `pirate bot-user derive-wallet --handle <handle.pirate>`
 - `pirate onboarding status`
 - `pirate verify human start [--provider self|very]`
@@ -30,7 +30,7 @@ Implemented commands:
 - `pirate community preview <community_id|@slug> [--locale <locale>]`
 - `pirate community members <community_id|@slug> [--locale <locale>]`
 - `pirate community accounts ensure --alias <name> --subject <jwt-subject> [--display-name <name>] [--handle <label>] [--base-url <url>]`
-- `pirate community accounts provision-batch --file <accounts.json> [--accounts-file <path>] [--admin-token <token>] [--base-url <url>]`
+- `pirate community accounts provision-batch --file <accounts.json> [--accounts-file <path>] [--operator-credential <opc_...>.<secret>] [--base-url <url>]`
 - `pirate community roles <grant|revoke> <community_id|@slug> --role <admin|moderator> (--user-id <usr_...>|--account <alias>)`
 - `pirate community apply <folder|manifest.json> [--community-id <id>] [--dry-run] [--allow-vote-seed]`
 - `pirate community rules set <community_id|@slug> --file <rules.txt|rules.json>`
@@ -72,7 +72,7 @@ Admin session fields:
 
 - `mode`: `"admin"`
 - `base_url`
-- `admin_token`
+- `admin_credential`
 - `admin_as_user_id`
 - `user_id`
 
@@ -101,7 +101,7 @@ Used with `--as <alias>` in `seed-post`. Override with `--accounts-file <path>`.
 Switch to admin mode to manage any community:
 
 ```bash
-pirate auth admin-login --admin-token <token> --as-user <usr_...> --base-url https://api.pirate.sc
+pirate auth admin-login --operator-credential <opc_...>.<secret> --as-user <usr_...> --base-url https://api.pirate.sc
 ```
 
 The `--as-user` sets the default acting user for admin operations. All admin mutations are audit-logged server-side.

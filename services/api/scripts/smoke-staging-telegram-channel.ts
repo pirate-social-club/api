@@ -23,7 +23,7 @@ type Json = Record<string, unknown>
 
 const prefix = "telegram-channel-smoke"
 const apiBase = (process.env.PIRATE_SMOKE_API_BASE_URL ?? "https://api-staging.pirate.sc").replace(/\/+$/u, "")
-const adminToken = String(process.env.PIRATE_ADMIN_TOKEN ?? "").trim()
+const adminCredential = String(process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL ?? "").trim()
 const configuredCommunity = String(process.env.PIRATE_TELEGRAM_SMOKE_COMMUNITY_ID ?? "").trim()
 const timeoutMs = Number(process.env.PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS ?? 20 * 60_000)
 const latencySloMs = Number(
@@ -35,7 +35,7 @@ const dispatchMode = String(
   process.env.PIRATE_TELEGRAM_SMOKE_DISPATCH_MODE ?? "deterministic",
 ).trim()
 
-if (!adminToken) throw new Error("PIRATE_ADMIN_TOKEN is required")
+if (!adminCredential) throw new Error("PIRATE_ADMIN_OPERATOR_CREDENTIAL is required")
 if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
   throw new Error("PIRATE_TELEGRAM_SMOKE_TIMEOUT_MS must be positive")
 }
@@ -64,7 +64,7 @@ async function request(input: {
         method: input.method ?? "GET",
         headers: {
           "content-type": "application/json",
-          "x-admin-token": adminToken,
+          Authorization: `Operator ${adminCredential}`,
           ...(input.asUserId ? { "x-admin-as-user-id": input.asUserId } : {}),
         },
         body: input.body ? JSON.stringify(input.body) : undefined,

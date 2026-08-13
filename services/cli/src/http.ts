@@ -19,7 +19,7 @@ export async function apiRequest<T>(input: {
   path: string
   method?: "GET" | "POST" | "PUT" | "PATCH"
   accessToken?: string | null
-  adminToken?: string | null
+  adminCredential?: string | null
   adminAsUserId?: string | null
   adminOperationClass?: string | null
   body?: unknown
@@ -28,7 +28,7 @@ export async function apiRequest<T>(input: {
     method: input.method ?? "GET",
     headers: {
       ...(input.accessToken ? { Authorization: `Bearer ${input.accessToken}` } : {}),
-      ...(input.adminToken ? { "X-Admin-Token": input.adminToken } : {}),
+      ...(input.adminCredential ? { Authorization: `Operator ${input.adminCredential}` } : {}),
       ...(input.adminAsUserId ? { "X-Admin-As-User-Id": input.adminAsUserId } : {}),
       ...(input.adminOperationClass ? { "X-Admin-Operation-Class": input.adminOperationClass } : {}),
       ...(input.body !== undefined ? { "Content-Type": "application/json" } : {}),

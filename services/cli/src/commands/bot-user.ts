@@ -51,7 +51,7 @@ export async function runBotUser(action: string | undefined, args: ParsedArgs): 
     case "provision": {
       const dir = getFlag(args, "dir")
       const walletMasterSecret = process.env.BOT_WALLET_MASTER_SECRET
-      const adminToken = getFlag(args, "admin-token") || process.env.PIRATE_ADMIN_TOKEN
+      const adminCredential = getFlag(args, "operator-credential") || process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL
       const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
       if (!dir) {
         exitWithUsage("Missing bot directory. Use --dir <path>.")
@@ -59,8 +59,8 @@ export async function runBotUser(action: string | undefined, args: ParsedArgs): 
       if (!walletMasterSecret) {
         exitWithUsage("Missing BOT_WALLET_MASTER_SECRET.")
       }
-      if (!adminToken) {
-        exitWithUsage("Missing admin token. Use --admin-token <token> or PIRATE_ADMIN_TOKEN.")
+      if (!adminCredential) {
+        exitWithUsage("Missing operator credential. Use --operator-credential <opc_...>.<secret> or PIRATE_ADMIN_OPERATOR_CREDENTIAL.")
       }
 
       const config = readBotUserConfig(dir)
@@ -69,7 +69,7 @@ export async function runBotUser(action: string | undefined, args: ParsedArgs): 
         baseUrl,
         path: "/admin/bot-users/provision",
         method: "POST",
-        adminToken,
+        adminCredential,
         body: {
           ...config,
           handle: wallet.handle,
@@ -81,20 +81,20 @@ export async function runBotUser(action: string | undefined, args: ParsedArgs): 
     }
     case "token": {
       const handle = getFlag(args, "handle")
-      const adminToken = getFlag(args, "admin-token") || process.env.PIRATE_ADMIN_TOKEN
+      const adminCredential = getFlag(args, "operator-credential") || process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL
       const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
       if (!handle) {
         exitWithUsage("Missing bot handle. Use --handle <handle.pirate>.")
       }
-      if (!adminToken) {
-        exitWithUsage("Missing admin token. Use --admin-token <token> or PIRATE_ADMIN_TOKEN.")
+      if (!adminCredential) {
+        exitWithUsage("Missing operator credential. Use --operator-credential <opc_...>.<secret> or PIRATE_ADMIN_OPERATOR_CREDENTIAL.")
       }
 
       const response = await apiRequest<unknown>({
         baseUrl,
         path: `/admin/bot-users/handle/${encodeURIComponent(handle)}/token`,
         method: "POST",
-        adminToken,
+        adminCredential,
         body: {},
       })
       printJson(response)

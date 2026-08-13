@@ -449,13 +449,13 @@ type BotUserProvisionResponse = {
 async function provisionBatchCommunityAccounts(args: ParsedArgs): Promise<void> {
   const file = requireFlag(args, "file")
   const walletMasterSecret = process.env.BOT_WALLET_MASTER_SECRET
-  const adminToken = getFlag(args, "admin-token") || process.env.PIRATE_ADMIN_TOKEN
+  const adminCredential = getFlag(args, "operator-credential") || process.env.PIRATE_ADMIN_OPERATOR_CREDENTIAL
   const baseUrl = resolveBaseUrl(getFlag(args, "base-url"))
   if (!walletMasterSecret) {
     exitWithUsage("Missing BOT_WALLET_MASTER_SECRET.")
   }
-  if (!adminToken) {
-    exitWithUsage("Missing admin token. Use --admin-token <token> or PIRATE_ADMIN_TOKEN.")
+  if (!adminCredential) {
+    exitWithUsage("Missing operator credential. Use --operator-credential <opc_...>.<secret> or PIRATE_ADMIN_OPERATOR_CREDENTIAL.")
   }
 
   const specs = readProvisionBatchSpecs(file)
@@ -480,7 +480,7 @@ async function provisionBatchCommunityAccounts(args: ParsedArgs): Promise<void> 
         baseUrl,
         path: "/admin/bot-users/provision",
         method: "POST",
-        adminToken,
+        adminCredential,
         body: {
           handle: wallet.handle,
           wallet_address: wallet.walletAddress,
