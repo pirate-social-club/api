@@ -116,6 +116,28 @@ describe("buildStudyCloze", () => {
     expect(buildStudyCloze(target, [target])).toBeNull()
   })
 
+  test("degrades safely when migration 1156 is absent", async () => {
+    const client = createClient({ url: ":memory:" })
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE song_study_unit (
+          id TEXT PRIMARY KEY, post_id TEXT NOT NULL, line_id TEXT NOT NULL,
+          line_index INTEGER NOT NULL, source_language TEXT, prompt_text TEXT NOT NULL,
+          reference_text TEXT NOT NULL, say_it_back_status TEXT NOT NULL,
+          unit_version INTEGER NOT NULL, max_attempts INTEGER NOT NULL
+        );
+        INSERT INTO song_study_unit VALUES
+          ('stu_1', 'post_1', 'line_001', 0, 'en', 'I walked beside the river under moonlight', 'I walked beside the river under moonlight', 'ready', 2, 2);
+      `)
+
+      await expect(ensureStudyClozeRows(client, "post_1")).resolves.toBeUndefined()
+      const schema = await client.execute("SELECT name FROM sqlite_master WHERE name = 'song_study_unit_cloze'")
+      expect(schema.rows).toEqual([])
+    } finally {
+      client.close()
+    }
+  })
+
   test("regenerates every row when another source line changes", async () => {
     const client = createClient({ url: ":memory:" })
     try {
