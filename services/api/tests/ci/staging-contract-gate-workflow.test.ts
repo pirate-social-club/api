@@ -11,17 +11,17 @@ function occurrences(haystack: string, needle: string): number {
 }
 
 describe("staging contract gate workflow", () => {
-  test("accepts the caller admin bootstrap secret before deriving an operator credential", async () => {
+  test("accepts the caller operator credential before using the legacy fallback", async () => {
     const workflow = await readFile(workflowPath, "utf8")
 
     expect(workflow).toMatch(
-      /secrets:\s*[\s\S]*?PIRATE_ADMIN_TOKEN:\s*\n\s+required: false/u,
+      /secrets:\s*[\s\S]*?PIRATE_ADMIN_OPERATOR_CREDENTIAL:\s*\n\s+required: false/u,
     )
     expect(workflow).toContain(
-      "PIRATE_ADMIN_TOKEN: ${{ secrets.PIRATE_ADMIN_TOKEN }}",
+      "PIRATE_ADMIN_OPERATOR_CREDENTIAL: ${{ secrets.PIRATE_ADMIN_OPERATOR_CREDENTIAL }}",
     )
     expect(workflow).toContain(
-      "if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == '' || env.PIRATE_ADMIN_TOKEN == ''",
+      "if: env.AUTH_UPSTREAM_JWT_SHARED_SECRET == '' || env.PIRATE_ADMIN_OPERATOR_CREDENTIAL == ''",
     )
     expect(workflow).toContain(
       'credential="opc_admin_automation.${PIRATE_ADMIN_TOKEN}"',
@@ -75,4 +75,5 @@ describe("staging contract gate workflow", () => {
     expect(uploadStep, "Playwright report upload step").toBeTruthy()
     expect(uploadStep).toMatch(/if:\s*(failure\(\)|always\(\))/u)
   })
+
 })
