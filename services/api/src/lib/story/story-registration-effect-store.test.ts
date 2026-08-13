@@ -33,6 +33,7 @@ beforeEach(async () => {
   for (const migrationName of [
     "1129_story_registration_effects.sql",
     "1130_story_registration_effect_request_identity.sql",
+    "1139_story_registration_durable_request.sql",
   ]) {
     const migration = await readFile(
       new URL(`../../../test-fixtures/db/community-template/migrations/${migrationName}`, import.meta.url),
@@ -262,5 +263,50 @@ describe("Story registration effect journal", () => {
       callDataHash: `0x${"55".repeat(32)}`,
       now: "2026-07-15T10:00:01.000Z",
     })).rejects.toThrow("story_registration_effect_request_conflict")
+  })
+
+  test("replays the first durable request when recomputed transaction inputs drift", async () => {
+    const durableRequestJson = JSON.stringify({
+      version: 1,
+      creatorWalletAddress: REQUEST.creatorWalletAddress,
+      request: { royaltyShares: [{ address: REQUEST.creatorWalletAddress, share: 100 }] },
+    })
+    const first = await reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      durableRequestJson,
+      now: "2026-07-15T10:00:00.000Z",
+    })
+    if (first.kind !== "execute") throw new Error("expected execution reservation")
+    expect(first.durableRequestJson).toBe(durableRequestJson)
+    await failStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+      operationId: first.operationId,
+      reconciliationRequired: false,
+      providerTxRef: null,
+      errorCode: "story_registration_provider_unavailable",
+      now: "2026-07-15T10:00:01.000Z",
+    })
+
+    const retry = await reserveStoryRegistrationEffect({
+      client,
+      ...REQUEST,
+      creatorWalletAddress: "0x7777777777777777777777777777777777777777",
+      callDataHash: `0x${"88".repeat(32)}`,
+      durableRequestJson: JSON.stringify({ version: 1, request: { royaltyShares: [] } }),
+      now: "2026-07-15T10:00:02.000Z",
+    })
+    expect(retry).toMatchObject({ kind: "execute", durableRequestJson })
+    await expect(getStoryRegistrationEffect({
+      client,
+      communityId: COMMUNITY_ID,
+      assetId: ASSET_ID,
+    })).resolves.toMatchObject({
+      creatorWalletAddress: REQUEST.creatorWalletAddress,
+      callDataHash: REQUEST.callDataHash,
+      durableRequestJson,
+    })
   })
 })
