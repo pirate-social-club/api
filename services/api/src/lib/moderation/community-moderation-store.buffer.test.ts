@@ -213,13 +213,15 @@ describe("moderation create helpers (buffer-safe)", () => {
     expect(sqls[0]).toMatch(/and\s+enforcement_state\s*=\s*\?7/i)
   })
 
-  test("moderation action reads fall back before generic asset columns exist", async () => {
+  test("moderation action reads probe once and use the legacy projection before generic columns exist", async () => {
     const sqls: string[] = []
     const executor: DbExecutor = {
       execute: async (statement) => {
         const sql = typeof statement === "string" ? statement : statement.sql
         sqls.push(sql)
-        if (sqls.length === 1) throw new Error("no such column: asset_id")
+        if (/pragma\s+table_info/i.test(sql)) {
+          return { rows: [{ name: "moderation_action_id" }] }
+        }
         return {
           rows: [{
             moderation_action_id: "mac_legacy",
@@ -244,7 +246,11 @@ describe("moderation create helpers (buffer-safe)", () => {
     }
 
     const actions = await listModerationActionsForCase({ executor, moderationCaseId: "mca_1" })
-    expect(sqls).toHaveLength(2)
+    await listModerationActionsForCase({ executor, moderationCaseId: "mca_1" })
+    expect(sqls).toHaveLength(3)
+    expect(sqls[0]).toMatch(/pragma\s+table_info\(moderation_actions\)/i)
+    expect(sqls[1]).not.toMatch(/asset_id/i)
+    expect(sqls[2]).not.toMatch(/asset_id/i)
     expect(actions[0]).toMatchObject({
       moderation_action_id: "mac_legacy",
       asset_id: null,
