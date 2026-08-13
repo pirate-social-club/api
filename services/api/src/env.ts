@@ -466,6 +466,27 @@ export type Env = {
   REWARDS_CAMPAIGN_MAX_REWARD_CENTS?: string
   REWARDS_CAMPAIGN_MIN_DURATION_SECONDS?: string
   REWARDS_CAMPAIGN_MAX_DURATION_SECONDS?: string
+  // Daily shared Megapot ticket-pool overlay. Disabled unless explicitly true;
+  // protocol addresses and timing terms are supplied through Infisical.
+  REWARD_TICKET_POOLS_ENABLED?: string
+  // Separate promotion gate for a future mainnet launch. Staging remains the
+  // only enabled chain until this is explicitly added to the release contract.
+  REWARD_TICKET_POOLS_MAINNET_ENABLED?: string
+  MEGAPOT_CHAIN_ID?: string
+  MEGAPOT_RPC_URL?: string
+  MEGAPOT_JACKPOT_ADDRESS?: string
+  MEGAPOT_RANDOM_TICKET_BUYER_ADDRESS?: string
+  MEGAPOT_TICKET_NFT_ADDRESS?: string
+  MEGAPOT_USDC_TOKEN_ADDRESS?: string
+  MEGAPOT_CUSTODY_ADDRESS?: string
+  MEGAPOT_REFERRER_ADDRESS?: string
+  MEGAPOT_SOURCE_TAG?: string
+  MEGAPOT_PRICE_QUOTE_TTL_SECONDS?: string
+  MEGAPOT_ENTRY_CUTOFF_SECONDS?: string
+  MEGAPOT_PURCHASE_REVIEW_TTL_SECONDS?: string
+  MEGAPOT_SWEEP_STALE_SECONDS?: string
+  MEGAPOT_ALERT_OWNER?: string
+  MEGAPOT_ALERT_DESTINATION?: string
   // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
   REWARDS_IDENTITY_PROVIDER?: string
   /**
