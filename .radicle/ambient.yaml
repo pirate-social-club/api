@@ -15,7 +15,6 @@ plan:
       set -euo pipefail
       cache=/ci/cache/bun
       bun_runtime="${cache}-runtime/bun"
-      bunfig=/ci/bunfig.toml
       mkdir -p "$cache"
       if [[ ! -x "$bun_runtime" ]]; then
         runtime_sha256=41201a8c5ee74a9dcbb1ce25a1104f1f929838b57a845aa78d98379b0ce7cde2
@@ -27,10 +26,6 @@ plan:
         rm -rf -- "$temp"
       fi
       bun="$bun_runtime"
-      cat > "$bunfig" <<'EOF'
-      [install]
-      prefer = "offline"
-      EOF
 
       import_bun_cache() {
         local root="$1"
@@ -74,9 +69,9 @@ plan:
       import_bun_cache contracts
 
       cd /ci/src/services/shared
-      "$bun" install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
+      "$bun" install --frozen-lockfile --ignore-scripts --prefer-offline --cache-dir "$cache"
       "$bun" run check
 
       cd /ci/src/services/contracts
-      "$bun" install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
+      "$bun" install --frozen-lockfile --ignore-scripts --prefer-offline --cache-dir "$cache"
       "$bun" run check
