@@ -31,11 +31,11 @@ plan:
       import_bun_cache() {
         local root="$1"
         local manifest="/ci/deps/bun/$root/manifest.tsv"
-        while IFS=$'\t' read -r name version archive integrity; do
+        while IFS=$'\t' read -r name version cache_version archive integrity; do
           [[ "$name" == "name" ]] && continue
           : "$integrity"
-          [[ -n "$name" && -n "$version" && -n "$archive" ]]
-          local target="$cache/$name@$version@@@1"
+          [[ -n "$name" && -n "$version" && -n "$cache_version" && -n "$archive" ]]
+          local target="$cache/$name@$cache_version@@@1"
           if [[ -f "$target/package.json" ]]; then
             continue
           fi
