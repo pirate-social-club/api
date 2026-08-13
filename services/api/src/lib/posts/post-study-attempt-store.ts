@@ -38,6 +38,8 @@ export type StudyExerciseForAttempt = StudyExerciseRow & {
   target_language: string
 }
 
+export const FILL_BLANK_PROMPT_TEXT = "Fill in the lyric."
+
 export type FillBlankExerciseIdentity = {
   fingerprint: string | null
   language: string
@@ -118,7 +120,7 @@ async function fillBlankExerciseRow(
   return await executeFirst(client, {
     sql: `
       SELECT u.id, u.post_id, u.line_id, u.line_index, u.source_language,
-             u.prompt_text, c.segments_json, c.tokens_json,
+             c.segments_json, c.tokens_json,
              c.correct_placements_json, c.max_attempts, c.status, c.cloze_version,
              c.source_fingerprint
       FROM song_study_unit u
@@ -256,7 +258,7 @@ export async function getExerciseForAttempt(
       max_attempts: Number(row.max_attempts ?? 2),
       options_json: null,
       post_id: readString(row.post_id) ?? "",
-      prompt_text: readString(row.prompt_text) ?? "",
+      prompt_text: FILL_BLANK_PROMPT_TEXT,
       question: null,
       reference_text: null,
       review_language: reviewLanguage,
