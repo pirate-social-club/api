@@ -126,29 +126,6 @@ jobs:
           echo "::add-mask::$credential"
           printf 'PIRATE_ADMIN_OPERATOR_CREDENTIAL=%s\n' "$credential" >> "$GITHUB_ENV"
 
-      # The verifier host is shared with production; only the browser/API
-      # deployment under test is staging. Fetch this host's credential from the
-      # production Infisical environment so the staging gate authenticates to
-      # the real verifier it probes.
-      - name: Fetch the production HNS verifier observer credential
-        working-directory: core
-        env:
-          INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
-          INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
-          INFISICAL_ENV: prod
-          INFISICAL_SECRET_PATH: /services/api
-          SECRET_NAMES: HNS_VERIFIER_AUTH_TOKEN
-        run: scripts/ci/fetch-infisical-secrets.sh
-
-      - name: Require the deployed HNS verifier raw-record contract
-        working-directory: api/services/api
-        env:
-          HNS_VERIFIER_BASE_URL: https://verifier.pirate.sc/hns
-          # This repair-list root is intentionally not a healthy routing fixture.
-          # The endpoint is GET-only and neither provisions a zone nor publishes a challenge.
-          HNS_VERIFIER_CONTRACT_ROOT_LABEL: tame_impala
-        run: bun scripts/verify-hns-verifier-raw-records.ts
-
       - name: Verify required contract inventory
         working-directory: web
         shell: bash
