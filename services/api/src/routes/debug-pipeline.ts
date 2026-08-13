@@ -98,9 +98,9 @@ debugPipeline.post("/home-feed-benchmark", async (c) => {
 })
 
 debugPipeline.post("/staging-d1/archive-smoke", async (c) => {
+  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
   const adminOverride = await requireDebugAdmin(c)
   if (!adminOverride) return c.json({ error: "unauthorized" }, 401)
-  if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
 
   const body = await c.req.json().catch(() => null) as {
     community_ids?: unknown
@@ -188,8 +188,8 @@ debugPipeline.post("/staging-d1/archive-smoke", async (c) => {
 })
 
 debugPipeline.post("/staging-d1/reclaim", async (c) => {
-  if (!await requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   if (c.env.ENVIRONMENT !== "staging") return c.json({ error: "not_found" }, 404)
+  if (!await requireDebugAdmin(c)) return c.json({ error: "unauthorized" }, 401)
   if (!c.env.SHARD_ADMIN_TOKEN) {
     return c.json({ error: "staging_reclaim_not_configured" }, 503)
   }
