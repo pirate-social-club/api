@@ -1,0 +1,70 @@
+name: hns-verifier-contract-gate
+
+on:
+  workflow_call:
+    inputs:
+      api_sha:
+        description: API commit containing the verifier probe
+        required: true
+        type: string
+      core_ref:
+        description: Core ref used by the deployed API
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  hns-verifier-contract:
+    name: HNS verifier raw-record contract
+    runs-on: blacksmith-2vcpu-ubuntu-2404
+    # This probe is independent of the staging deployment. Keep it in its own
+    # reusable workflow so a dead production verifier fails quickly instead of
+    # waiting for the full staging promotion lane.
+    timeout-minutes: 5
+    env:
+      API_SHA: ${{ inputs.api_sha }}
+    steps:
+      - name: Check out deployed API
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/api
+          ref: ${{ env.API_SHA }}
+          path: api
+
+      - name: Check out compatible Core
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: pirate-social-club/core
+          ref: ${{ inputs.core_ref }}
+          path: core
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+
+      # The verifier host is shared with production. Fetch its observer
+      # credential from the production Infisical environment; the staging
+      # browser/API deployment is unrelated to this read-only external probe.
+      - name: Fetch the production HNS verifier observer credential
+        working-directory: core
+        env:
+          INFISICAL_IDENTITY_ID: 3141c3e2-a32c-4299-9382-c2684d11fe06
+          INFISICAL_PROJECT_ID: 5acea78e-7813-4d8a-b29c-9b862a0b1c71
+          INFISICAL_ENV: prod
+          INFISICAL_SECRET_PATH: /services/api
+          SECRET_NAMES: HNS_VERIFIER_AUTH_TOKEN
+        run: scripts/ci/fetch-infisical-secrets.sh
+
+      - name: Require the deployed HNS verifier raw-record contract
+        working-directory: api/services/api
+        env:
+          HNS_VERIFIER_BASE_URL: https://verifier.pirate.sc/hns
+          # This repair-list root is intentionally not a healthy routing fixture.
+          # The endpoint is GET-only and neither provisions a zone nor publishes a challenge.
+          HNS_VERIFIER_CONTRACT_ROOT_LABEL: tame_impala
+        run: bun scripts/verify-hns-verifier-raw-records.ts
