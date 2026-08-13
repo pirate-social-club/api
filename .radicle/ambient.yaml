@@ -77,4 +77,5 @@ plan:
 
       cd /ci/src/services/contracts
       "$bun" install --frozen-lockfile --ignore-scripts --prefer-offline --cache-dir "$cache"
-      "$bun" run check
+      "$bun" node_modules/typescript/bin/tsc --noEmit
+      "$bun" node_modules/typescript/bin/tsc --noEmit -p tsconfig.consumer.json
