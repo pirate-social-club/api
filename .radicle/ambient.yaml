@@ -1,0 +1,53 @@
+pre_plan:
+  - action: bun_get
+    path: services/shared
+    output: shared
+  - action: bun_get
+    path: services/contracts
+    output: contracts
+plan:
+  - action: shell
+    shell: |
+      set -euo pipefail
+      cache=/ci/cache/bun
+      bunfig=/ci/bunfig.toml
+      mkdir -p "$cache"
+      cat > "$bunfig" <<'EOF'
+      [install]
+      prefer = "offline"
+      EOF
+
+      import_bun_cache() {
+        local root="$1"
+        local manifest="/ci/deps/bun/$root/manifest.tsv"
+        while IFS=$'\t' read -r name version archive integrity; do
+          [[ "$name" == "name" ]] && continue
+          [[ -n "$name" && -n "$version" && -n "$archive" ]]
+          local target="$cache/$name@$version@@@1"
+          if [[ -f "$target/package.json" ]]; then
+            continue
+          fi
+          [[ ! -e "$target" ]] || {
+            echo "incomplete Bun cache entry exists: $target" >&2
+            exit 1
+          }
+          local temp
+          temp=$(mktemp -d "$cache/.extract.XXXXXX")
+          tar -xzf "/ci/deps/bun/$root/$archive" -C "$temp"
+          test -f "$temp/package/package.json"
+          mkdir -p "$(dirname "$target")"
+          mv "$temp/package" "$target"
+          rmdir "$temp"
+        done < "$manifest"
+      }
+
+      import_bun_cache shared
+      import_bun_cache contracts
+
+      cd /ci/src/services/shared
+      bun install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
+      bun run check
+
+      cd /ci/src/services/contracts
+      bun install --frozen-lockfile --ignore-scripts --cache-dir "$cache" --config "$bunfig"
+      bun run check
