@@ -58,6 +58,9 @@
   ],
   "features": {
     "generic_digital_goods": {
+      "flags": [
+        "GENERIC_DIGITAL_GOODS_ENABLED"
+      ],
       "migrations": [
         "1157_generic_assets_learning_foundation.sql"
       ]

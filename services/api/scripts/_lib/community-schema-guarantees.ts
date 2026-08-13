@@ -72,7 +72,11 @@ export function parseCommunitySchemaGuarantees(manifest: unknown): CommunitySche
       throw new Error("community-schema-requirements: `features` must be an object")
     }
     for (const [feature, value] of Object.entries(rawFeatures as Record<string, unknown>)) {
-      const migrations = (value as { migrations?: unknown })?.migrations ?? value
+      const featurePolicy = value as { flags?: unknown; migrations?: unknown }
+      if (!Array.isArray(featurePolicy.flags) || featurePolicy.flags.some((flag) => typeof flag !== "string" || !flag.trim())) {
+        throw new Error(`community-schema-requirements: feature ${feature} must declare an array of flags`)
+      }
+      const migrations = featurePolicy.migrations
       if (!Array.isArray(migrations)) {
         throw new Error(`community-schema-requirements: feature ${feature} must declare an array of migrations`)
       }
