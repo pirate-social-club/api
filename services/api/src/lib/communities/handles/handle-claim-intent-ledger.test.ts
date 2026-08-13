@@ -9,6 +9,7 @@ import {
   completeFundedHandleClaimIntent,
   consumeAuthorizedFreeHandleClaimIntent,
   fundAuthorizedHandleClaimIntent,
+  markFundedHandleClaimIntentRefundPending,
   releaseExpiredHandleClaimTokenAllocations,
 } from "./handle-claim-intent-ledger"
 
@@ -220,6 +221,30 @@ describe("funded handle-claim intent ledger", () => {
       finalization_next_attempt_at: NOW,
       refund_pending_at: null,
       refund_reason: null,
+    })
+  })
+
+  test("classifies a released shard reservation after custody binding", async () => {
+    const client = await createLedgerClient()
+    await fund(client, Date.parse("2026-08-13T11:59:30.000Z") / 1000)
+
+    await expect(markFundedHandleClaimIntentRefundPending({
+      client,
+      intentId: INTENT_ID,
+      now: NOW,
+      reason: "handle_label_reservation_expired",
+    })).resolves.toBe(true)
+
+    const persisted = await state(client)
+    expect(persisted.intent).toMatchObject({
+      status: "refund_pending",
+      refund_reason: "handle_label_reservation_expired",
+      finalization_next_attempt_at: null,
+    })
+    expect(persisted.observed).toMatchObject({
+      match_status: "claimed",
+      consumer_rail: "community_handle_intent",
+      consumer_id: INTENT_ID,
     })
   })
 

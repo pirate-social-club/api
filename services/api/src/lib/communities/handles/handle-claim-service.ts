@@ -75,7 +75,10 @@ export async function claimCommunityHandle(input: {
     throw badRequestError("quote is required")
   }
   let consumedFreeIntentId: string | null = null
-  if (handleClaimIntentsEnabled(input.env) && input.body.claim_intent?.trim()) {
+  // A persisted intent remains authoritative after admissions are disabled.
+  // The admission flag controls creation/adoption below; it must not route an
+  // already-bound paid receipt back to the legacy rail during rollback.
+  if (input.body.claim_intent?.trim()) {
     const intentId = input.body.claim_intent.trim()
     const authorizationId = input.body.action_authorization?.trim()
     if (!authorizationId) throw badRequestError("action_authorization is required for handle claim intents")

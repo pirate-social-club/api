@@ -50,10 +50,7 @@ export type TokenEntitlementWitness = {
 export type FundHandleClaimIntentResult =
   | { status: "funded_pending_finalization" }
   | {
-      reason:
-        | "funding_block_timestamp_missing"
-        | "funding_included_after_deadline"
-        | "token_entitlement_reservation_expired"
+      reason: string
       status: "refund_pending"
     }
 
@@ -299,15 +296,7 @@ export async function fundAuthorizedHandleClaimIntent(input: {
         throw conflictError("Handle claim intent is already funded by a different transaction")
       }
       if (currentStatus === "refund_pending") {
-        const reason = requiredString(intent, "refund_reason")
-        if (
-          reason !== "funding_block_timestamp_missing"
-          && reason !== "funding_included_after_deadline"
-          && reason !== "token_entitlement_reservation_expired"
-        ) {
-          throw conflictError("Handle claim intent has an unsupported refund reason")
-        }
-        return { status: "refund_pending", reason }
+        return { status: "refund_pending", reason: requiredString(intent, "refund_reason") }
       }
       return { status: "funded_pending_finalization" }
     }
@@ -391,6 +380,36 @@ export async function fundAuthorizedHandleClaimIntent(input: {
     return refundReason == null
       ? { status: "funded_pending_finalization" }
       : { status: "refund_pending", reason: refundReason }
+  })
+}
+
+/**
+ * Bind-then-classify transition for deterministic failures discovered after
+ * the funding receipt has been claimed. The receipt is already durable at this
+ * point; downstream shard or eligibility failures become a refund obligation,
+ * never an untracked rejection.
+ */
+export async function markFundedHandleClaimIntentRefundPending(input: {
+  client: Client
+  intentId: string
+  now: string
+  reason: string
+}): Promise<boolean> {
+  return await withTransaction(input.client, "write", async (tx) => {
+    const updated = await tx.execute({
+      sql: `
+        UPDATE community_handle_claim_intents
+        SET status = 'refund_pending', refund_pending_at = ?2,
+            refund_reason = ?3, finalization_next_attempt_at = NULL,
+            finalization_attempt_count = finalization_attempt_count + 1,
+            finalization_last_error = ?3, updated_at = ?2
+        WHERE community_handle_claim_intent_id = ?1
+          AND status = 'funded_pending_finalization'
+        RETURNING community_handle_claim_intent_id
+      `,
+      args: [input.intentId, input.now, input.reason.slice(0, 1000)],
+    })
+    return updated.rows[0] != null
   })
 }
 

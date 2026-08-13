@@ -1,6 +1,6 @@
 import type { CommunityHandle, CommunityHandleClaimRequest, Env } from "../../../types"
 import type { UserRepository } from "../../auth/repositories"
-import { badRequestError, conflictError, eligibilityFailed } from "../../errors"
+import { badRequestError, conflictError, eligibilityFailed, HttpError } from "../../errors"
 import { nowIso } from "../../helpers"
 import { withStandaloneControlPlaneClient } from "../../runtime-deps"
 import { numberOrNull, requiredString, rowValue, stringOrNull } from "../../sql-row"
@@ -14,6 +14,7 @@ import {
 import {
   completeFundedHandleClaimIntent,
   fundAuthorizedHandleClaimIntent,
+  markFundedHandleClaimIntentRefundPending,
   requireHandleClaimIntentBinding,
 } from "./handle-claim-intent-ledger"
 import {
@@ -67,36 +68,6 @@ export async function claimCommunityHandleWithFundedIntent(input: {
     throw eligibilityFailed("settlement_wallet_attachment must be an EVM wallet")
   }
 
-  const preflightDb = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
-  try {
-    const preflight = await preflightDb.client.execute({
-      sql: `
-        SELECT q.handle_claim_quote_id, q.price_cents, q.status,
-          r.handle_label_reservation_id
-        FROM community_handle_claim_quotes q
-        LEFT JOIN community_handle_label_reservations r
-          ON r.handle_claim_intent_id = q.handle_claim_intent_id
-          AND r.purpose = 'payment' AND r.status = 'active'
-        WHERE q.handle_claim_quote_id = ?1
-          AND q.community_id = ?2 AND q.user_id = ?3
-          AND q.handle_claim_intent_id = ?4
-        LIMIT 1
-      `,
-      args: [input.quoteId, input.communityId, input.userId, intentId],
-    })
-    const row = preflight.rows[0]
-    if (!row) throw conflictError("Funded handle claim quote is not bound on its community shard")
-    if (numberOrNull(rowValue(row, "price_cents")) !== priceCents) {
-      throw conflictError("Funded handle claim price snapshot does not match its quote")
-    }
-    const status = requiredString(initialIntent, "status")
-    if (status === "authorized" && !stringOrNull(rowValue(row, "handle_label_reservation_id"))) {
-      throw conflictError("Funded handle claim has no active label reservation")
-    }
-  } finally {
-    preflightDb.close()
-  }
-
   const initialStatus = requiredString(initialIntent, "status")
   let fundingStatus: "funded_pending_finalization" | "refund_pending" = "funded_pending_finalization"
   let refundReason: string | null = null
@@ -145,6 +116,47 @@ export async function claimCommunityHandleWithFundedIntent(input: {
     throw conflictError("Handle claim intent is not authorized for funding")
   }
 
+  // Custody is now durably bound. Only after that bind may shard state
+  // classify the outcome. In particular, an expired/released payment
+  // reservation must become a refund obligation, not an upstream rejection.
+  if (fundingStatus === "funded_pending_finalization") {
+    let shardBindingFailure: string | null = null
+    const preflightDb = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
+    try {
+      const preflight = await preflightDb.client.execute({
+        sql: `
+          SELECT q.handle_claim_quote_id, q.price_cents
+          FROM community_handle_claim_quotes q
+          WHERE q.handle_claim_quote_id = ?1
+            AND q.community_id = ?2 AND q.user_id = ?3
+            AND q.handle_claim_intent_id = ?4
+          LIMIT 1
+        `,
+        args: [input.quoteId, input.communityId, input.userId, intentId],
+      })
+      const row = preflight.rows[0]
+      if (!row) {
+        shardBindingFailure = "handle_claim_finalization_unavailable"
+      } else if (numberOrNull(rowValue(row, "price_cents")) !== priceCents) {
+        shardBindingFailure = "handle_claim_finalization_unavailable"
+      }
+    } finally {
+      preflightDb.close()
+    }
+    if (shardBindingFailure) {
+      await withStandaloneControlPlaneClient(input.env, async (client) => {
+        await markFundedHandleClaimIntentRefundPending({
+          client,
+          intentId,
+          now: nowIso(),
+          reason: shardBindingFailure,
+        })
+      })
+      fundingStatus = "refund_pending"
+      refundReason = shardBindingFailure
+    }
+  }
+
   if (fundingStatus === "refund_pending") {
     throw conflictError("Payment was verified but cannot finalize this name. A refund is pending.", {
       claim_intent: intentId,
@@ -164,6 +176,7 @@ export async function claimCommunityHandleWithFundedIntent(input: {
   const finalization = decodeFundedHandleClaimFinalization(fundedIntent)
   const writeDb = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   let handleRow
+  let finalizationError: unknown = null
   try {
     const now = nowIso()
     handleRow = await finalizeFundedHandleClaimOnShard({
@@ -175,16 +188,49 @@ export async function claimCommunityHandleWithFundedIntent(input: {
       ).toISOString(),
     })
   } catch (error) {
+    finalizationError = error
+  } finally {
+    writeDb.close()
+  }
+
+  if (finalizationError) {
+    const refundReason = deterministicFinalizationRefundReason(finalizationError)
+    if (refundReason) {
+      await withStandaloneControlPlaneClient(input.env, async (client) => {
+        await markFundedHandleClaimIntentRefundPending({
+          client,
+          intentId,
+          now: nowIso(),
+          reason: refundReason,
+        })
+      })
+      throw conflictError("Payment was verified but cannot finalize this name. A refund is pending.", {
+        claim_intent: intentId,
+        funding_tx_ref: fundingTxRef,
+        reason: refundReason,
+      })
+    }
     throw conflictError(
       "Payment was verified and this name is pending finalization. Retry the same claim and transaction.",
       { claim_intent: intentId, funding_tx_ref: fundingTxRef },
     )
-  } finally {
-    writeDb.close()
   }
 
   await withStandaloneControlPlaneClient(input.env, async (client) => {
     await completeFundedHandleClaimIntent({ client, intentId, now: nowIso() })
   })
   return serializeHandle(handleRow)
+}
+
+function deterministicFinalizationRefundReason(error: unknown): string | null {
+  if (error instanceof HttpError && !error.retryable && error.status >= 400 && error.status < 500) {
+    return error.message.toLowerCase().includes("active shard reservation")
+      ? "handle_label_reservation_expired"
+      : "handle_claim_finalization_unavailable"
+  }
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase()
+  if (message.includes("unique constraint") || message.includes("constraint failed")) {
+    return "handle_claim_finalization_unavailable"
+  }
+  return null
 }

@@ -126,6 +126,37 @@ describe("handle claim refund reconciler", () => {
     expect(settle).not.toHaveBeenCalled()
   })
 
+  test("drains refunds while new-intent admission is disabled", async () => {
+    await seed("hci_admission_paused")
+    const settle = mock(async () => ({
+      idempotencyKey: JSON.stringify(["handle_claim_refund", "hci_admission_paused"]),
+      state: "confirmed" as const,
+      txHash: refundTxHash,
+      nonce: 9,
+    }))
+    setHandleClaimRefundCoordinatorForTests({ settle })
+    const verify = mock(async () => ({
+      kind: "verified" as const,
+      senderAddress,
+      txRef: fundingTxHash,
+    }))
+
+    const summary = await reconcileHandleClaimRefunds({
+      env: { ...env, COMMUNITY_HANDLE_CLAIM_INTENTS_ENABLED: "false" },
+      verify,
+    })
+
+    expect(summary).toMatchObject({
+      enabled: true,
+      queued: 1,
+      scanned: 1,
+      enqueued: 1,
+      confirmed: 1,
+      errors: 0,
+    })
+    expect(settle).toHaveBeenCalledTimes(1)
+  })
+
   test("verifies, dispatches, and records a confirmed refund idempotently", async () => {
     await seed("hci_confirmed")
     const settle = mock(async () => ({

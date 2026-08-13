@@ -14,7 +14,10 @@ export function handleClaimIntentsEnabled(env: Env): boolean {
 }
 
 export function handleClaimRefundsEnabled(env: Env): boolean {
-  return handleClaimIntentsEnabled(env) && enabled(env.COMMUNITY_HANDLE_CLAIM_REFUNDS_ENABLED)
+  // Recovery is deliberately independent from new-intent admission. An
+  // incident may stop creating or adopting intents while already-funded
+  // intents must continue draining to refund or completion.
+  return enabled(env.COMMUNITY_HANDLE_CLAIM_REFUNDS_ENABLED)
 }
 
 export function resolveHandleClaimPaymentClockSkewSeconds(env: Env): number {

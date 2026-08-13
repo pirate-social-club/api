@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createClient } from "@libsql/client"
 
 import { app } from "../../../src/index"
+import { buildLocalCommunityDbUrl } from "../../../src/lib/communities/community-local-db"
+import { expireStaleHandleLabelReservations } from "../../../src/lib/communities/handles/handle-label-reservation"
 import {
   json,
   createRouteTestContext,
@@ -213,6 +216,9 @@ describe("community handle claim intents", () => {
       match_status: "claimed",
     })
 
+    // Rollback stops new admission, but an already-bound intent must remain on
+    // the intent rail and must not fall through to legacy receipt consumption.
+    context.env.COMMUNITY_HANDLE_CLAIM_INTENTS_ENABLED = "false"
     const repeatedResponse = await requestJson(
       `http://pirate.test/communities/${communityId}/handles/claim`,
       claimBody,
@@ -221,6 +227,99 @@ describe("community handle claim intents", () => {
     )
     expect(repeatedResponse.status).toBe(200)
     expect(await json(repeatedResponse)).toMatchObject({ label: "paidcard", funding_tx_ref: fundingTxHash })
+
+    const legacyReceipts = await context.client.execute({
+      sql: "SELECT COUNT(*) AS count FROM observed_funding_receipts WHERE consumer_rail = 'community_handle'",
+    })
+    expect(Number(legacyReceipts.rows[0]?.count)).toBe(0)
+
+    context.env.COMMUNITY_HANDLE_CLAIM_INTENTS_ENABLED = "true"
+    const sweptQuoteResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/quote`,
+      { desired_label: "sweptcard" },
+      context.env,
+      exchanged.access_token,
+    )
+    expect(sweptQuoteResponse.status).toBe(200)
+    const sweptQuote = await json(sweptQuoteResponse) as {
+      id: string
+      claim_intent: string
+      action_authorization: string
+    }
+
+    const shardClient = createClient({
+      url: buildLocalCommunityDbUrl(context.communityDbRoot, communityId),
+    })
+    try {
+      await expireStaleHandleLabelReservations({
+        executor: shardClient,
+        now: "2999-01-01T00:00:00.000Z",
+      })
+    } finally {
+      shardClient.close()
+    }
+
+    const sweptFundingTxHash = `0x${"68".repeat(32)}`
+    setCommunityCommerceBuyerFundingVerifierForTests(async (input) => ({
+      txRef: input.fundingTxRef,
+      fromAddress: input.buyerAddress,
+      toAddress: input.quote.funding_destination_address!,
+      tokenAddress: "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      amountAtomic: String(BigInt(input.quote.final_price_cents * 10_000)),
+      chainRef: "eip155:84532",
+      observation: {
+        chainId: 84532,
+        logIndex: 19,
+        blockNumber: 12_402,
+        blockHash: `0x${"57".repeat(32)}`,
+        blockTimestamp: Math.floor(Date.now() / 1000),
+      },
+    }))
+    const sweptClaimResponse = await requestJson(
+      `http://pirate.test/communities/${communityId}/handles/claim`,
+      {
+        quote: sweptQuote.id,
+        claim_intent: sweptQuote.claim_intent,
+        action_authorization: sweptQuote.action_authorization,
+        settlement_wallet_attachment: exchanged.user.primary_wallet_attachment,
+        funding_tx_ref: sweptFundingTxHash,
+      },
+      context.env,
+      exchanged.access_token,
+    )
+    expect(sweptClaimResponse.status).toBe(409)
+    expect(await json(sweptClaimResponse)).toMatchObject({
+      details: { reason: "handle_label_reservation_expired" },
+    })
+
+    const sweptIntent = await context.client.execute({
+      sql: `
+        SELECT i.status, i.refund_reason, r.match_status, r.consumer_rail
+        FROM community_handle_claim_intents i
+        JOIN observed_funding_receipts r ON r.observed_funding_receipt_id = i.observed_funding_receipt_id
+        WHERE i.community_handle_claim_intent_id = ?1
+      `,
+      args: [sweptQuote.claim_intent],
+    })
+    expect(sweptIntent.rows[0]).toMatchObject({
+      status: "refund_pending",
+      refund_reason: "handle_label_reservation_expired",
+      match_status: "claimed",
+      consumer_rail: "community_handle_intent",
+    })
+
+    const sweptShardClient = createClient({
+      url: buildLocalCommunityDbUrl(context.communityDbRoot, communityId),
+    })
+    try {
+      const handles = await sweptShardClient.execute({
+        sql: "SELECT COUNT(*) AS count FROM community_handles WHERE handle_claim_intent_id = ?1",
+        args: [sweptQuote.claim_intent],
+      })
+      expect(Number(handles.rows[0]?.count)).toBe(0)
+    } finally {
+      sweptShardClient.close()
+    }
   })
 
   test("adopts a paid quote created before the intent flag is enabled", async () => {
