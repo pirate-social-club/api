@@ -1681,6 +1681,18 @@ export type CreatePostRequest = (((unknown & {
   title: string;
   source_post: string;
   source_community: string;
+} | {
+  post_type: "file";
+  title: string;
+  file_upload: string;
+  access_mode: "public" | "locked";
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
+} | {
+  post_type: "deck";
+  title: string;
+  learning_deck: string;
+  access_mode: "public" | "locked";
+  license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
 }) & {
   idempotency_key: string;
   publish_mode?: "sync" | "async";
@@ -1693,7 +1705,7 @@ export type CreatePostRequest = (((unknown & {
   disclosed_qualifier_ids?: Array<string> | null;
   parent_post?: string | null;
   label?: string | null;
-  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost";
+  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost" | "file" | "deck";
   body?: string | null;
   caption?: string | null;
   link_url?: string | null;
@@ -1708,6 +1720,8 @@ export type CreatePostRequest = (((unknown & {
   access_mode?: "public" | "locked" | null;
   asset?: string | null;
   song_artifact_bundle?: string | null;
+  file_upload?: string | null;
+  learning_deck?: string | null;
   song_mode?: "original" | "remix" | null;
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null;
   upstream_asset_refs?: Array<string> | null;
@@ -1735,12 +1749,12 @@ export type Asset = {
   song_artifact_bundle?: string | null;
   display_title?: string | null;
   creator_user: string;
-  asset_kind: "song_audio" | "video_file";
+  asset_kind: "song_audio" | "video_file" | "download_file" | "learning_deck";
   rights_basis: "none" | "original" | "derivative" | "attribution_only";
   access_mode: "public" | "locked";
   license_preset?: "non-commercial" | "commercial-use" | "commercial-remix" | null;
   commercial_rev_share_pct?: number | null;
-  primary_content_ref: string;
+  primary_content_ref: string | null;
   primary_content_hash?: string | null;
   publication_status: "draft" | "story_requested" | "story_published" | "story_failed" | "withdrawn";
   story_status: "none" | "requested" | "published" | "failed";
@@ -1773,6 +1787,15 @@ export type Asset = {
   created: number;
 };
 
+export type AssetPayloadDescriptor = {
+  delivery_behavior: "download" | "app_native" | "audio" | "video";
+  display_filename: string | null;
+  mime_type: string;
+  size_bytes: number;
+  content_hash: string;
+  payload_format: string;
+};
+
 export type AssetAccessResponse = {
   asset: string;
   community: string;
@@ -1786,6 +1809,7 @@ export type AssetAccessResponse = {
   bundle_preview_status?: "pending" | "processing" | "completed" | "failed" | null;
   delivery_kind: "primary_content_ref" | "locked_delivery_ref" | "story_cdr_ref" | null;
   delivery_ref: string | null;
+  payload: AssetPayloadDescriptor | null;
   story_cdr_access?: ({
     chain_id: number;
     rpc_url: string;
@@ -1893,7 +1917,7 @@ export type CrosspostSource = {
   post: string;
   community: string;
   captured_at?: string | null;
-  post_type?: "text" | "image" | "video" | "link" | "song" | null;
+  post_type?: "text" | "image" | "video" | "link" | "song" | "crosspost" | "file" | "deck" | null;
   title?: string | null;
   community_label?: string | null;
   community_route_slug?: string | null;
@@ -1904,7 +1928,7 @@ export type CrosspostSource = {
   age_gate_policy?: "none" | "18_plus" | null;
 };
 
-export type PostPublishFailureCode = "song_analysis_blocked" | "song_analysis_review_required" | "song_rights_reference_required" | "song_preview_generation_failed" | "text_moderation_blocked" | "story_royalty_registration_failed" | "story_locked_delivery_failed" | "listing_creation_failed" | "catalog_sync_failed" | "provider_unavailable" | "internal_error";
+export type PostPublishFailureCode = "song_analysis_blocked" | "song_analysis_review_required" | "song_rights_reference_required" | "song_preview_generation_failed" | "text_moderation_blocked" | "story_royalty_registration_failed" | "story_locked_delivery_failed" | "listing_creation_failed" | "catalog_sync_failed" | "provider_unavailable" | "internal_error" | "payload_verification_failed" | "payload_safety_blocked" | "payload_safety_review_required" | "payload_claim_failed" | "deck_package_generation_failed" | "deck_package_hash_mismatch";
 
 export type CreatePostListingDraft = {
   price_cents: number;
@@ -1933,7 +1957,7 @@ export type Post = {
   agent_ownership_provider_snapshot?: string | null;
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null;
   label?: string | null;
-  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost";
+  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost" | "file" | "deck";
   status: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted";
   comments_locked?: boolean;
   comments_locked_at?: number | null;
