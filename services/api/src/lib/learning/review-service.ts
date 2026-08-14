@@ -432,6 +432,20 @@ export async function rateLearningSessionItem(input: {
   const session = await loadSession(input.client, input.sessionId, input.userId)
   if (session.scope_kind !== "deck") throw notFoundError("Learning session not found")
   const access = await assertDeckAccess({ ...input, deckId: session.scope_ref })
+  const priorEvent = await executeFirst(input.client, {
+    sql: `SELECT learning_review_event_id, rating FROM learning_review_events WHERE user_id = ?1 AND idempotency_key = ?2 LIMIT 1`,
+    args: [input.userId, input.idempotencyKey],
+  })
+  if (priorEvent) {
+    const currentSession = await loadSession(input.client, input.sessionId, input.userId)
+    const nextItem = currentSession.current_item_id ? await loadSessionItem(input.client, input.sessionId, currentSession.current_item_id) : null
+    return {
+      ...view(currentSession, nextItem),
+      replayed: true,
+      rating: ratingValue(stringValue(priorEvent, "rating")),
+      next_item: view(currentSession, nextItem).current_item,
+    }
+  }
   if (session.status !== "active" || session.current_item_id !== input.itemId) throw conflictError("Learning session card is no longer current")
   if (session.session_revision !== input.expectedSessionRevision) throw conflictError("Learning session changed; reload it")
   const item = await loadSessionItem(input.client, input.sessionId, input.itemId)
@@ -503,7 +517,7 @@ export async function rateLearningSessionItem(input: {
       args: [eventId, input.userId, input.itemId, access.learning_deck_id, access.learning_deck_version_id, input.sessionId, input.idempotencyKey, sequence, rating, reviewedAt, LEARNING_REVIEW_ALGORITHM, LEARNING_REVIEW_PARAMETERS_VERSION, priorHash, resultingJson],
     })
     const newRevision = priorRevision + 1
-    const stateArgs = [input.userId, input.itemId, transition.state.phase, transition.state.stability, transition.state.difficulty, transition.state.learningStepIndex, transition.state.scheduledIntervalDays, new Date(transition.state.dueAtMs).toISOString(), reviewedAt, transition.state.reps, transition.state.lapses, newRevision, eventId, reviewedAt]
+    const stateArgs = [input.userId, input.itemId, LEARNING_REVIEW_ALGORITHM, LEARNING_REVIEW_PARAMETERS_VERSION, transition.state.phase, transition.state.stability, transition.state.difficulty, transition.state.learningStepIndex, transition.state.scheduledIntervalDays, new Date(transition.state.dueAtMs).toISOString(), reviewedAt, transition.state.reps, transition.state.lapses, newRevision, eventId, reviewedAt]
     if (stateRow) {
       const updated = await tx.execute({
         sql: `
