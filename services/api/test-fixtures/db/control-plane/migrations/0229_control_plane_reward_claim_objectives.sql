@@ -1,6 +1,7 @@
 -- Allow independent Study and Karaoke claims while preserving the historical
 -- Either campaign boundary. Legacy Either claims remain globally exclusive for
--- a song/day; new objective campaigns are exclusive only within their slot.
+-- a song/day because 0228 materializes their occupancy in both reward_song_pools
+-- objective rows; this table's objective key only scopes new objective claims.
 
 DROP INDEX IF EXISTS reward_song_period_claims_song_identity_period_unique;
 
