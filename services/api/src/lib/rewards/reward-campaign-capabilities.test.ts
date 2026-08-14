@@ -37,7 +37,7 @@ describe("getRewardCampaignCapabilities", () => {
     expect(capabilities.max_budget_cents).toBe(10_000)
     expect(capabilities.max_reward_cents).toBe(100)
     expect(capabilities.chain_id).toBe(84_532)
-    expect(capabilities.eligible_activities).toEqual(["study", "karaoke", "either"])
+    expect(capabilities.eligible_activities).toEqual(["study", "karaoke"])
     expect(capabilities.nationality_payout_tiers).toBe("enabled")
     expect(capabilities.flat_identity_providers).toEqual(["self", "zkpassport", "very"])
     expect(capabilities.nationality_tier_identity_providers).toEqual(["self", "zkpassport"])

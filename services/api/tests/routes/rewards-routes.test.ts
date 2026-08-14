@@ -265,7 +265,7 @@ describe("rewards routes", () => {
       community: "com_cmt_rewards_route",
       post: "post_pst_reward_campaign_song",
       reward_identity_provider: "very",
-      eligible_activity: "either",
+      eligible_activity: "study",
       min_score_bps: 7000,
       daily_reward_cents: 40,
       milestone_7_cents: 0,
@@ -768,6 +768,16 @@ describe("rewards routes", () => {
     await addWallet(ctx, session.userId, new Date().toISOString())
     await seedCampaignSong(ctx, session.userId)
 
+    const legacyEither = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        eligible_activity: "either",
+        idempotency_key: "reward-campaign-either-rejected",
+      })),
+    }, ctx.env)
+    expect(legacyEither.status).toBe(400)
+
     const unsupportedMilestone = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
@@ -822,7 +832,7 @@ describe("rewards routes", () => {
       post: "pst_reward_campaign_song",
       status: "draft",
       song_owner: session.userId,
-      eligible_activity: "either",
+      eligible_activity: "study",
       min_score_bps: 7000,
     })
 
@@ -922,7 +932,7 @@ describe("rewards routes", () => {
     expect(publicOffer.status).toBe(200)
     expect(await json(publicOffer)).toEqual({
       campaign: campaign.id,
-      eligible_activity: "either",
+      eligible_activity: "study",
       min_score_bps: 7000,
       daily_reward_cents: 40,
       chain_id: 84532,
@@ -938,7 +948,7 @@ describe("rewards routes", () => {
     expect(songOffer.status).toBe(200)
     expect(await json(songOffer)).toEqual({
       campaign: campaign.id,
-      eligible_activity: "either",
+      eligible_activity: "study",
       min_score_bps: 7000,
       daily_reward_cents: 40,
       chain_id: 84532,
@@ -1200,6 +1210,45 @@ describe("rewards routes", () => {
     expect(released.status).toBe(404)
   })
 
+  test("song resolver skips a terminal objective pool when no objective is requested", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-pool-objective-fallback-owner")
+    await seedCampaignSong(ctx, owner.userId)
+
+    const createStudy = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "objective-fallback-study" })),
+    }, ctx.env)
+    expect(createStudy.status).toBe(201)
+    const study = await json(createStudy) as { id: string }
+
+    const createKaraoke = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        eligible_activity: "karaoke",
+        idempotency_key: "objective-fallback-karaoke",
+      })),
+    }, ctx.env)
+    expect(createKaraoke.status).toBe(201)
+    const karaoke = await json(createKaraoke) as { id: string }
+
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1",
+      args: [study.id],
+    })
+
+    const resolved = await app.request(
+      "http://pirate.test/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song",
+      { headers: authHeaders(owner.accessToken) },
+      ctx.env,
+    )
+    expect(resolved.status).toBe(200)
+    expect(await json(resolved)).toMatchObject({ id: karaoke.id, eligible_activity: "karaoke" })
+  })
+
   test("uses one stable song pool and accepts concurrent contribution lots from different funders", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
@@ -1218,6 +1267,18 @@ describe("rewards routes", () => {
     expect(firstCreate.status).toBe(201)
     const pool = await json(firstCreate) as { id: string; reward_identity_provider: string }
     expect(pool.reward_identity_provider).toBe("very")
+    const studyPool = await app.request(
+      "http://pirate.test/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song&objective=study",
+      { headers: authHeaders(firstBooster.accessToken) },
+      ctx.env,
+    )
+    expect(studyPool.status).toBe(200)
+    const karaokePool = await app.request(
+      "http://pirate.test/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song&objective=karaoke",
+      { headers: authHeaders(firstBooster.accessToken) },
+      ctx.env,
+    )
+    expect(karaokePool.status).toBe(404)
     const duplicatePool = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(secondBooster.accessToken), "content-type": "application/json" },
