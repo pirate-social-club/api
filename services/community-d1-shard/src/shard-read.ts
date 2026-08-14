@@ -90,6 +90,8 @@ export type ShardEnv = {
    * must never be reachable on a misconfigured shard.
    */
   SHARD_ADMIN_TOKEN?: string
+  /** Percentage of bulk reads that emit aggregate overlap diagnostics (0–100). */
+  SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT?: string
   [binding: string]: D1Database | WorkerVersionMetadata | string | undefined
 }
 
@@ -315,6 +317,61 @@ function toResult(result: D1Result): ShardQueryResult {
   }
 }
 
+export const SHARD_BULK_READ_CONCURRENCY = 8
+
+export type ShardBulkReadDiagnostics = {
+  completed_operations: number
+  max_active_operations: number
+  max_operation_ms: number
+  operation_count: number
+  operation_p50_ms: number
+  operation_p95_ms: number
+  sum_operation_ms: number
+  total_ms: number
+  wave_count: number
+}
+
+export function parseShardBulkReadDiagnosticsSamplePercent(raw: string | undefined): number {
+  const parsed = Number(raw?.trim() ?? "")
+  if (!Number.isFinite(parsed)) return 0
+  return Math.max(0, Math.min(100, parsed))
+}
+
+export function summarizeShardBulkReadDiagnostics(input: {
+  completedOperationDurationsMs: number[]
+  maxActiveOperations: number
+  operationCount: number
+  totalMs: number
+}): ShardBulkReadDiagnostics {
+  const durations = input.completedOperationDurationsMs
+    .filter((duration) => Number.isFinite(duration) && duration >= 0)
+    .map((duration) => Math.round(duration))
+    .sort((left, right) => left - right)
+  const percentile = (fraction: number): number => {
+    if (durations.length === 0) return 0
+    return durations[Math.min(durations.length - 1, Math.max(0, Math.ceil(durations.length * fraction) - 1))] ?? 0
+  }
+
+  return {
+    completed_operations: durations.length,
+    max_active_operations: Math.max(0, input.maxActiveOperations),
+    max_operation_ms: durations.at(-1) ?? 0,
+    operation_count: Math.max(0, input.operationCount),
+    operation_p50_ms: percentile(0.5),
+    operation_p95_ms: percentile(0.95),
+    sum_operation_ms: durations.reduce((sum, duration) => sum + duration, 0),
+    total_ms: Math.max(0, Math.round(input.totalMs)),
+    wave_count: input.operationCount > 0
+      ? Math.ceil(input.operationCount / SHARD_BULK_READ_CONCURRENCY)
+      : 0,
+  }
+}
+
+function shouldSampleShardBulkReadDiagnostics(env: ShardEnv): boolean {
+  const samplePercent = parseShardBulkReadDiagnosticsSamplePercent(env.SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT)
+  return samplePercent >= 100 || (samplePercent > 0 && Math.random() * 100 < samplePercent)
+}
+
 export async function runShardRead(
   env: ShardEnv,
   input: ShardReadRequest,
@@ -358,9 +415,19 @@ export async function runShardBulkRead(
   input: ShardBulkReadRequest,
 ): Promise<ShardBulkReadResponse> {
   const operations: ShardBulkReadResponse["operations"] = []
-  for (let offset = 0; offset < input.operations.length; offset += 8) {
-    const batch = input.operations.slice(offset, offset + 8)
+  const diagnosticsEnabled = input.operations.length > 0 && shouldSampleShardBulkReadDiagnostics(env)
+  const startedAt = performance.now()
+  const operationDurationsMs: number[] = []
+  let activeOperations = 0
+  let maxActiveOperations = 0
+  for (let offset = 0; offset < input.operations.length; offset += SHARD_BULK_READ_CONCURRENCY) {
+    const batch = input.operations.slice(offset, offset + SHARD_BULK_READ_CONCURRENCY)
     operations.push(...await Promise.all(batch.map(async (operation) => {
+    const operationStartedAt = diagnosticsEnabled ? performance.now() : 0
+    if (diagnosticsEnabled) {
+      activeOperations += 1
+      maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+    }
     try {
       return { communityId: operation.communityId, result: await runShardBatch(env, operation) }
     } catch (error) {
@@ -396,8 +463,24 @@ export async function runShardBulkRead(
         }
       }
       return { communityId: operation.communityId, result: { ok: true as const, value: values } }
+    } finally {
+      if (diagnosticsEnabled) {
+        operationDurationsMs.push(performance.now() - operationStartedAt)
+        activeOperations -= 1
+      }
     }
     })))
+  }
+  if (diagnosticsEnabled) {
+    console.info(JSON.stringify({
+      event: "community_d1_shard_bulk_read",
+      ...summarizeShardBulkReadDiagnostics({
+        completedOperationDurationsMs: operationDurationsMs,
+        maxActiveOperations,
+        operationCount: input.operations.length,
+        totalMs: performance.now() - startedAt,
+      }),
+    }))
   }
   return { operations }
 }

@@ -7,6 +7,14 @@ calls it when a community's `community_database_routing` row has `backend='d1'`.
 
 There is no write/transaction method here — the write path is PR3.
 
+## Bulk-read diagnostics
+
+`SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT` enables sampled aggregate logs for
+the bulk read path. The diagnostic event reports operation count, wave count,
+max in-flight operations, total duration, and the sum/max/p50/p95 operation
+durations. It intentionally omits community and binding identifiers. Staging
+uses 100% sampling for measurement; production uses 1% sampling.
+
 ## Authorization (two gates, both server-side, before any D1 access)
 
 1. **`(communityId → bindingName)` allowlist** — `COMMUNITY_D1_BINDING_MAP_JSON`

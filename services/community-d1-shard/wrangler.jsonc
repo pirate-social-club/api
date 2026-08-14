@@ -24,7 +24,8 @@
     // This shard's own worker id. Returned in communityD1Bind responses so the
     // API can populate community_database_routing.shard_worker_id.
     "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-staging",
-    "STAGING_RECLAIM_ENABLED": "true"
+    "STAGING_RECLAIM_ENABLED": "true",
+    "SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT": "100"
   },
   "d1_databases": [
     {
@@ -2569,7 +2570,8 @@
       },
       "vars": {
         "COMMUNITY_D1_BINDING_MAP_JSON": "{}",
-        "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-prod"
+        "COMMUNITY_D1_SHARD_WORKER_ID": "community-d1-shard-prod",
+        "SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT": "1"
       },
       "d1_databases": [
         { "binding": "D1_POOL", "database_name": "community-d1-shard-pool-prod", "database_id": "115ea5db-726a-4786-82c0-0824116bcb2d" },
