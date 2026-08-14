@@ -42,7 +42,7 @@ import { parseJobPayload } from "./payload"
 import { publishGenericAssetClaim } from "../commerce/generic-asset-publication"
 import { getAssetRow } from "../commerce/queries"
 import { assertAssetDeliveryAllowed } from "../commerce/asset-read-policy"
-import { genericDigitalGoodsEnabled } from "../../helpers"
+import { genericDigitalGoodsEnabled, learningDecksEnabled } from "../../helpers"
 import { requireOwnedContentBlob } from "../../content-blobs/content-blob-repository"
 import { materializeGeneratedContentBlob } from "../../content-blobs/content-blob-service"
 import { canonicalLearningDeckPackage } from "../../learning/deck-package"
@@ -676,6 +676,18 @@ async function finalizeGenericDigitalGoodsPost(input: {
   let deckPackage: Awaited<ReturnType<typeof canonicalLearningDeckPackage>> | null = null
   let deckId: string | null = null
   if (post.post_type === "deck") {
+    if (!learningDecksEnabled(jobInput.env)) {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "deck_package_generation_failed",
+        failureMessage: "Learning decks are not enabled",
+        retryable: false,
+        now,
+      })
+    }
     deckId = publishOptions.learning_deck?.trim() ?? null
     if (!deckId) {
       return await markPostPublishFinalizeFailed({
