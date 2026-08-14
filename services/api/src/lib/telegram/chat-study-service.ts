@@ -3,7 +3,7 @@ import { getCommunityRepository } from "../communities/db-community-repository"
 import { openCommunityReadClient } from "../communities/community-read-access"
 import { isCommunityStudyEnabled } from "../communities/community-study-policy-service"
 import { hasActiveCommunityElevenLabsCredential } from "../communities/assistant-policy/credential-service"
-import { makeId, nowIso } from "../helpers"
+import { envFlag, makeId, nowIso } from "../helpers"
 import {
   getPostStudyPayload,
   submitPostStudyAttempt,
@@ -18,6 +18,7 @@ import {
   splitLyricsForStudy,
   STUDY_UNIT_GENERATION_VERSION,
 } from "../posts/post-study-unit-service"
+import { hasStudyClozeSchema, hasStudyLyricsLanguageSchema } from "../posts/post-study-cloze-service"
 import { rowValue } from "../sql-row"
 import type { ReadClient } from "../sql-client"
 import { getControlPlaneClient } from "../runtime-deps"
@@ -395,6 +396,11 @@ function studyPostFromRow(row: unknown): StudyPost | null {
     song_title: stringOrNull(rowValue(row, "song_title")),
     source_language: stringOrNull(rowValue(row, "source_language")),
     source_language_reliable: Number(rowValue(row, "source_language_reliable") ?? 0) === 1,
+    lyrics_language: stringOrNull(rowValue(row, "lyrics_language")),
+    lyrics_language_reliable: Number(rowValue(row, "lyrics_language_reliable") ?? 0) === 1,
+    lyrics_language_detector: stringOrNull(rowValue(row, "lyrics_language_detector")),
+    lyrics_language_detected_at: stringOrNull(rowValue(row, "lyrics_language_detected_at")),
+    lyrics_language_source_hash: stringOrNull(rowValue(row, "lyrics_language_source_hash")),
     status: stringOrNull(rowValue(row, "status")) ?? "",
     title: stringOrNull(rowValue(row, "title")),
     visibility: stringOrNull(rowValue(row, "visibility")) ?? "public",
@@ -431,12 +437,23 @@ async function activeCampaignRewards(input: {
 export async function batchReadyPostIds(input: {
   client: ReadClient
   credentialAvailable: boolean
+  fillBlankEnabled?: boolean
+  fillBlankSchemaReady?: boolean
   posts: StudyPost[]
   targetLanguage: string
   viewerUserId: string
 }): Promise<Set<string>> {
   if (input.posts.length === 0) return new Set()
   const placeholders = input.posts.map((_, index) => `?${index + 3}`).join(", ")
+  const fillBlankProjection = input.fillBlankEnabled && input.fillBlankSchemaReady
+    ? `EXISTS (
+          SELECT 1
+          FROM song_study_unit unit
+          WHERE unit.post_id = p.post_id
+            AND p.lyrics_language IS NOT NULL
+            AND p.lyrics_language_reliable = 1
+        ) AS has_fill_blank`
+    : "0 AS has_fill_blank"
   const result = await input.client.execute({
     sql: `
       SELECT p.post_id,
@@ -469,7 +486,8 @@ export async function batchReadyPostIds(input: {
             AND localization.translation_text IS NOT NULL
             AND localization.options_json IS NOT NULL
             AND localization.correct_option_id IS NOT NULL
-        ) AS has_translation
+        ) AS has_translation,
+        ${fillBlankProjection}
       FROM posts p
       WHERE p.post_id IN (${placeholders})
     `,
@@ -491,8 +509,10 @@ export async function batchReadyPostIds(input: {
             !isSameLanguageStudyPair(post.source_language, input.targetLanguage)
             && Number(rowValue(row, "has_translation")) === 1
           )
-        )
-      : input.credentialAvailable && splitLyricsForStudy(post.lyrics).length > 0
+          || (input.fillBlankEnabled === true && Number(rowValue(row, "has_fill_blank")) === 1)
+      )
+      : (input.credentialAvailable || (input.fillBlankEnabled === true && post.lyrics_language_reliable === true))
+        && splitLyricsForStudy(post.lyrics).length > 0
     return ready ? [post.post_id] : []
   }))
 }
@@ -524,11 +544,27 @@ async function listReadySongs(input: {
       env: input.env,
       communityId: input.communityId,
     })
+    const schema = await db.client.execute({ sql: "PRAGMA table_info(posts)" })
+    const columns = new Set(schema.rows.map((row) => String((row as Record<string, unknown>).name ?? "")))
+    const lyricsLanguageProjection = [
+      "lyrics_language",
+      "lyrics_language_reliable",
+      "lyrics_language_detector",
+      "lyrics_language_detected_at",
+      "lyrics_language_source_hash",
+    ].every((column) => columns.has(column))
+      ? "lyrics_language, lyrics_language_reliable, lyrics_language_detector, lyrics_language_detected_at, lyrics_language_source_hash"
+      : "NULL AS lyrics_language, 0 AS lyrics_language_reliable, NULL AS lyrics_language_detector, NULL AS lyrics_language_detected_at, NULL AS lyrics_language_source_hash"
+    const fillBlankEnabled = envFlag(input.env.SONG_STUDY_FILL_BLANK_ENABLED)
+    const fillBlankSchemaReady = fillBlankEnabled
+      && await hasStudyClozeSchema(db.client)
+      && await hasStudyLyricsLanguageSchema(db.client)
     while (true) {
       const rows = await db.client.execute({
         sql: `
           SELECT post_id, community_id, author_user_id, post_type, status, visibility,
                  lyrics, title, song_title, song_cover_art_ref, song_artifact_bundle_id, source_language, source_language_reliable,
+                 ${lyricsLanguageProjection},
                  access_mode, age_gate_policy, asset_id, created_at
           FROM posts
           WHERE community_id = ?1
@@ -549,6 +585,8 @@ async function listReadySongs(input: {
         batchReadyPostIds({
           client: db.client,
           credentialAvailable,
+          fillBlankEnabled,
+          fillBlankSchemaReady,
           posts,
           targetLanguage: input.targetLanguage,
           viewerUserId: input.actor.userId,

@@ -15,6 +15,19 @@ export async function hasStudyClozeSchema(client: Pick<ReadClient, "execute">): 
   return result.rows.length > 0
 }
 
+export async function hasStudyLyricsLanguageSchema(client: Pick<ReadClient, "execute">): Promise<boolean> {
+  const result = await client.execute({ sql: "PRAGMA table_info(posts)" })
+  const columns = new Set(result.rows.map((row) => String((row as Record<string, unknown>).name ?? "")))
+  return [
+    "lyrics_language",
+    "lyrics_language_confidence",
+    "lyrics_language_reliable",
+    "lyrics_language_detector",
+    "lyrics_language_detected_at",
+    "lyrics_language_source_hash",
+  ].every((column) => columns.has(column))
+}
+
 export type StudyClozeSegment =
   | { kind: "text"; text: string }
   | { id: string; kind: "blank" }
@@ -140,6 +153,10 @@ function languagePolicy(value: string | null): LanguagePolicy | null {
   return language ? LANGUAGE_POLICIES[language] ?? null : null
 }
 
+export function isStudyClozeLanguageSupported(value: string | null | undefined): boolean {
+  return languagePolicy(value ?? null) !== null
+}
+
 function selectGapParts(unit: StudyUnitRow, parts: WordPart[], policy: LanguagePolicy): WordPart[] {
   const distinct = parts.filter((part, index) => {
     const normalized = normalizedWord(part.text)
@@ -167,25 +184,31 @@ function selectGapParts(unit: StudyUnitRow, parts: WordPart[], policy: LanguageP
 export function buildStudyCloze(
   unit: StudyUnitRow,
   units: StudyUnitRow[],
+  language = unit.source_language,
 ): StudyCloze | null {
-  return analyzeStudyCloze(unit, units).cloze
+  return analyzeStudyCloze(unit, units, language).cloze
 }
 
-export function analyzeStudyCloze(unit: StudyUnitRow, units: StudyUnitRow[]): StudyClozeAnalysis {
+export function analyzeStudyCloze(
+  unit: StudyUnitRow,
+  units: StudyUnitRow[],
+  language = unit.source_language,
+): StudyClozeAnalysis {
   const partsByUnit = new Map(units.map((candidate) => [
     candidate.id,
-    wordParts(candidate.prompt_text, candidate.source_language),
+    wordParts(candidate.prompt_text, language),
   ]))
-  return analyzeStudyClozeFromParts(unit, units, partsByUnit)
+  return analyzeStudyClozeFromParts(unit, units, partsByUnit, language)
 }
 
 function analyzeStudyClozeFromParts(
   unit: StudyUnitRow,
   units: StudyUnitRow[],
   partsByUnit: Map<string, WordPart[]>,
+  language = unit.source_language,
 ): StudyClozeAnalysis {
   const parts = partsByUnit.get(unit.id) ?? []
-  const policy = languagePolicy(unit.source_language)
+  const policy = languagePolicy(language)
   if (!policy) return { cloze: null, unavailableReason: "unsupported_language" }
   if (parts.length < 4) return { cloze: null, unavailableReason: "too_few_words" }
   if (!parts.some((part) => scriptBucket(part.text) === policy.bucket)) {
@@ -198,7 +221,6 @@ function analyzeStudyClozeFromParts(
   const distractorTarget = Math.max(2, 4 - gaps.length)
   const seenDistractors = new Set<string>()
   const distractors = units
-    .filter((candidate) => primaryLanguage(candidate.source_language) === primaryLanguage(unit.source_language))
     .flatMap((candidate) => partsByUnit.get(candidate.id) ?? [])
     .filter((part) => scriptBucket(part.text) === policy.bucket)
     .filter((part) => {
@@ -247,23 +269,36 @@ function analyzeStudyClozeFromParts(
   return { cloze: { correctPlacements, segments, tokens }, unavailableReason: null }
 }
 
-async function clozeSourceFingerprint(units: StudyUnitRow[]): Promise<string> {
-  return await sha256Hex(JSON.stringify(units.map((unit) => [
+async function clozeSourceFingerprint(input: {
+  detector: string | null
+  language: string | null
+  languageReliable: boolean
+  sourceHash: string | null
+  units: StudyUnitRow[]
+}): Promise<string> {
+  return await sha256Hex(JSON.stringify({
+    detector: input.detector,
+    language: input.language,
+    language_reliable: input.languageReliable,
+    source_hash: input.sourceHash,
+    units: input.units.map((unit) => [
     unit.id,
     unit.line_id,
     unit.source_language,
     unit.prompt_text,
-  ])))
+    ]),
+  }))
 }
 
 function clozeUpsertStatement(input: {
   fingerprint: string
   now: string
   partsByUnit: Map<string, WordPart[]>
+  language: string | null
   unit: StudyUnitRow
   units: StudyUnitRow[]
 }): InStatement {
-  const cloze = analyzeStudyClozeFromParts(input.unit, input.units, input.partsByUnit).cloze
+  const cloze = analyzeStudyClozeFromParts(input.unit, input.units, input.partsByUnit, input.language).cloze
   return {
     sql: `
       INSERT INTO song_study_unit_cloze (
@@ -299,12 +334,15 @@ function clozeUpsertStatement(input: {
 
 export async function ensureStudyClozeRows(input: {
   client: Client
+  lyricsLanguage: string | null | undefined
+  lyricsLanguageDetector?: string | null
+  lyricsLanguageReliable: boolean
+  lyricsLanguageSourceHash?: string | null
   postId: string
-  sourceLanguageReliable: boolean
 }): Promise<void> {
   // Cloze selection applies language-specific rules. Do not convert an
   // unverified language label into an apparently-valid exercise.
-  if (!input.sourceLanguageReliable) return
+  if (!input.lyricsLanguageReliable || !input.lyricsLanguage?.trim()) return
   // Fleet quarantines and pre-allocation pools can legitimately lag the
   // community template. Fill-blank is enrichment, so a missing 1156 table
   // degrades to the established exercise types instead of breaking Study.
@@ -313,7 +351,13 @@ export async function ensureStudyClozeRows(input: {
   // which caller happened to provide the first in-memory slice.
   const units = await selectStudyUnits(input.client, input.postId)
   if (units.length === 0) return
-  const fingerprint = await clozeSourceFingerprint(units)
+  const fingerprint = await clozeSourceFingerprint({
+    detector: input.lyricsLanguageDetector ?? null,
+    language: input.lyricsLanguage,
+    languageReliable: input.lyricsLanguageReliable,
+    sourceHash: input.lyricsLanguageSourceHash ?? null,
+    units,
+  })
   const existing = await input.client.execute({
     sql: `SELECT unit_id, source_text, source_fingerprint FROM song_study_unit_cloze WHERE cloze_version >= ?1 AND unit_id IN (${units.map((_, index) => `?${index + 2}`).join(", ")})`,
     args: [STUDY_CLOZE_GENERATION_VERSION, ...units.map((unit) => unit.id)],
@@ -328,6 +372,13 @@ export async function ensureStudyClozeRows(input: {
   })
   if (stale.length === 0) return
   const now = new Date().toISOString()
-  const partsByUnit = new Map(units.map((unit) => [unit.id, wordParts(unit.prompt_text, unit.source_language)]))
-  await input.client.batch(stale.map((unit) => clozeUpsertStatement({ fingerprint, now, partsByUnit, unit, units })), "write")
+  const partsByUnit = new Map(units.map((unit) => [unit.id, wordParts(unit.prompt_text, input.lyricsLanguage ?? null)]))
+  await input.client.batch(stale.map((unit) => clozeUpsertStatement({
+    fingerprint,
+    language: input.lyricsLanguage ?? null,
+    now,
+    partsByUnit,
+    unit,
+    units,
+  })), "write")
 }

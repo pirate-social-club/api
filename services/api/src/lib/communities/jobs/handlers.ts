@@ -15,6 +15,7 @@ import {
   runCommentTranslationMaterialize,
   runCommunityTextTranslationMaterialize,
   runPostLabelMaterialize,
+  runPostLyricsLanguageDetectionMaterialize,
   runPostTranslationMaterialize,
 } from "./content-materialization-handlers"
 import { runEmbedHydrate } from "./embed-hydration-handler"
@@ -48,6 +49,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runPostLabelMaterialize(input)
     case "post_translation_materialize":
       return runPostTranslationMaterialize(input)
+    case "post_lyrics_language_detection_materialize":
+      return runPostLyricsLanguageDetectionMaterialize(input)
     case "link_summary_materialize":
       return runLinkSummaryMaterialize(input)
     case "link_summary_translation_materialize":

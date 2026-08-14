@@ -3,6 +3,7 @@ import { enqueueCommunityJob, type CommunityJobRow } from "../communities/jobs/s
 import { COMMUNITY_JOB_MAX_ATTEMPTS } from "../communities/jobs/runner-types"
 import { CONTENT_TRANSLATION_PREWARM_LOCALES, sameLanguageLocale } from "../localization/content-locale"
 import { computePostSourceHash } from "../localization/content-source-hash"
+import { computeLyricsLanguageSourceHash } from "../localization/lyrics-language-detection-materializer"
 import { nowIso } from "../helpers"
 import type { Community, LocalizedPostResponse, Post } from "../../types"
 import type { PostWriteDraft } from "./community-post-create-store"
@@ -11,6 +12,28 @@ import { normalizeLinkUrl } from "./link-enrichment/url-normalization"
 
 const DEFAULT_EMBED_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const ACTIVE_MARKET_EMBED_RECHECK_INTERVAL_MS = 5 * 60 * 1000
+
+export async function enqueuePostLyricsLanguageDetectionJob(input: {
+  client: DbExecutor
+  communityId: string
+  post: PostWriteDraft
+  createdAt: string
+}): Promise<void> {
+  if (input.post.post_type !== "song" || !input.post.lyrics?.trim()) return
+  const sourceHash = await computeLyricsLanguageSourceHash(input.post.lyrics)
+  if (!sourceHash) return
+  await enqueueCommunityJob({
+    client: input.client,
+    communityId: input.communityId,
+    jobType: "post_lyrics_language_detection_materialize",
+    subjectType: "post_lyrics_language_detection",
+    subjectId: `${input.post.post_id}:${sourceHash}`,
+    payloadJson: JSON.stringify({ post_id: input.post.post_id, source_hash: sourceHash }),
+    createdAt: input.createdAt,
+    dedupe: false,
+    reuseTerminalFailure: true,
+  })
+}
 
 async function enqueuePostTranslationJob(input: {
   client: DbExecutor

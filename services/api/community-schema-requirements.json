@@ -19,7 +19,8 @@
     "then the fleet only has to satisfy it when that feature is being enabled.",
     "1126 is intentionally unconditional because rewards are already enabled in staging and",
     "a missing outbox turns a reward configuration drift into a Study/Karaoke outage.",
-    "1133 is positively attested by its namespace_role column, replacement indexes, and the absence of the dropped legacy index."
+    "1133 is positively attested by its namespace_role column, replacement indexes, and the absence of the dropped legacy index.",
+    "1143 was promoted after clean full-denominator production and staging fleet verification."
   ],
   "version": 1,
   "canonical_schema": true,
@@ -43,6 +44,7 @@
     "1140_karaoke_attempts_schema_repair.sql",
     "1141_namespace_handle_policy_revision.sql",
     "1142_song_study_sessions.sql",
+    "1143_lyrics_language.sql",
     "1144_karaoke_scoring_diagnostics.sql",
     "1145_dance_attempts.sql",
     "1146_dance_attempt_reason_contract.sql",
@@ -67,56 +69,7 @@
       ]
     }
   },
-  "transitional": {
-    "1143_lyrics_language.sql": {
-      "rationale": "Schema-tolerant Stage 1b rollout. Runtime reads are restricted to the audited projection/serialization path, and shards without all six columns receive NULL/false compatibility values. This is temporary and must not become an indefinite policy class.",
-      "promotion_condition": "Promote to unconditional only after the fleet reconciles as 100 applied + 1 quarantined DB_CMTY_0092, DB_CMTY_0092 is resolved through its quarantine process, and 1143 is independently verified in both schema_migrations and physical column presence across the resulting full live denominator. Stage 2 remains blocked until this promotion closes.",
-      "expires_after": "2026-08-15T13:44:00Z",
-      "owner": "schema-policy-operator",
-      "tracking_issue": "https://github.com/pirate-social-club/api/issues/746",
-      "capability_guard": "hasLyricsLanguageColumns",
-      "runtime_reference_counts": {
-        "src/lib/posts/community-post-projection.ts": {
-          "lyrics_language": 4,
-          "lyrics_language_confidence": 3,
-          "lyrics_language_reliable": 3,
-          "lyrics_language_detector": 3,
-          "lyrics_language_detected_at": 3,
-          "lyrics_language_source_hash": 3
-        },
-        "src/lib/posts/community-post-serialization.ts": {
-          "lyrics_language": 5,
-          "lyrics_language_confidence": 5,
-          "lyrics_language_reliable": 5,
-          "lyrics_language_detector": 5,
-          "lyrics_language_detected_at": 5,
-          "lyrics_language_source_hash": 5
-        },
-        "src/serializers/post.ts": {
-          "lyrics_language": 2,
-          "lyrics_language_confidence": 2,
-          "lyrics_language_reliable": 2,
-          "lyrics_language_detector": 2,
-          "lyrics_language_detected_at": 2,
-          "lyrics_language_source_hash": 2
-        },
-        "src/types.ts": {
-          "lyrics_language": 1,
-          "lyrics_language_confidence": 1,
-          "lyrics_language_reliable": 1,
-          "lyrics_language_detector": 1,
-          "lyrics_language_detected_at": 1,
-          "lyrics_language_source_hash": 1
-        }
-      },
-      "compatibility_tests": [
-        {
-          "path": "src/lib/posts/community-post-projection.lyrics-language.test.ts",
-          "sha256": "af54238f0a0709d5b38fc031d99d2494faac1e34b20bf593dec9999fa61d5d67"
-        }
-      ]
-    }
-  },
+  "transitional": {},
   "deferred": {
     "1148_post_age_gate_provenance.sql": {
       "rationale": "Core prepares post age-gate provenance columns, but this API commit deliberately rolls back all runtime reads and writes until migration 1148 is applied across the production shard fleet."

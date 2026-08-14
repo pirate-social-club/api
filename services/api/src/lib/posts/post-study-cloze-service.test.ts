@@ -130,7 +130,7 @@ describe("buildStudyCloze", () => {
           ('stu_1', 'post_1', 'line_001', 0, 'en', 'I walked beside the river under moonlight', 'I walked beside the river under moonlight', 'ready', 2, 2);
       `)
 
-      await expect(ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: true })).resolves.toBeUndefined()
+      await expect(ensureStudyClozeRows({ client, postId: "post_1", lyricsLanguage: "en", lyricsLanguageReliable: true })).resolves.toBeUndefined()
       const schema = await client.execute("SELECT name FROM sqlite_master WHERE name = 'song_study_unit_cloze'")
       expect(schema.rows).toEqual([])
     } finally {
@@ -159,12 +159,12 @@ describe("buildStudyCloze", () => {
           ('stu_1', 'post_1', 'line_001', 0, 'en', 'I walked beside the river under moonlight', 'I walked beside the river under moonlight', 'ready', 2, 2),
           ('stu_2', 'post_1', 'line_002', 1, 'en', 'The morning carries every quiet memory', 'The morning carries every quiet memory', 'ready', 2, 2);
       `)
-      await ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: false })
+      await ensureStudyClozeRows({ client, postId: "post_1", lyricsLanguage: "en", lyricsLanguageReliable: false })
       expect((await client.execute("SELECT COUNT(*) AS count FROM song_study_unit_cloze")).rows[0]?.count).toBe(0)
-      await ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: true })
+      await ensureStudyClozeRows({ client, postId: "post_1", lyricsLanguage: "en", lyricsLanguageReliable: true, lyricsLanguageDetector: "test:en", lyricsLanguageSourceHash: "lyrics-v1" })
       const before = await client.execute("SELECT unit_id, cloze_version, source_fingerprint FROM song_study_unit_cloze ORDER BY unit_id")
       await client.execute("UPDATE song_study_unit SET prompt_text = 'The evening carries another vivid memory' WHERE id = 'stu_2'")
-      await ensureStudyClozeRows({ client, postId: "post_1", sourceLanguageReliable: true })
+      await ensureStudyClozeRows({ client, postId: "post_1", lyricsLanguage: "en", lyricsLanguageReliable: true, lyricsLanguageDetector: "test:en", lyricsLanguageSourceHash: "lyrics-v1" })
       const after = await client.execute("SELECT unit_id, source_fingerprint FROM song_study_unit_cloze ORDER BY unit_id")
 
       expect(before.rows).toHaveLength(2)
@@ -173,6 +173,44 @@ describe("buildStudyCloze", () => {
       expect(String(before.rows[0]?.source_fingerprint)).toMatch(/^[0-9a-f]{64}$/u)
       expect(after.rows[0]?.source_fingerprint).not.toBe(before.rows[0]?.source_fingerprint)
       expect(after.rows[0]?.source_fingerprint).toBe(after.rows[1]?.source_fingerprint)
+    } finally {
+      client.close()
+    }
+  })
+
+  test("regenerates when lyrics detector metadata changes even if lines do not", async () => {
+    const client = createClient({ url: ":memory:" })
+    try {
+      await client.executeMultiple(`
+        CREATE TABLE song_study_unit (
+          id TEXT PRIMARY KEY, post_id TEXT NOT NULL, line_id TEXT NOT NULL,
+          line_index INTEGER NOT NULL, source_language TEXT, prompt_text TEXT NOT NULL,
+          reference_text TEXT NOT NULL, say_it_back_status TEXT NOT NULL,
+          unit_version INTEGER NOT NULL, max_attempts INTEGER NOT NULL
+        );
+        CREATE TABLE song_study_unit_cloze (
+          unit_id TEXT PRIMARY KEY, cloze_version INTEGER NOT NULL, status TEXT NOT NULL,
+          source_text TEXT NOT NULL, source_fingerprint TEXT NOT NULL,
+          segments_json TEXT, tokens_json TEXT, correct_placements_json TEXT,
+          max_attempts INTEGER NOT NULL, generated_at TEXT, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        INSERT INTO song_study_unit VALUES
+          ('stu_1', 'post_1', 'line_001', 0, 'en', 'I walked beside the river under moonlight', 'I walked beside the river under moonlight', 'ready', 2, 2),
+          ('stu_2', 'post_1', 'line_002', 1, 'en', 'The morning carries every quiet memory', 'The morning carries every quiet memory', 'ready', 2, 2);
+      `)
+      const base = {
+        client,
+        lyricsLanguage: "en",
+        lyricsLanguageReliable: true,
+        lyricsLanguageDetector: "openrouter:model-a",
+        postId: "post_1",
+      } as const
+      await ensureStudyClozeRows({ ...base, lyricsLanguageSourceHash: "lyrics-v1" })
+      const first = await client.execute("SELECT source_fingerprint FROM song_study_unit_cloze WHERE unit_id = 'stu_1'")
+      await ensureStudyClozeRows({ ...base, lyricsLanguageDetector: "openrouter:model-b", lyricsLanguageSourceHash: "lyrics-v2" })
+      const second = await client.execute("SELECT source_fingerprint FROM song_study_unit_cloze WHERE unit_id = 'stu_1'")
+      expect(first.rows[0]?.source_fingerprint).not.toBe(second.rows[0]?.source_fingerprint)
     } finally {
       client.close()
     }

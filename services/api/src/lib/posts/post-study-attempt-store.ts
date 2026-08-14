@@ -2,6 +2,7 @@ import { executeFirst } from "../db-helpers"
 import type { ReadClient } from "../sql-client"
 import type { StudyPack } from "./post-study-localization-service"
 import type { AttemptOutcome, FsrsRating } from "./post-study-recall-grading"
+import { hasStudyClozeSchema, hasStudyLyricsLanguageSchema } from "./post-study-cloze-service"
 
 export type ExerciseType = "say_it_back" | "translation_choice" | "fill_blank"
 
@@ -108,16 +109,20 @@ async function fillBlankExerciseRow(
   client: ReadClient,
   identity: FillBlankExerciseIdentity,
 ): Promise<Record<string, unknown> | null> {
+  if (!await hasStudyClozeSchema(client) || !await hasStudyLyricsLanguageSchema(client)) return null
   return await executeFirst(client, {
     sql: `
-      SELECT u.id, u.post_id, u.line_id, u.line_index, u.source_language,
+      SELECT u.id, u.post_id, u.line_id, u.line_index, p.lyrics_language,
              c.segments_json, c.tokens_json,
              c.correct_placements_json, c.max_attempts, c.status, c.cloze_version,
              c.source_fingerprint
       FROM song_study_unit u
       JOIN song_study_unit_cloze c ON c.unit_id = u.id
+      JOIN posts p ON p.post_id = u.post_id
       WHERE u.id = ?1
-        AND COALESCE(u.source_language, 'source') = ?2
+        AND p.lyrics_language IS NOT NULL
+        AND p.lyrics_language_reliable = 1
+        AND p.lyrics_language = ?2
       LIMIT 1
     `,
     args: [identity.unitId, identity.language],
@@ -234,7 +239,7 @@ export async function getExerciseForAttempt(
     const current = Number(row.cloze_version ?? 0) === fillBlankIdentity.version
       && readString(row.source_fingerprint) === fillBlankIdentity.fingerprint
     if (!current) return null
-    const reviewLanguage = readString(row.source_language) ?? "source"
+    const reviewLanguage = readString(row.lyrics_language) ?? "source"
     return {
       correct_option_id: null,
       correct_placements_json: readString(row.correct_placements_json),
