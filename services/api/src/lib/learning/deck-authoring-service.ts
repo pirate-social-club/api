@@ -5,6 +5,9 @@ import { learningDecksEnabled, makeId, nowIso } from "../helpers"
 import { executeFirst, type DbExecutor } from "../db-helpers"
 import type { Client } from "../sql-client"
 import { withTransaction } from "../transactions"
+import { getControlPlaneClient } from "../runtime-deps"
+import { claimOwnedReadyContentBlob, requireOwnedContentBlob } from "../content-blobs/content-blob-repository"
+import { readContentSource } from "../content-blobs/content-source-broker-client"
 import {
   canonicalLearningDeckPackage,
   parseLearningDeckCsv,
@@ -412,24 +415,85 @@ export function previewLearningDeckCsv(csv: string): DeckCsvParseResult {
   return parseLearningDeckCsv(csv)
 }
 
+export async function readLearningDeckCsvImport(input: {
+  env: Env
+  controlPlaneClient?: Client
+  communityId: string
+  contentBlobId: string
+  userId: string
+}): Promise<string> {
+  const owned = await requireOwnedContentBlob({
+    client: input.controlPlaneClient ?? getControlPlaneClient(input.env),
+    communityId: input.communityId,
+    uploaderUserId: input.userId,
+    contentBlobId: input.contentBlobId,
+  })
+  const blob = owned.blob
+  if (
+    blob.validation_profile !== "deck_import_csv_v1"
+    || blob.status !== "ready"
+    || blob.security_scan_state !== "clean"
+    || blob.verified_size_bytes == null
+    || blob.verified_content_hash == null
+    || blob.plaintext_retention_state === "purged"
+  ) {
+    throw conflictError("CSV import is not ready for preview")
+  }
+  const bytes = await readContentSource({
+    env: input.env,
+    contentBlobId: blob.content_blob_id,
+    expectedSizeBytes: blob.verified_size_bytes,
+    expectedSha256: blob.verified_content_hash,
+  })
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+  } catch {
+    throw badRequestError("CSV import must be valid UTF-8")
+  }
+}
+
 export async function commitLearningDeckCsv(input: {
+  env: Env
+  controlPlaneClient?: Client
   client: DbExecutor
   communityId: string
   deckId: string
   userId: string
-  csv: string
+  contentBlobId: string
   promptColumn: number
   answerColumn: number
   tagsColumn?: number | null
 }): Promise<LearningDeckDraft> {
-  const parsed = parseLearningDeckCsv(input.csv)
+  const csv = await readLearningDeckCsvImport(input)
+  const parsed = parseLearningDeckCsv(csv)
   if (parsed.errors.length) throw badRequestError(parsed.errors[0]?.message ?? "CSV import failed")
   if (!Number.isInteger(input.promptColumn) || !Number.isInteger(input.answerColumn)) throw badRequestError("CSV column mapping is invalid")
   if (input.promptColumn < 0 || input.answerColumn < 0 || input.promptColumn >= parsed.headers.length || input.answerColumn >= parsed.headers.length) {
     throw badRequestError("CSV column mapping is out of range")
   }
+  const importKey = await sha256Hex(JSON.stringify({
+    answerColumn: input.answerColumn,
+    csv,
+    promptColumn: input.promptColumn,
+    tagsColumn: input.tagsColumn ?? null,
+  }))
+  const cardIdPrefix = `lcd_${importKey.slice(0, 24)}_`
+  await claimOwnedReadyContentBlob({
+    client: input.controlPlaneClient ?? getControlPlaneClient(input.env),
+    communityId: input.communityId,
+    uploaderUserId: input.userId,
+    contentBlobId: input.contentBlobId,
+    claimKind: "deck_import",
+    claimRef: `${input.deckId}:${importKey}`,
+    claimedAt: nowIso(),
+  })
   let draft = await getLearningDeckDraft(input)
-  for (const values of parsed.rows) {
+  const existingImportedCards = draft.cards
+    .filter((card) => card.cardId.startsWith(cardIdPrefix) && card.retiredAt == null)
+  const importOrdinalBase = existingImportedCards.length > 0
+    ? Math.min(...existingImportedCards.map((card) => card.ordinal))
+    : draft.cards.length
+  for (const [index, values] of parsed.rows.entries()) {
     const prompt = values[input.promptColumn] ?? ""
     const answer = values[input.answerColumn] ?? ""
     if (!prompt.trim() || !answer.trim()) throw badRequestError("CSV prompt and answer cells are required")
@@ -439,11 +503,12 @@ export async function commitLearningDeckCsv(input: {
       communityId: input.communityId,
       deckId: input.deckId,
       userId: input.userId,
+      cardId: `${cardIdPrefix}${index}`,
       cardType: "basic",
       prompt,
       answer,
       tags,
-      ordinal: draft.cards.length,
+      ordinal: importOrdinalBase + index,
     })
   }
   return draft

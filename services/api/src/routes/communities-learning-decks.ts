@@ -9,6 +9,7 @@ import {
   createLearningDeckDraft,
   getLearningDeckDraft,
   getPublishedLearningDeckByAsset,
+  readLearningDeckCsvImport,
   previewLearningDeckCsv,
   retireLearningDeckCard,
   upsertLearningDeckCard,
@@ -233,20 +234,28 @@ export function registerCommunityLearningDeckRoutes(communities: Hono<Authentica
   })
 
   communities.post("/:communityId/learning-decks/imports/preview", async (c) => {
-    const { csv } = await requireJsonBody<{ csv?: unknown }>(c, "Invalid learning deck CSV payload")
-    if (typeof csv !== "string") throw badRequestError("csv is required")
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const { content_blob_id: contentBlobId } = await requireJsonBody<{ content_blob_id?: unknown }>(c, "Invalid learning deck CSV payload")
+    if (typeof contentBlobId !== "string") throw badRequestError("content_blob_id is required")
+    const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
+    try {
+      await requireMemberAccess(db.client, communityId, actor.userId)
+    } finally {
+      await db.close()
+    }
+    const csv = await readLearningDeckCsvImport({ env: c.env, communityId, contentBlobId, userId: actor.userId })
     return c.json(previewLearningDeckCsv(csv), 200)
   })
 
   communities.post("/:communityId/learning-decks/:deckId/imports/commit", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<{
-      csv?: unknown
+      content_blob_id?: unknown
       prompt_column?: unknown
       answer_column?: unknown
       tags_column?: unknown
     }>(c, "Invalid learning deck CSV payload")
-    if (typeof body.csv !== "string") throw badRequestError("csv is required")
+    if (typeof body.content_blob_id !== "string") throw badRequestError("content_blob_id is required")
     const promptColumn = Number(body.prompt_column)
     const answerColumn = Number(body.answer_column)
     const tagsColumn = body.tags_column == null ? null : Number(body.tags_column)
@@ -254,11 +263,12 @@ export function registerCommunityLearningDeckRoutes(communities: Hono<Authentica
     try {
       await requireMemberAccess(db.client, communityId, actor.userId)
       const deck = await commitLearningDeckCsv({
+        env: c.env,
         client: db.client,
         communityId,
         deckId: c.req.param("deckId"),
         userId: actor.userId,
-        csv: body.csv,
+        contentBlobId: body.content_blob_id,
         promptColumn,
         answerColumn,
         tagsColumn,
