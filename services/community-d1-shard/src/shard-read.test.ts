@@ -10,6 +10,9 @@ import {
   runShardBatch,
   runShardBulkRead,
   runShardBulkWrite,
+  parseShardBulkReadDiagnosticsSamplePercent,
+  SHARD_BULK_READ_CONCURRENCY,
+  summarizeShardBulkReadDiagnostics,
   runShardBind,
   runShardDecommission,
   runShardGetPoolRow,
@@ -410,6 +413,33 @@ describe("runShardBatch (returns ShardResult — step 2.5)", () => {
 })
 
 describe("bulk shard RPCs", () => {
+  test("parses and clamps the diagnostics sample percentage", () => {
+    expect(parseShardBulkReadDiagnosticsSamplePercent(undefined)).toBe(0)
+    expect(parseShardBulkReadDiagnosticsSamplePercent("25")).toBe(25)
+    expect(parseShardBulkReadDiagnosticsSamplePercent("200")).toBe(100)
+    expect(parseShardBulkReadDiagnosticsSamplePercent("-1")).toBe(0)
+    expect(parseShardBulkReadDiagnosticsSamplePercent("not-a-number")).toBe(0)
+  })
+
+  test("summarizes operation overlap without treating sum time as wall time", () => {
+    expect(summarizeShardBulkReadDiagnostics({
+      completedOperationDurationsMs: [10, 20, 30, 40],
+      maxActiveOperations: SHARD_BULK_READ_CONCURRENCY,
+      operationCount: 9,
+      totalMs: 60,
+    })).toEqual({
+      completed_operations: 4,
+      max_active_operations: 8,
+      max_operation_ms: 40,
+      operation_count: 9,
+      operation_p50_ms: 20,
+      operation_p95_ms: 40,
+      sum_operation_ms: 100,
+      total_ms: 60,
+      wave_count: 2,
+    })
+  })
+
   test("authorizes and executes independent read batches in one bulk request", async () => {
     const db = fakeD1([{ n: 1 }])
     const response = await runShardBulkRead(envWith(db), {
@@ -421,6 +451,37 @@ describe("bulk shard RPCs", () => {
     })
     expect(response.operations).toHaveLength(1)
     expect(response.operations[0]?.result).toMatchObject({ ok: true, value: [{ rows: [{ n: 1 }] }] })
+  })
+
+  test("emits sampled aggregate diagnostics with the existing eight-operation cap", async () => {
+    const db = fakeD1([{ n: 1 }])
+    const env = envWith(db)
+    env.SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT = "100"
+    const events: Array<Record<string, unknown>> = []
+    const originalInfo = console.info
+    console.info = ((message: unknown) => {
+      events.push(JSON.parse(String(message)) as Record<string, unknown>)
+    }) as typeof console.info
+    try {
+      await runShardBulkRead(env, {
+        operations: Array.from({ length: 9 }, (_, index) => ({
+          communityId: "cmt_1",
+          bindingName: "DB_CMTY_PILOT",
+          statements: [{ sql: `SELECT ${index} AS n` }],
+        })),
+      })
+    } finally {
+      console.info = originalInfo
+    }
+
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({
+      event: "community_d1_shard_bulk_read",
+      operation_count: 9,
+      wave_count: 2,
+      max_active_operations: 8,
+      completed_operations: 9,
+    })
   })
 
   test("keeps each bulk write operation atomic and independently authorized", async () => {

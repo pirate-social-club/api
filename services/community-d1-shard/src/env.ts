@@ -29,6 +29,8 @@ export interface Env {
    * `wrangler secret put SHARD_ADMIN_TOKEN --env staging`.
    */
   SHARD_ADMIN_TOKEN?: string
+  /** Percentage of bulk reads that emit aggregate overlap diagnostics (0–100). */
+  SHARD_BULK_READ_DIAGNOSTICS_SAMPLE_PERCENT?: string
   /** Explicit kill switch for destructive loaded-binding reclamation. Staging only. */
   STAGING_RECLAIM_ENABLED?: string
   /** Native Cloudflare Worker version identity for deployment attestation. */
