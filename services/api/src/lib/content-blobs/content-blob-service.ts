@@ -17,7 +17,7 @@ import {
   prepareInitialContentSecurityScan,
 } from "../content-security/content-security-queue"
 import { badRequestError, conflictError, notFoundError } from "../errors"
-import { envFlag, makeId, nowIso, splitCsv } from "../helpers"
+import { envFlag, genericDigitalGoodsEnabled, makeId, nowIso, splitCsv } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
   beginProxyContentUpload,
@@ -62,7 +62,11 @@ function requireContentBlobUploadsEnabled(env: Env, communityId: string): void {
   const allowedCommunities = new Set(
     splitCsv(env.CONTENT_BLOB_UPLOAD_COMMUNITY_IDS).map((value) => value.replace(/^com_/, "")),
   )
-  if (!envFlag(env.CONTENT_BLOB_UPLOADS_ENABLED, false) || !allowedCommunities.has(communityId)) {
+  if (
+    !genericDigitalGoodsEnabled(env)
+    || !envFlag(env.CONTENT_BLOB_UPLOADS_ENABLED, false)
+    || !allowedCommunities.has(communityId)
+  ) {
     throw notFoundError("Content blob uploads are not enabled")
   }
 }

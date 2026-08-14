@@ -217,6 +217,23 @@ export async function getLearningDeckDraft(input: {
   return { deck, version, cards: await loadCards({ client: input.client, versionId: version.learning_deck_version_id }) }
 }
 
+export async function getPublishedLearningDeckByAsset(input: {
+  client: DbExecutor
+  communityId: string
+  assetId: string
+}): Promise<LearningDeckDraft> {
+  const found = await executeFirst(input.client, {
+    sql: `SELECT ${DECK_COLUMNS} FROM learning_decks WHERE community_id = ?1 AND asset_id = ?2 AND status = 'published' LIMIT 1`,
+    args: [input.communityId, input.assetId],
+  })
+  if (!found) throw notFoundError("Learning deck not found")
+  const deck = deckFromRow(found)
+  if (deck.published_version == null) throw notFoundError("Learning deck not found")
+  const version = await loadVersion({ client: input.client, deckId: deck.learning_deck_id, version: deck.published_version })
+  if (!version || version.status !== "published") throw notFoundError("Learning deck not found")
+  return { deck, version, cards: await loadCards({ client: input.client, versionId: version.learning_deck_version_id }) }
+}
+
 export async function createLearningDeckDraft(input: {
   env: Env
   communityRepository: DeckCommunityRepository

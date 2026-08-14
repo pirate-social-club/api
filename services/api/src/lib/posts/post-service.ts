@@ -58,7 +58,7 @@ import { processCommunityJobById } from "../communities/jobs/runner"
 import { getBackgroundCommunityJobRepository } from "../communities/jobs/background-job-repository"
 import { SONG_CONTENT_HASH_VERIFICATION_PENDING_ERROR } from "../communities/jobs/post-publish-finalize-handler"
 import { conflictError, eligibilityFailed, internalError, notFoundError, providerUnavailable } from "../errors"
-import { nowIso } from "../helpers"
+import { genericDigitalGoodsEnabled, learningDecksEnabled, nowIso } from "../helpers"
 import { withBackgroundControlPlaneClients } from "../runtime-deps"
 import type { DbExecutor } from "../db-helpers"
 import type { Env } from "../../env"
@@ -473,6 +473,14 @@ export async function createPost(input: {
   const community = await loadCommunityProjection(input.env, input.communityRepository, communityRow)
 
   assertPostCreateRequest(input.body, input.communityId)
+  if (input.body.post_type === "file" || input.body.post_type === "deck") {
+    if (!genericDigitalGoodsEnabled(input.env)) {
+      throw notFoundError("Post type not found")
+    }
+    if (input.body.post_type === "deck" && !learningDecksEnabled(input.env)) {
+      throw notFoundError("Post type not found")
+    }
+  }
 
   const db = await postCommunityWriteOpenerForRuntime(input.env, input.communityRepository, input.communityId)
   try {

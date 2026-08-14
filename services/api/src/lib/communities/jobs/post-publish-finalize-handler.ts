@@ -668,6 +668,21 @@ async function finalizeGenericDigitalGoodsPost(input: {
       now,
     })
   }
+  const postModerationFailure = postModerationPublishFailure({
+    analysisState: post.analysis_state,
+  })
+  if (postModerationFailure) {
+    return await markPostPublishFinalizeFailed({
+      client,
+      communityRepository: jobInput.communityRepository,
+      communityId,
+      postId: post.post_id,
+      failureCode: postModerationFailure.code,
+      failureMessage: postModerationFailure.message,
+      retryable: postModerationFailure.retryable,
+      now,
+    })
+  }
 
   const controlPlaneClient = dependencies.getControlPlaneClient(jobInput.env)
   let contentBlobId = post.post_type === "file"

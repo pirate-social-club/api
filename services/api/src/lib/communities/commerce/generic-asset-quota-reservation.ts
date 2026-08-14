@@ -73,6 +73,23 @@ async function findReservation(input: {
   return row ? reservationFromRow(row) : null
 }
 
+export async function findGenericAssetQuotaReservationByAssetId(input: {
+  client: DbExecutor
+  assetId: string
+}): Promise<GenericAssetQuotaReservation | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT ${RESERVATION_COLUMNS}
+      FROM generic_asset_quota_reservations
+      WHERE asset_id = ?1
+      ORDER BY created_at DESC, reservation_id DESC
+      LIMIT 1
+    `,
+    args: [input.assetId],
+  })
+  return row ? reservationFromRow(row) : null
+}
+
 function assertReservationRequest(input: {
   reservedBytes: number
   reservationKey: string

@@ -29,7 +29,10 @@ import type { AssetRow } from "./row-types"
 import { assertLegacyMediaAsset } from "./asset-kind-policy"
 import { isGenericAssetKind } from "./asset-kind-policy"
 import { getActivePrimaryAssetPayload } from "./generic-asset-repository"
-import { reconcileGenericAssetBytes } from "./generic-asset-quota-reservation"
+import {
+  findGenericAssetQuotaReservationByAssetId,
+  reconcileGenericAssetBytes,
+} from "./generic-asset-quota-reservation"
 import { claimOwnedReadyContentBlob } from "../../content-blobs/content-blob-repository"
 import {
   assertAssetNotBlockedByRightsHold,
@@ -481,9 +484,19 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           asset_id: asset.asset_id,
         })
       }
+      const reservation = await findGenericAssetQuotaReservationByAssetId({
+        client: controlPlaneClient,
+        assetId: asset.asset_id,
+      })
+      if (!reservation) {
+        throw providerUnavailable("Generic asset quota reservation is unavailable", {
+          reason: "generic_quota_reservation_missing",
+          asset_id: asset.asset_id,
+        })
+      }
       await reconcileGenericAssetBytes({
         client: controlPlaneClient,
-        reservationId: `gar_${asset.source_post_id}`,
+        reservationId: reservation.reservation_id,
         actualBytes: plaintextBytes + ciphertextBytes,
         plaintextBytes,
         ciphertextBytes,

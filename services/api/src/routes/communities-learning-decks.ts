@@ -1,12 +1,14 @@
 import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
-import { badRequestError } from "../lib/errors"
+import { badRequestError, notFoundError } from "../lib/errors"
+import { learningDecksEnabled } from "../lib/helpers"
 import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { requireMemberAccess } from "../lib/communities/community-content-access"
 import {
   commitLearningDeckCsv,
   createLearningDeckDraft,
   getLearningDeckDraft,
+  getPublishedLearningDeckByAsset,
   previewLearningDeckCsv,
   retireLearningDeckCard,
   upsertLearningDeckCard,
@@ -16,6 +18,7 @@ import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
 } from "./communities-route-helpers"
+import { decodePublicAssetId } from "../lib/public-ids"
 import {
   createLearningDeckSession,
   getLearningSession,
@@ -80,6 +83,17 @@ function cardBody(body: CardRouteBody): {
 }
 
 export function registerCommunityLearningDeckRoutes(communities: Hono<AuthenticatedEnv>): void {
+  const requireLearningDeckFeature = async (c: Parameters<Parameters<typeof communities.use>[1]>[0], next: () => Promise<void>) => {
+    if (!learningDecksEnabled(c.env ?? {})) throw notFoundError("Learning deck not found")
+    await next()
+  }
+  // Hono's wildcard matcher is intentionally explicit here: the collection
+  // route without a trailing slash must be gated too, otherwise draft reads
+  // could remain available while deck writers are disabled.
+  communities.use("/:communityId/learning-decks", requireLearningDeckFeature)
+  communities.use("/:communityId/learning-decks/*", requireLearningDeckFeature)
+  communities.use("/:communityId/learning-study-sessions/*", requireLearningDeckFeature)
+
   communities.post("/:communityId/learning-decks", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<DraftRouteBody>(c, "Invalid learning deck payload")
@@ -92,6 +106,24 @@ export function registerCommunityLearningDeckRoutes(communities: Hono<Authentica
       description: optionalString(body.description, "description"),
     })
     return c.json(deck, 201)
+  })
+
+  communities.get("/:communityId/learning-decks/by-asset/:assetId", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
+    try {
+      await requireMemberAccess(db.client, communityId, actor.userId)
+      const published = await getPublishedLearningDeckByAsset({
+        client: db.client,
+        communityId,
+        assetId: decodePublicAssetId(c.req.param("assetId")),
+      })
+      // Deck metadata is safe to use for routing, but answers must only ever
+      // cross the review-session reveal boundary.
+      return c.json({ ...published, cards: [] }, 200)
+    } finally {
+      await db.close()
+    }
   })
 
   communities.get("/:communityId/learning-decks/:deckId", async (c) => {

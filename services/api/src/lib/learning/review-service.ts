@@ -22,7 +22,7 @@ type DeckAccess = {
   asset_id: string
   creator_user_id: string
   access_mode: "public" | "locked"
-  enforcement_state: "active" | "quarantined" | "blocked"
+  enforcement_state: "active" | "quarantined" | "blocked" | "missing"
 }
 
 type SessionRow = {
@@ -163,7 +163,7 @@ async function assertDeckAccess(input: {
   const row = await executeFirst(input.client, {
     sql: `
       SELECT d.learning_deck_id, v.learning_deck_version_id, d.creator_user_id,
-             a.asset_id, a.access_mode, enforcement.enforcement_state
+             a.asset_id, a.access_mode, COALESCE(enforcement.enforcement_state, 'missing') AS enforcement_state
       FROM learning_decks d
       JOIN learning_deck_versions v
         ON v.learning_deck_id = d.learning_deck_id
