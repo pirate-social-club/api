@@ -71,6 +71,9 @@ export async function publishGenericAssetClaim(input: {
   if (verifiedSizeBytes == null || !contentHash) {
     throw conflictError("Content blob is missing verified size or hash")
   }
+  if (!Number.isSafeInteger(input.reservedBytes) || input.reservedBytes < verifiedSizeBytes) {
+    throw conflictError("Generic asset quota reservation must cover the verified plaintext bytes")
+  }
 
   const claimed = await claimOwnedReadyContentBlob({
     client: input.controlPlaneClient,

@@ -168,7 +168,17 @@ export async function reconcileGenericAssetBytes(input: {
   packageBytes: number
   reconciledAt: string
 }): Promise<GenericAssetQuotaReservation> {
-  if (!Number.isSafeInteger(input.actualBytes) || input.actualBytes < 0) {
+  if (
+    !Number.isSafeInteger(input.actualBytes)
+    || input.actualBytes < 0
+    || !Number.isSafeInteger(input.plaintextBytes)
+    || input.plaintextBytes < 0
+    || !Number.isSafeInteger(input.ciphertextBytes)
+    || input.ciphertextBytes < 0
+    || !Number.isSafeInteger(input.packageBytes)
+    || input.packageBytes < 0
+    || input.actualBytes !== input.plaintextBytes + input.ciphertextBytes + input.packageBytes
+  ) {
     throw conflictError("Generic asset reconciled bytes must be non-negative")
   }
   const result = await input.client.execute({
