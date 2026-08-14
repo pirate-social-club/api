@@ -1,83 +1,30 @@
-pre_plan:
-  - action: http_get
-    items:
-      - url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.10/bun-linux-x64-baseline.zip
-        filename: bun-runtime.zip
-  - action: bun_get
-    path: services/shared
-    output: shared
-  - action: bun_get
-    path: services/contracts
-    output: contracts
 plan:
   - action: shell
     shell: |
       set -euo pipefail
-      grep -q 'node_modules/typescript/bin/tsc' /ci/src/.radicle/ambient.yaml
-      cache=/ci/cache/bun
-      bun_runtime="${cache}-runtime/bun"
-      mkdir -p "$cache"
-      if [[ ! -x "$bun_runtime" ]]; then
-        runtime_sha256=41201a8c5ee74a9dcbb1ce25a1104f1f929838b57a845aa78d98379b0ce7cde2
-        echo "$runtime_sha256  /ci/deps/bun-runtime.zip" | sha256sum -c -
-        temp=$(mktemp -d "$cache/.bun-runtime.XXXXXX")
-        unzip -q /ci/deps/bun-runtime.zip -d "$temp"
-        install -d "$(dirname "$bun_runtime")"
-        install -m 0755 "$temp/bun-linux-x64-baseline/bun" "$bun_runtime"
-        rm -rf -- "$temp"
-      fi
-      bun="$bun_runtime"
-      bun_bin_dir=$(dirname "$bun_runtime")
-      export PATH="$bun_bin_dir:$PATH"
+      grep -q 'shell-only' /ci/src/.radicle/ambient.yaml
 
-      import_bun_cache() {
-        # cache_version is Bun's hashed prerelease directory name.
-        local root="$1"
-        local manifest="/ci/deps/bun/$root/manifest.tsv"
-        while IFS=$'\t' read -r name version cache_version archive integrity; do
-          [[ "$name" == "name" ]] && continue
-          : "$integrity"
-          [[ -n "$name" && -n "$version" && -n "$cache_version" && -n "$archive" ]]
-          [[ "$cache_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-f]{16})?(\+[0-9a-f]{16})?$ ]]
-          local target="$cache/$name@$cache_version@@@1"
-          if [[ -f "$target/package.json" ]]; then
-            continue
-          fi
-          [[ ! -e "$target" ]] || {
-            echo "incomplete Bun cache entry exists: $target" >&2
-            exit 1
-          }
-          local archive_path="/ci/deps/bun/$root/$archive"
-          if [[ "$integrity" == sha512-* ]]; then
-            local actual_integrity
-            actual_integrity="sha512-$(openssl dgst -sha512 -binary "$archive_path" | base64 -w0)"
-            [[ "$actual_integrity" == "$integrity" ]] || {
-              echo "Bun cache integrity mismatch: $archive" >&2
-              exit 1
-            }
-          fi
-          local temp
-          temp=$(mktemp -d "$cache/.extract.XXXXXX")
-          tar -xzf "$archive_path" -C "$temp"
-          local package_json
-          package_json=$(find "$temp" -mindepth 1 -maxdepth 3 -type f -name package.json -print -quit)
-          [[ -n "$package_json" ]]
-          local package_dir="${package_json%/package.json}"
-          [[ "$package_dir" != "$temp" ]]
-          mkdir -p "$(dirname "$target")"
-          mv "$package_dir" "$target"
-          rm -rf -- "$temp"
-        done < "$manifest"
-      }
+      # This is intentionally a source/repository gate. The API service has
+      # file: dependencies on sibling packages and a large Bun toolchain;
+      # hosted CI owns typechecking, tests, builds, and integration checks.
+      test -f /ci/src/package.json
+      grep -q '"name": "@pirate/api-repo"' /ci/src/package.json
+      test ! -e /ci/src/node_modules
 
-      import_bun_cache shared
-      import_bun_cache contracts
+      for package in services/api services/shared services/contracts; do
+        test -f "/ci/src/$package/package.json"
+        test -f "/ci/src/$package/bun.lock"
+        test -d "/ci/src/$package/src"
+        test ! -e "/ci/src/$package/node_modules"
+      done
 
-      cd /ci/src/services/shared
-      "$bun" install --frozen-lockfile --ignore-scripts --prefer-offline --cache-dir "$cache"
-      "$bun" run check
+      grep -q '"name": "@pirate/api-service"' /ci/src/services/api/package.json
+      grep -q '"name": "@pirate/api-shared"' /ci/src/services/shared/package.json
+      grep -q '"name": "@pirate/api-contracts"' /ci/src/services/contracts/package.json
+      grep -q '"type": "module"' /ci/src/services/api/package.json
+      grep -q '"private": true' /ci/src/services/api/package.json
 
-      cd /ci/src/services/contracts
-      "$bun" install --frozen-lockfile --ignore-scripts --prefer-offline --cache-dir "$cache"
-      "$bun" node_modules/typescript/bin/tsc --noEmit
-      "$bun" node_modules/typescript/bin/tsc --noEmit -p tsconfig.consumer.json
+      find /ci/src/services/api/src -type f -name '*.ts' -print -quit | grep -q .
+      find /ci/src/services/shared/src -type f -name '*.ts' -print -quit | grep -q .
+      find /ci/src/services/contracts/src -type f -name '*.ts' -print -quit | grep -q .
+      echo 'shell-only API gate passed'
