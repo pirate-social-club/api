@@ -15,6 +15,13 @@ export function genericDigitalGoodsEnabled(env: {
   return envFlag(env.GENERIC_DIGITAL_GOODS_ENABLED, false)
 }
 
+export function learningDecksEnabled(env: {
+  GENERIC_DIGITAL_GOODS_ENABLED?: string
+  LEARNING_DECKS_ENABLED?: string
+}): boolean {
+  return genericDigitalGoodsEnabled(env) && envFlag(env.LEARNING_DECKS_ENABLED, false)
+}
+
 export function isLocalEnvironment(environment: string | undefined): boolean {
   const normalized = String(environment || "").trim().toLowerCase()
   return normalized === "" || ["dev", "development", "local", "test"].includes(normalized)

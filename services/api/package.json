@@ -85,8 +85,8 @@
     "@pirate-social-club/karaoke-runtime": "0.2.2",
     "@pirate/api-contracts": "file:../contracts",
     "@pirate/api-shared": "file:../shared",
-    "@pirate/content-source-protocol": "file:../content-source-protocol",
     "@pirate/bookings-domain": "file:../../../core/packages/bookings-domain",
+    "@pirate/content-source-protocol": "file:../content-source-protocol",
     "@pirate/hns-delegation": "file:../../../core/packages/hns-delegation",
     "@privy-io/node": "^0.11.0",
     "@selfxyz/core": "^1.2.0-beta.1",
@@ -99,6 +99,7 @@
     "hono": "^4.12.25",
     "jose": "^6.2.2",
     "pg": "^8.16.3",
+    "ts-fsrs": "6.0.0-beta.2",
     "viem": "^2.48.1"
   },
   "overrides": {

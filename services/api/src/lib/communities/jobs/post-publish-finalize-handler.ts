@@ -1,7 +1,7 @@
 import { getUserRepository } from "../../auth/repositories"
 import { openCommunityWriteClient } from "../community-read-access"
 import { nowIso } from "../../helpers"
-import { HttpError, internalError, notFoundError, providerUnavailable } from "../../errors"
+import { HttpError, conflictError, internalError, notFoundError, providerUnavailable } from "../../errors"
 import type { DbExecutor } from "../../db-helpers"
 import { createCommunityListingInTransaction } from "../commerce/listing-service"
 import { getListingRowByAssetId } from "../commerce/shared"
@@ -44,6 +44,11 @@ import { getAssetRow } from "../commerce/queries"
 import { assertAssetDeliveryAllowed } from "../commerce/asset-read-policy"
 import { genericDigitalGoodsEnabled } from "../../helpers"
 import { requireOwnedContentBlob } from "../../content-blobs/content-blob-repository"
+import { materializeGeneratedContentBlob } from "../../content-blobs/content-blob-service"
+import { canonicalLearningDeckPackage } from "../../learning/deck-package"
+import { getLearningDeckDraft } from "../../learning/deck-authoring-service"
+import { withTransaction } from "../../transactions"
+import type { Client } from "../../sql-client"
 
 type PostPublishFinalizeDependencies = {
   getControlPlaneClient: typeof getControlPlaneClient
@@ -92,6 +97,7 @@ type PublishOptions = {
     listing_id?: string | null
     reservation_id?: string | null
     reservation_key?: string | null
+    generated_content_blob_id?: string | null
   } | null
 }
 
@@ -663,9 +669,59 @@ async function finalizeGenericDigitalGoodsPost(input: {
     })
   }
 
-  const contentBlobId = post.post_type === "file"
+  const controlPlaneClient = dependencies.getControlPlaneClient(jobInput.env)
+  let contentBlobId = post.post_type === "file"
     ? publishOptions.file_upload?.trim()
     : publishOptions.learning_deck?.trim()
+  let deckPackage: Awaited<ReturnType<typeof canonicalLearningDeckPackage>> | null = null
+  let deckId: string | null = null
+  if (post.post_type === "deck") {
+    deckId = publishOptions.learning_deck?.trim() ?? null
+    if (!deckId) {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "deck_package_generation_failed",
+        failureMessage: "Learning deck draft is missing",
+        retryable: false,
+        now,
+      })
+    }
+    const draft = await getLearningDeckDraft({ client, communityId, deckId, userId: post.author_user_id ?? "" })
+    deckPackage = await canonicalLearningDeckPackage({
+      title: draft.deck.title,
+      description: draft.deck.description,
+      cards: draft.cards.map((card) => ({
+        cardId: card.cardId,
+        cardType: card.cardType,
+        prompt: card.prompt,
+        answer: card.answer,
+        tags: card.tags,
+      })),
+    })
+    const generatedContentBlobId = publishOptions.allocated_ids?.generated_content_blob_id?.trim() || `cbl_${post.post_id}_deck`
+    await mergePostPublishRequestOptions({
+      client,
+      communityId,
+      postId: post.post_id,
+      patch: { allocated_ids: { generated_content_blob_id: generatedContentBlobId } },
+      updatedAt: nowIso(),
+    })
+    const generated = await materializeGeneratedContentBlob({
+      env: jobInput.env,
+      client: controlPlaneClient,
+      communityId,
+      uploaderUserId: post.author_user_id ?? "",
+      contentBlobId: generatedContentBlobId,
+      bytes: new TextEncoder().encode(deckPackage.json),
+      filename: `learning-deck-${post.post_id}.json`,
+      mimeType: "application/json",
+      now,
+    })
+    contentBlobId = generated.blob.content_blob_id
+  }
   if (!contentBlobId) {
     return await markPostPublishFinalizeFailed({
       client,
@@ -674,18 +730,6 @@ async function finalizeGenericDigitalGoodsPost(input: {
       postId: post.post_id,
       failureCode: "payload_claim_failed",
       failureMessage: "Generic post is missing its content blob",
-      retryable: false,
-      now,
-    })
-  }
-  if (post.post_type === "deck") {
-    return await markPostPublishFinalizeFailed({
-      client,
-      communityRepository: jobInput.communityRepository,
-      communityId,
-      postId: post.post_id,
-      failureCode: "deck_package_generation_failed",
-      failureMessage: "Learning deck package generation is not enabled yet",
       retryable: false,
       now,
     })
@@ -704,7 +748,6 @@ async function finalizeGenericDigitalGoodsPost(input: {
   }
 
   const assetKind = post.post_type === "file" ? "download_file" as const : "learning_deck" as const
-  const controlPlaneClient = dependencies.getControlPlaneClient(jobInput.env)
   let postWithAsset = await assignPostAssetIdIfMissing({
     executor: client,
     postId: post.post_id,
@@ -838,6 +881,58 @@ async function finalizeGenericDigitalGoodsPost(input: {
   }
   if (!asset) {
     throw internalError("Generic asset is missing after finalize claim")
+  }
+
+  if (post.post_type === "deck" && deckId && deckPackage) {
+    await withTransaction(client as unknown as Client, "write", async (tx) => {
+      const deckRow = await tx.execute({
+        sql: `
+          SELECT learning_deck_id, active_draft_version, status, published_version, asset_id
+          FROM learning_decks
+          WHERE community_id = ?1 AND learning_deck_id = ?2
+          LIMIT 1
+        `,
+        args: [communityId, deckId],
+      })
+      const deck = deckRow.rows[0]
+      if (!deck) throw notFoundError("Learning deck not found")
+      const status = String(deck.status)
+      const activeVersion = Number(deck.active_draft_version)
+      if (status === "published") {
+        if (String(deck.asset_id) !== asset.asset_id) throw internalError("Published learning deck asset does not match post asset")
+        return
+      }
+      const versionUpdate = await tx.execute({
+        sql: `
+          UPDATE learning_deck_versions
+          SET status = 'published', content_hash = ?1, card_count = ?2,
+              canonical_blob_ref = ?3, validation_error_json = NULL,
+              published_at = ?4, updated_at = ?4
+          WHERE learning_deck_id = ?5 AND version = ?6 AND status IN ('draft', 'ready')
+        `,
+        args: [deckPackage.contentHash, deckPackage.deck.cards.length, contentBlobId, now, deckId, activeVersion],
+      })
+      if ((versionUpdate.rowsAffected ?? 0) !== 1) {
+        const existingVersion = await tx.execute({
+          sql: `SELECT status, content_hash, canonical_blob_ref FROM learning_deck_versions WHERE learning_deck_id = ?1 AND version = ?2 LIMIT 1`,
+          args: [deckId, activeVersion],
+        })
+        const version = existingVersion.rows[0]
+        if (!version || String(version.status) !== "published" || String(version.canonical_blob_ref) !== contentBlobId) {
+          throw conflictError("Learning deck version is not publishable")
+        }
+      }
+      const deckUpdate = await tx.execute({
+        sql: `
+          UPDATE learning_decks
+          SET status = 'published', source_post_id = ?1, asset_id = ?2,
+              published_version = ?3, updated_at = ?4
+          WHERE learning_deck_id = ?5 AND community_id = ?6 AND status = 'draft'
+        `,
+        args: [post.post_id, asset.asset_id, activeVersion, now, deckId, communityId],
+      })
+      if ((deckUpdate.rowsAffected ?? 0) !== 1) throw conflictError("Learning deck publication changed; retry")
+    })
   }
 
   await enqueueLockedAssetDeliveryIfRequested({

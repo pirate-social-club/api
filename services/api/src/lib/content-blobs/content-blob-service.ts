@@ -10,6 +10,7 @@ import {
 } from "../communities/community-content-access"
 import type { CommunityReadRepository } from "../communities/db-community-repository"
 import type { CommunityDatabaseBindingRepository } from "../communities/community-repository-types"
+import type { Client } from "../sql-client"
 import { sha256Hex } from "../crypto"
 import {
   dispatchContentSecurityScanJob,
@@ -21,6 +22,7 @@ import { getControlPlaneClient } from "../runtime-deps"
 import {
   beginProxyContentUpload,
   createContentBlobIntent,
+  findOwnedContentBlob,
   markProxyContentBlobUploaded,
   releaseProxyContentUpload,
   requireOwnedContentBlob,
@@ -34,6 +36,7 @@ import {
   type CreateContentBlobRequest,
 } from "./content-blob-policy"
 import { serializeContentBlob, type ContentBlob } from "./content-blob-serialization"
+import type { OwnedContentBlob } from "./content-blob-types"
 import {
   assertContentSourceBrokerConfigured,
   CONTENT_SOURCE_STORAGE_ENDPOINT,
@@ -254,6 +257,102 @@ export async function uploadContentBlobBytes(input: {
       contentUploadSessionId: session.content_upload_session_id,
       updatedAt: nowIso(),
     }).catch(() => undefined)
+    throw error
+  }
+}
+
+/** Materialize a server-generated package through the ordinary broker/scanner rails. */
+export async function materializeGeneratedContentBlob(input: {
+  env: Env
+  client: Client
+  communityId: string
+  uploaderUserId: string
+  contentBlobId: string
+  bytes: Uint8Array<ArrayBuffer>
+  filename: string
+  mimeType: string
+  now?: string
+}): Promise<OwnedContentBlob> {
+  assertContentSourceBrokerConfigured(input.env)
+  if (input.bytes.byteLength < 1 || input.bytes.byteLength > CONTENT_BLOB_PROXY_MAX_BYTES) {
+    throw badRequestError("Generated content package exceeds the 50 MiB limit")
+  }
+  const now = input.now ?? nowIso()
+  const hashHex = await sha256Hex(input.bytes)
+  let owned = await findOwnedContentBlob({
+    client: input.client,
+    communityId: input.communityId,
+    uploaderUserId: input.uploaderUserId,
+    contentBlobId: input.contentBlobId,
+  })
+  if (!owned) {
+    owned = await createContentBlobIntent({
+      client: input.client,
+      intent: {
+        contentBlobId: input.contentBlobId,
+        contentUploadSessionId: makeId("cus"),
+        communityId: input.communityId,
+        uploaderUserId: input.uploaderUserId,
+        validationProfile: "download_file_v1",
+        declaredFilename: input.filename,
+        declaredMimeType: input.mimeType,
+        declaredSizeBytes: input.bytes.byteLength,
+        declaredContentHash: `0x${hashHex}`,
+        storageRef: `service://content-source-broker/${input.contentBlobId}`,
+        uploadMode: "proxy",
+        objectKey: contentSourceObjectKey(input.contentBlobId),
+        providerUploadId: null,
+        partSizeBytes: null,
+        totalParts: null,
+        bucket: CONTENT_SOURCE_STORAGE_NAMESPACE,
+        storageEndpoint: CONTENT_SOURCE_STORAGE_ENDPOINT,
+        expiresAt: addMilliseconds(now, CONTENT_BLOB_SESSION_TTL_MS),
+        createdAt: now,
+      },
+    })
+  }
+  if (["ready", "verifying", "uploaded"].includes(owned.blob.status)) return owned
+  const session = owned.uploadSession
+  if (owned.blob.status !== "pending_upload" || !session || session.upload_mode !== "proxy") {
+    throw conflictError("Generated content package upload is not resumable")
+  }
+  const scanJob = await prepareInitialContentSecurityScan({ env: input.env, client: input.client, scanJobId: makeId("csj") })
+  const locked = await beginProxyContentUpload({
+    client: input.client,
+    communityId: input.communityId,
+    uploaderUserId: input.uploaderUserId,
+    contentBlobId: input.contentBlobId,
+    contentUploadSessionId: session.content_upload_session_id,
+    updatedAt: now,
+  })
+  if (!locked) {
+    const refreshed = await findOwnedContentBlob({ client: input.client, communityId: input.communityId, uploaderUserId: input.uploaderUserId, contentBlobId: input.contentBlobId })
+    if (refreshed && ["ready", "verifying", "uploaded"].includes(refreshed.blob.status)) return refreshed
+    throw conflictError("Generated content package upload is already in progress")
+  }
+  try {
+    const storage = await storeContentSource({ env: input.env, contentBlobId: input.contentBlobId, bytes: input.bytes, sha256: hashHex })
+    const uploaded = await markProxyContentBlobUploaded({
+      client: input.client,
+      communityId: input.communityId,
+      uploaderUserId: input.uploaderUserId,
+      contentBlobId: input.contentBlobId,
+      contentUploadSessionId: session.content_upload_session_id,
+      verifiedSizeBytes: input.bytes.byteLength,
+      verifiedContentHash: storage.contentHash,
+      storageProvider: storage.storageProvider,
+      storageBucket: storage.storageBucket,
+      storageObjectKey: storage.storageObjectKey,
+      storageEndpoint: storage.storageEndpoint,
+      gatewayUrl: null,
+      ipfsCid: null,
+      completedAt: now,
+      scanJob: scanJob ?? undefined,
+    })
+    if (scanJob) await dispatchContentSecurityScanJob({ env: input.env, client: input.client, scanJobId: scanJob.scanJobId, dispatchedAt: nowIso() })
+    return uploaded
+  } catch (error) {
+    await releaseProxyContentUpload({ client: input.client, uploaderUserId: input.uploaderUserId, contentBlobId: input.contentBlobId, contentUploadSessionId: session.content_upload_session_id, updatedAt: nowIso() }).catch(() => undefined)
     throw error
   }
 }

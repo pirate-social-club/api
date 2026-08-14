@@ -526,7 +526,7 @@ type CrosspostSource = {
   post_id: string
   community_id: string
   captured_at?: string | null
-  post_type?: "text" | "image" | "video" | "link" | "song" | null
+  post_type?: "text" | "image" | "video" | "link" | "song" | "file" | "deck" | null
   title?: string | null
   community_label?: string | null
   community_route_slug?: string | null
