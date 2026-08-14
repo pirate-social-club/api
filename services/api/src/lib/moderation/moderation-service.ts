@@ -176,7 +176,9 @@ async function enqueueGenericAssetBuyerRescan(input: {
   const control = getControlPlaneClient(input.env)
   const release = await findActiveContentSecurityScannerRelease({
     executor: control,
-    securityScanProfile: asset.asset_kind === "learning_deck" ? "deck_import_csv_v1" : "download_file_v1",
+    // Published deck payloads are the server-generated canonical package and
+    // therefore use the same package scanner profile as downloadable files.
+    securityScanProfile: "download_file_v1",
   })
   if (!release) {
     logPipelineInfo("[moderation] buyer report rescan deferred: no active scanner release", {
