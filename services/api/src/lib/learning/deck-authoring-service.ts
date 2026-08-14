@@ -289,9 +289,11 @@ export async function upsertLearningDeckCard(input: {
   if (issues.length) throw badRequestError(issues[0]?.message ?? "Invalid learning card")
   const contentHash = await cardContentHash(candidate)
   const now = nowIso()
-  const nextOrdinal = input.ordinal == null
-    ? (await loadCards({ client: input.client, versionId: draft.version.learning_deck_version_id })).length
-    : Math.max(0, Math.trunc(input.ordinal))
+  const existingCards = await loadCards({ client: input.client, versionId: draft.version.learning_deck_version_id })
+  const nextOrdinal = input.ordinal == null ? existingCards.length : Math.max(0, Math.trunc(input.ordinal))
+  if (existingCards.some((card) => card.cardId !== cardId && card.ordinal === nextOrdinal)) {
+    throw badRequestError("ordinal is already occupied by another learning card")
+  }
   const promptJson = JSON.stringify({ type: "text", text: candidate.prompt.normalize("NFC") })
   const answerJson = JSON.stringify({ type: "text", text: candidate.answer.normalize("NFC") })
   const tagsJson = JSON.stringify([...(candidate.tags ?? [])].map((tag) => tag.normalize("NFC")).sort())

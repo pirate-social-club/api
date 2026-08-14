@@ -268,17 +268,18 @@ export async function materializeGeneratedContentBlob(input: {
   communityId: string
   uploaderUserId: string
   contentBlobId: string
-  bytes: Uint8Array<ArrayBuffer>
+  bytes: Uint8Array
   filename: string
   mimeType: string
   now?: string
 }): Promise<OwnedContentBlob> {
   assertContentSourceBrokerConfigured(input.env)
-  if (input.bytes.byteLength < 1 || input.bytes.byteLength > CONTENT_BLOB_PROXY_MAX_BYTES) {
+  const bytes = new Uint8Array(input.bytes)
+  if (bytes.byteLength < 1 || bytes.byteLength > CONTENT_BLOB_PROXY_MAX_BYTES) {
     throw badRequestError("Generated content package exceeds the 50 MiB limit")
   }
   const now = input.now ?? nowIso()
-  const hashHex = await sha256Hex(input.bytes)
+  const hashHex = await sha256Hex(bytes)
   let owned = await findOwnedContentBlob({
     client: input.client,
     communityId: input.communityId,
@@ -296,7 +297,7 @@ export async function materializeGeneratedContentBlob(input: {
         validationProfile: "download_file_v1",
         declaredFilename: input.filename,
         declaredMimeType: input.mimeType,
-        declaredSizeBytes: input.bytes.byteLength,
+        declaredSizeBytes: bytes.byteLength,
         declaredContentHash: `0x${hashHex}`,
         storageRef: `service://content-source-broker/${input.contentBlobId}`,
         uploadMode: "proxy",
@@ -331,14 +332,14 @@ export async function materializeGeneratedContentBlob(input: {
     throw conflictError("Generated content package upload is already in progress")
   }
   try {
-    const storage = await storeContentSource({ env: input.env, contentBlobId: input.contentBlobId, bytes: input.bytes, sha256: hashHex })
+    const storage = await storeContentSource({ env: input.env, contentBlobId: input.contentBlobId, bytes, sha256: hashHex })
     const uploaded = await markProxyContentBlobUploaded({
       client: input.client,
       communityId: input.communityId,
       uploaderUserId: input.uploaderUserId,
       contentBlobId: input.contentBlobId,
       contentUploadSessionId: session.content_upload_session_id,
-      verifiedSizeBytes: input.bytes.byteLength,
+      verifiedSizeBytes: bytes.byteLength,
       verifiedContentHash: storage.contentHash,
       storageProvider: storage.storageProvider,
       storageBucket: storage.storageBucket,

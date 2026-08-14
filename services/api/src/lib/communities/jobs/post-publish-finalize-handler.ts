@@ -705,7 +705,7 @@ async function finalizeGenericDigitalGoodsPost(input: {
     deckPackage = await canonicalLearningDeckPackage({
       title: draft.deck.title,
       description: draft.deck.description,
-      cards: draft.cards.map((card) => ({
+      cards: draft.cards.filter((card) => card.retiredAt == null).map((card) => ({
         cardId: card.cardId,
         cardType: card.cardType,
         prompt: card.prompt,
@@ -727,7 +727,7 @@ async function finalizeGenericDigitalGoodsPost(input: {
       communityId,
       uploaderUserId: post.author_user_id ?? "",
       contentBlobId: generatedContentBlobId,
-      bytes: new TextEncoder().encode(deckPackage.json),
+      bytes: deckPackage.bytes,
       filename: `learning-deck-${post.post_id}.json`,
       mimeType: "application/json",
       now,
