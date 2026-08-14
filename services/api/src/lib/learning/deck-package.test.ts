@@ -35,6 +35,10 @@ describe("learning deck package", () => {
       title: "Deck",
       cards: [card({ prompt: "x".repeat(16 * 1024 + 1) })],
     }).map((issue) => issue.code)).toContain("text_too_long")
+    expect(validateLearningDeck({
+      title: "Deck",
+      cards: [card({ answer: "javascript:alert(1)" })],
+    }).map((issue) => issue.code)).toContain("active_content_detected")
   })
 
   test("requires exactly one c1 cloze group", () => {

@@ -27,6 +27,8 @@ export type GenericAssetReconciliationSummary = {
   blob_without_payload: number
   payload_without_claim: number
   quarantined: number
+  enforcement_repairs: number
+  enforcement_conflicts: number
   errors: number
 }
 
@@ -41,6 +43,83 @@ type GenericPayload = {
   contentHash: string
   sizeBytes: number
   enforcementState: "active" | "quarantined" | "blocked" | null
+}
+
+type EnforcementAction = {
+  moderationActionId: string
+  actionType: string
+  nextPostStatus: GenericPayload["postStatus"]
+  nextAssetEnforcementState: "active" | "quarantined" | "blocked"
+  evidenceRef: string
+}
+
+function validEnforcementTransition(action: EnforcementAction): boolean {
+  if (action.actionType === "hide" || action.actionType === "quarantine_asset") {
+    return action.nextPostStatus === "hidden" && action.nextAssetEnforcementState === "quarantined"
+  }
+  if (action.actionType === "remove" || action.actionType === "block_asset") {
+    return action.nextPostStatus === "removed" && action.nextAssetEnforcementState === "blocked"
+  }
+  if (action.actionType === "restore" || action.actionType === "restore_asset") {
+    return action.nextPostStatus === "published" && action.nextAssetEnforcementState === "active"
+  }
+  return false
+}
+
+async function repairEnforcementProjection(input: {
+  env: Env
+  repository: CommunityDatabaseBindingRepository
+  payload: GenericPayload
+  action: EnforcementAction
+  now: string
+}): Promise<boolean> {
+  if (!validEnforcementTransition(input.action)) return false
+  const db = await openCommunityWriteClient(input.env, input.repository, input.payload.communityId)
+  try {
+    const latest = await executeFirst(db.client, {
+      sql: `
+        SELECT moderation_action_id, action_type, next_post_status,
+               next_asset_enforcement_state, evidence_ref
+        FROM moderation_actions
+        WHERE asset_id = ?1 AND post_id = ?2
+        ORDER BY created_at DESC, moderation_action_id DESC
+        LIMIT 1
+      `,
+      args: [input.payload.assetId, input.payload.postId],
+    })
+    if (!latest || String((latest as Record<string, unknown>).moderation_action_id) !== input.action.moderationActionId) {
+      return false
+    }
+    await withTransaction(db.client, "write", async (tx) => {
+      if (input.payload.postStatus !== input.action.nextPostStatus) {
+        await tx.execute({
+          sql: `
+            UPDATE posts
+            SET status = ?1, updated_at = ?2
+            WHERE post_id = ?3 AND status = ?4
+          `,
+          args: [input.action.nextPostStatus, input.now, input.payload.postId, input.payload.postStatus],
+        })
+      }
+      if (input.payload.enforcementState !== input.action.nextAssetEnforcementState) {
+        await setAssetModerationEnforcement({
+          executor: tx,
+          assetId: input.payload.assetId,
+          moderationActionId: input.action.moderationActionId,
+          enforcementState: input.action.nextAssetEnforcementState,
+          reasonCode: "enforcement_projection_repair",
+          evidenceRef: input.action.evidenceRef,
+          expectedEnforcementState: input.payload.enforcementState,
+          allowMissingInsert: input.payload.enforcementState === null,
+          now: input.now,
+        })
+      }
+    })
+    return input.payload.postStatus !== input.action.nextPostStatus
+      || input.payload.enforcementState !== input.action.nextAssetEnforcementState
+  } finally {
+    db.close()
+  }
 }
 
 async function quarantineMismatchedPayload(input: {
@@ -126,6 +205,8 @@ export async function reconcileGenericAssetPayloads(input: {
     blob_without_payload: 0,
     payload_without_claim: 0,
     quarantined: 0,
+    enforcement_repairs: 0,
+    enforcement_conflicts: 0,
     errors: 0,
   }
   const control = getControlPlaneClient(input.env)
@@ -177,6 +258,30 @@ export async function reconcileGenericAssetPayloads(input: {
         }
         summary.payloads += 1
         payloadRefs.add(payload.payloadRef)
+        const actionRow = await executeFirst(db.client, {
+          sql: `
+            SELECT moderation_action_id, action_type, next_post_status,
+                   next_asset_enforcement_state, evidence_ref
+            FROM moderation_actions
+            WHERE asset_id = ?1 AND post_id = ?2
+            ORDER BY created_at DESC, moderation_action_id DESC
+            LIMIT 1
+          `,
+          args: [payload.assetId, payload.postId],
+        })
+        const action = actionRow
+          ? {
+            moderationActionId: String((actionRow as Record<string, unknown>).moderation_action_id),
+            actionType: String((actionRow as Record<string, unknown>).action_type),
+            nextPostStatus: String((actionRow as Record<string, unknown>).next_post_status) as GenericPayload["postStatus"],
+            nextAssetEnforcementState: String((actionRow as Record<string, unknown>).next_asset_enforcement_state) as EnforcementAction["nextAssetEnforcementState"],
+            evidenceRef: String((actionRow as Record<string, unknown>).evidence_ref ?? "generic_asset_reconciliation"),
+          } satisfies EnforcementAction
+          : null
+        if (action && !validEnforcementTransition(action)) {
+          summary.enforcement_conflicts += 1
+          continue
+        }
         const blob = await executeFirst(control, {
           sql: `
             SELECT community_id, uploader_user_id, status, security_scan_state,
@@ -218,6 +323,25 @@ export async function reconcileGenericAssetPayloads(input: {
             console.warn("[generic-asset-reconciler] quarantine failed", error)
           }
           continue
+        }
+        if (action && (payload.postStatus !== action.nextPostStatus || payload.enforcementState !== action.nextAssetEnforcementState)) {
+          if (action.nextAssetEnforcementState === "active"
+            && (blobValue.status !== "ready" || blobValue.security_scan_state !== "clean")) {
+            summary.enforcement_conflicts += 1
+            continue
+          }
+          try {
+            if (await repairEnforcementProjection({
+              env: input.env,
+              repository,
+              payload,
+              action,
+              now: nowIso(),
+            })) summary.enforcement_repairs += 1
+          } catch (error) {
+            summary.enforcement_conflicts += 1
+            console.warn("[generic-asset-reconciler] enforcement repair failed", error)
+          }
         }
         if (blobValue.claim_kind === "asset_payload" && blobValue.claim_ref === payload.assetId) continue
         if (blobValue.claim_kind !== null && blobValue.claim_kind !== undefined) {

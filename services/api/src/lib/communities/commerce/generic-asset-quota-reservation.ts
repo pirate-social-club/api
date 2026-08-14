@@ -182,7 +182,12 @@ export async function reserveGenericAssetBytes(input: {
         return resumed
       }
       const raced = await findReservation(input)
-      if (raced) return raced
+      if (raced) {
+        if (raced.status === "released" || raced.status === "failed") {
+          return reserveGenericAssetBytes(input)
+        }
+        return raced
+      }
     }
     return existing
   }

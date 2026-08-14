@@ -71,6 +71,43 @@ function buildPublicAssetContentPath(communityId: string, assetId: string): stri
   return `/public-communities/${encodeURIComponent(`com_${communityId}`)}/assets/${encodeURIComponent(`asset_${assetId}`)}/content`
 }
 
+function safeDownloadFilename(filename: string | null | undefined): {
+  ascii: string
+  encoded: string
+} {
+  const normalized = String(filename ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim()
+  const bounded = normalized.slice(0, 180) || "download.bin"
+  const ascii = bounded
+    .replace(/[^\x20-\x7e]/g, "_")
+    .replace(/[\\"\r\n]/g, "_")
+    .replace(/^\.+$/, "download.bin")
+    .slice(0, 120) || "download.bin"
+  return { ascii, encoded: encodeURIComponent(bounded) }
+}
+
+function withGenericDownloadHeaders(input: {
+  response: Response
+  filename: string
+  mimeType: string
+  sizeBytes: number
+  contentHash: string
+}): Response {
+  const filename = safeDownloadFilename(input.filename)
+  const headers = new Headers(input.response.headers)
+  headers.set("Content-Disposition", `attachment; filename="${filename.ascii}"; filename*=UTF-8''${filename.encoded}`)
+  headers.set("Content-Type", input.mimeType)
+  headers.set("Content-Length", String(input.sizeBytes))
+  headers.set("X-Content-Type-Options", "nosniff")
+  headers.set("X-Asset-Content-Hash", input.contentHash)
+  headers.set("ETag", `"sha256-${input.contentHash}"`)
+  headers.set("Cache-Control", "private, no-store")
+  return new Response(input.response.body, {
+    status: input.response.status,
+    statusText: input.response.statusText,
+    headers,
+  })
+}
+
 
 type AuthorizedAssetAccess = {
   asset: AssetRow
@@ -432,11 +469,25 @@ export async function fetchPublicCommunityAssetContent(input: {
       if (!asset.primary_content_ref) {
         throw notFoundError("Asset content is not ready")
       }
-      return await fetchPrimaryAssetContent({
+      const response = await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
         storageRef: asset.primary_content_ref,
       })
+      const payload = await resolveAssetPayloadDescriptor({
+        client: db.client,
+        asset,
+        notFoundMessage: "Asset content not found",
+      })
+      return payload
+        ? withGenericDownloadHeaders({
+            response,
+            filename: payload.display_filename ?? "download.bin",
+            mimeType: payload.mime_type,
+            sizeBytes: payload.size_bytes,
+            contentHash: payload.content_hash,
+          })
+        : response
     }
     if (!asset.locked_delivery_storage_ref) {
       throw notFoundError("Asset content is not ready")
@@ -477,11 +528,25 @@ export async function fetchCommunityAssetContent(input: {
       if (!asset.primary_content_ref) {
         throw notFoundError("Asset content is not ready")
       }
-      return await fetchPrimaryAssetContent({
+      const response = await fetchPrimaryAssetContent({
         env: input.env,
         communityId: input.communityId,
         storageRef: asset.primary_content_ref,
       })
+      const payload = await resolveAssetPayloadDescriptor({
+        client: db.client,
+        asset,
+        notFoundMessage: "Asset content not found",
+      })
+      return payload
+        ? withGenericDownloadHeaders({
+            response,
+            filename: payload.display_filename ?? "download.bin",
+            mimeType: payload.mime_type,
+            sizeBytes: payload.size_bytes,
+            contentHash: payload.content_hash,
+          })
+        : response
     }
     if (!asset.locked_delivery_storage_ref) {
       throw notFoundError("Asset content is not ready")

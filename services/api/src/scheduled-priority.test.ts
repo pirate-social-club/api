@@ -35,6 +35,7 @@ describe("scheduled priority ordering", () => {
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
       "process_community_jobs",
+      "process_community_publish_finalize",
     ])
   })
 
@@ -71,6 +72,7 @@ describe("scheduled priority ordering", () => {
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
       "process_community_jobs",
+      "process_community_publish_finalize",
       "reconcile_d1_provisioning",
     ])
   })
@@ -90,6 +92,7 @@ describe("scheduled priority ordering", () => {
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
       "process_community_jobs",
+      "process_community_publish_finalize",
     ])
   })
 
@@ -108,6 +111,7 @@ describe("scheduled priority ordering", () => {
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
       "process_community_jobs",
+      "process_community_publish_finalize",
       "reconcile_d1_provisioning",
       "revalidate_hns_namespaces",
     ])
@@ -128,6 +132,7 @@ describe("scheduled priority ordering", () => {
       "monitor_reward_campaign_treasury_solvency",
       "monitor_reward_campaigns",
       "process_community_jobs",
+      "process_community_publish_finalize",
       "reconcile_d1_provisioning",
       "observe_hns_roots",
       "revalidate_hns_namespaces",

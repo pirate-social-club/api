@@ -153,6 +153,11 @@ export function eligibleTelegramPost(projection: CommunityPostProjectionRow, pos
     && projection.visibility === "public"
     && post.status === "published"
     && post.visibility === "public"
+    // Generic goods need a dedicated outbound adapter that emits approved
+    // listing metadata and a paywall link. Until that exists, never turn a
+    // locked file/deck into an unreviewed channel post.
+    && post.post_type !== "file"
+    && post.post_type !== "deck"
     && post.age_gate_policy !== "18_plus"
     && post.content_safety_state !== "adult"
 }

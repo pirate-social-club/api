@@ -344,6 +344,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           client: input.client,
           asset,
           notFoundMessage: "Asset not found",
+          allowProcessingPost: true,
         })
       },
       onProgress: input.onProgress ?? null,
@@ -373,6 +374,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           client: input.client,
           asset,
           notFoundMessage: "Asset not found",
+          allowProcessingPost: true,
         })
         await input.client.execute({
           sql: `
@@ -662,6 +664,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     client: input.client,
     asset,
     notFoundMessage: "Asset not found",
+    allowProcessingPost: true,
   })
   await input.client.execute({
     sql: `

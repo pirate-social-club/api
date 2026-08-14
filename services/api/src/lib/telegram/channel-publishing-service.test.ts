@@ -160,6 +160,20 @@ describe("Telegram by-URL upload ceilings", () => {
 })
 
 describe("Telegram channel eligibility", () => {
+  test("does not publish generic goods before their outbound adapter exists", () => {
+    const projection = {
+      status: "published",
+      visibility: "public",
+    } as Parameters<typeof eligibleTelegramPost>[0]
+    for (const postType of ["file", "deck"]) {
+      expect(eligibleTelegramPost(projection, {
+        post_type: postType,
+        status: "published",
+        visibility: "public",
+      })).toBe(false)
+    }
+  })
+
   test("rejects private and adult projections", () => {
     const projection = {
       status: "published",

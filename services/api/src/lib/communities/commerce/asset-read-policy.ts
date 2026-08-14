@@ -44,11 +44,27 @@ export async function assertAssetDeliveryAllowed(input: {
   client: DbExecutor
   asset: AssetRow
   notFoundMessage: string
+  /** Publication/locked-delivery workers may inspect a still-processing post,
+   * but no buyer, creator, moderator, or public reader may deliver it. */
+  allowProcessingPost?: boolean
 }): Promise<void> {
   if (!isGenericAssetKind(input.asset.asset_kind)) return
 
   const enforcement = await getAssetEnforcement(input.client, input.asset.asset_id)
   if (!enforcement || enforcement.enforcement_state !== "active") {
+    throw notFoundError(input.notFoundMessage)
+  }
+  const postResult = await input.client.execute({
+    sql: `
+      SELECT status
+      FROM posts
+      WHERE post_id = ?1 AND community_id = ?2
+      LIMIT 1
+    `,
+    args: [input.asset.source_post_id, input.asset.community_id],
+  })
+  const postStatus = postResult.rows[0] && String((postResult.rows[0] as Record<string, unknown>).status)
+  if (postStatus !== "published" && !(input.allowProcessingPost && postStatus === "processing")) {
     throw notFoundError(input.notFoundMessage)
   }
   const payload = await getActivePrimaryAssetPayload(input.client, input.asset.asset_id)

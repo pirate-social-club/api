@@ -49,6 +49,7 @@ export type DeckValidationIssue = {
   | "text_too_long"
   | "too_many_tags"
   | "tag_invalid"
+  | "active_content_detected"
   | "cloze_group_invalid"
   message: string
   cardIndex?: number
@@ -80,6 +81,12 @@ function isUnsafeText(value: string): boolean {
   return false
 }
 
+function isActiveContentText(value: string): boolean {
+  return /<(?:script|iframe|object|embed)\b/iu.test(value)
+    || /(?:^|[\s"'])javascript\s*:/iu.test(value)
+    || /data\s*:\s*text\/html/iu.test(value)
+}
+
 function validateText(
   value: string,
   cardIndex: number | undefined,
@@ -95,6 +102,9 @@ function validateText(
   }
   if (isUnsafeText(normalized)) {
     return [{ code: "text_unsafe", message: `${field} contains unsupported control characters`, cardIndex, field }]
+  }
+  if (isActiveContentText(normalized)) {
+    return [{ code: "active_content_detected", message: `${field} contains active content`, cardIndex, field }]
   }
   return []
 }
@@ -123,6 +133,8 @@ export function validateLearningDeck(input: {
     issues.push({ code: "text_too_long", message: "title exceeds the 16 KiB limit", field: "title" })
   } else if (isUnsafeText(title)) {
     issues.push({ code: "text_unsafe", message: "title contains unsupported control characters", field: "title" })
+  } else if (isActiveContentText(title)) {
+    issues.push({ code: "active_content_detected", message: "title contains active content", field: "title" })
   }
   if (input.description != null) {
     const description = normalizeText(input.description)
@@ -130,6 +142,8 @@ export function validateLearningDeck(input: {
       issues.push({ code: "text_too_long", message: "description exceeds the 16 KiB limit", field: "description" })
     } else if (isUnsafeText(description)) {
       issues.push({ code: "text_unsafe", message: "description contains unsupported control characters", field: "description" })
+    } else if (isActiveContentText(description)) {
+      issues.push({ code: "active_content_detected", message: "description contains active content", field: "description" })
     }
   }
   if (!input.cards.length) issues.push({ code: "cards_required", message: "at least one card is required" })
@@ -160,6 +174,8 @@ export function validateLearningDeck(input: {
       const normalizedTag = normalizeText(tag)
       if (!normalizedTag.trim() || normalizedTag.length > 256 || isUnsafeText(normalizedTag)) {
         issues.push({ code: "tag_invalid", message: "tag is empty, too long, or contains unsupported characters", cardIndex, field: "tag" })
+      } else if (isActiveContentText(normalizedTag)) {
+        issues.push({ code: "active_content_detected", message: "tag contains active content", cardIndex, field: "tag" })
       }
     }
   })

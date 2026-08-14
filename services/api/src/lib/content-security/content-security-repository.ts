@@ -11,6 +11,46 @@ import type {
 } from "./content-security-types"
 import { contentSecurityScanResultMatchesJob } from "./content-security-types"
 
+export async function findCurrentContentPolicyDecision(input: {
+  executor: DbExecutor
+  contentBlobId: string
+  contentHash: string
+  sizeBytes: number
+  scanResultRef: string | null
+  securityScanProfile: string | null
+}): Promise<{ scanResultId: string; formatPolicyVersion: string } | null> {
+  if (!input.scanResultRef || !input.securityScanProfile) return null
+  const row = await executeFirst(input.executor, {
+    sql: `
+      SELECT results.scan_result_id, results.content_format_policy_version
+      FROM content_security_scan_results AS results
+      JOIN content_security_scanner_releases AS releases
+        ON releases.scanner_release_id = results.scanner_release_id
+      WHERE results.scan_result_id = ?1
+        AND results.content_blob_id = ?2
+        AND results.content_hash = ?3
+        AND results.size_bytes = ?4
+        AND results.security_scan_profile = ?5
+        AND results.outcome = 'clean'
+        AND results.content_format_outcome = 'allow'
+        AND releases.status = 'active'
+      LIMIT 1
+    `,
+    args: [
+      input.scanResultRef,
+      input.contentBlobId,
+      input.contentHash,
+      input.sizeBytes,
+      input.securityScanProfile,
+    ],
+  })
+  if (!row) return null
+  return {
+    scanResultId: requiredString(row, "scan_result_id"),
+    formatPolicyVersion: requiredString(row, "content_format_policy_version"),
+  }
+}
+
 function toRelease(row: unknown): ContentSecurityScannerRelease {
   return {
     scannerReleaseId: requiredString(row, "scanner_release_id"),

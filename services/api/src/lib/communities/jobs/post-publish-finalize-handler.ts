@@ -41,10 +41,12 @@ import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
 import { publishGenericAssetClaim } from "../commerce/generic-asset-publication"
 import { getAssetRow } from "../commerce/queries"
+import { getActivePrimaryAssetPayload } from "../commerce/generic-asset-repository"
 import { assertAssetDeliveryAllowed } from "../commerce/asset-read-policy"
 import { genericDigitalGoodsEnabled, learningDecksEnabled } from "../../helpers"
 import { requireOwnedContentBlob } from "../../content-blobs/content-blob-repository"
 import { materializeGeneratedContentBlob } from "../../content-blobs/content-blob-service"
+import { findCurrentContentPolicyDecision } from "../../content-security/content-security-repository"
 import { canonicalLearningDeckPackage } from "../../learning/deck-package"
 import { getLearningDeckDraft } from "../../learning/deck-authoring-service"
 import { withTransaction } from "../../transactions"
@@ -832,6 +834,20 @@ async function finalizeGenericDigitalGoodsPost(input: {
         content_blob_id: contentBlobId,
       })
     }
+    const policyDecision = await findCurrentContentPolicyDecision({
+      executor: controlPlaneClient,
+      contentBlobId: blob.content_blob_id,
+      contentHash: blob.verified_content_hash,
+      sizeBytes: blob.verified_size_bytes,
+      scanResultRef: blob.security_scan_result_ref,
+      securityScanProfile: blob.security_scan_profile,
+    })
+    if (!policyDecision) {
+      throw providerUnavailable("Content policy decision is unavailable", {
+        reason: "content_policy_decision_pending",
+        content_blob_id: blob.content_blob_id,
+      })
+    }
     if (blob.verified_size_bytes > GENERIC_LOCKED_PAYLOAD_MAX_BYTES) {
       return await markPostPublishFinalizeFailed({
         client,
@@ -908,6 +924,47 @@ async function finalizeGenericDigitalGoodsPost(input: {
   }
   if (!asset) {
     throw internalError("Generic asset is missing after finalize claim")
+  }
+  const activePayload = await getActivePrimaryAssetPayload(client, asset.asset_id)
+  if (!activePayload) {
+    throw providerUnavailable("Generic asset payload is unavailable", {
+      reason: "payload_policy_projection_pending",
+      asset_id: asset.asset_id,
+    })
+  }
+  const ownedPayloadBlob = await requireOwnedContentBlob({
+    client: controlPlaneClient,
+    communityId,
+    uploaderUserId: post.author_user_id ?? "",
+    contentBlobId: activePayload.content_blob_ref,
+  })
+  const payloadBlob = ownedPayloadBlob.blob
+  if (
+    payloadBlob.status !== "ready"
+    || payloadBlob.security_scan_state !== "clean"
+    || payloadBlob.verified_size_bytes == null
+    || !payloadBlob.verified_content_hash
+    || payloadBlob.verified_content_hash !== activePayload.content_hash
+    || payloadBlob.verified_size_bytes !== activePayload.size_bytes
+  ) {
+    throw providerUnavailable("Generic asset safety evidence is unavailable", {
+      reason: "payload_safety_evidence_pending",
+      asset_id: asset.asset_id,
+    })
+  }
+  const currentPolicyDecision = await findCurrentContentPolicyDecision({
+    executor: controlPlaneClient,
+    contentBlobId: payloadBlob.content_blob_id,
+    contentHash: payloadBlob.verified_content_hash,
+    sizeBytes: payloadBlob.verified_size_bytes,
+    scanResultRef: payloadBlob.security_scan_result_ref,
+    securityScanProfile: payloadBlob.security_scan_profile,
+  })
+  if (!currentPolicyDecision) {
+    throw providerUnavailable("Generic asset content policy evidence is unavailable", {
+      reason: "content_policy_decision_pending",
+      asset_id: asset.asset_id,
+    })
   }
 
   if (post.post_type === "deck" && deckId && deckPackage) {
@@ -994,6 +1051,7 @@ async function finalizeGenericDigitalGoodsPost(input: {
     client,
     asset,
     notFoundMessage: "Asset not found",
+    allowProcessingPost: true,
   })
 
   if (listingDraft) {

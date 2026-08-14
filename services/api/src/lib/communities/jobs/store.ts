@@ -144,9 +144,15 @@ export async function findNextRunnableCommunityJob(input: {
   communityId?: string | null
   maxAttempts?: number
   skipJobTypes?: CommunityJobType[] | null
+  onlyJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobRow | null> {
   const skipJobTypes = [...new Set(input.skipJobTypes ?? [])]
+  const onlyJobTypes = [...new Set(input.onlyJobTypes ?? [])]
   const skipJobTypePlaceholders = skipJobTypes.map((_, index) => `?${index + 4}`).join(", ")
+  const onlyJobTypeOffset = 4 + skipJobTypes.length
+  const onlyJobTypePlaceholders = onlyJobTypes
+    .map((_, index) => `?${index + onlyJobTypeOffset}`)
+    .join(", ")
   const row = await executeFirst(input.client, {
     sql: `
       SELECT ${COMMUNITY_JOB_SELECT_COLUMNS}
@@ -154,12 +160,19 @@ export async function findNextRunnableCommunityJob(input: {
       WHERE status IN ('queued', 'failed')
         AND (?1 IS NULL OR community_id = ?1)
         AND (available_at IS NULL OR available_at <= ?2)
-        AND (?3 IS NULL OR attempt_count < ?3)
-        ${skipJobTypes.length > 0 ? `AND job_type NOT IN (${skipJobTypePlaceholders})` : ""}
+      AND (?3 IS NULL OR attempt_count < ?3)
+      ${skipJobTypes.length > 0 ? `AND job_type NOT IN (${skipJobTypePlaceholders})` : ""}
+      ${onlyJobTypes.length > 0 ? `AND job_type IN (${onlyJobTypePlaceholders})` : ""}
       ORDER BY created_at ASC, job_id ASC
       LIMIT 1
     `,
-    args: [input.communityId ?? null, input.now, input.maxAttempts ?? null, ...skipJobTypes],
+    args: [
+      input.communityId ?? null,
+      input.now,
+      input.maxAttempts ?? null,
+      ...skipJobTypes,
+      ...onlyJobTypes,
+    ],
   })
 
   return row ? toCommunityJobRow(row) : null
