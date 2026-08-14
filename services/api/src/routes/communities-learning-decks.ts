@@ -1,20 +1,27 @@
 import { Hono } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
-import { badRequestError, notFoundError } from "../lib/errors"
-import { learningDecksEnabled } from "../lib/helpers"
+import { badRequestError, conflictError, notFoundError } from "../lib/errors"
+import { learningDecksEnabled, nowIso } from "../lib/helpers"
 import { openCommunityWriteClient } from "../lib/communities/community-read-access"
 import { requireMemberAccess } from "../lib/communities/community-content-access"
 import {
   commitLearningDeckCsv,
+  assertLearningDeckCsvImportOwned,
   createLearningDeckDraft,
   getLearningDeckDraft,
   getPublishedLearningDeckByAsset,
-  readLearningDeckCsvImport,
-  previewLearningDeckCsv,
+  type LearningDeckCsvPreview,
   retireLearningDeckCard,
   upsertLearningDeckCard,
   validateLearningDeckDraft,
 } from "../lib/learning/deck-authoring-service"
+import {
+  enqueueCommunityJob,
+  findLatestCommunityJobBySubjectAndType,
+  getCommunityJobById,
+  getLatestCommunityJobEvent,
+  type CommunityJobRow,
+} from "../lib/communities/jobs/store"
 import {
   getResolvedCommunityRouteContext,
   requireJsonBody,
@@ -39,6 +46,48 @@ type CardRouteBody = {
   answer?: unknown
   tags?: unknown
   ordinal?: unknown
+}
+
+type ImportJobPreviewResponse = {
+  import_job_id: string
+  status: CommunityJobRow["status"]
+  preview: LearningDeckCsvPreview | null
+  error: string | null
+}
+
+function readImportPreview(eventDetails: string | null): LearningDeckCsvPreview | null {
+  if (!eventDetails) return null
+  try {
+    const value = JSON.parse(eventDetails) as Partial<LearningDeckCsvPreview>
+    if (
+      !Array.isArray(value.headers)
+      || !Array.isArray(value.rows)
+      || !Array.isArray(value.errors)
+      || typeof value.row_count !== "number"
+      || typeof value.error_count !== "number"
+    ) return null
+    return value as LearningDeckCsvPreview
+  } catch {
+    return null
+  }
+}
+
+function importJobResponse(job: CommunityJobRow, preview: LearningDeckCsvPreview | null): ImportJobPreviewResponse {
+  return {
+    import_job_id: job.job_id,
+    status: job.status,
+    preview,
+    error: job.error_code,
+  }
+}
+
+function importJobOwner(job: CommunityJobRow): string | null {
+  try {
+    const payload = JSON.parse(job.payload_json ?? "{}") as { user_id?: unknown }
+    return typeof payload.user_id === "string" ? payload.user_id : null
+  } catch {
+    return null
+  }
 }
 
 function requiredString(value: unknown, field: string): string {
@@ -122,6 +171,28 @@ export function registerCommunityLearningDeckRoutes(communities: Hono<Authentica
       // Deck metadata is safe to use for routing, but answers must only ever
       // cross the review-session reveal boundary.
       return c.json({ ...published, cards: [] }, 200)
+    } finally {
+      await db.close()
+    }
+  })
+
+  communities.get("/:communityId/learning-decks/imports/:importJobId", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
+    try {
+      await requireMemberAccess(db.client, communityId, actor.userId)
+      const job = await getCommunityJobById({ client: db.client, jobId: c.req.param("importJobId") })
+      if (!job || job.community_id !== communityId || job.job_type !== "learning_deck_import_parse" || importJobOwner(job) !== actor.userId) {
+        throw notFoundError("Learning deck import not found")
+      }
+      const event = job.status === "succeeded"
+        ? await getLatestCommunityJobEvent({
+          client: db.client,
+          jobId: job.job_id,
+          checkpoint: "learning_deck_import_preview_ready",
+        })
+        : null
+      return c.json(importJobResponse(job, readImportPreview(event?.details_json ?? null)), 200)
     } finally {
       await db.close()
     }
@@ -237,31 +308,74 @@ export function registerCommunityLearningDeckRoutes(communities: Hono<Authentica
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const { content_blob_id: contentBlobId } = await requireJsonBody<{ content_blob_id?: unknown }>(c, "Invalid learning deck CSV payload")
     if (typeof contentBlobId !== "string") throw badRequestError("content_blob_id is required")
+    await assertLearningDeckCsvImportOwned({ env: c.env, communityId, contentBlobId, userId: actor.userId })
     const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
     try {
       await requireMemberAccess(db.client, communityId, actor.userId)
+      let job = await findLatestCommunityJobBySubjectAndType({
+        client: db.client,
+        jobType: "learning_deck_import_parse",
+        subjectType: "content_blob",
+        subjectId: contentBlobId,
+      })
+      if (!job || job.status === "failed") {
+        job = await enqueueCommunityJob({
+          client: db.client,
+          communityId,
+          jobType: "learning_deck_import_parse",
+          subjectType: "content_blob",
+          subjectId: contentBlobId,
+          payloadJson: JSON.stringify({ content_blob_id: contentBlobId, user_id: actor.userId }),
+          createdAt: nowIso(),
+        })
+      }
+      const event = job.status === "succeeded"
+        ? await getLatestCommunityJobEvent({
+          client: db.client,
+          jobId: job.job_id,
+          checkpoint: "learning_deck_import_preview_ready",
+        })
+        : null
+      return c.json(importJobResponse(job, readImportPreview(event?.details_json ?? null)), 200)
     } finally {
       await db.close()
     }
-    const csv = await readLearningDeckCsvImport({ env: c.env, communityId, contentBlobId, userId: actor.userId })
-    return c.json(previewLearningDeckCsv(csv), 200)
   })
 
   communities.post("/:communityId/learning-decks/:deckId/imports/commit", async (c) => {
     const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
     const body = await requireJsonBody<{
       content_blob_id?: unknown
+      import_job_id?: unknown
       prompt_column?: unknown
       answer_column?: unknown
       tags_column?: unknown
     }>(c, "Invalid learning deck CSV payload")
     if (typeof body.content_blob_id !== "string") throw badRequestError("content_blob_id is required")
+    if (typeof body.import_job_id !== "string") throw badRequestError("import_job_id is required")
     const promptColumn = Number(body.prompt_column)
     const answerColumn = Number(body.answer_column)
     const tagsColumn = body.tags_column == null ? null : Number(body.tags_column)
     const db = await openCommunityWriteClient(c.env, communityRepository, communityId)
     try {
       await requireMemberAccess(db.client, communityId, actor.userId)
+      const importJob = await getCommunityJobById({ client: db.client, jobId: body.import_job_id })
+      if (
+        !importJob
+        || importJob.community_id !== communityId
+        || importJob.job_type !== "learning_deck_import_parse"
+        || importJob.subject_id !== body.content_blob_id
+        || importJob.status !== "succeeded"
+        || importJobOwner(importJob) !== actor.userId
+      ) {
+        throw conflictError("Learning deck CSV import is not ready to commit")
+      }
+      const previewEvent = await getLatestCommunityJobEvent({
+        client: db.client,
+        jobId: importJob.job_id,
+        checkpoint: "learning_deck_import_preview_ready",
+      })
+      if (!previewEvent) throw conflictError("Learning deck CSV preview is unavailable")
       const deck = await commitLearningDeckCsv({
         env: c.env,
         client: db.client,

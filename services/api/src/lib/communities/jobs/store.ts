@@ -28,6 +28,7 @@ export type CommunityJobType =
   | "video_media_analysis"
   | "video_audio_catalog_unenroll"
   | "telegram_post_publish"
+  | "learning_deck_import_parse"
 type CommunityJobStatus = "queued" | "running" | "succeeded" | "failed"
 export type CommunityJobCheckpoint =
   | "attempt_started"
@@ -44,6 +45,7 @@ export type CommunityJobCheckpoint =
   | "royalty_registration_started"
   | "royalty_registration_waiting"
   | "royalty_registration_completed"
+  | "learning_deck_import_preview_ready"
   | "projection_sync_started"
   | "projection_sync_completed"
 
@@ -67,6 +69,15 @@ export type CommunityJobRow = {
   lease_expires_at: string | null
   created_at: string
   updated_at: string
+}
+
+export type CommunityJobEventRow = {
+  event_id: string
+  job_id: string
+  community_id: string
+  checkpoint: CommunityJobCheckpoint
+  details_json: string | null
+  created_at: string
 }
 
 const COMMUNITY_JOB_SELECT_COLUMNS = `
@@ -114,6 +125,34 @@ export async function getCommunityJobById(input: {
   })
 
   return row ? toCommunityJobRow(row) : null
+}
+
+export async function getLatestCommunityJobEvent(input: {
+  client: DbExecutor
+  jobId: string
+  checkpoint?: CommunityJobCheckpoint
+}): Promise<CommunityJobEventRow | null> {
+  const row = await executeFirst(input.client, {
+    sql: `
+      SELECT event_id, job_id, community_id, checkpoint, details_json, created_at
+      FROM community_job_events
+      WHERE job_id = ?1
+        AND (?2 IS NULL OR checkpoint = ?2)
+      ORDER BY created_at DESC, event_id DESC
+      LIMIT 1
+    `,
+    args: [input.jobId, input.checkpoint ?? null],
+  })
+  if (!row) return null
+  const value = row as Record<string, unknown>
+  return {
+    event_id: requiredString(value, "event_id"),
+    job_id: requiredString(value, "job_id"),
+    community_id: requiredString(value, "community_id"),
+    checkpoint: requiredString(value, "checkpoint") as CommunityJobCheckpoint,
+    details_json: stringOrNull(value.details_json),
+    created_at: requiredString(value, "created_at"),
+  }
 }
 
 export async function findLatestCommunityJobBySubjectAndType(input: {

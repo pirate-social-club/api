@@ -415,6 +415,39 @@ export function previewLearningDeckCsv(csv: string): DeckCsvParseResult {
   return parseLearningDeckCsv(csv)
 }
 
+export type LearningDeckCsvPreview = Pick<DeckCsvParseResult, "headers" | "rows" | "errors"> & {
+  row_count: number
+  error_count: number
+}
+
+export async function assertLearningDeckCsvImportOwned(input: {
+  env: Env
+  controlPlaneClient?: Client
+  communityId: string
+  contentBlobId: string
+  userId: string
+}): Promise<void> {
+  const owned = await requireOwnedContentBlob({
+    client: input.controlPlaneClient ?? getControlPlaneClient(input.env),
+    communityId: input.communityId,
+    uploaderUserId: input.userId,
+    contentBlobId: input.contentBlobId,
+  })
+  if (owned.blob.validation_profile !== "deck_import_csv_v1") {
+    throw notFoundError("Content blob not found")
+  }
+}
+
+export function boundedLearningDeckCsvPreview(result: DeckCsvParseResult): LearningDeckCsvPreview {
+  return {
+    headers: result.headers,
+    rows: result.rows.slice(0, 20),
+    errors: result.errors.slice(0, 100),
+    row_count: result.rows.length,
+    error_count: result.errors.length,
+  }
+}
+
 export async function readLearningDeckCsvImport(input: {
   env: Env
   controlPlaneClient?: Client
