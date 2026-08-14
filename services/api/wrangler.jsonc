@@ -905,8 +905,10 @@
         "STORY_COORDINATOR_FINALITY_PREFER_SAFE_BLOCK": "true",
         "STORY_COORDINATOR_BACKLOG_ALERT_MS": "600000",
         "STORY_COORDINATOR_RECONCILIATION_ALERT_MS": "300000",
-        "PIRATE_CHECKOUT_SOURCE_CHAIN_ID": "84532",
-        "PIRATE_CHECKOUT_USDC_TOKEN_ADDRESS": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        // Base mainnet. The USDC address is resolved from the chain id in
+        // checkout-config.ts; do not reintroduce a token override here.
+        "PIRATE_CHECKOUT_SOURCE_CHAIN_ID": "8453",
+        // TODO(bookings): still Base Sepolia — needs the same cutover.
         "PIRATE_BOOKING_SETTLEMENT_CHAIN_ID": "84532",
         "BOOKINGS_PAYMENT_REVERIFICATION_CRON_ENABLED": "true",
         "BASE_SEPOLIA_RPC_URL": "https://sepolia.base.org",
