@@ -84,7 +84,16 @@ anything:
 
 ## Current holds
 
-- **ACTIVE — 2026-08-10T12:56:32Z — `lit_rewards_cutover_session`** — Do not
+- **RELEASED — 2026-08-14T10:16:16Z — `workspace_owner` authorization** — The
+  prior rewards hold was explicitly released for the bounded relay diagnostic
+  window below. No rewards cutover action is part of this release.
+
+- **ACTIVE — 2026-08-14T10:16:16Z — `workspace_owner` — `5cb523a395b392474ec0b6aa41a72dd8bd6da72f` — expected end 2026-08-14T10:46:16Z** — Instrumented Privy relay
+  500 capture only. Deploy the instrumented relay branch, replay one disposable
+  fixture request while tailing, then restore the prior staging SHA and release
+  this hold.
+
+- **HISTORICAL — 2026-08-10T12:56:32Z — `lit_rewards_cutover_session`** — Do not
   deploy `pirate-api-staging` or run the Web `Release` workflow. Staging is
   intentionally left on API `bdae8fe70247fc9e9b1f68d581963864c98b4d3b`
   with the EOA settlement backend and EOA vault operator. API main

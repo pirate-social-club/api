@@ -9,6 +9,7 @@ import {
   type FollowRelayRequest,
 } from "../lib/efp-indexer/follow-sponsorship-relay"
 import { getControlPlaneClient } from "../lib/runtime-deps"
+import { requestIdForContext } from "../lib/request-correlation"
 
 const privyRelay = new Hono<AuthenticatedEnv>()
 privyRelay.use("*", authenticateAdminOrUser)
@@ -50,6 +51,7 @@ privyRelay.post("/", async (c) => {
     client: getControlPlaneClient(c.env),
     env: c.env,
     request,
+    diagnosticRequestId: requestIdForContext(c),
   })
   return c.json(result, 202)
 })

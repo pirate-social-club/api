@@ -1,6 +1,7 @@
 import type { Address, Hex } from "viem"
 
 import type { Env } from "../../env"
+import { sha256Hex } from "../crypto"
 import { badRequestError, conflictError, eligibilityFailed, rateLimited } from "../errors"
 import type { Client, QueryResult, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
@@ -88,6 +89,50 @@ function privyErrorMessage(payload: PrivyRelayPayload | null, status: number): s
 
 function transactionHash(payload: PrivyRelayPayload | null): string {
   return String(payload?.data?.hash ?? payload?.hash ?? "").toLowerCase()
+}
+
+type RelayDiagnosticStage =
+  | "validate"
+  | "resolve_wallet"
+  | "privy_request"
+  | "privy_response"
+  | "finalize"
+  | "response"
+
+async function relayDiagnosticContext(input: FollowRelayRequest, requestId?: string): Promise<{
+  request_id: string | null
+  intent_id_hash: string
+  wallet_id_hash: string
+  transaction_index: number
+  started_at_ms: number
+}> {
+  const [intentIdHash, walletIdHash] = await Promise.all([
+    sha256Hex(input.intentId).catch(() => "unavailable"),
+    sha256Hex(input.privyWalletId).catch(() => "unavailable"),
+  ])
+  return {
+    request_id: requestId ?? null,
+    intent_id_hash: intentIdHash,
+    wallet_id_hash: walletIdHash,
+    transaction_index: input.transactionIndex,
+    started_at_ms: Date.now(),
+  }
+}
+
+function logRelayDiagnostic(
+  context: Awaited<ReturnType<typeof relayDiagnosticContext>>,
+  stage: RelayDiagnosticStage,
+  outcome: "started" | "completed" | "error",
+  metadata: Record<string, unknown> = {},
+): void {
+  console.log(JSON.stringify({
+    event: "privy_relay_diagnostic",
+    stage,
+    outcome,
+    elapsed_ms: Date.now() - context.started_at_ms,
+    ...context,
+    ...metadata,
+  }))
 }
 
 export function privyFollowRequestId(intentId: string, transactionIndex: number): string {
@@ -452,7 +497,10 @@ export async function relaySponsoredFollowTransaction(input: {
   request: FollowRelayRequest
   now?: Date
   fetcher?: typeof fetch
+  diagnosticRequestId?: string
 }): Promise<{ txHash: Hex; consistency: "accepted_not_yet_reflected" }> {
+  const diagnostic = await relayDiagnosticContext(input.request, input.diagnosticRequestId)
+  logRelayDiagnostic(diagnostic, "validate", "started")
   if (!/^efw_[a-f0-9]{32}$/u.test(input.request.intentId)) throw badRequestError("Invalid follow intent")
   if (!Number.isSafeInteger(input.request.transactionIndex) || input.request.transactionIndex < 0) {
     throw badRequestError("Invalid follow transaction index")
@@ -467,16 +515,32 @@ export async function relaySponsoredFollowTransaction(input: {
     input.request.intentId,
     input.request.transactionIndex,
   )
-  await withTransaction(input.client, "write", (tx) => loadAndReserve({
-    tx,
-    env: input.env,
-    actorUserId: input.actorUserId,
-    request: input.request,
-    now,
-    config,
-  }))
+  logRelayDiagnostic(diagnostic, "validate", "completed", {
+    request_expiry_present: Boolean(input.request.requestExpiry),
+  })
+
+  logRelayDiagnostic(diagnostic, "resolve_wallet", "started")
+  try {
+    await withTransaction(input.client, "write", (tx) => loadAndReserve({
+      tx,
+      env: input.env,
+      actorUserId: input.actorUserId,
+      request: input.request,
+      now,
+      config,
+    }))
+  } catch (error) {
+    logRelayDiagnostic(diagnostic, "resolve_wallet", "error", {
+      error_code: error instanceof Error ? error.constructor.name : "unknown_error",
+    })
+    throw error
+  }
+  logRelayDiagnostic(diagnostic, "resolve_wallet", "completed")
 
   let response: Response
+  logRelayDiagnostic(diagnostic, "privy_request", "started", {
+    request_id_hash: await sha256Hex(requestId).catch(() => "unavailable"),
+  })
   try {
     response = await fetcher(
       `${apiUrl}/v1/wallets/${encodeURIComponent(input.request.privyWalletId)}/rpc`,
@@ -518,9 +582,20 @@ export async function relaySponsoredFollowTransaction(input: {
       request_id: requestId,
       message: message.slice(0, 500),
     })
+    logRelayDiagnostic(diagnostic, "privy_request", "error", {
+      error_code: "provider_transport_error",
+    })
     throw eligibilityFailed("Follow sponsorship was submitted and is awaiting confirmation")
   }
+  logRelayDiagnostic(diagnostic, "privy_request", "completed", {
+    status: response.status,
+  })
   const payload = await response.json().catch(() => null) as PrivyRelayPayload | null
+  logRelayDiagnostic(diagnostic, "privy_response", "completed", {
+    status: response.status,
+    payload_has_transaction_id: typeof payload?.data?.transaction_id === "string",
+    payload_has_hash: /^0x[a-f0-9]{64}$/u.test(transactionHash(payload)),
+  })
   if (!response.ok) {
     const message = privyErrorMessage(payload, response.status)
     await releaseReservation({ client: input.client, intentId: input.request.intentId, now, error: message })
@@ -531,13 +606,26 @@ export async function relaySponsoredFollowTransaction(input: {
     ? payload.data.transaction_id.trim()
     : ""
   if (!/^0x[a-f0-9]{64}$/u.test(txHash) && transactionId) {
-    txHash = await waitForPrivyTransactionHash({
-      apiUrl,
-      appId: config.appId,
-      appSecret: config.appSecret,
-      transactionId,
-      fetcher,
-    }) ?? ""
+    logRelayDiagnostic(diagnostic, "finalize", "started", {
+      provider_transaction_id_present: true,
+    })
+    try {
+      txHash = await waitForPrivyTransactionHash({
+        apiUrl,
+        appId: config.appId,
+        appSecret: config.appSecret,
+        transactionId,
+        fetcher,
+      }) ?? ""
+    } catch (error) {
+      logRelayDiagnostic(diagnostic, "finalize", "error", {
+        error_code: error instanceof Error ? error.constructor.name : "unknown_error",
+      })
+      throw error
+    }
+    logRelayDiagnostic(diagnostic, "finalize", "completed", {
+      transaction_hash_present: /^0x[a-f0-9]{64}$/u.test(txHash),
+    })
   }
   if (!/^0x[a-f0-9]{64}$/u.test(txHash)) {
     // Privy accepted the send, so keep the intent in `submitting`. Releasing it
@@ -552,13 +640,26 @@ export async function relaySponsoredFollowTransaction(input: {
     }
     throw eligibilityFailed("Follow sponsorship was accepted but is still awaiting an on-chain hash")
   }
-  await finalizeSend({
-    client: input.client,
-    actorUserId: input.actorUserId,
-    intentId: input.request.intentId,
-    txHash: txHash as Hex,
-    now,
+  logRelayDiagnostic(diagnostic, "finalize", "started", {
+    provider_transaction_id_present: Boolean(transactionId),
+    transaction_hash_present: true,
   })
+  try {
+    await finalizeSend({
+      client: input.client,
+      actorUserId: input.actorUserId,
+      intentId: input.request.intentId,
+      txHash: txHash as Hex,
+      now,
+    })
+  } catch (error) {
+    logRelayDiagnostic(diagnostic, "finalize", "error", {
+      error_code: error instanceof Error ? error.constructor.name : "unknown_error",
+    })
+    throw error
+  }
+  logRelayDiagnostic(diagnostic, "finalize", "completed")
+  logRelayDiagnostic(diagnostic, "response", "completed", { status: 202 })
   return { txHash: txHash as Hex, consistency: "accepted_not_yet_reflected" }
 }
 
