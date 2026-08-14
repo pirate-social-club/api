@@ -77,6 +77,7 @@ import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communit
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
+import { expireUnclaimedContentBlobs } from "./lib/content-blobs/content-blob-repository"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import {
   checkScheduledD1PoolCapacity,
@@ -1130,6 +1131,20 @@ async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
       operation: "reconcile_projection",
       sponsorship,
       ...summary,
+    }))
+  }
+}
+
+async function reconcileScheduledContentBlobs(env: Env): Promise<void> {
+  const summary = await expireUnclaimedContentBlobs({
+    client: getControlPlaneClient(env),
+    now: new Date().toISOString(),
+    limit: 100,
+  })
+  if (summary.contentBlobIds.length > 0) {
+    console.info("[scheduled] expired unclaimed content blobs", JSON.stringify({
+      count: summary.contentBlobIds.length,
+      content_blob_ids: summary.contentBlobIds,
     }))
   }
 }
@@ -2248,6 +2263,9 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
         : []),
       ...(env.CONTROL_PLANE_DATABASE_URL
         ? [{ name: "reconcile_efp_follow_writes", run: () => reconcileScheduledEfpFollowWrites(env) }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL
+        ? [{ name: "reconcile_content_blob_lifecycle", run: () => reconcileScheduledContentBlobs(env) }]
         : []),
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },

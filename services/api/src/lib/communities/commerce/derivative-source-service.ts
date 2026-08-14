@@ -16,7 +16,9 @@ import type {
 } from "../../../types"
 
 function derivativeSourceKindFromAssetKind(assetKind: DerivativeSourceRow["asset_kind"]): DerivativeSourceKind {
-  return assetKind === "video_file" ? "video" : "song"
+  if (assetKind === "video_file") return "video"
+  if (assetKind === "song_audio") return "song"
+  throw new Error("Unsupported derivative source asset kind")
 }
 
 function derivativeSourceStoryRef(row: DerivativeSourceRow): string | null {

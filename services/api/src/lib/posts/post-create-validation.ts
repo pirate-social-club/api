@@ -195,8 +195,13 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
     throw badRequestError("crosspost_source must not be provided in the post body")
   }
   validatePostEvent(body)
-  if (body.publish_mode === "async" && body.post_type !== "song") {
-    throw badRequestError("publish_mode async is only supported for song posts")
+  if (
+    body.publish_mode === "async"
+    && body.post_type !== "song"
+    && body.post_type !== "file"
+    && body.post_type !== "deck"
+  ) {
+    throw badRequestError("publish_mode async is only supported for song posts, file posts, or deck posts")
   }
   if (body.publish_mode === "async" && !body.idempotency_key?.trim()) {
     throw badRequestError("idempotency_key is required for async publishing")
@@ -314,6 +319,37 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
       contentLabel: body.rights_basis === "derivative" ? "derivative video" : "original video",
     })
   }
+  if (body.post_type === "file" || body.post_type === "deck") {
+    const isDeck = body.post_type === "deck"
+    const contentLabel = isDeck ? "learning deck" : "file"
+    const sourceRef = isDeck ? body.learning_deck : body.file_upload
+    if (!body.title?.trim()) {
+      throw badRequestError(`title is required for ${contentLabel} posts`)
+    }
+    if (!sourceRef?.trim()) {
+      throw badRequestError(`${isDeck ? "learning_deck" : "file_upload"} is required for ${contentLabel} posts`)
+    }
+    if (body.access_mode !== "public" && body.access_mode !== "locked") {
+      throw badRequestError(`${contentLabel} access_mode must be public or locked`)
+    }
+    if (body.access_mode === "locked" && !body.listing_draft) {
+      throw badRequestError(`listing_draft is required for locked ${contentLabel} posts`)
+    }
+    if (body.media_refs?.length || body.song_artifact_bundle?.trim() || body.asset_id?.trim()) {
+      throw badRequestError(`${contentLabel} posts cannot provide legacy media or asset fields`)
+    }
+    if (body.link_url?.trim() || body.lyrics?.trim() || body.song_mode || body.upstream_asset_refs?.length) {
+      throw badRequestError(`${contentLabel} posts cannot provide link or song fields`)
+    }
+    if (body.royalty_allocations != null) {
+      throw badRequestError(`royalty_allocations are not supported for ${contentLabel} posts`)
+    }
+    validateAssetLicense({
+      body,
+      contentLabel,
+      requireLicense: body.access_mode === "locked",
+    })
+  }
   if (body.visibility && body.visibility !== "public" && body.visibility !== "members_only") {
     throw badRequestError("visibility must be public or members_only")
   }
@@ -347,10 +383,16 @@ export function assertPostCreateRequest(body: CreatePostRequest, _communityId: s
   if ((body.identity_mode ?? "public") !== "anonymous" && body.disclosed_qualifier_ids?.length) {
     throw badRequestError("disclosed_qualifier_ids are only allowed for anonymous posts")
   }
-  if (body.post_type !== "song" && body.post_type !== "video" && body.access_mode) {
-    throw badRequestError("access_mode is only supported for song and video posts")
+  if (
+    body.post_type !== "song"
+    && body.post_type !== "video"
+    && body.post_type !== "file"
+    && body.post_type !== "deck"
+    && body.access_mode
+  ) {
+    throw badRequestError("access_mode is only supported for song, video, file, and deck posts")
   }
-  if (body.post_type !== "song" && body.post_type !== "video") {
+  if (body.post_type !== "song" && body.post_type !== "video" && body.post_type !== "file" && body.post_type !== "deck") {
     if (body.license_preset) {
       throw badRequestError("license_preset is only supported for original asset posts")
     }

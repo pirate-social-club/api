@@ -4,6 +4,9 @@ import { numberOrNull, requiredString, rowValue, stringOrNull } from "../../sql-
 
 export type GenericAssetQuotaReservationStatus = "reserved" | "reconciled" | "released" | "failed"
 
+export const GENERIC_ASSET_PER_USER_COMMUNITY_QUOTA_BYTES = 2 * 1024 * 1024 * 1024
+export const GENERIC_ASSET_COMMUNITY_QUOTA_BYTES = 20 * 1024 * 1024 * 1024
+
 export type GenericAssetQuotaReservation = {
   reservation_id: string
   community_id: string
@@ -83,9 +86,32 @@ function assertReservationRequest(input: {
   }
   if (
     input.maxAccountedBytes != null
-    && (!Number.isSafeInteger(input.maxAccountedBytes) || input.maxAccountedBytes <= 0)
+    && (
+      !Number.isSafeInteger(input.maxAccountedBytes)
+      || input.maxAccountedBytes <= 0
+      || input.maxAccountedBytes > GENERIC_ASSET_PER_USER_COMMUNITY_QUOTA_BYTES
+    )
   ) {
-    throw conflictError("Generic asset quota limit must be a positive byte count")
+    throw conflictError("Generic asset quota limit must be within the per-user community ceiling")
+  }
+}
+
+function assertReservationMatches(input: {
+  existing: GenericAssetQuotaReservation
+  communityId: string
+  assetId: string | null
+  contentBlobId: string | null
+  reservedBytes: number
+  policyVersion: string
+}): void {
+  if (
+    input.existing.community_id !== input.communityId
+    || input.existing.asset_id !== input.assetId
+    || input.existing.reserved_bytes !== input.reservedBytes
+    || input.existing.content_blob_id !== input.contentBlobId
+    || input.existing.policy_version !== input.policyVersion
+  ) {
+    throw conflictError("Generic asset quota reservation key was reused with different bytes")
   }
 }
 
@@ -108,12 +134,38 @@ export async function reserveGenericAssetBytes(input: {
   assertReservationRequest(input)
   const existing = await findReservation(input)
   if (existing) {
-    if (
-      existing.community_id !== input.communityId
-      || existing.reserved_bytes !== input.reservedBytes
-      || existing.content_blob_id !== (input.contentBlobId ?? null)
-    ) {
-      throw conflictError("Generic asset quota reservation key was reused with different bytes")
+    assertReservationMatches({
+      existing,
+      communityId: input.communityId,
+      assetId: input.assetId ?? null,
+      contentBlobId: input.contentBlobId ?? null,
+      reservedBytes: input.reservedBytes,
+      policyVersion: input.policyVersion,
+    })
+    if (existing.status === "released" || existing.status === "failed") {
+      const reopened = await input.client.execute({
+        sql: `
+          UPDATE generic_asset_quota_reservations
+          SET status = 'reserved', actual_bytes = NULL,
+              plaintext_bytes = ?1, ciphertext_bytes = ?2, package_bytes = ?3,
+              failure_code = NULL, updated_at = ?4, reconciled_at = NULL
+          WHERE reservation_id = ?5 AND status IN ('released', 'failed')
+        `,
+        args: [
+          input.plaintextBytes ?? 0,
+          input.ciphertextBytes ?? 0,
+          input.packageBytes ?? 0,
+          input.createdAt,
+          existing.reservation_id,
+        ],
+      })
+      if ((reopened.rowsAffected ?? 0) === 1) {
+        const resumed = await findReservation(input)
+        if (!resumed) throw internalError("Generic asset quota reservation is missing after resume")
+        return resumed
+      }
+      const raced = await findReservation(input)
+      if (raced) return raced
     }
     return existing
   }
@@ -132,6 +184,12 @@ export async function reserveGenericAssetBytes(input: {
         WHERE user_id = ?3 AND community_id = ?2
           AND status IN ('reserved', 'reconciled')
       ) + ?7 <= ?13
+      AND (
+        SELECT COALESCE(SUM(CASE WHEN status = 'reserved' THEN reserved_bytes ELSE actual_bytes END), 0)
+        FROM generic_asset_quota_reservations
+        WHERE community_id = ?2
+          AND status IN ('reserved', 'reconciled')
+      ) + ?7 <= ?14
     `,
     args: [
       input.reservationId,
@@ -146,12 +204,18 @@ export async function reserveGenericAssetBytes(input: {
       input.packageBytes ?? 0,
       input.policyVersion,
       input.createdAt,
-      input.maxAccountedBytes ?? null,
+      input.maxAccountedBytes ?? GENERIC_ASSET_PER_USER_COMMUNITY_QUOTA_BYTES,
+      GENERIC_ASSET_COMMUNITY_QUOTA_BYTES,
     ],
   })
   if ((inserted.rowsAffected ?? 0) !== 1) {
     const raced = await findReservation(input)
-    if (raced) return raced
+    if (raced) {
+      if (raced.status === "released" || raced.status === "failed") {
+        return reserveGenericAssetBytes(input)
+      }
+      return raced
+    }
     throw conflictError("Generic asset byte quota is unavailable")
   }
   const created = await findReservation(input)
@@ -167,6 +231,7 @@ export async function reconcileGenericAssetBytes(input: {
   ciphertextBytes: number
   packageBytes: number
   reconciledAt: string
+  maxAccountedBytes?: number | null
 }): Promise<GenericAssetQuotaReservation> {
   if (
     !Number.isSafeInteger(input.actualBytes)
@@ -181,6 +246,20 @@ export async function reconcileGenericAssetBytes(input: {
   ) {
     throw conflictError("Generic asset reconciled bytes must be non-negative")
   }
+  const maxAccountedBytes = input.maxAccountedBytes ?? GENERIC_ASSET_PER_USER_COMMUNITY_QUOTA_BYTES
+  if (
+    !Number.isSafeInteger(maxAccountedBytes)
+    || maxAccountedBytes <= 0
+    || maxAccountedBytes > GENERIC_ASSET_PER_USER_COMMUNITY_QUOTA_BYTES
+  ) {
+    throw conflictError("Generic asset quota limit must be within the per-user community ceiling")
+  }
+  const existing = await executeFirst(input.client, {
+    sql: `SELECT ${RESERVATION_COLUMNS} FROM generic_asset_quota_reservations WHERE reservation_id = ?1 LIMIT 1`,
+    args: [input.reservationId],
+  })
+  if (!existing) throw internalError("Generic asset quota reservation is missing")
+  const existingReservation = reservationFromRow(existing)
   const result = await input.client.execute({
     sql: `
       UPDATE generic_asset_quota_reservations
@@ -188,6 +267,20 @@ export async function reconcileGenericAssetBytes(input: {
           plaintext_bytes = ?2, ciphertext_bytes = ?3, package_bytes = ?4,
           reconciled_at = ?5, updated_at = ?5
       WHERE reservation_id = ?6 AND status = 'reserved'
+        AND (
+          SELECT COALESCE(SUM(CASE WHEN status = 'reserved' THEN reserved_bytes ELSE actual_bytes END), 0)
+          FROM generic_asset_quota_reservations
+          WHERE user_id = ?7 AND community_id = ?8
+            AND reservation_id <> ?6
+            AND status IN ('reserved', 'reconciled')
+        ) + ?1 <= ?9
+        AND (
+          SELECT COALESCE(SUM(CASE WHEN status = 'reserved' THEN reserved_bytes ELSE actual_bytes END), 0)
+          FROM generic_asset_quota_reservations
+          WHERE community_id = ?8
+            AND reservation_id <> ?6
+            AND status IN ('reserved', 'reconciled')
+        ) + ?1 <= ?10
     `,
     args: [
       input.actualBytes,
@@ -196,6 +289,10 @@ export async function reconcileGenericAssetBytes(input: {
       input.packageBytes,
       input.reconciledAt,
       input.reservationId,
+      existingReservation.user_id,
+      existingReservation.community_id,
+      maxAccountedBytes,
+      GENERIC_ASSET_COMMUNITY_QUOTA_BYTES,
     ],
   })
   const row = await executeFirst(input.client, {
@@ -205,6 +302,9 @@ export async function reconcileGenericAssetBytes(input: {
   if (!row) throw internalError("Generic asset quota reservation is missing")
   const reservation = reservationFromRow(row)
   if ((result.rowsAffected ?? 0) === 0 && reservation.status !== "reconciled") {
+    if (reservation.status === "reserved") {
+      throw conflictError("Generic asset byte quota would be exceeded")
+    }
     throw conflictError("Generic asset quota reservation is not open")
   }
   return reservation

@@ -689,6 +689,7 @@ export async function createPost(input: {
           requestBodyHash: idempotencyBodyHash,
           listingDraft: input.body.listing_draft ?? null,
           publishOptions: {
+            post_id: draft.post_id,
             access_mode: input.body.access_mode ?? null,
             commercial_rev_share_pct: input.body.commercial_rev_share_pct ?? null,
             license_preset: input.body.license_preset ?? null,
@@ -696,6 +697,15 @@ export async function createPost(input: {
             rights_basis: input.body.rights_basis ?? null,
             song_mode: input.body.song_mode ?? null,
             upstream_asset_refs: input.body.upstream_asset_refs ?? null,
+            file_upload: input.body.file_upload ?? null,
+            learning_deck: input.body.learning_deck ?? null,
+            allocated_ids: {
+              post_id: draft.post_id,
+              asset_id: input.body.asset_id ?? null,
+              content_blob_id: input.body.file_upload ?? input.body.learning_deck ?? null,
+              reservation_id: `gar_${draft.post_id}`,
+              reservation_key: `post:${draft.post_id}:generic_asset`,
+            },
           },
           status: "pending",
           createdAt,

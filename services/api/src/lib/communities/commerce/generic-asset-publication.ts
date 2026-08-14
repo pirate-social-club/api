@@ -1,12 +1,13 @@
 import type { Client } from "../../sql-client"
-import { internalError, conflictError } from "../../errors"
-import { nowIso } from "../../helpers"
+import { internalError, conflictError, notFoundError } from "../../errors"
+import { genericDigitalGoodsEnabled, nowIso } from "../../helpers"
 import { withTransaction } from "../../transactions"
 import {
   claimOwnedReadyContentBlob,
+  releaseOwnedContentBlobClaim,
   requireOwnedContentBlob,
 } from "../../content-blobs/content-blob-repository"
-import type { ContentBlobRow } from "../../content-blobs/content-blob-types"
+import type { ContentBlobRow, OwnedContentBlob } from "../../content-blobs/content-blob-types"
 import {
   reconcileGenericAssetBytes,
   releaseGenericAssetBytes,
@@ -27,7 +28,7 @@ export type GenericAssetPublicationResult = {
 }
 
 /**
- * Claims a clean blob, reserves physical-byte quota, and materializes the
+ * Reserves physical-byte quota, claims a clean blob, and materializes the
  * generic asset's three shard rows as one write transaction. The transaction
  * is deliberately idempotent for retries of the same asset claim, but never
  * overwrites a later enforcement decision.
@@ -44,6 +45,8 @@ export async function publishGenericAssetClaim(input: {
   assetKind: GenericAssetKind
   accessMode?: "locked"
   rightsBasis?: "none" | "original" | "derivative" | "attribution_only"
+  licensePreset?: "non-commercial" | "commercial-use" | "commercial-remix" | null
+  commercialRevSharePct?: number | null
   displayTitle?: string | null
   displayFilename: string
   mimeType: string
@@ -56,6 +59,9 @@ export async function publishGenericAssetClaim(input: {
   maxAccountedBytes?: number | null
   createdAt?: string
 }): Promise<GenericAssetPublicationResult> {
+  if (!genericDigitalGoodsEnabled(input.env)) {
+    throw notFoundError("Generic digital goods are not enabled")
+  }
   if (!isGenericAssetKind(input.assetKind)) {
     throw conflictError("Generic publication requires a generic asset kind")
   }
@@ -75,15 +81,6 @@ export async function publishGenericAssetClaim(input: {
     throw conflictError("Generic asset quota reservation must cover the verified plaintext bytes")
   }
 
-  const claimed = await claimOwnedReadyContentBlob({
-    client: input.controlPlaneClient,
-    communityId: input.communityId,
-    uploaderUserId: input.creatorUserId,
-    contentBlobId: input.contentBlobId,
-    claimKind: "asset_payload",
-    claimRef: input.assetId,
-    claimedAt: createdAt,
-  })
   const quotaReservation = await reserveGenericAssetBytes({
     client: input.controlPlaneClient,
     reservationId: input.reservationId,
@@ -99,7 +96,17 @@ export async function publishGenericAssetClaim(input: {
     maxAccountedBytes: input.maxAccountedBytes,
   })
 
+  let claimed: OwnedContentBlob | null = null
   try {
+    claimed = await claimOwnedReadyContentBlob({
+      client: input.controlPlaneClient,
+      communityId: input.communityId,
+      uploaderUserId: input.creatorUserId,
+      contentBlobId: input.contentBlobId,
+      claimKind: "asset_payload",
+      claimRef: input.assetId,
+      claimedAt: createdAt,
+    })
     await withTransaction(input.shardClient, "write", async (tx) => {
       const existing = await getAssetRow(tx, input.communityId, input.assetId)
       if (existing) {
@@ -115,12 +122,13 @@ export async function publishGenericAssetClaim(input: {
           sql: `
             INSERT INTO assets (
               asset_id, community_id, source_post_id, creator_user_id, asset_kind,
-              rights_basis, access_mode, primary_content_ref, primary_content_hash,
+              rights_basis, access_mode, license_preset, commercial_rev_share_pct,
+              primary_content_ref, primary_content_hash,
               publication_status, story_status, locked_delivery_status,
               display_title, created_at, updated_at
             ) VALUES (
-              ?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, ?8,
-              'story_requested', 'requested', 'requested', ?9, ?10, ?10
+              ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+              NULL, ?10, 'story_requested', 'requested', 'requested', ?11, ?12, ?12
             )
           `,
           args: [
@@ -131,6 +139,8 @@ export async function publishGenericAssetClaim(input: {
             input.assetKind,
             input.rightsBasis ?? "original",
             input.accessMode ?? "locked",
+            input.licensePreset ?? null,
+            input.commercialRevSharePct ?? null,
             contentHash,
             input.displayTitle ?? null,
             createdAt,
@@ -189,6 +199,15 @@ export async function publishGenericAssetClaim(input: {
       }
     })
   } catch (error) {
+    await releaseOwnedContentBlobClaim({
+      client: input.controlPlaneClient,
+      communityId: input.communityId,
+      uploaderUserId: input.creatorUserId,
+      contentBlobId: input.contentBlobId,
+      claimKind: "asset_payload",
+      claimRef: input.assetId,
+      releasedAt: nowIso(),
+    })
     await releaseGenericAssetBytes({
       client: input.controlPlaneClient,
       reservationId: quotaReservation.reservation_id,
@@ -200,6 +219,7 @@ export async function publishGenericAssetClaim(input: {
 
   const asset = await getAssetRow(input.shardClient, input.communityId, input.assetId)
   if (!asset) throw internalError("Generic asset is missing after materialization")
+  if (!claimed) throw internalError("Generic asset content blob claim is missing")
   return { assetId: asset.asset_id, contentBlob: claimed.blob, quotaReservation }
 }
 
@@ -209,6 +229,7 @@ export async function finalizeGenericAssetQuota(input: {
   plaintextBytes: number
   ciphertextBytes: number
   packageBytes: number
+  maxAccountedBytes?: number | null
   reconciledAt?: string
 }): Promise<GenericAssetQuotaReservation> {
   return await reconcileGenericAssetBytes({
@@ -218,6 +239,7 @@ export async function finalizeGenericAssetQuota(input: {
     plaintextBytes: input.plaintextBytes,
     ciphertextBytes: input.ciphertextBytes,
     packageBytes: input.packageBytes,
+    maxAccountedBytes: input.maxAccountedBytes,
     reconciledAt: input.reconciledAt ?? nowIso(),
   })
 }

@@ -33,6 +33,7 @@ import {
 import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationShareBps } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import { assertAssetDeliveryAllowed } from "./asset-read-policy"
 import {
   assertAssetNotRightsHeld,
   assertListingNotRightsHeld,
@@ -364,6 +365,11 @@ export async function prepareCommunityListingWrite(input: {
       throw notFoundError("Asset not found")
     }
     assetKind = asset.asset_kind
+    await assertAssetDeliveryAllowed({
+      client: input.client,
+      asset,
+      notFoundMessage: "Asset not found",
+    })
     await assertSongAssetRightsReadyForListing({
       client: input.client,
       communityId: input.communityId,

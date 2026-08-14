@@ -62,6 +62,19 @@ function linkRequest(link_url: string): CreatePostRequest {
   } as CreatePostRequest
 }
 
+function genericRequest(postType: "file" | "deck", overrides: Partial<CreatePostRequest> = {}): CreatePostRequest {
+  return {
+    idempotency_key: `idem_${postType}`,
+    post_type: postType,
+    title: "Study material",
+    access_mode: "locked",
+    license_preset: "non-commercial",
+    listing_draft: { price_cents: 100, regional_pricing_enabled: false, status: "active" },
+    ...(postType === "file" ? { file_upload: "cbl_file" } : { learning_deck: "ldk_source" }),
+    ...overrides,
+  } as CreatePostRequest
+}
+
 describe("assertPostCreateRequest link_url scheme", () => {
   test("rejects a javascript: scheme (would be an XSS sink when rendered as href)", () => {
     expect(() => assertPostCreateRequest(linkRequest("javascript:alert(document.domain)"), COMMUNITY_ID)).toThrow(/valid http/)
@@ -94,6 +107,41 @@ describe("assertPostCreateRequest anonymous asset posts", () => {
 
     expect(() => assertPostCreateRequest(freeVideo, COMMUNITY_ID)).not.toThrow()
     expect(() => assertPostCreateRequest(lockedVideo, COMMUNITY_ID)).not.toThrow()
+  })
+})
+
+describe("assertPostCreateRequest generic digital goods", () => {
+  test("accepts locked file and deck requests", () => {
+    expect(() => assertPostCreateRequest(genericRequest("file"), COMMUNITY_ID)).not.toThrow()
+    expect(() => assertPostCreateRequest(genericRequest("deck"), COMMUNITY_ID)).not.toThrow()
+  })
+
+  test("requires source reference, title, and a license for locked goods", () => {
+    expect(() => assertPostCreateRequest(genericRequest("file", { file_upload: "" }), COMMUNITY_ID)).toThrow(/file_upload is required/)
+    expect(() => assertPostCreateRequest(genericRequest("deck", { title: "" }), COMMUNITY_ID)).toThrow(/title is required/)
+    expect(() => assertPostCreateRequest(genericRequest("file", { license_preset: null }), COMMUNITY_ID)).toThrow(/license_preset is required/)
+  })
+
+  test("requires a listing draft for locked goods", () => {
+    const request = genericRequest("file")
+    request.listing_draft = null
+    expect(() => assertPostCreateRequest(request, COMMUNITY_ID)).toThrow(/listing_draft is required/)
+  })
+
+  test("rejects royalty and legacy media fields", () => {
+    expect(() => assertPostCreateRequest(genericRequest("file", {
+      royalty_allocations: validSplit(),
+    }), COMMUNITY_ID)).toThrow(/royalty_allocations are not supported/)
+    expect(() => assertPostCreateRequest(genericRequest("deck", {
+      media_refs: [{ storage_ref: "s_1", mime_type: "text/csv" }],
+    }), COMMUNITY_ID)).toThrow(/legacy media/)
+  })
+
+  test("allows asynchronous publication for generic goods", () => {
+    expect(() => assertPostCreateRequest(genericRequest("file", {
+      publish_mode: "async",
+      idempotency_key: "idem_file_async",
+    }), COMMUNITY_ID)).not.toThrow()
   })
 })
 

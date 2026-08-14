@@ -187,6 +187,31 @@ describe("content source broker", () => {
     expect(await response.json()).toEqual(expect.objectContaining({ code: "source_conflict" }))
   })
 
+  test("reads the exact verified plaintext object for internal encryption", async () => {
+    const { bucket } = fakeR2()
+    const bytes = new TextEncoder().encode("plaintext for locked delivery")
+    const sha256 = await digest(bytes)
+    await handleContentSourceBrokerRequest(new Request(
+      `https://broker.test/objects/${BLOB_ID}`,
+      { method: "PUT", headers: requestHeaders(sha256, bytes.byteLength), body: bytes },
+    ), env({ bucket }))
+
+    const response = await handleContentSourceBrokerRequest(new Request(
+      `https://broker.test/objects/${BLOB_ID}`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${BROKER_SECRET}`,
+          "x-content-sha256": sha256,
+          "x-content-size": String(bytes.byteLength),
+        },
+      },
+    ), env({ bucket }))
+    expect(response.status).toBe(200)
+    expect(response.headers.get("x-content-sha256")).toBe(sha256)
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
+  })
+
   test("streams one verified object to the scanner with job-bound metadata", async () => {
     const { bucket } = fakeR2()
     const bytes = new TextEncoder().encode("verified source")
