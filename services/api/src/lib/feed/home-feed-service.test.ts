@@ -837,6 +837,7 @@ describe("listHomeFeedProjectionPage", () => {
 
     expect(first.rows).toHaveLength(25)
     expect(first.rows[0]?.source_post_id).toBe("video_26")
+    expect(first.rows[0]?.author_user_id).toBe("usr_feed_operator")
     expect(first.nextCursor?.startsWith("k:")).toBe(true)
 
     await client.execute({

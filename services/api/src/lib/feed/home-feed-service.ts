@@ -498,9 +498,10 @@ export async function listVideoHomeFeedProjectionRows(input: {
     }
   }
   const limitIndex = args.push(pageSize + 1)
-  const projectedPayloadColumns = input.includeProjectedPayload
-    ? ", author_user_id, identity_mode, projected_payload_json"
-    : ""
+  // Author identity is needed for request-scoped profile prefetch on the
+  // anonymous public video feed. Keep projected payload shadow-gated, but do
+  // not gate these two small identity columns behind the experiment.
+  const projectedPayloadColumns = `, author_user_id, identity_mode${input.includeProjectedPayload ? ", projected_payload_json" : ""}`
   const result = await getControlPlaneClient(input.env).execute({
     sql: `
       WITH eligible AS (
