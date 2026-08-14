@@ -7627,6 +7627,18 @@ const spec = {
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "objective",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "study",
+                "karaoke"
+              ]
+            }
           }
         ],
         "responses": {
@@ -7921,6 +7933,18 @@ const spec = {
             "required": true,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "objective",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "study",
+                "karaoke"
+              ]
             }
           }
         ],

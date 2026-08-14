@@ -123,6 +123,7 @@ let testLockedAssetDeliveryPreparer: ((input: {
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
   preparedDelivery?: PreparedLockedDeliveryCoordinates | null
+  assertDeliveryAllowed?: () => Promise<void>
   onPreparedDelivery?: (prepared: PreparedLockedDeliveryCoordinates) => Promise<void>
   onProgress?: LockedDeliveryProgressReporter | null
 }) => Promise<LockedAssetDeliveryResult>) | null = null
@@ -141,6 +142,7 @@ export function setLockedAssetDeliveryPreparerForTests(
     rightsBasis: Post["rights_basis"]
     upstreamAssetRefs: string[] | null
     preparedDelivery?: PreparedLockedDeliveryCoordinates | null
+    assertDeliveryAllowed?: () => Promise<void>
     onPreparedDelivery?: (prepared: PreparedLockedDeliveryCoordinates) => Promise<void>
     onProgress?: LockedDeliveryProgressReporter | null
   }) => Promise<LockedAssetDeliveryResult>) | null,
@@ -416,6 +418,7 @@ export async function prepareLockedAssetDelivery(input: {
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
   preparedDelivery?: PreparedLockedDeliveryCoordinates | null
+  assertDeliveryAllowed?: () => Promise<void>
   onPreparedDelivery?: (prepared: PreparedLockedDeliveryCoordinates) => Promise<void>
   onProgress?: LockedDeliveryProgressReporter | null
 }): Promise<{
@@ -436,6 +439,7 @@ export async function prepareLockedAssetDelivery(input: {
   lockedDeliveryStorageRef: string
   lockedDeliveryMetadataJson: string
 }> {
+  await input.assertDeliveryAllowed?.()
   if (testLockedAssetDeliveryPreparer) {
     return await testLockedAssetDeliveryPreparer(input)
   }

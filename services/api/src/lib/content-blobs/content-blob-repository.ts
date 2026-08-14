@@ -83,6 +83,86 @@ export async function requireOwnedContentBlob(input: {
   return owned
 }
 
+/**
+ * Claim a verified blob for one downstream owner.
+ *
+ * The claim is deliberately a single conditional UPDATE: publication can be
+ * retried after a worker timeout, but a blob must never be attached to two
+ * assets. Replaying the same claim is idempotent; every other competing claim
+ * fails closed. Readiness and malware-clean state are checked in the UPDATE so
+ * a scanner transition racing publication cannot be bypassed by a stale read.
+ */
+export async function claimOwnedReadyContentBlob(input: {
+  client: Client
+  communityId: string
+  uploaderUserId: string
+  contentBlobId: string
+  claimKind: NonNullable<ContentBlobRow["claim_kind"]>
+  claimRef: string
+  claimedAt: string
+}): Promise<OwnedContentBlob> {
+  const owned = await requireOwnedContentBlob(input)
+  const isReadyForClaim = owned.blob.status === "ready"
+    && owned.blob.security_scan_state === "clean"
+    && owned.blob.verified_size_bytes != null
+    && owned.blob.verified_content_hash != null
+  const existingClaim = owned.blob.claim_kind
+    ? { kind: owned.blob.claim_kind, ref: owned.blob.claim_ref }
+    : null
+  if (existingClaim) {
+    if (existingClaim.kind === input.claimKind && existingClaim.ref === input.claimRef) {
+      if (!isReadyForClaim) {
+        throw conflictError("Content blob is no longer ready to claim")
+      }
+      return owned
+    }
+    throw conflictError("Content blob is already claimed")
+  }
+
+  const result = await input.client.execute({
+    sql: `
+      UPDATE content_blobs
+      SET claim_kind = ?1,
+          claim_ref = ?2,
+          claimed_at = ?3,
+          updated_at = ?3
+      WHERE content_blob_id = ?4
+        AND community_id = ?5
+        AND uploader_user_id = ?6
+        AND status = 'ready'
+        AND security_scan_state = 'clean'
+        AND verified_size_bytes IS NOT NULL
+        AND verified_content_hash IS NOT NULL
+        AND claim_kind IS NULL
+        AND claim_ref IS NULL
+    `,
+    args: [
+      input.claimKind,
+      input.claimRef,
+      input.claimedAt,
+      input.contentBlobId,
+      input.communityId,
+      input.uploaderUserId,
+    ],
+  })
+  if ((result.rowsAffected ?? 0) !== 1) {
+    const after = await findOwnedContentBlob(input)
+    if (after?.blob.claim_kind === input.claimKind && after.blob.claim_ref === input.claimRef) {
+      return after
+    }
+    if (!after) {
+      throw notFoundError("Content blob not found")
+    }
+    throw conflictError("Content blob is not ready to claim")
+  }
+
+  const claimed = await findOwnedContentBlob(input)
+  if (!claimed) {
+    throw internalError("Content blob is missing after claim")
+  }
+  return claimed
+}
+
 export async function createContentBlobIntent(input: {
   client: Client
   intent: CreateContentBlobIntentInput

@@ -24,7 +24,9 @@ export type RewardCampaignCapabilities = {
   token_address: string
 }
 
-const ELIGIBLE_ACTIVITIES: RewardCampaignCapabilities["eligible_activities"] = ["study", "karaoke", "either"]
+// Either remains readable on historical campaigns, but is no longer a valid
+// creation term now that each song has independent objective slots.
+const ELIGIBLE_ACTIVITIES: RewardCampaignCapabilities["eligible_activities"] = ["study", "karaoke"]
 
 /**
  * The pilot runs campaigns for a fixed 30 days. Clamping it into the configured

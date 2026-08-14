@@ -145,8 +145,8 @@ describe("reward campaign reconciler", () => {
       await ctx.client.execute({
         sql: `
           INSERT INTO reward_song_pools (
-            community_id, post_id, reward_campaign_id, created_at, updated_at
-          ) VALUES ('cmt_campaign_draft_expiry', ?1, ?2, ?3, ?3)
+            community_id, post_id, objective, reward_campaign_id, created_at, updated_at
+          ) VALUES ('cmt_campaign_draft_expiry', ?1, 'study', ?2, ?3, ?3)
         `,
         args: [campaign.post, campaign.id, campaign.created],
       })
@@ -235,8 +235,8 @@ describe("reward campaign reconciler", () => {
       await ctx.client.execute({
         sql: `
           INSERT INTO reward_song_pools (
-            community_id, post_id, reward_campaign_id, created_at, updated_at
-          ) VALUES ('cmt_retired_funding', ?1, ?2, '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z')
+            community_id, post_id, objective, reward_campaign_id, created_at, updated_at
+          ) VALUES ('cmt_retired_funding', ?1, 'study', ?2, '2026-07-29T00:00:00.000Z', '2026-07-29T00:00:00.000Z')
         `,
         args: [`pst_retired_${id}`, `rcp_retired_${id}`],
       })
