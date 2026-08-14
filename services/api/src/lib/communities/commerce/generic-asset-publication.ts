@@ -21,6 +21,32 @@ import type { Asset, Env } from "../../../types"
 
 type GenericAssetKind = Extract<Asset["asset_kind"], "download_file">
 
+type GenericAssetPublicationDependencies = {
+  claimOwnedReadyContentBlob: typeof claimOwnedReadyContentBlob
+  releaseOwnedContentBlobClaim: typeof releaseOwnedContentBlobClaim
+  requireOwnedContentBlob: typeof requireOwnedContentBlob
+  reconcileGenericAssetBytes: typeof reconcileGenericAssetBytes
+  releaseGenericAssetBytes: typeof releaseGenericAssetBytes
+  reserveGenericAssetBytes: typeof reserveGenericAssetBytes
+  getAssetRow: typeof getAssetRow
+  getActivePrimaryAssetPayload: typeof getActivePrimaryAssetPayload
+  getAssetEnforcement: typeof getAssetEnforcement
+  withTransaction: typeof withTransaction
+}
+
+const defaultDependencies: GenericAssetPublicationDependencies = {
+  claimOwnedReadyContentBlob,
+  releaseOwnedContentBlobClaim,
+  requireOwnedContentBlob,
+  reconcileGenericAssetBytes,
+  releaseGenericAssetBytes,
+  reserveGenericAssetBytes,
+  getAssetRow,
+  getActivePrimaryAssetPayload,
+  getAssetEnforcement,
+  withTransaction,
+}
+
 export type GenericAssetPublicationResult = {
   assetId: string
   contentBlob: ContentBlobRow
@@ -58,7 +84,9 @@ export async function publishGenericAssetClaim(input: {
   quotaPolicyVersion: string
   maxAccountedBytes?: number | null
   createdAt?: string
+  dependencies?: Partial<GenericAssetPublicationDependencies>
 }): Promise<GenericAssetPublicationResult> {
+  const dependencies = { ...defaultDependencies, ...input.dependencies }
   if (!genericDigitalGoodsEnabled(input.env)) {
     throw notFoundError("Generic digital goods are not enabled")
   }
@@ -66,7 +94,7 @@ export async function publishGenericAssetClaim(input: {
     throw conflictError("Generic publication requires a generic asset kind")
   }
   const createdAt = input.createdAt ?? nowIso()
-  const owned = await requireOwnedContentBlob({
+  const owned = await dependencies.requireOwnedContentBlob({
     client: input.controlPlaneClient,
     communityId: input.communityId,
     uploaderUserId: input.creatorUserId,
@@ -81,7 +109,7 @@ export async function publishGenericAssetClaim(input: {
     throw conflictError("Generic asset quota reservation must cover the verified plaintext bytes")
   }
 
-  const quotaReservation = await reserveGenericAssetBytes({
+  const quotaReservation = await dependencies.reserveGenericAssetBytes({
     client: input.controlPlaneClient,
     reservationId: input.reservationId,
     communityId: input.communityId,
@@ -98,7 +126,7 @@ export async function publishGenericAssetClaim(input: {
 
   let claimed: OwnedContentBlob | null = null
   try {
-    claimed = await claimOwnedReadyContentBlob({
+    claimed = await dependencies.claimOwnedReadyContentBlob({
       client: input.controlPlaneClient,
       communityId: input.communityId,
       uploaderUserId: input.creatorUserId,
@@ -107,8 +135,8 @@ export async function publishGenericAssetClaim(input: {
       claimRef: input.assetId,
       claimedAt: createdAt,
     })
-    await withTransaction(input.shardClient, "write", async (tx) => {
-      const existing = await getAssetRow(tx, input.communityId, input.assetId)
+    await dependencies.withTransaction(input.shardClient, "write", async (tx) => {
+      const existing = await dependencies.getAssetRow(tx, input.communityId, input.assetId)
       if (existing) {
         if (
           existing.source_post_id !== input.sourcePostId
@@ -148,7 +176,7 @@ export async function publishGenericAssetClaim(input: {
         })
       }
 
-      const payload = await getActivePrimaryAssetPayload(tx, input.assetId)
+      const payload = await dependencies.getActivePrimaryAssetPayload(tx, input.assetId)
       if (payload) {
         if (
           payload.content_blob_ref !== input.contentBlobId
@@ -184,7 +212,7 @@ export async function publishGenericAssetClaim(input: {
         })
       }
 
-      const enforcement = await getAssetEnforcement(tx, input.assetId)
+      const enforcement = await dependencies.getAssetEnforcement(tx, input.assetId)
       if (!enforcement) {
         await tx.execute({
           sql: `
@@ -199,7 +227,7 @@ export async function publishGenericAssetClaim(input: {
       }
     })
   } catch (error) {
-    await releaseOwnedContentBlobClaim({
+    await dependencies.releaseOwnedContentBlobClaim({
       client: input.controlPlaneClient,
       communityId: input.communityId,
       uploaderUserId: input.creatorUserId,
@@ -208,7 +236,7 @@ export async function publishGenericAssetClaim(input: {
       claimRef: input.assetId,
       releasedAt: nowIso(),
     })
-    await releaseGenericAssetBytes({
+    await dependencies.releaseGenericAssetBytes({
       client: input.controlPlaneClient,
       reservationId: quotaReservation.reservation_id,
       releasedAt: nowIso(),
@@ -217,7 +245,7 @@ export async function publishGenericAssetClaim(input: {
     throw error
   }
 
-  const asset = await getAssetRow(input.shardClient, input.communityId, input.assetId)
+  const asset = await dependencies.getAssetRow(input.shardClient, input.communityId, input.assetId)
   if (!asset) throw internalError("Generic asset is missing after materialization")
   if (!claimed) throw internalError("Generic asset content blob claim is missing")
   return { assetId: asset.asset_id, contentBlob: claimed.blob, quotaReservation }

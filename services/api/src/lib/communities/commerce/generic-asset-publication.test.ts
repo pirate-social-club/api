@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { publishGenericAssetClaim } from "./generic-asset-publication"
 
 type CallState = {
   assetReads: number
@@ -58,7 +59,7 @@ const tx = {
   }),
 }
 
-mock.module("./generic-asset-quota-reservation", () => ({
+const dependencies = {
   reserveGenericAssetBytes: mock(async () => {
     state.reserveCalls += 1
     return reservation
@@ -68,9 +69,6 @@ mock.module("./generic-asset-quota-reservation", () => ({
     return { ...reservation, status: "released" }
   }),
   reconcileGenericAssetBytes: mock(async () => ({ ...reservation, status: "reconciled" })),
-}))
-
-mock.module("../../content-blobs/content-blob-repository", () => ({
   requireOwnedContentBlob: mock(async () => ({ blob: contentBlob })),
   claimOwnedReadyContentBlob: mock(async () => {
     state.claimCalls += 1
@@ -80,25 +78,14 @@ mock.module("../../content-blobs/content-blob-repository", () => ({
   releaseOwnedContentBlobClaim: mock(async () => {
     state.releaseClaimCalls += 1
   }),
-}))
-
-mock.module("./queries", () => ({
   getAssetRow: mock(async (client: unknown) => {
     state.assetReads += 1
     return client === tx && !state.existingAsset ? null : asset
   }),
-}))
-
-mock.module("./generic-asset-repository", () => ({
   getActivePrimaryAssetPayload: mock(async () => state.existingAsset ? payload : null),
   getAssetEnforcement: mock(async () => state.existingAsset ? { enforcement_state: "active" } : null),
-}))
-
-mock.module("../../transactions", () => ({
   withTransaction: mock(async (_client: unknown, _mode: unknown, callback: (executor: typeof tx) => Promise<void>) => callback(tx)),
-}))
-
-const { publishGenericAssetClaim } = await import("./generic-asset-publication")
+}
 
 function input(overrides: Record<string, unknown> = {}) {
   return {
@@ -123,6 +110,7 @@ function input(overrides: Record<string, unknown> = {}) {
     reservedBytes: 256,
     quotaPolicyVersion: "generic_assets_v1",
     createdAt: "2026-08-15T00:00:00.000Z",
+    dependencies,
     ...overrides,
   } as never
 }
