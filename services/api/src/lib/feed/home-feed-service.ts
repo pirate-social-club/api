@@ -79,28 +79,46 @@ function serverTimingMetricName(name: string): string {
   return name.replace(/_ms$/u, "").replace(/_/gu, "-")
 }
 
-function formatHomeFeedServerTiming(input: {
+type HomeFeedRoutingTiming = {
+  pageCommunityCount: number
+  prefetchBatchCount: number
+  prefetchOperationCount: number
+  prefetchShardGroupCount: number
+}
+
+function formatHomeFeedCountMetric(name: string, value: number): string {
+  // Server-Timing has no count field. Keep the numeric value in `dur` so
+  // existing header parsers can read it, and label it explicitly to prevent
+  // dashboards from treating it as milliseconds.
+  return `${name};dur=${value};desc="count"`
+}
+
+export function formatHomeFeedServerTiming(input: {
   phases: Record<string, number>
+  routing?: HomeFeedRoutingTiming
   totalMs: number
 }): string {
-  return [
+  const entries = [
     `home-feed;dur=${input.totalMs}`,
     ...Object.entries(input.phases)
       .filter((entry): entry is [string, number] => Number.isFinite(entry[1]))
       .map(([name, duration]) => `${serverTimingMetricName(name)};dur=${duration}`),
-  ].join(", ")
+  ]
+  if (input.routing) {
+    entries.push(
+      formatHomeFeedCountMetric("prefetch-batches", input.routing.prefetchBatchCount),
+      formatHomeFeedCountMetric("prefetch-operations", input.routing.prefetchOperationCount),
+      formatHomeFeedCountMetric("prefetch-shard-groups", input.routing.prefetchShardGroupCount),
+    )
+  }
+  return entries.join(", ")
 }
 
 function withHomeFeedServerTiming(
   response: HomeFeedResponse,
   input: {
     phases: Record<string, number>
-    routing?: {
-      pageCommunityCount: number
-      prefetchBatchCount: number
-      prefetchOperationCount: number
-      prefetchShardGroupCount: number
-    }
+    routing?: HomeFeedRoutingTiming
     totalMs: number
   },
 ): HomeFeedResponseWithTiming {

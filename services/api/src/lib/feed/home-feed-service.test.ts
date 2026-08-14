@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import type { CommunityFollowProjectionRow, CommunityMembershipProjectionRow, CommunityRow } from "../auth/auth-db-rows"
 import {
   filterVisibleHomeFeedProjections,
+  formatHomeFeedServerTiming,
   homeFeedCorpusMemberCommunityIds,
   listHomeFeedCommunityViewCounts,
   homeFeedBestRankSql,
@@ -21,6 +22,27 @@ import {
 } from "./home-feed-service"
 import type { Env, HomeFeedItem } from "../../types"
 import { SINGLE_COMMUNITY_VIDEO_FEED_SELECTION_POLICY } from "./video-feed-selection"
+
+describe("formatHomeFeedServerTiming", () => {
+  test("exposes prefetch routing counters as labeled Server-Timing values", () => {
+    const header = formatHomeFeedServerTiming({
+      phases: { community_prefetch_ms: 1286 },
+      routing: {
+        pageCommunityCount: 9,
+        prefetchBatchCount: 1,
+        prefetchOperationCount: 27,
+        prefetchShardGroupCount: 3,
+      },
+      totalMs: 4415,
+    })
+
+    expect(header).toContain("community-prefetch;dur=1286")
+    expect(header).toContain('prefetch-batches;dur=1;desc="count"')
+    expect(header).toContain('prefetch-operations;dur=27;desc="count"')
+    expect(header).toContain('prefetch-shard-groups;dur=3;desc="count"')
+    expect(header).not.toContain("page-communities")
+  })
+})
 
 describe("refreshMaterializedHomeFeedBookings", () => {
   test("replaces cached booking decoration and clears hosts no longer discoverable", async () => {
