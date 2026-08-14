@@ -80,7 +80,7 @@ export async function prepareVideoPostAsset(input: {
   requestUrl: string
   userId: string
   communityId: string
-  body: CreatePostRequest
+  body: Extract<CreatePostRequest, { post_type: "video" }>
 }): Promise<PreparedVideoPostAsset> {
   const accessMode = input.body.access_mode ?? "public"
   const resolvedVideo = await resolveVideoPostAsset({
