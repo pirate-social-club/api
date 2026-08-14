@@ -423,52 +423,52 @@ export async function runShardBulkRead(
   for (let offset = 0; offset < input.operations.length; offset += SHARD_BULK_READ_CONCURRENCY) {
     const batch = input.operations.slice(offset, offset + SHARD_BULK_READ_CONCURRENCY)
     operations.push(...await Promise.all(batch.map(async (operation) => {
-    const operationStartedAt = diagnosticsEnabled ? performance.now() : 0
-    if (diagnosticsEnabled) {
-      activeOperations += 1
-      maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
-    }
-    try {
-      return { communityId: operation.communityId, result: await runShardBatch(env, operation) }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      const missing = operation.allowMissingTables?.filter((table) =>
-        new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(message),
-      ) ?? []
-      if (missing.length === 0) throw error
+      const operationStartedAt = diagnosticsEnabled ? performance.now() : 0
+      if (diagnosticsEnabled) {
+        activeOperations += 1
+        maxActiveOperations = Math.max(maxActiveOperations, activeOperations)
+      }
+      try {
+        return { communityId: operation.communityId, result: await runShardBatch(env, operation) }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        const missing = operation.allowMissingTables?.filter((table) =>
+          new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(message),
+        ) ?? []
+        if (missing.length === 0) throw error
 
-      // Legacy shards may lack one explicitly named table (currently only
-      // `bookings`). Re-run the operation statement-by-statement so that the
-      // absent table contributes an empty result while every other failure is
-      // still fail-closed.
-      const values: ShardQueryResult[] = []
-      for (const statement of operation.statements) {
-        try {
-          const value = await runShardRead(env, {
-            communityId: operation.communityId,
-            bindingName: operation.bindingName,
-            statement,
-          })
-          if (!value.ok) return { communityId: operation.communityId, result: value }
-          values.push(value.value)
-        } catch (statementError) {
-          const statementMessage = statementError instanceof Error ? statementError.message : String(statementError)
-          if (operation.allowMissingTables?.some((table) =>
-            new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(statementMessage),
-          )) {
-            values.push({ rows: [] })
-            continue
+        // Legacy shards may lack one explicitly named table (currently only
+        // `bookings`). Re-run the operation statement-by-statement so that the
+        // absent table contributes an empty result while every other failure is
+        // still fail-closed.
+        const values: ShardQueryResult[] = []
+        for (const statement of operation.statements) {
+          try {
+            const value = await runShardRead(env, {
+              communityId: operation.communityId,
+              bindingName: operation.bindingName,
+              statement,
+            })
+            if (!value.ok) return { communityId: operation.communityId, result: value }
+            values.push(value.value)
+          } catch (statementError) {
+            const statementMessage = statementError instanceof Error ? statementError.message : String(statementError)
+            if (operation.allowMissingTables?.some((table) =>
+              new RegExp(`no such table:\\s*(?:main\\.)?${table}\\b`, "iu").test(statementMessage),
+            )) {
+              values.push({ rows: [] })
+              continue
+            }
+            throw statementError
           }
-          throw statementError
+        }
+        return { communityId: operation.communityId, result: { ok: true as const, value: values } }
+      } finally {
+        if (diagnosticsEnabled) {
+          operationDurationsMs.push(performance.now() - operationStartedAt)
+          activeOperations -= 1
         }
       }
-      return { communityId: operation.communityId, result: { ok: true as const, value: values } }
-    } finally {
-      if (diagnosticsEnabled) {
-        operationDurationsMs.push(performance.now() - operationStartedAt)
-        activeOperations -= 1
-      }
-    }
     })))
   }
   if (diagnosticsEnabled) {
