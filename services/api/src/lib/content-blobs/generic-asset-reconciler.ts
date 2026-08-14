@@ -138,6 +138,7 @@ export async function reconcileGenericAssetPayloads(input: {
     summary.communities += 1
     const db = await openCommunityReadClient(input.env, repository, community.community_id)
     try {
+      const payloadRefs = new Set<string>()
       const result = await db.client.execute({
         sql: `
           SELECT assets.asset_id, assets.community_id, assets.creator_user_id, assets.source_post_id,
@@ -175,6 +176,7 @@ export async function reconcileGenericAssetPayloads(input: {
           enforcementState: value.enforcement_state == null ? null : String(value.enforcement_state) as GenericPayload["enforcementState"],
         }
         summary.payloads += 1
+        payloadRefs.add(payload.payloadRef)
         const blob = await executeFirst(control, {
           sql: `
             SELECT community_id, uploader_user_id, status, security_scan_state,
@@ -186,7 +188,16 @@ export async function reconcileGenericAssetPayloads(input: {
           args: [payload.payloadRef],
         })
         if (!blob) {
-          summary.blob_without_payload += 1
+          summary.payload_without_claim += 1
+          const evidence = `generic_asset_reconciliation:${payload.assetId}:${payload.payloadRef}:missing_blob`
+          try {
+            if (await quarantineMismatchedPayload({ env: input.env, repository, payload, reason: evidence, now: nowIso() })) {
+              summary.quarantined += 1
+            }
+          } catch (error) {
+            summary.errors += 1
+            console.warn("[generic-asset-reconciler] missing-blob quarantine failed", error)
+          }
           continue
         }
         const blobValue = blob as Record<string, unknown>
@@ -211,6 +222,15 @@ export async function reconcileGenericAssetPayloads(input: {
         if (blobValue.claim_kind === "asset_payload" && blobValue.claim_ref === payload.assetId) continue
         if (blobValue.claim_kind !== null && blobValue.claim_kind !== undefined) {
           summary.claim_restore_conflict += 1
+          const evidence = `generic_asset_reconciliation:${payload.assetId}:${payload.payloadRef}:claim_conflict`
+          try {
+            if (await quarantineMismatchedPayload({ env: input.env, repository, payload, reason: evidence, now: nowIso() })) {
+              summary.quarantined += 1
+            }
+          } catch (error) {
+            summary.errors += 1
+            console.warn("[generic-asset-reconciler] claim-conflict quarantine failed", error)
+          }
           continue
         }
         summary.payload_without_claim += 1
@@ -233,6 +253,21 @@ export async function reconcileGenericAssetPayloads(input: {
           summary.claim_restore_conflict += 1
           console.warn("[generic-asset-reconciler] claim restore conflict", error)
         }
+      }
+      const claimedBlobs = await control.execute({
+        sql: `
+          SELECT content_blob_id
+          FROM content_blobs
+          WHERE community_id = ?1
+            AND claim_kind = 'asset_payload'
+          ORDER BY claimed_at ASC, content_blob_id ASC
+          LIMIT 500
+        `,
+        args: [community.community_id],
+      })
+      for (const row of claimedBlobs.rows) {
+        const contentBlobId = String((row as Record<string, unknown>).content_blob_id ?? "")
+        if (contentBlobId && !payloadRefs.has(contentBlobId)) summary.blob_without_payload += 1
       }
     } catch (error) {
       summary.errors += 1

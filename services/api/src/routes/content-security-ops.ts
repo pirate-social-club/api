@@ -21,7 +21,10 @@ import {
   createGenericEmergencyControl,
   type GenericEmergencyControlScope,
 } from "../lib/communities/commerce/generic-asset-emergency-controls"
-import { GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE } from "../lib/operator-credential-scopes"
+import {
+  GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE,
+  type OperatorScope,
+} from "../lib/operator-credential-scopes"
 
 type ContentSecurityOpsEnv = { Bindings: Env }
 const contentSecurityOps = new Hono<ContentSecurityOpsEnv>()
@@ -92,7 +95,7 @@ function serialize(release: ContentSecurityScannerReleaseRecord) {
 async function operator(
   c: Context<ContentSecurityOpsEnv>,
   services: Dependencies,
-  requiredScope = CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE,
+  requiredScope: OperatorScope = CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE,
 ) {
   const actor = await services.authenticate({
     env: c.env,
