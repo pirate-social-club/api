@@ -879,7 +879,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       await withProductionPostgresClient(async (client) => {
         const register = (campaignId: string) => client.execute({
           sql: rewardSongPoolRegisterSql(true),
-          args: ["cmt_reward_pg", "pst_slot_pg", campaignId, NOW],
+          args: ["cmt_reward_pg", "pst_slot_pg", campaignId, "karaoke", NOW],
         })
         const attempts = await Promise.all([
           register("rcp_slot_a_pg"),
@@ -941,12 +941,12 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `, [NOW])
     await seed.unsafe(`
       INSERT INTO reward_song_pools (
-        community_id, post_id, reward_campaign_id, created_at, updated_at
+        community_id, post_id, objective, reward_campaign_id, created_at, updated_at
       ) VALUES
-        ('cmt_reward_pg', 'pst_cancel_draft_pg', 'rcp_cancel_draft_pg', $1, $1),
-        ('cmt_reward_pg', 'pst_cancel_funded_pg', 'rcp_cancel_funded_pg', $1, $1),
-        ('cmt_reward_pg', 'pst_expired_draft_pg', 'rcp_expired_draft_pg', $1, $1),
-        ('cmt_reward_pg', 'pst_recent_draft_pg', 'rcp_recent_draft_pg', $1, $1)
+        ('cmt_reward_pg', 'pst_cancel_draft_pg', 'study', 'rcp_cancel_draft_pg', $1, $1),
+        ('cmt_reward_pg', 'pst_cancel_funded_pg', 'study', 'rcp_cancel_funded_pg', $1, $1),
+        ('cmt_reward_pg', 'pst_expired_draft_pg', 'study', 'rcp_expired_draft_pg', $1, $1),
+        ('cmt_reward_pg', 'pst_recent_draft_pg', 'study', 'rcp_recent_draft_pg', $1, $1)
     `, [NOW])
     await seed.unsafe(`INSERT INTO reward_campaign_funding_effects (
       reward_campaign_funding_effect_id, reward_campaign_id, status,
@@ -1042,9 +1042,9 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `, [campaignId, postId])
     await seed.unsafe(`
       INSERT INTO reward_song_pools (
-        community_id, post_id, reward_campaign_id, created_at, updated_at
+        community_id, post_id, objective, reward_campaign_id, created_at, updated_at
       ) VALUES (
-        'cmt_reward_pg', $2, $1, '2026-07-29T00:00:00.000Z',
+        'cmt_reward_pg', $2, 'study', $1, '2026-07-29T00:00:00.000Z',
         '2026-07-29T00:00:00.000Z'
       )
     `, [campaignId, postId])
@@ -1495,10 +1495,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     `, [NOW])
     await seed.unsafe(`
       INSERT INTO reward_song_pools (
-        community_id, post_id, reward_campaign_id, created_at, updated_at
+        community_id, post_id, objective, reward_campaign_id, created_at, updated_at
       ) VALUES (
         'cmt_reward_pg', 'pst_provider_mismatch_pg',
-        'rcp_provider_mismatch_pg', $1, $1
+        'study', 'rcp_provider_mismatch_pg', $1, $1
       )
     `, [NOW])
     await seed.end()
@@ -1622,10 +1622,10 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       'confirmed', 100, $1
     )`, [NOW])
     await seed.unsafe(`INSERT INTO reward_song_pools (
-      community_id, post_id, reward_campaign_id, created_at, updated_at
+      community_id, post_id, objective, reward_campaign_id, created_at, updated_at
     ) VALUES (
       'cmt_reward_pg', 'pst_evidence_conflict_pg',
-      'rcp_evidence_conflict_pg', $1, $1
+      'study', 'rcp_evidence_conflict_pg', $1, $1
     )`, [NOW])
     await seed.end()
 
