@@ -100,7 +100,7 @@ export type PublishedSongFillBlankReport = {
   total_lines: number
 }
 
-export type PublishedSongFillBlankFleetReport = {
+export type PublishedSongFillBlankShardReport = {
   format_version: 1
   observed_at: string
   read_only: true
@@ -163,6 +163,9 @@ const EXERCISE_ORDER: Readonly<Record<StudyExerciseRow["exercise_type"], number>
 }
 
 function canonicalCandidateOrder(left: StudyExerciseRow, right: StudyExerciseRow): number {
+  // This report is explicitly first-learn with no review state, so every SQL
+  // due_rank is 1. The remaining keys mirror listExercises exactly:
+  // line_index, sort_order, then id.
   return left.line_index - right.line_index
     || EXERCISE_ORDER[left.exercise_type] - EXERCISE_ORDER[right.exercise_type]
     || left.id.localeCompare(right.id)
@@ -237,6 +240,8 @@ export async function buildPublishedSongFillBlankReport(input: {
     candidate.exercise_type !== "fill_blank" && candidate.qualifies_for_reward !== false)
   const candidateWindow = [...qualifyingCandidates, ...diagnosticCandidates]
     .sort(canonicalCandidateOrder)
+    // `/study` requests this exact larger window whenever fill blank is on,
+    // before selectStudySessionCandidates freezes the ten-card lesson.
     .slice(0, STUDY_FILL_BLANK_CANDIDATE_WINDOW)
   const selected = selectStudySessionCandidates(candidateWindow)
   const selectedOrdinalById = new Map(selected.map((candidate, index) => [candidate.id, index]))
@@ -317,11 +322,11 @@ function readNumber(value: unknown): number | null {
  * explicit because speech credentials and the learner's translation target
  * determine which reward-bearing candidates can displace enrichment.
  */
-export async function generatePublishedSongFillBlankFleetReport(input: {
+export async function generatePublishedSongFillBlankShardReport(input: {
   client: DbExecutor
   observedAt: string
   servingContext: StudyFillBlankReportServingContext
-}): Promise<PublishedSongFillBlankFleetReport> {
+}): Promise<PublishedSongFillBlankShardReport> {
   const result = await input.client.execute({
     sql: `
       SELECT community_id, post_id, COALESCE(song_title, title) AS song_title,

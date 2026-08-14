@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises"
 import type { StudyExerciseRow } from "./post-study-attempt-store"
 import {
   buildPublishedSongFillBlankReport,
-  generatePublishedSongFillBlankFleetReport,
+  generatePublishedSongFillBlankShardReport,
   type StudyFillBlankReportPost,
 } from "./post-study-fill-blank-report"
 import type { StudyUnitRow } from "./post-study-unit-service"
@@ -111,9 +111,9 @@ describe("published song fill-blank report", () => {
       .toMatchObject({ unsupported_language: 2 })
   })
 
-  test("shows that ten qualifying cards make generated cloze cards invisible", async () => {
+  test("matches the route's thirty-candidate window and makes enrichment invisible at capacity", async () => {
     const corpus = await corpusFixture()
-    const sourceLines = corpus.flatMap((song) => song.lines).slice(0, 12)
+    const sourceLines = corpus.flatMap((song) => song.lines).slice(0, 20)
     const song: CorpusSong = { id: "long-fixture", language: "en", lines: sourceLines }
     const units = unitsForSong(song)
     const report = await buildPublishedSongFillBlankReport({
@@ -123,8 +123,11 @@ describe("published song fill-blank report", () => {
     })
 
     expect(report.eligible_line_count).toBeGreaterThan(0)
-    expect(report.session_inclusion.qualifying_candidates).toBe(12)
+    expect(report.session_inclusion.qualifying_candidates).toBe(20)
+    expect(report.session_inclusion.candidate_window_count).toBe(30)
     expect(report.session_inclusion.included_fill_blank_candidates).toBe(0)
+    expect(report.eligible_lines.some((line) => line.session_exclusion_reason === "outside_candidate_window"))
+      .toBe(true)
     expect(report.eligible_lines.every((line) =>
       line.session_exclusion_reason === "qualifying_capacity"
         || line.session_exclusion_reason === "outside_candidate_window")).toBe(true)
@@ -176,7 +179,7 @@ describe("published song fill-blank report", () => {
         })),
       ], "write")
 
-      const report = await generatePublishedSongFillBlankFleetReport({
+      const report = await generatePublishedSongFillBlankShardReport({
         client,
         observedAt: "2026-08-14T00:00:00.000Z",
         servingContext: {
