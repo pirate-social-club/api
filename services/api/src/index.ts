@@ -79,6 +79,7 @@ import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-histo
 import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
 import { expireUnclaimedContentBlobs } from "./lib/content-blobs/content-blob-repository"
 import { reconcileGenericAssetPayloads } from "./lib/content-blobs/generic-asset-reconciler"
+import { reconcileDeckImportPlaintextRetention } from "./lib/content-blobs/deck-import-retention"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import {
   checkScheduledD1PoolCapacity,
@@ -1152,12 +1153,23 @@ async function reconcileScheduledContentBlobs(env: Env): Promise<void> {
 
 async function reconcileScheduledGenericAssetPayloads(env: Env): Promise<void> {
   if (env.GENERIC_DIGITAL_GOODS_ENABLED !== "true") return
-  await reconcileGenericAssetPayloads({
+  const repository = getCommunityRepository(env)
+  const payloadSummary = await reconcileGenericAssetPayloads({
     env,
-    repository: getCommunityRepository(env),
+    repository,
     communityLimit: 25,
     payloadLimitPerCommunity: 100,
   })
+  const retentionSummary = await reconcileDeckImportPlaintextRetention({
+    env,
+    repository,
+  })
+  if (retentionSummary.purged > 0 || retentionSummary.errors > 0) {
+    console.info("[scheduled] deck import plaintext retention reconciled", {
+      payload_summary: payloadSummary,
+      retention_summary: retentionSummary,
+    })
+  }
 }
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {

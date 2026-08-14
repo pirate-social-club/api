@@ -4,6 +4,7 @@ import {
   LEARNING_REVIEW_ALGORITHM,
   LEARNING_REVIEW_PARAMETERS_VERSION,
   reviewLearningCard,
+  type ReviewState,
 } from "./review-scheduler"
 
 describe("fsrs_6_v1 review scheduler", () => {
@@ -37,6 +38,39 @@ describe("fsrs_6_v1 review scheduler", () => {
     expect(second.state.reps).toBe(2)
     expect(second.state.lastReviewedAtMs).toBe(first.state.dueAtMs)
     expect(second.state.dueAtMs).toBeGreaterThan(first.state.dueAtMs)
+  })
+
+  test("matches the pinned FSRS-6 reference interval vector", () => {
+    // Reference: open-spaced-repetition/ts-fsrs FSRS-6 fixture, using the
+    // default 21 weights, short-term learning steps, and fuzz disabled.
+    const ratings = [
+      "good", "good", "good", "good", "good", "good",
+      "again", "again", "good", "good", "good", "good", "good",
+    ] as const
+    const expectedIntervals = [0, 2, 11, 46, 163, 498, 0, 0, 2, 4, 7, 12, 21]
+    let state: ReviewState | null = null
+    let nowMs = Date.UTC(2022, 11, 29, 12, 30)
+    const intervals: number[] = []
+    for (const rating of ratings) {
+      const transition = reviewLearningCard({ nowMs, rating, state })
+      intervals.push(transition.state.scheduledIntervalDays)
+      state = transition.state
+      nowMs = transition.state.dueAtMs
+    }
+    expect(intervals).toEqual(expectedIntervals)
+  })
+
+  test("matches the pinned FSRS-6 memory-state vector", () => {
+    const ratings = ["again", "good", "good", "good", "good", "good"] as const
+    const elapsedDays = [0, 0, 1, 3, 8, 21]
+    let state: ReviewState | null = null
+    let nowMs = Date.UTC(2022, 11, 29, 12, 30)
+    for (const [index, rating] of ratings.entries()) {
+      nowMs += elapsedDays[index]! * 24 * 60 * 60 * 1000
+      state = reviewLearningCard({ nowMs, rating, state }).state
+    }
+    expect(state?.stability).toBeCloseTo(53.62691, 4)
+    expect(state?.difficulty).toBeCloseTo(6.3574867, 4)
   })
 
   test("rejects invalid timestamps and non-finite persisted state", () => {

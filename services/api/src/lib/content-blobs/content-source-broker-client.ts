@@ -147,6 +147,44 @@ export async function readContentSource(input: {
   return bytes
 }
 
+/**
+ * Delete one hash-bound plaintext source through the private broker.
+ *
+ * The broker confirms absence with a HEAD after the delete. A missing source
+ * is therefore treated as already absent, while every other non-success
+ * response remains retryable or a conflict at the caller's boundary.
+ */
+export async function deleteContentSource(input: {
+  env: Env
+  contentBlobId: string
+  expectedSizeBytes: number
+  expectedSha256: string
+}): Promise<"deleted" | "absent"> {
+  const { service, secret } = requireContentSourceBroker(input.env)
+  let response: Response
+  try {
+    response = await service.fetch(new Request(
+      `https://content-source-broker.internal/objects/${encodeURIComponent(input.contentBlobId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "x-content-sha256": input.expectedSha256.replace(/^0x/, "").toLowerCase(),
+          "x-content-size": String(input.expectedSizeBytes),
+        },
+      },
+    ))
+  } catch {
+    throw providerUnavailable("Content source storage is unavailable")
+  }
+  if (response.status === 204) return "deleted"
+  if (response.status === 404) return "absent"
+  if (response.status === 409) {
+    throw conflictError("Content source storage metadata does not match")
+  }
+  throw providerUnavailable(`Content source deletion failed with status ${response.status}`)
+}
+
 function boundedText(value: unknown, maxLength = 256): string | null {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength ? value : null
 }

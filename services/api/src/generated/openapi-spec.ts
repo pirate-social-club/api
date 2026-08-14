@@ -75,6 +75,9 @@ const spec = {
       "name": "Song Study"
     },
     {
+      "name": "Learning Decks"
+    },
+    {
       "name": "Dance"
     },
     {
@@ -5179,6 +5182,587 @@ const spec = {
         "operationId": "put_communities_by_community_id_song_artifact_uploads_by_song_artifact_upload_id_content"
       }
     },
+    "/communities/{community_id}/learning-decks": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Create a learning deck draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_decks"
+      }
+    },
+    "/communities/{community_id}/learning-decks/by-asset/{asset_id}": {
+      "get": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Read a published learning deck by asset",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/AssetId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_learning_decks_by_asset_by_asset_id"
+      }
+    },
+    "/communities/{community_id}/learning-decks/{deck_id}": {
+      "get": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Read an owned learning deck draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_learning_decks_by_deck_id"
+      }
+    },
+    "/communities/{community_id}/learning-decks/{deck_id}/cards": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Add or update a learning deck card",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckCardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_decks_by_deck_id_cards"
+      }
+    },
+    "/communities/{community_id}/learning-decks/{deck_id}/cards/{card_id}": {
+      "patch": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Update a learning deck card",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningCardId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckCardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "patch_communities_by_community_id_learning_decks_by_deck_id_cards_by_card_id"
+      },
+      "delete": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Retire a learning deck card",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningCardId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "delete_communities_by_community_id_learning_decks_by_deck_id_cards_by_card_id"
+      }
+    },
+    "/communities/{community_id}/learning-decks/{deck_id}/validate": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Validate a learning deck draft and produce its canonical package",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckValidation"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_decks_by_deck_id_validate"
+      }
+    },
+    "/communities/{community_id}/learning-decks/imports/preview": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Queue or read a durable CSV import preview",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckCsvImportPreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckCsvImportStatus"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_decks_imports_preview"
+      }
+    },
+    "/communities/{community_id}/learning-decks/imports/{import_job_id}": {
+      "get": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Read a durable CSV import job and preview",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/ImportJobId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckCsvImportStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_learning_decks_imports_by_import_job_id"
+      }
+    },
+    "/communities/{community_id}/learning-decks/{deck_id}/imports/commit": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Commit a ready CSV import into a learning deck draft",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckCsvImportCommitRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckDraft"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_decks_by_deck_id_imports_commit"
+      }
+    },
+    "/communities/{community_id}/learning-decks/{deck_id}/study-sessions": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Start or resume a deterministic learning deck study session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningDeckId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckStudySessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckStudySession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_decks_by_deck_id_study_sessions"
+      }
+    },
+    "/communities/{community_id}/learning-study-sessions/{session_id}": {
+      "get": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Read a learning study session",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningSessionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckStudySession"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "get_communities_by_community_id_learning_study_sessions_by_session_id"
+      }
+    },
+    "/communities/{community_id}/learning-study-sessions/{session_id}/reveal": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Reveal the current study answer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckRevealRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckStudySession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_study_sessions_by_session_id_reveal"
+      }
+    },
+    "/communities/{community_id}/learning-study-sessions/{session_id}/rate": {
+      "post": {
+        "tags": [
+          "Learning Decks"
+        ],
+        "summary": "Record an idempotent FSRS study rating",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CommunityId"
+          },
+          {
+            "$ref": "#/components/parameters/LearningSessionId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LearningDeckRateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDeckStudySession"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AuthError"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        },
+        "operationId": "post_communities_by_community_id_learning_study_sessions_by_session_id_rate"
+      }
+    },
     "/communities/{community_id}/song-artifacts": {
       "get": {
         "tags": [
@@ -7633,11 +8217,7 @@ const spec = {
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "enum": [
-                "study",
-                "karaoke"
-              ]
+              "$ref": "#/components/schemas/RewardCampaignObjective"
             }
           }
         ],
@@ -7940,11 +8520,7 @@ const spec = {
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "enum": [
-                "study",
-                "karaoke"
-              ]
+              "$ref": "#/components/schemas/RewardCampaignObjective"
             }
           }
         ],
@@ -9063,6 +9639,46 @@ const spec = {
       "SongArtifactUploadId": {
         "in": "path",
         "name": "song_artifact_upload_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AssetId": {
+        "in": "path",
+        "name": "asset_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "LearningDeckId": {
+        "in": "path",
+        "name": "deck_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "LearningCardId": {
+        "in": "path",
+        "name": "card_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ImportJobId": {
+        "in": "path",
+        "name": "import_job_id",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
+      "LearningSessionId": {
+        "in": "path",
+        "name": "session_id",
         "required": true,
         "schema": {
           "type": "string"
@@ -14783,6 +15399,130 @@ const spec = {
                 "type": "string"
               }
             }
+          },
+          {
+            "required": [
+              "post_type",
+              "title",
+              "file_upload",
+              "access_mode"
+            ],
+            "properties": {
+              "post_type": {
+                "type": "string",
+                "enum": [
+                  "file"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "file_upload": {
+                "type": "string"
+              },
+              "access_mode": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "locked"
+                ]
+              },
+              "license_preset": {
+                "type": "string",
+                "enum": [
+                  "non-commercial",
+                  "commercial-use",
+                  "commercial-remix"
+                ],
+                "nullable": true
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "link_url"
+                  ]
+                },
+                {
+                  "required": [
+                    "media_refs"
+                  ]
+                },
+                {
+                  "required": [
+                    "song_artifact_bundle"
+                  ]
+                },
+                {
+                  "required": [
+                    "lyrics"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "required": [
+              "post_type",
+              "title",
+              "learning_deck",
+              "access_mode"
+            ],
+            "properties": {
+              "post_type": {
+                "type": "string",
+                "enum": [
+                  "deck"
+                ]
+              },
+              "title": {
+                "type": "string"
+              },
+              "learning_deck": {
+                "type": "string"
+              },
+              "access_mode": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "locked"
+                ]
+              },
+              "license_preset": {
+                "type": "string",
+                "enum": [
+                  "non-commercial",
+                  "commercial-use",
+                  "commercial-remix"
+                ],
+                "nullable": true
+              }
+            },
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "link_url"
+                  ]
+                },
+                {
+                  "required": [
+                    "media_refs"
+                  ]
+                },
+                {
+                  "required": [
+                    "song_artifact_bundle"
+                  ]
+                },
+                {
+                  "required": [
+                    "lyrics"
+                  ]
+                }
+              ]
+            }
           }
         ],
         "required": [
@@ -14861,7 +15601,9 @@ const spec = {
               "video",
               "link",
               "song",
-              "crosspost"
+              "crosspost",
+              "file",
+              "deck"
             ]
           },
           "body": {
@@ -14937,6 +15679,14 @@ const spec = {
             "nullable": true
           },
           "song_artifact_bundle": {
+            "type": "string",
+            "nullable": true
+          },
+          "file_upload": {
+            "type": "string",
+            "nullable": true
+          },
+          "learning_deck": {
             "type": "string",
             "nullable": true
           },
@@ -15095,7 +15845,9 @@ const spec = {
               "video",
               "link",
               "song",
-              "crosspost"
+              "crosspost",
+              "file",
+              "deck"
             ]
           },
           "status": {
@@ -15736,6 +16488,7 @@ const spec = {
           "community",
           "post",
           "comment",
+          "asset",
           "reporter_user",
           "reason_code",
           "created"
@@ -15760,6 +16513,10 @@ const spec = {
             "nullable": true
           },
           "comment": {
+            "type": "string",
+            "nullable": true
+          },
+          "asset": {
             "type": "string",
             "nullable": true
           },
@@ -16762,6 +17519,320 @@ const spec = {
         "properties": {
           "content_base64": {
             "type": "string"
+          }
+        }
+      },
+      "LearningDeckCreateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "LearningDeckDraft": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "deck",
+          "version",
+          "cards"
+        ],
+        "properties": {
+          "deck": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "learning_deck_id",
+              "title",
+              "description",
+              "status"
+            ],
+            "properties": {
+              "learning_deck_id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "published",
+                  "archived"
+                ]
+              }
+            }
+          },
+          "version": {
+            "type": "object",
+            "additionalProperties": true,
+            "required": [
+              "learning_deck_version_id",
+              "version",
+              "status"
+            ],
+            "properties": {
+              "learning_deck_version_id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              }
+            }
+          },
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LearningDeckCard"
+            }
+          }
+        }
+      },
+      "LearningDeckCardRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "card_type",
+          "prompt",
+          "answer"
+        ],
+        "properties": {
+          "card_id": {
+            "type": "string",
+            "nullable": true
+          },
+          "card_type": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "cloze"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ordinal": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          }
+        }
+      },
+      "LearningDeckValidation": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "draft",
+          "issues",
+          "canonical"
+        ],
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/LearningDeckDraft"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true,
+              "required": [
+                "message"
+              ],
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "canonical": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true,
+            "required": [
+              "schema_version",
+              "card_count",
+              "content_hash",
+              "json"
+            ],
+            "properties": {
+              "schema_version": {
+                "type": "integer"
+              },
+              "card_count": {
+                "type": "integer"
+              },
+              "content_hash": {
+                "type": "string"
+              },
+              "json": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "LearningDeckCsvImportPreviewRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "content_blob_id"
+        ],
+        "properties": {
+          "content_blob_id": {
+            "type": "string"
+          }
+        }
+      },
+      "LearningDeckCsvImportStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "import_job_id",
+          "status",
+          "preview",
+          "error"
+        ],
+        "properties": {
+          "import_job_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed"
+            ]
+          },
+          "preview": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LearningDeckCsvImportPreview"
+              }
+            ],
+            "nullable": true
+          },
+          "error": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LearningDeckCsvImportCommitRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "content_blob_id",
+          "import_job_id",
+          "prompt_column",
+          "answer_column"
+        ],
+        "properties": {
+          "content_blob_id": {
+            "type": "string"
+          },
+          "import_job_id": {
+            "type": "string"
+          },
+          "prompt_column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "answer_column": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tags_column": {
+            "type": "integer",
+            "minimum": 0,
+            "nullable": true
+          }
+        }
+      },
+      "LearningDeckStudySessionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "now_ms": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "LearningDeckStudySession": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "LearningDeckRevealRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "expected_session_revision"
+        ],
+        "properties": {
+          "expected_session_revision": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "LearningDeckRateRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "item_id",
+          "rating",
+          "idempotency_key",
+          "expected_session_revision"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string"
+          },
+          "rating": {
+            "type": "string",
+            "enum": [
+              "again",
+              "hard",
+              "good",
+              "easy"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "expected_session_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reviewed_at_ms": {
+            "type": "integer",
+            "format": "int64"
           }
         }
       },
@@ -18607,6 +19678,13 @@ const spec = {
             "type": "string"
           }
         }
+      },
+      "RewardCampaignObjective": {
+        "type": "string",
+        "enum": [
+          "study",
+          "karaoke"
+        ]
       },
       "RewardCampaign": {
         "type": "object",
@@ -22263,7 +23341,13 @@ const spec = {
           "listing_creation_failed",
           "catalog_sync_failed",
           "provider_unavailable",
-          "internal_error"
+          "internal_error",
+          "payload_verification_failed",
+          "payload_safety_blocked",
+          "payload_safety_review_required",
+          "payload_claim_failed",
+          "deck_package_generation_failed",
+          "deck_package_hash_mismatch"
         ]
       },
       "PostEmbed": {
@@ -22326,7 +23410,10 @@ const spec = {
               "image",
               "video",
               "link",
-              "song"
+              "song",
+              "crosspost",
+              "file",
+              "deck"
             ],
             "nullable": true
           },
@@ -23320,6 +24407,46 @@ const spec = {
             "type": "string",
             "nullable": true
           },
+          "previous_post_status": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "draft",
+              "published",
+              "hidden",
+              "removed",
+              "deleted"
+            ]
+          },
+          "next_post_status": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "draft",
+              "published",
+              "hidden",
+              "removed",
+              "deleted"
+            ]
+          },
+          "previous_asset_enforcement_state": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "active",
+              "quarantined",
+              "blocked"
+            ]
+          },
+          "next_asset_enforcement_state": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "active",
+              "quarantined",
+              "blocked"
+            ]
+          },
           "created": {
             "type": "integer",
             "format": "int64"
@@ -23428,7 +24555,10 @@ const spec = {
           "remove",
           "restore",
           "age_gate",
-          "set_content_rating"
+          "set_content_rating",
+          "quarantine_asset",
+          "block_asset",
+          "restore_asset"
         ]
       },
       "RightsReviewCaseListItem": {
@@ -23671,6 +24801,111 @@ const spec = {
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "LearningDeckCard": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "cardId",
+          "cardType",
+          "prompt",
+          "answer",
+          "tags",
+          "ordinal",
+          "retiredAt"
+        ],
+        "properties": {
+          "cardId": {
+            "type": "string"
+          },
+          "cardType": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "cloze"
+            ]
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "answer": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "ordinal": {
+            "type": "integer"
+          },
+          "retiredAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "contentHash": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
+      "LearningDeckCsvImportPreview": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "headers",
+          "rows",
+          "errors",
+          "row_count",
+          "error_count"
+        ],
+        "properties": {
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "row",
+                "code",
+                "message"
+              ],
+              "properties": {
+                "row": {
+                  "type": "integer"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "error_count": {
+            "type": "integer"
           }
         }
       },

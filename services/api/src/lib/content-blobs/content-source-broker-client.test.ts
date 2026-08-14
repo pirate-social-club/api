@@ -7,6 +7,7 @@ import {
   CONTENT_SOURCE_STORAGE_ENDPOINT,
   CONTENT_SOURCE_STORAGE_NAMESPACE,
   CONTENT_SOURCE_STORAGE_PROVIDER,
+  deleteContentSource,
   scanContentSource,
   readContentSource,
   storeContentSource,
@@ -152,6 +153,32 @@ describe("content source broker client", () => {
       expectedSha256: `0x${sourceSha256}`,
     })
     expect(result).toEqual(bytes)
+  })
+
+  test("deletes only the hash-bound source and accepts confirmed absence", async () => {
+    const requests: Request[] = []
+    await expect(deleteContentSource({
+      env: env(async (request) => {
+        requests.push(request)
+        expect(request.method).toBe("DELETE")
+        expect(request.url).toEndWith("/objects/cbl_fixture")
+        expect(request.headers.get("authorization")).toBe("Bearer broker-secret")
+        expect(request.headers.get("x-content-sha256")).toBe(sha256)
+        expect(request.headers.get("x-content-size")).toBe(String(bytes.byteLength))
+        return new Response(null, { status: 204 })
+      }),
+      contentBlobId: "cbl_fixture",
+      expectedSizeBytes: bytes.byteLength,
+      expectedSha256: `0x${sha256}`,
+    })).resolves.toBe("deleted")
+    expect(requests).toHaveLength(1)
+
+    await expect(deleteContentSource({
+      env: env(async () => new Response(null, { status: 404 })),
+      contentBlobId: "cbl_fixture",
+      expectedSizeBytes: bytes.byteLength,
+      expectedSha256: `0x${sha256}`,
+    })).resolves.toBe("absent")
   })
 
   test("distinguishes immutable object conflicts from transient service failure", async () => {
