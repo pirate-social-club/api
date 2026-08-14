@@ -8,6 +8,8 @@ export type RewardCampaignConfig = {
   enabled: boolean
   chainId: number
   tokenAddress: string
+  tokenDecimals: number
+  tokenSymbol: string
   treasuryAddress: string
   rpcUrl: string
   quoteTtlSeconds: number
@@ -21,7 +23,7 @@ export type RewardCampaignConfig = {
 
 export type RewardCampaignAssetConfig = Pick<
   RewardCampaignConfig,
-  "chainId" | "tokenAddress" | "treasuryAddress" | "rpcUrl"
+  "chainId" | "tokenAddress" | "tokenDecimals" | "tokenSymbol" | "treasuryAddress" | "rpcUrl"
 >
 
 const CAMPAIGN_ENV_KEYS = [
@@ -83,6 +85,12 @@ export function resolveRewardCampaignAssetConfig(env: Env): RewardCampaignAssetC
   const config = {
     chainId,
     tokenAddress: address(env, "REWARDS_CAMPAIGN_USDC_TOKEN_ADDRESS"),
+    // The campaign asset is canonical USDC by construction: the env key is
+    // USDC-named and settlement readiness pins it to the canonical settlement
+    // token, so precision/display metadata is constant. A token registry
+    // lookup replaces these literals when non-USDC assets are admitted.
+    tokenDecimals: 6,
+    tokenSymbol: "USDC",
     treasuryAddress: address(env, "REWARDS_CAMPAIGN_TREASURY_ADDRESS"),
     rpcUrl,
   }
@@ -100,6 +108,8 @@ export function resolveRewardCampaignConfig(env: Env): RewardCampaignConfig {
       enabled: false,
       chainId: 0,
       tokenAddress: "",
+      tokenDecimals: 0,
+      tokenSymbol: "",
       treasuryAddress: "",
       rpcUrl: "",
       quoteTtlSeconds: 0,

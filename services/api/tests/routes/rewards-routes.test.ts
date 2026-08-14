@@ -658,7 +658,7 @@ describe("rewards routes", () => {
     expect(stored.rows[0]).toMatchObject({
       default_amount_cents: 40,
       max_claim_cents: 80,
-      terms_version: 4,
+      terms_version: 5,
     })
 
     const quote = await app.request(`http://pirate.test/reward_campaigns/${campaign.id}/funding_quotes`, {
