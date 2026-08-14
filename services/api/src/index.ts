@@ -78,6 +78,7 @@ import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/material
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
 import { expireUnclaimedContentBlobs } from "./lib/content-blobs/content-blob-repository"
+import { reconcileGenericAssetPayloads } from "./lib/content-blobs/generic-asset-reconciler"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import {
   checkScheduledD1PoolCapacity,
@@ -1147,6 +1148,16 @@ async function reconcileScheduledContentBlobs(env: Env): Promise<void> {
       content_blob_ids: summary.contentBlobIds,
     }))
   }
+}
+
+async function reconcileScheduledGenericAssetPayloads(env: Env): Promise<void> {
+  if (env.GENERIC_DIGITAL_GOODS_ENABLED !== "true") return
+  await reconcileGenericAssetPayloads({
+    env,
+    repository: getCommunityRepository(env),
+    communityLimit: 25,
+    payloadLimitPerCommunity: 100,
+  })
 }
 
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
@@ -2266,6 +2277,9 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
         : []),
       ...(env.CONTROL_PLANE_DATABASE_URL
         ? [{ name: "reconcile_content_blob_lifecycle", run: () => reconcileScheduledContentBlobs(env) }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL && env.GENERIC_DIGITAL_GOODS_ENABLED === "true"
+        ? [{ name: "reconcile_generic_asset_payloads", run: () => reconcileScheduledGenericAssetPayloads(env) }]
         : []),
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },

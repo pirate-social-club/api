@@ -42,6 +42,7 @@ import {
   CONTENT_SOURCE_STORAGE_ENDPOINT,
   storeContentSource,
 } from "./content-source-broker-client"
+import { assertGenericEmergencyControlsClear } from "../communities/commerce/generic-asset-emergency-controls"
 
 const CONTENT_BLOB_SESSION_TTL_MS = 60 * 60 * 1000
 type ContentBlobCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
@@ -97,6 +98,15 @@ export async function createContentBlob(input: {
   requireContentBlobUploadsEnabled(input.env, input.communityId)
   assertContentSourceBrokerConfigured(input.env)
   assertCreateContentBlobRequest(input.body)
+  await assertGenericEmergencyControlsClear({
+    client: getControlPlaneClient(input.env),
+    context: {
+      communityId: input.communityId,
+      uploaderUserId: input.userId,
+      validationProfile: input.body.validation_profile.trim(),
+    },
+    notFoundMessage: "Content blob uploads are not enabled",
+  })
   await requireCommunityMember(input)
 
   const now = nowIso()

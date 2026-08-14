@@ -3,6 +3,7 @@ import type { Context } from "hono"
 import type { AuthenticatedEnv } from "../lib/auth-middleware"
 import {
   getModerationCaseDetail,
+  inspectGenericAssetForModeration,
   listCommunityModerationCases,
   reportComment,
   reportPost,
@@ -74,6 +75,20 @@ export function registerCommunityModerationRoutes(communities: Hono<Authenticate
       userId: actor.userId,
       communityId,
       moderationCaseId: decodePublicModerationCaseId(c.req.param("moderationCaseId")),
+      communityRepository,
+    })
+    return c.json(result, 200)
+  })
+
+  communities.post("/:communityId/moderation/cases/:moderationCaseId/asset-inspection", async (c) => {
+    const { actor, communityId, communityRepository } = await getResolvedCommunityRouteContext(c)
+    const body = await requireJsonBody<{ reason?: string }>(c, "Invalid asset inspection payload")
+    const result = await inspectGenericAssetForModeration({
+      env: c.env,
+      userId: actor.userId,
+      communityId,
+      moderationCaseId: decodePublicModerationCaseId(c.req.param("moderationCaseId")),
+      reason: body.reason ?? "",
       communityRepository,
     })
     return c.json(result, 200)

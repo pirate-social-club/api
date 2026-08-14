@@ -69,7 +69,7 @@ export async function insertContentSecurityScanJob(input: {
   scanJobId: string
   contentBlobId: string
   scannerRelease: ContentSecurityScannerRelease
-  requestReason: "initial_upload"
+  requestReason: "initial_upload" | "definition_refresh" | "buyer_report" | "moderation" | "operator"
   expectedContentHash: string
   expectedSizeBytes: number
   maxAttempts: number

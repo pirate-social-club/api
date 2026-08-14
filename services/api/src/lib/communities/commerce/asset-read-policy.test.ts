@@ -23,6 +23,9 @@ function executor(rowsByTable: { payload?: QueryResultRow; enforcement?: QueryRe
       if (sql.includes("FROM asset_enforcement")) {
         return { rows: rowsByTable.enforcement ? [rowsByTable.enforcement] : [] }
       }
+      if (sql.includes("FROM generic_asset_emergency_controls")) {
+        return { rows: [] }
+      }
       throw new Error(`Unexpected query: ${sql}`)
     },
   }

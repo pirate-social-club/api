@@ -5,19 +5,25 @@ import type {
 } from "../communities/db-community-repository"
 import type { ProfileRepository, UserRepository } from "../auth/repositories"
 import { getProfilePublicHandleLabel } from "../auth/auth-serializers"
-import type { DbExecutor } from "../db-helpers"
+import { executeFirst, type DbExecutor } from "../db-helpers"
 import { badRequestError, internalError, notFoundError } from "../errors"
-import { nowIso } from "../helpers"
+import { makeId, nowIso } from "../helpers"
 import { withTransaction } from "../transactions"
 import { logPipelineInfo } from "../observability/pipeline-log"
 import { updateStoryRegisteredAssetPostStatus } from "../communities/commerce/derivative-source-projection"
-import { getAssetEnforcement } from "../communities/commerce/generic-asset-repository"
+import { getActivePrimaryAssetPayload, getAssetEnforcement } from "../communities/commerce/generic-asset-repository"
 import { isGenericAssetKind } from "../communities/commerce/asset-kind-policy"
 import { getAssetRow } from "../communities/commerce/queries"
 import { getPostById } from "../posts/community-post-query-store"
 import { getCommentById } from "../comments/community-comment-store"
 import type { Env } from "../../env"
 import { schedulePublicPostCachePurge } from "../public-read-cache-invalidation"
+import { getControlPlaneClient } from "../runtime-deps"
+import {
+  findActiveContentSecurityScannerRelease,
+  insertContentSecurityScanJob,
+} from "../content-security/content-security-repository"
+import { CONTENT_SECURITY_INITIAL_SCAN_MAX_ATTEMPTS } from "../content-security/content-security-types"
 import {
   createModerationAction,
   createModerationCase,
@@ -147,6 +153,53 @@ async function buildModerationCaseDetail(input: {
   }
 }
 
+/**
+ * A buyer report is also a durable request to re-check the exact immutable
+ * bytes they observed. The report remains accepted when the scanner is
+ * temporarily unavailable; the warning is operationally visible and the
+ * normal scanner dispatcher will pick up the queued job once a release is
+ * active.
+ */
+async function enqueueGenericAssetBuyerRescan(input: {
+  env: Env
+  dbClient: DbExecutor
+  communityId: string
+  postId: string
+  now: string
+}): Promise<void> {
+  const post = await getPostById(input.dbClient, input.postId)
+  if (!post?.asset_id) return
+  const asset = await getAssetRow(input.dbClient, input.communityId, post.asset_id)
+  if (!asset || !isGenericAssetKind(asset.asset_kind)) return
+  const payload = await getActivePrimaryAssetPayload(input.dbClient, asset.asset_id)
+  if (!payload) return
+  const control = getControlPlaneClient(input.env)
+  const release = await findActiveContentSecurityScannerRelease({
+    executor: control,
+    securityScanProfile: asset.asset_kind === "learning_deck" ? "deck_import_csv_v1" : "download_file_v1",
+  })
+  if (!release) {
+    logPipelineInfo("[moderation] buyer report rescan deferred: no active scanner release", {
+      level: "warn",
+      community_id: input.communityId,
+      asset_id: asset.asset_id,
+      content_blob_id: payload.content_blob_ref,
+    })
+    return
+  }
+  await insertContentSecurityScanJob({
+    executor: control,
+    scanJobId: makeId("cssj"),
+    contentBlobId: payload.content_blob_ref,
+    scannerRelease: release,
+    requestReason: "buyer_report",
+    expectedContentHash: payload.content_hash,
+    expectedSizeBytes: payload.size_bytes,
+    maxAttempts: CONTENT_SECURITY_INITIAL_SCAN_MAX_ATTEMPTS,
+    now: input.now,
+  })
+}
+
 export async function reportPost(input: {
   env: Env
   userId: string
@@ -187,7 +240,7 @@ export async function reportPost(input: {
       communityId: input.communityId,
       target: { postId: input.postId },
     })
-    return await withTransaction(db.client, "write", async (tx) => {
+    const report = await withTransaction(db.client, "write", async (tx) => {
       let moderationCase = existingCase
       if (!moderationCase) {
         moderationCase = await createModerationCase({
@@ -216,6 +269,23 @@ export async function reportPost(input: {
         now,
       })
     })
+    try {
+      await enqueueGenericAssetBuyerRescan({
+        env: input.env,
+        dbClient: db.client,
+        communityId: input.communityId,
+        postId: input.postId,
+        now,
+      })
+    } catch (error) {
+      logPipelineInfo("[moderation] buyer report rescan enqueue failed", {
+        level: "warn",
+        community_id: input.communityId,
+        post_id: input.postId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+    return report
   } finally {
     db.close()
   }
@@ -362,6 +432,147 @@ export async function getModerationCaseDetail(input: {
       caseRow,
       dbClient: db.client,
     })
+  } finally {
+    db.close()
+  }
+}
+
+function boundedInspectionValue(value: unknown, maxBytes = 8_192): unknown {
+  if (typeof value === "string") return value.slice(0, maxBytes)
+  if (value === null || typeof value !== "object") return value
+  try {
+    const serialized = JSON.stringify(value)
+    if (serialized.length <= maxBytes) return value
+    return serialized.slice(0, maxBytes)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Return an audited, metadata-only moderation view. This deliberately never
+ * reads or streams the blob object; deck cards are decoded from the bounded
+ * canonical card rows and truncated before crossing the API boundary.
+ */
+export async function inspectGenericAssetForModeration(input: {
+  env: Env
+  userId: string
+  communityId: string
+  moderationCaseId: string
+  reason: string
+  communityRepository: ModerationCommunityRepository
+}): Promise<{
+  case_id: string
+  reason: string
+  asset: {
+    asset_id: string
+    asset_kind: string
+    enforcement_state: string | null
+    payload: {
+      display_filename: string | null
+      mime_type: string
+      size_bytes: number
+      content_hash: string
+      payload_format: string
+    }
+  }
+  scanner: Record<string, unknown> | null
+  deck: { cards: Array<Record<string, unknown>> } | null
+}> {
+  const reason = input.reason.trim()
+  if (!reason) throw badRequestError("reason is required")
+  const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
+  try {
+    await requireAnyCommunityRole({ client: db.client, communityId: input.communityId, userId: input.userId })
+    const caseRow = await getModerationCaseById({ executor: db.client, moderationCaseId: input.moderationCaseId })
+    if (!caseRow || caseRow.community_id !== input.communityId || !caseRow.post_id) {
+      throw notFoundError("Moderation case not found")
+    }
+    const post = await getPostById(db.client, caseRow.post_id)
+    if (!post?.asset_id) throw notFoundError("Generic asset not found")
+    const asset = await getAssetRow(db.client, input.communityId, post.asset_id)
+    if (!asset || !isGenericAssetKind(asset.asset_kind)) throw notFoundError("Generic asset not found")
+    const payload = await getActivePrimaryAssetPayload(db.client, asset.asset_id)
+    if (!payload) throw notFoundError("Asset content not found")
+    const enforcement = await getAssetEnforcement(db.client, asset.asset_id)
+    const control = getControlPlaneClient(input.env)
+    const scannerRow = await executeFirst(control, {
+      sql: `
+        SELECT results.outcome, results.security_scan_profile, results.scanner_policy_version,
+               results.engine_version, results.signature_version, results.finding_code,
+               results.error_code, results.content_format_outcome, results.content_format_finding_code,
+               results.detected_mime_type, results.recorded_at
+        FROM content_security_scan_results AS results
+        WHERE results.content_blob_id = ?1
+        ORDER BY results.recorded_at DESC, results.scan_result_id DESC
+        LIMIT 1
+      `,
+      args: [payload.content_blob_ref],
+    })
+    const scanner = scannerRow
+      ? Object.fromEntries(Object.entries(scannerRow).filter(([key]) => key !== "content_hash"))
+      : null
+    let deck: { cards: Array<Record<string, unknown>> } | null = null
+    if (asset.asset_kind === "learning_deck") {
+      const cardRows = await db.client.execute({
+        sql: `
+          SELECT cards.ordinal, cards.card_type, cards.prompt_json, cards.answer_json, cards.tags_json,
+                 cards.content_hash
+          FROM learning_decks AS decks
+          JOIN learning_deck_versions AS versions
+            ON versions.learning_deck_id = decks.learning_deck_id
+           AND versions.version = decks.published_version
+          JOIN learning_card_versions AS cards
+            ON cards.learning_deck_version_id = versions.learning_deck_version_id
+          WHERE decks.asset_id = ?1
+          ORDER BY cards.ordinal ASC
+          LIMIT 200
+        `,
+        args: [asset.asset_id],
+      })
+      deck = {
+        cards: cardRows.rows.map((row) => {
+          const parse = (key: string): unknown => {
+            try { return boundedInspectionValue(JSON.parse(String((row as Record<string, unknown>)[key] ?? "null"))) }
+            catch { return null }
+          }
+          return {
+            ordinal: Number((row as Record<string, unknown>).ordinal ?? 0),
+            card_type: String((row as Record<string, unknown>).card_type ?? "basic"),
+            prompt: parse("prompt_json"),
+            answer: parse("answer_json"),
+            tags: parse("tags_json"),
+            content_hash: String((row as Record<string, unknown>).content_hash ?? ""),
+          }
+        }),
+      }
+    }
+    console.info(JSON.stringify({
+      component: "generic_asset_moderation_inspection",
+      community_id: input.communityId,
+      moderation_case_id: input.moderationCaseId,
+      asset_id: asset.asset_id,
+      reason,
+      content_hash: payload.content_hash,
+    }))
+    return {
+      case_id: input.moderationCaseId,
+      reason,
+      asset: {
+        asset_id: asset.asset_id,
+        asset_kind: asset.asset_kind,
+        enforcement_state: enforcement?.enforcement_state ?? null,
+        payload: {
+          display_filename: payload.display_filename,
+          mime_type: payload.mime_type,
+          size_bytes: payload.size_bytes,
+          content_hash: payload.content_hash,
+          payload_format: payload.payload_format,
+        },
+      },
+      scanner,
+      deck,
+    }
   } finally {
     db.close()
   }
