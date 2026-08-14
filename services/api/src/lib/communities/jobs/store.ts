@@ -13,6 +13,7 @@ export type CommunityJobType =
   | "link_preview_fetch"
   | "post_label_materialize"
   | "post_translation_materialize"
+  | "post_lyrics_language_detection_materialize"
   | "comment_translation_materialize"
   | "community_text_translation_materialize"
   | "link_summary_materialize"

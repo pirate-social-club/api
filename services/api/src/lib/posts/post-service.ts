@@ -46,6 +46,7 @@ import {
 import {
   enqueueEmbedHydrateIfNeeded,
   enqueuePostLabelIfNeeded,
+  enqueuePostLyricsLanguageDetectionJob,
   enqueuePostTranslationPrewarmJobs,
 } from "./post-jobs"
 import {
@@ -638,6 +639,13 @@ export async function createPost(input: {
       })
 
       await enqueuePostTranslationPrewarmJobs({
+        client: tx,
+        communityId: input.communityId,
+        post: draft,
+        createdAt,
+      })
+
+      await enqueuePostLyricsLanguageDetectionJob({
         client: tx,
         communityId: input.communityId,
         post: draft,

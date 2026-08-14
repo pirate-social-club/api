@@ -37,6 +37,7 @@ export type PostWriteDraft = Pick<
   | "title"
   | "body"
   | "caption"
+  | "lyrics"
   | "link_url"
   | "source_language"
   | "translation_policy"
@@ -301,6 +302,7 @@ export async function insertPost(input: {
     title,
     body: input.body.body ?? null,
     caption: input.body.caption ?? null,
+    lyrics: input.body.lyrics ?? null,
     link_url: input.body.link_url ?? null,
     source_language: sourceLanguage,
     translation_policy: translationPolicy,

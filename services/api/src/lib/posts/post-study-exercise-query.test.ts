@@ -28,6 +28,11 @@ async function clientWithoutClozeSchema(): Promise<Client> {
       user_id TEXT NOT NULL, post_id TEXT NOT NULL, line_id TEXT NOT NULL,
       exercise_type TEXT NOT NULL, target_language TEXT NOT NULL, due_at TEXT NOT NULL
     );
+    CREATE TABLE posts (
+      post_id TEXT PRIMARY KEY, lyrics_language TEXT, lyrics_language_confidence REAL,
+      lyrics_language_reliable INTEGER NOT NULL DEFAULT 0, lyrics_language_detector TEXT,
+      lyrics_language_detected_at TEXT, lyrics_language_source_hash TEXT
+    );
   `)
   return rawClient as unknown as Client
 }
@@ -35,6 +40,10 @@ async function clientWithoutClozeSchema(): Promise<Client> {
 describe("post-study exercise query schema tolerance", () => {
   test("omits the fill-blank exercise branch when migration 1156 is absent", async () => {
     const client = await clientWithoutClozeSchema()
+    await client.execute({
+      sql: "INSERT INTO posts (post_id, lyrics_language, lyrics_language_reliable) VALUES (?1, ?2, ?3)",
+      args: ["post_1", "en", 1],
+    })
     const result = await listExercises({
       client,
       dueReviewServing: true,
@@ -68,6 +77,10 @@ describe("post-study exercise query schema tolerance", () => {
 
   test("includes fill-blank exercise and due branches when migration 1156 is present", async () => {
     const client = await clientWithoutClozeSchema()
+    await client.execute({
+      sql: "INSERT INTO posts (post_id, lyrics_language, lyrics_language_reliable) VALUES (?1, ?2, ?3)",
+      args: ["post_1", "en", 1],
+    })
     await client.execute(`
       CREATE TABLE song_study_unit_cloze (
         unit_id TEXT PRIMARY KEY, cloze_version INTEGER NOT NULL, status TEXT NOT NULL,

@@ -37,6 +37,7 @@ import {
 } from "./post-study-attempt-store"
 import {
   ensureStudyClozeRows,
+  isStudyClozeLanguageSupported,
   type StudyClozePlacement,
   type StudyClozeSegment,
   type StudyClozeToken,
@@ -137,6 +138,11 @@ type StudyCapabilityPost = {
   song_title?: string | null
   source_language?: string | null
   source_language_reliable?: boolean
+  lyrics_language?: string | null
+  lyrics_language_reliable?: boolean
+  lyrics_language_detector?: string | null
+  lyrics_language_detected_at?: string | null
+  lyrics_language_source_hash?: string | null
   stored_source_language?: string | null
   title?: string | null
 }
@@ -402,12 +408,15 @@ function fillBlankEnabled(env: Env | null | undefined): boolean {
 }
 
 function fillBlankAvailableForPost(env: Env | null | undefined, post: {
-  source_language_reliable?: boolean
+  lyrics_language?: string | null
+  lyrics_language_reliable?: boolean
 }): boolean {
-  // source_language remains Study's served-language identity. Fill blank uses
-  // language-specific stopword and script rules, so only an explicitly
-  // reliable label may generate, select, or grade an exercise.
-  return fillBlankEnabled(env) && post.source_language_reliable === true
+  // Fill blank is generated from lyrics, so its policy must use the independent
+  // lyrics-language detector rather than the post's title/body language.
+  return fillBlankEnabled(env)
+    && post.lyrics_language_reliable === true
+    && Boolean(post.lyrics_language?.trim())
+    && isStudyClozeLanguageSupported(post.lyrics_language)
 }
 
 function ungradableRerecordEnabled(env: Env): boolean {
@@ -505,7 +514,10 @@ async function resolveCapabilityStudyUnits(input: {
         await ensureStudyClozeRows({
           client: input.artifactWriteClient,
           postId: input.post.post_id,
-          sourceLanguageReliable: true,
+          lyricsLanguage: input.post.lyrics_language,
+          lyricsLanguageReliable: input.post.lyrics_language_reliable === true,
+          lyricsLanguageDetector: input.post.lyrics_language_detector,
+          lyricsLanguageSourceHash: input.post.lyrics_language_source_hash,
         })
       }
       await enqueueStudyGenerationIfNeeded({
@@ -1070,7 +1082,10 @@ export async function getPostStudyPayload(input: {
       await ensureStudyClozeRows({
         client: db.client,
         postId: input.postId,
-        sourceLanguageReliable: true,
+        lyricsLanguage: post.lyrics_language,
+        lyricsLanguageReliable: post.lyrics_language_reliable === true,
+        lyricsLanguageDetector: post.lyrics_language_detector,
+        lyricsLanguageSourceHash: post.lyrics_language_source_hash,
       })
     }
     await enqueueStudyGenerationIfNeeded({
