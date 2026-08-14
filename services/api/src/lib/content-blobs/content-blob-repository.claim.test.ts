@@ -46,7 +46,6 @@ function row(overrides: Partial<ContentBlobRow> = {}): Record<string, unknown> {
     part_size_bytes: null,
     total_parts: null,
     bucket: "content",
-    storage_endpoint: "https://r2.example",
     expires_at: "2026-08-15T00:00:00.000Z",
     session_created_at: "2026-08-14T00:00:00.000Z",
     session_updated_at: "2026-08-14T00:00:00.000Z",
