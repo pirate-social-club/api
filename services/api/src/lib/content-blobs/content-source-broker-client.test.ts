@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
+import { sha256Hex } from "../crypto"
 import type { ContentSecurityScanJob } from "../content-security/content-security-types"
 import {
   ContentSourceScanError,
@@ -7,11 +8,13 @@ import {
   CONTENT_SOURCE_STORAGE_NAMESPACE,
   CONTENT_SOURCE_STORAGE_PROVIDER,
   scanContentSource,
+  readContentSource,
   storeContentSource,
 } from "./content-source-broker-client"
 
 const bytes = new TextEncoder().encode("source bytes")
 const sha256 = "a".repeat(64)
+const sourceSha256 = await sha256Hex(bytes)
 const job: ContentSecurityScanJob = {
   scanJobId: "csj_fixture",
   contentBlobId: "cbl_fixture",
@@ -128,6 +131,27 @@ describe("content source broker client", () => {
       bytes,
       sha256,
     })).rejects.toThrow("invalid evidence")
+  })
+
+  test("reads and verifies plaintext source bytes", async () => {
+    const result = await readContentSource({
+      env: env(async (request) => {
+        expect(request.method).toBe("GET")
+        expect(request.url).toEndWith("/objects/cbl_fixture")
+        expect(request.headers.get("x-content-sha256")).toBe(sourceSha256)
+        expect(request.headers.get("x-content-size")).toBe(String(bytes.byteLength))
+        return new Response(bytes, {
+          headers: {
+            "content-length": String(bytes.byteLength),
+            "x-content-sha256": sourceSha256,
+          },
+        })
+      }),
+      contentBlobId: "cbl_fixture",
+      expectedSizeBytes: bytes.byteLength,
+      expectedSha256: `0x${sourceSha256}`,
+    })
+    expect(result).toEqual(bytes)
   })
 
   test("distinguishes immutable object conflicts from transient service failure", async () => {

@@ -27,6 +27,7 @@ async function zeroShareProjectionEnv(parentIpId: string): Promise<Env> {
       CREATE TABLE story_registered_asset_projections (
         community_id TEXT NOT NULL,
         asset_id TEXT NOT NULL,
+        asset_kind TEXT NOT NULL CHECK (asset_kind IN ('song_audio', 'video_file')),
         source_post_status TEXT NOT NULL,
         license_preset TEXT,
         story_ip_id TEXT NOT NULL,
@@ -37,9 +38,9 @@ async function zeroShareProjectionEnv(parentIpId: string): Promise<Env> {
     await client.execute({
       sql: `
         INSERT INTO story_registered_asset_projections (
-          community_id, asset_id, source_post_status, license_preset,
+          community_id, asset_id, asset_kind, source_post_status, license_preset,
           story_ip_id, story_license_terms_id, commercial_rev_share_pct
-        ) VALUES ('cmt_source', 'ast_source', 'published', 'commercial-remix', ?1, '17', 0)
+        ) VALUES ('cmt_source', 'ast_source', 'song_audio', 'published', 'commercial-remix', ?1, '17', 0)
       `,
       args: [parentIpId],
     })

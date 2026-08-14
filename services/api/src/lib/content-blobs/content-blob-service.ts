@@ -16,7 +16,7 @@ import {
   prepareInitialContentSecurityScan,
 } from "../content-security/content-security-queue"
 import { badRequestError, conflictError, notFoundError } from "../errors"
-import { envFlag, makeId, nowIso, splitCsv } from "../helpers"
+import { envFlag, genericDigitalGoodsEnabled, makeId, nowIso, splitCsv } from "../helpers"
 import { getControlPlaneClient } from "../runtime-deps"
 import {
   beginProxyContentUpload,
@@ -39,6 +39,7 @@ import {
   CONTENT_SOURCE_STORAGE_ENDPOINT,
   storeContentSource,
 } from "./content-source-broker-client"
+import { assertGenericEmergencyControlsClear } from "../communities/commerce/generic-asset-emergency-controls"
 
 const CONTENT_BLOB_SESSION_TTL_MS = 60 * 60 * 1000
 type ContentBlobCommunityRepository = CommunityReadRepository & CommunityDatabaseBindingRepository
@@ -59,7 +60,11 @@ function requireContentBlobUploadsEnabled(env: Env, communityId: string): void {
   const allowedCommunities = new Set(
     splitCsv(env.CONTENT_BLOB_UPLOAD_COMMUNITY_IDS).map((value) => value.replace(/^com_/, "")),
   )
-  if (!envFlag(env.CONTENT_BLOB_UPLOADS_ENABLED, false) || !allowedCommunities.has(communityId)) {
+  if (
+    !genericDigitalGoodsEnabled(env)
+    || !envFlag(env.CONTENT_BLOB_UPLOADS_ENABLED, false)
+    || !allowedCommunities.has(communityId)
+  ) {
     throw notFoundError("Content blob uploads are not enabled")
   }
 }
@@ -90,6 +95,15 @@ export async function createContentBlob(input: {
   requireContentBlobUploadsEnabled(input.env, input.communityId)
   assertContentSourceBrokerConfigured(input.env)
   assertCreateContentBlobRequest(input.body)
+  await assertGenericEmergencyControlsClear({
+    client: getControlPlaneClient(input.env),
+    context: {
+      communityId: input.communityId,
+      uploaderUserId: input.userId,
+      validationProfile: input.body.validation_profile.trim(),
+    },
+    notFoundMessage: "Content blob uploads are not enabled",
+  })
   await requireCommunityMember(input)
 
   const now = nowIso()

@@ -1,4 +1,4 @@
-import { badRequestError, notFoundError } from "../../errors"
+import { badRequestError, HttpError, notFoundError } from "../../errors"
 import { makeId, nowIso } from "../../helpers"
 import { loadCommunityProjection } from "../create/service"
 import {
@@ -33,6 +33,7 @@ import {
 import { getCommunityPricingPolicy } from "./policy-service"
 import { assertValidDonationShareBps } from "./quote-helpers"
 import { assertAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import { assertAssetDeliveryAllowed } from "./asset-read-policy"
 import {
   assertAssetNotRightsHeld,
   assertListingNotRightsHeld,
@@ -276,16 +277,50 @@ export async function listCommunityListings(input: {
   const db = await openCommunityReadClient(input.env, input.communityRepository, input.communityId)
   try {
     await requireCommunityMember(db.client, input.communityId, input.userId)
-    const rows = await listListingRows(db.client, input.communityId, {
-      after: decodeCommerceListCursor(input.cursor),
-      limit: input.limit + 1,
-    })
-    const pageRows = rows.slice(0, input.limit)
-    const lastRow = pageRows[pageRows.length - 1] ?? null
+    let cursor = decodeCommerceListCursor(input.cursor)
+    const visibleRows: Awaited<ReturnType<typeof listListingRows>> = []
+    let exhausted = false
+    // Enforcement is an authoritative read gate, not a listing-time hint. Walk
+    // bounded batches so quarantined assets disappear without making a page
+    // itself commercially actionable or breaking cursor progress.
+    for (let batch = 0; batch < 4 && visibleRows.length <= input.limit; batch += 1) {
+      const rows = await listListingRows(db.client, input.communityId, {
+        after: cursor,
+        limit: Math.max(input.limit * 2, 25),
+      })
+      if (rows.length === 0) {
+        exhausted = true
+        break
+      }
+      for (const row of rows) {
+        if (row.asset_id?.trim()) {
+          const asset = await getAssetRow(db.client, input.communityId, row.asset_id)
+          if (!asset) continue
+          try {
+            await assertAssetDeliveryAllowed({
+              client: db.client,
+              asset,
+              notFoundMessage: "Listing not found",
+            })
+          } catch (error) {
+            if (error instanceof HttpError && error.status === 404) continue
+            throw error
+          }
+        }
+        visibleRows.push(row)
+      }
+      const last = rows[rows.length - 1]
+      cursor = last ? { created_at: last.created_at, id: last.listing_id } : cursor
+      if (rows.length < Math.max(input.limit * 2, 25)) {
+        exhausted = true
+        break
+      }
+    }
+    const pageRows = visibleRows.slice(0, input.limit)
     return {
       items: pageRows.map((row) => serializeListing(row)),
-      next_cursor: rows.length > input.limit && lastRow
-        ? encodeCommerceListCursor({ created_at: lastRow.created_at, id: lastRow.listing_id })
+      next_cursor: !exhausted && cursor
+        ? encodeCommerceListCursor(cursor)
         : null,
     }
   } finally {
@@ -364,6 +399,11 @@ export async function prepareCommunityListingWrite(input: {
       throw notFoundError("Asset not found")
     }
     assetKind = asset.asset_kind
+    await assertAssetDeliveryAllowed({
+      client: input.client,
+      asset,
+      notFoundMessage: "Asset not found",
+    })
     await assertSongAssetRightsReadyForListing({
       client: input.client,
       communityId: input.communityId,
