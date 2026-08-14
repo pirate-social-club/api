@@ -44,6 +44,10 @@ const SONG_PERIOD_CLAIMS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0142_control_plane_reward_song_period_claims.sql",
   import.meta.url,
 )
+const CLAIM_OBJECTIVES_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0229_control_plane_reward_claim_objectives.sql",
+  import.meta.url,
+)
 const SCORE_TERMS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0144_control_plane_reward_campaign_score_terms.sql",
   import.meta.url,
@@ -62,6 +66,10 @@ const SONG_SLOTS_MIGRATION_URL = new URL(
 )
 const CONCURRENT_POOLS_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0159_control_plane_reward_concurrent_pools.sql",
+  import.meta.url,
+)
+const OBJECTIVE_POOLS_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0228_control_plane_reward_objective_pools.sql",
   import.meta.url,
 )
 const NATIONALITY_TIERS_MIGRATION_URL = new URL(
@@ -317,6 +325,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       );
     `)
     await db.unsafe(await readFile(SONG_PERIOD_CLAIMS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(CLAIM_OBJECTIVES_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(INVARIANTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(SCORE_TERMS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(PAYOUT_EFFECTS_MIGRATION_URL, "utf8"))
@@ -339,6 +348,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     await db.unsafe(await readFile(FUNDING_RETIREMENTS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(FUNDING_RETIREMENT_HARDENING_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(CONCURRENT_POOLS_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(OBJECTIVE_POOLS_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(NATIONALITY_TIERS_MIGRATION_URL, "utf8"))
     // Legacy campaign fixtures in this broad harness predate tier terms and
     // intentionally omit them. Preserve the prior harness default without
@@ -1726,18 +1736,20 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       })
       return [study, karaoke]
     })
-    expect(results.map((result) => result.result)).toEqual(["credited", "duplicate"])
+    expect(results.map((result) => result.result).sort()).toEqual(["credited", "credited"])
 
     const verify = connect(TEST_DB, 1)
     const claims = await verify.unsafe(`
-      SELECT song_artifact_bundle_id, reward_kind
+      SELECT song_artifact_bundle_id, reward_kind, objective
       FROM reward_song_period_claims
       WHERE community_id = 'cmt_reward_pg' AND post_id = 'pst_sequential_pg'
-    `) as Array<{ song_artifact_bundle_id: string; reward_kind: string }>
+      ORDER BY objective
+    `) as Array<{ song_artifact_bundle_id: string; reward_kind: string; objective: string }>
     const reservations = await verify.unsafe(`
       SELECT reward_campaign_id, qualification_basis
       FROM reward_campaign_reservations
       WHERE reward_campaign_id IN ('rcp_sequential_study_pg', 'rcp_sequential_karaoke_pg')
+      ORDER BY reward_campaign_id
     `) as Array<{ reward_campaign_id: string; qualification_basis: string }>
     const laterCampaign = await verify.unsafe(`
       SELECT reserved_cents, credited_cents
@@ -1745,13 +1757,19 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       WHERE reward_campaign_id = 'rcp_sequential_karaoke_pg'
     `) as Array<{ reserved_cents: number; credited_cents: number }>
     await verify.end()
-    expect(claims).toEqual([{ song_artifact_bundle_id: "sab_sequential_pg", reward_kind: "campaign_practice_day" }])
-    expect(reservations).toEqual([{ reward_campaign_id: "rcp_sequential_study_pg", qualification_basis: "study" }])
-    expect(laterCampaign).toEqual([{ reserved_cents: 0, credited_cents: 0 }])
+    expect(claims).toEqual([
+      { song_artifact_bundle_id: "sab_sequential_pg", reward_kind: "campaign_practice_day", objective: "karaoke" },
+      { song_artifact_bundle_id: "sab_sequential_pg", reward_kind: "campaign_practice_day", objective: "study" },
+    ])
+    expect(reservations).toEqual([
+      { reward_campaign_id: "rcp_sequential_karaoke_pg", qualification_basis: "karaoke" },
+      { reward_campaign_id: "rcp_sequential_study_pg", qualification_basis: "study" },
+    ])
+    expect(laterCampaign).toEqual([{ reserved_cents: 40, credited_cents: 0 }])
     await removeCampaignTestPost("pst_sequential_pg")
   })
 
-  test("song-scoped uniqueness resolves qualifications racing across campaign row locks", async () => {
+  test("objective-scoped uniqueness permits one Study and one Karaoke claim per period", async () => {
     const results = await withProductionPostgresClient(async (client) => Promise.all([
       creditRewardCampaignQualification({
         env: PG_ENV,
@@ -1787,7 +1805,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         now: "2026-07-10T13:00:00.000Z",
       }),
     ]))
-    expect(results.map((result) => result.result).sort()).toEqual(["credited", "duplicate"])
+    expect(results.map((result) => result.result).sort()).toEqual(["credited", "credited"])
 
     const verify = connect(TEST_DB, 1)
     const counts = await verify.unsafe(`
@@ -1799,7 +1817,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
         (SELECT COUNT(*)::int FROM reward_events WHERE post_id = 'pst_cross_race_pg') AS events
     `) as Array<{ claims: number; reservations: number; events: number }>
     await verify.end()
-    expect(counts).toEqual([{ claims: 1, reservations: 1, events: 1 }])
+    expect(counts).toEqual([{ claims: 2, reservations: 2, events: 2 }])
     await removeCampaignTestPost("pst_cross_race_pg")
   })
 

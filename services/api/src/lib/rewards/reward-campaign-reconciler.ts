@@ -772,17 +772,23 @@ export async function creditRewardCampaignQualification(input: {
       })
       return { result: "identity", amountCents: 0 }
     }
+    const campaignObjective = String(rowValue(campaignRow, "eligible_activity"))
+    const claimObjective = campaignObjective === "either"
+      ? "either"
+      : campaignObjective === "study" ? "study" : "karaoke"
     const existing = await executeFirst(tx, {
       sql: `
         SELECT reward_campaign_reservation_id
         FROM reward_song_period_claims
         WHERE community_id = ?1 AND post_id = ?2 AND reward_identity_id = ?3
           AND reward_period_key = ?4 AND reward_kind = 'campaign_practice_day'
+          AND (?5 = 'either' OR objective = ?5 OR objective = 'either')
         LIMIT 1
       `,
       args: [
         input.candidate.communityId, input.candidate.postId,
         identity.id, input.candidate.periodKey,
+        claimObjective,
       ],
     })
     if (existing) {
@@ -816,18 +822,18 @@ export async function creditRewardCampaignQualification(input: {
         INSERT INTO reward_song_period_claims (
           reward_campaign_reservation_id, community_id, post_id,
           song_artifact_bundle_id, reward_identity_id, reward_period_key,
-          reward_kind, claimed_at
+          reward_kind, objective, claimed_at
         ) VALUES (
-          ?1, ?2, ?3, ?4, ?5, ?6, 'campaign_practice_day', ?7
+          ?1, ?2, ?3, ?4, ?5, ?6, 'campaign_practice_day', ?7, ?8
         )
         ON CONFLICT (
-          community_id, post_id, reward_identity_id, reward_period_key, reward_kind
+          community_id, post_id, reward_identity_id, reward_period_key, reward_kind, objective
         ) DO NOTHING
         RETURNING reward_campaign_reservation_id
       `,
       args: [
         reservationId, input.candidate.communityId, input.candidate.postId,
-        input.candidate.artifactBundleId, identity.id, input.candidate.periodKey, creditNow,
+        input.candidate.artifactBundleId, identity.id, input.candidate.periodKey, claimObjective, creditNow,
       ],
     })
     if (claim.rows.length === 0) {
@@ -1138,6 +1144,7 @@ export async function reconcileRewardCampaigns(input: {
               AND r.reward_kind = 'campaign_practice_day'
               AND c.community_id = q.community_id AND c.post_id = q.post_id
               AND c.song_artifact_bundle_id = q.song_artifact_bundle_id
+              AND (c.eligible_activity = 'either' OR c.eligible_activity = q.activity)
               AND c.starts_at <= q.qualified_at AND c.ends_at >= q.qualified_at
           )
         ORDER BY q.qualified_at ASC, q.community_id ASC, q.shard_sequence ASC
