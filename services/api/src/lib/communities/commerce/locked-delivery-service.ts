@@ -15,6 +15,7 @@ import {
 } from "../../story/story-royalty-registration-service"
 import type { Asset, Env, Post, SongArtifactBundle, SongArtifactUpload } from "../../../types"
 import { prepareLockedAssetDelivery } from "./asset-delivery"
+import { assertAssetDeliveryAllowed } from "./asset-read-policy"
 import { upsertStoryRegisteredAssetProjection } from "./derivative-source-projection"
 import {
   recordLockedDeliveryProgress,
@@ -272,6 +273,13 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       bundleId: asset.song_artifact_bundle_id,
       rightsBasis: asset.rights_basis,
       upstreamAssetRefs: post.upstream_asset_refs ?? null,
+      assertDeliveryAllowed: async () => {
+        await assertAssetDeliveryAllowed({
+          client: input.client,
+          asset,
+          notFoundMessage: "Asset not found",
+        })
+      },
       onProgress: input.onProgress ?? null,
       preparedDelivery: asset.story_asset_version_id
         && asset.story_cdr_vault_uuid
