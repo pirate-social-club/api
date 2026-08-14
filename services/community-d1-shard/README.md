@@ -36,7 +36,7 @@ Any NEW RPC method touching D1 MUST go through `runShardRead`/`runShardBatch`
   (wrangler 4.81.1 has an undici `fetch failed` bug; retry on transient failures).
 - D1: `cmty-pilot-staging` (id `81369dab-8d38-4a7f-842f-dd3bb5c2fd30`), bound as `DB_CMTY_PILOT`.
 - `COMMUNITY_D1_BINDING_MAP_JSON = {"cmt_a43c487541154b358837c726b98aea2e":"DB_CMTY_PILOT"}`.
-- API staging binds it: service `community-d1-shard-staging`, entrypoint `CommunityD1Shard`, binding `COMMUNITY_D1_SHARD` (api `wrangler.jsonc` staging `services`). **Prod has no shard binding.**
+- API staging binds it: service `community-d1-shard-staging`, entrypoint `CommunityD1Shard`, binding `COMMUNITY_D1_SHARD` (api `wrangler.jsonc` staging `services`). Production uses the separate `community-d1-shard-prod` service binding with its own pool; it does not use this staging pilot.
 
 ### Reserved release-gate fixture
 
