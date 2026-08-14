@@ -3174,9 +3174,6 @@ export type RewardCampaignIncidentRecoveryResponse = {
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
-/** A live song pool occupies exactly one of these objective slots. */
-export type RewardCampaignObjective = Exclude<RewardCampaignEligibleActivity, "either">;
-
 export type RewardIdentityBindingCapability = "unavailable" | "selection_required" | "selected";
 
 export type RewardIdentityBindingDocument = {
@@ -3283,7 +3280,6 @@ export type RewardCampaign = {
   funding_tx_hash: string | null;
   created: number;
 };
-
 
 export type RewardCampaignCreateRequest = {
   community: string;

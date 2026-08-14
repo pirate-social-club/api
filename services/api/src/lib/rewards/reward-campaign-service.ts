@@ -4,10 +4,11 @@ import type {
   RewardCampaign,
   RewardCampaignCreateRequest,
   RewardCampaignEligibleActivity,
-  RewardCampaignObjective,
   RewardCampaignFundingQuote,
   RewardCampaignStatus,
 } from "@pirate/api-contracts"
+
+type RewardCampaignObjective = Exclude<RewardCampaignEligibleActivity, "either">
 
 import type { Env } from "../../env"
 import { executeFirst } from "../db-helpers"
