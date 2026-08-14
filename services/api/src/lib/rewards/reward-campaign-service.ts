@@ -799,13 +799,15 @@ export async function getRewardCampaignForSongPool(input: {
       SELECT ${CAMPAIGN_COLUMNS}
       FROM reward_campaigns
       WHERE reward_campaign_id = (
-        SELECT reward_campaign_id
-        FROM reward_song_pools
-        WHERE community_id = ?1 AND post_id = ?2${objectiveClause}
-        ORDER BY objective ASC
+        SELECT pool.reward_campaign_id
+        FROM reward_song_pools AS pool
+        JOIN reward_campaigns AS candidate
+          ON candidate.reward_campaign_id = pool.reward_campaign_id
+        WHERE pool.community_id = ?1 AND pool.post_id = ?2${objectiveClause}
+          AND candidate.status NOT IN ('ended', 'canceled')
+        ORDER BY pool.objective ASC
         LIMIT 1
       )
-        AND status NOT IN ('ended', 'canceled')
       LIMIT 1
     `,
     args: [

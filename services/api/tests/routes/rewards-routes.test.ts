@@ -1210,6 +1210,45 @@ describe("rewards routes", () => {
     expect(released.status).toBe(404)
   })
 
+  test("song resolver skips a terminal objective pool when no objective is requested", async () => {
+    const ctx = await createRouteTestContext(campaignEnv())
+    cleanup = ctx.cleanup
+    const owner = await exchangeJwt(ctx.env, "reward-pool-objective-fallback-owner")
+    await seedCampaignSong(ctx, owner.userId)
+
+    const createStudy = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({ idempotency_key: "objective-fallback-study" })),
+    }, ctx.env)
+    expect(createStudy.status).toBe(201)
+    const study = await json(createStudy) as { id: string }
+
+    const createKaraoke = await app.request("http://pirate.test/reward_campaigns", {
+      method: "POST",
+      headers: { ...authHeaders(owner.accessToken), "content-type": "application/json" },
+      body: JSON.stringify(campaignBody({
+        eligible_activity: "karaoke",
+        idempotency_key: "objective-fallback-karaoke",
+      })),
+    }, ctx.env)
+    expect(createKaraoke.status).toBe(201)
+    const karaoke = await json(createKaraoke) as { id: string }
+
+    await ctx.client.execute({
+      sql: "UPDATE reward_campaigns SET status = 'ended' WHERE reward_campaign_id = ?1",
+      args: [study.id],
+    })
+
+    const resolved = await app.request(
+      "http://pirate.test/reward_campaigns?community_id=com_cmt_rewards_route&post_id=post_pst_reward_campaign_song",
+      { headers: authHeaders(owner.accessToken) },
+      ctx.env,
+    )
+    expect(resolved.status).toBe(200)
+    expect(await json(resolved)).toMatchObject({ id: karaoke.id, eligible_activity: "karaoke" })
+  })
+
   test("uses one stable song pool and accepts concurrent contribution lots from different funders", async () => {
     const ctx = await createRouteTestContext(campaignEnv())
     cleanup = ctx.cleanup
