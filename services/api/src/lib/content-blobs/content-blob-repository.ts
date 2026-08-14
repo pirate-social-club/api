@@ -102,11 +102,18 @@ export async function claimOwnedReadyContentBlob(input: {
   claimedAt: string
 }): Promise<OwnedContentBlob> {
   const owned = await requireOwnedContentBlob(input)
+  const isReadyForClaim = owned.blob.status === "ready"
+    && owned.blob.security_scan_state === "clean"
+    && owned.blob.verified_size_bytes != null
+    && owned.blob.verified_content_hash != null
   const existingClaim = owned.blob.claim_kind
     ? { kind: owned.blob.claim_kind, ref: owned.blob.claim_ref }
     : null
   if (existingClaim) {
     if (existingClaim.kind === input.claimKind && existingClaim.ref === input.claimRef) {
+      if (!isReadyForClaim) {
+        throw conflictError("Content blob is no longer ready to claim")
+      }
       return owned
     }
     throw conflictError("Content blob is already claimed")

@@ -147,4 +147,22 @@ describe("claimOwnedReadyContentBlob", () => {
     })).rejects.toThrow("not ready to claim")
     expect(state.updates).toBe(1)
   })
+
+  test("does not let a same-claim retry bypass a later scan rejection", async () => {
+    const state = clientFor(row({
+      claim_kind: "asset_payload",
+      claim_ref: "ast_1",
+      security_scan_state: "malicious",
+    }))
+    await expect(claimOwnedReadyContentBlob({
+      client: state.client,
+      communityId: "com_1",
+      uploaderUserId: "usr_1",
+      contentBlobId: "cbl_1",
+      claimKind: "asset_payload",
+      claimRef: "ast_1",
+      claimedAt: "2026-08-14T04:00:00.000Z",
+    })).rejects.toThrow("no longer ready to claim")
+    expect(state.updates).toBe(0)
+  })
 })
