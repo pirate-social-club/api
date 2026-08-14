@@ -319,6 +319,7 @@ describe("community study routes", () => {
       { post_id: "pst_lyrics_only", access_mode: "public", asset_id: "ast_lyrics_only" },
       { post_id: "pst_same_language", access_mode: "public", asset_id: "ast_same_language" },
       { post_id: "pst_translation", access_mode: "public", asset_id: "ast_translation" },
+      { post_id: "pst_fill_blank_only", access_mode: "public", asset_id: "ast_fill_blank_only" },
     ].map((post) => ({
       ...post,
       access_mode: post.access_mode as StudyPost["access_mode"],
@@ -326,6 +327,8 @@ describe("community study routes", () => {
       age_gate_policy: "none" as const,
       community_id: communityId,
       lyrics: "A study-ready lyric line",
+      lyrics_language: post.post_id === "pst_fill_blank_only" ? "en" : null,
+      lyrics_language_reliable: post.post_id === "pst_fill_blank_only",
       post_type: "song",
       song_cover_art_ref: null,
       song_title: post.post_id,
@@ -343,19 +346,22 @@ describe("community study routes", () => {
               post_id, community_id, author_user_id, identity_mode, post_type,
               status, song_mode, title, lyrics, source_language, rights_basis,
               analysis_state, content_safety_state, age_gate_policy, created_at,
-              updated_at, access_mode, asset_id, visibility, song_title
+              updated_at, access_mode, asset_id, visibility, song_title,
+              lyrics_language, lyrics_language_reliable
             ) VALUES (?1, ?2, ?3, 'public', 'song', 'published', 'original', ?1,
                       ?4, 'en', 'original', 'allow', 'safe', 'none', ?5, ?5,
-                      ?6, ?7, 'public', ?1)
+                      ?6, ?7, 'public', ?1, ?8, ?9)
           `,
           args: [
             post.post_id,
             communityId,
-            post.author_user_id,
-            post.lyrics,
+            post.author_user_id ?? null,
+            post.lyrics ?? null,
             now,
-            post.access_mode,
-            post.asset_id,
+            post.access_mode ?? "public",
+            post.asset_id ?? null,
+            post.lyrics_language ?? null,
+            post.lyrics_language_reliable ? 1 : 0,
           ],
         })
       }
@@ -380,7 +386,7 @@ describe("community study routes", () => {
         `,
         args: [communityId, viewerUserId, now],
       })
-      for (const postId of ["pst_locked", "pst_purchased", "pst_stale", "pst_same_language", "pst_translation"]) {
+      for (const postId of ["pst_locked", "pst_purchased", "pst_stale", "pst_same_language", "pst_translation", "pst_fill_blank_only"]) {
         await client.execute({
           sql: `
             INSERT INTO song_study_unit (
@@ -388,11 +394,33 @@ describe("community study routes", () => {
               reference_text, say_it_back_status, unit_version, max_attempts,
               created_at, updated_at
             ) VALUES (?1, ?2, 'line_001', 0, 'en', 'A study-ready lyric line',
-                      'A study-ready lyric line', 'ready', ?3, 2, ?4, ?4)
+                      'A study-ready lyric line', ?3, ?4, 2, ?5, ?5)
           `,
-          args: [`stu_${postId}`, postId, postId === "pst_stale" ? 1 : 2, now],
+          args: [
+            `stu_${postId}`,
+            postId,
+            postId === "pst_fill_blank_only" ? "unavailable" : "ready",
+            postId === "pst_stale" ? 1 : 2,
+            now,
+          ],
         })
       }
+      await client.execute({
+        sql: `
+          INSERT INTO song_study_unit_cloze (
+            unit_id, cloze_version, status, source_text, source_fingerprint,
+            segments_json, tokens_json, correct_placements_json, max_attempts,
+            generated_at, created_at, updated_at
+          ) VALUES (
+            'stu_pst_fill_blank_only', 3, 'ready', 'A study-ready lyric line', ?1,
+            '[{"type":"text","text":"A "},{"type":"blank","blank_id":"blank_1"},{"type":"text","text":" lyric line"}]',
+            '[{"id":"token_1","text":"study-ready"}]',
+            '[{"blank_id":"blank_1","token_id":"token_1"}]',
+            2, ?2, ?2, ?2
+          )
+        `,
+        args: ["a".repeat(64), now],
+      })
       for (const postId of ["pst_same_language", "pst_translation"]) {
         await client.execute({
           sql: `
@@ -431,6 +459,25 @@ describe("community study routes", () => {
       await assertParity(posts.filter((post) => post.post_id !== "pst_same_language"), "es", true)
       await assertParity(posts.filter((post) => post.post_id === "pst_same_language"), "en", false)
       await assertParity(posts.filter((post) => post.post_id === "pst_translation"), "es", false)
+
+      const fillBlankOnlyPost = posts.find((post) => post.post_id === "pst_fill_blank_only")!
+      const fillBlankOnlyBatch = await batchReadyPostIds({
+        client,
+        credentialAvailable: false,
+        posts: [fillBlankOnlyPost],
+        targetLanguage: "en",
+        viewerUserId,
+      })
+      const fillBlankOnlyCapability = await resolvePostStudyCapability({
+        client,
+        env: { ...ctx.env, SONG_STUDY_FILL_BLANK_ENABLED: "true" },
+        hasActiveElevenLabsCredential: async () => false,
+        post: fillBlankOnlyPost,
+        targetLanguage: "en",
+        viewerUserId,
+      })
+      expect(fillBlankOnlyBatch.has(fillBlankOnlyPost.post_id)).toBe(false)
+      expect(fillBlankOnlyCapability?.status).toBe("unavailable")
     } finally {
       client.close()
     }
