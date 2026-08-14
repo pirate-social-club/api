@@ -273,11 +273,16 @@ rewards.get("/reward_campaign_capabilities", (c) => {
 })
 
 rewards.get("/reward_campaigns", async (c) => {
+  const objectiveValue = c.req.query("objective")?.trim()
+  if (objectiveValue && objectiveValue !== "study" && objectiveValue !== "karaoke") {
+    throw badRequestError("objective must be study or karaoke")
+  }
   const result = await getRewardCampaignForSongPool({
     env: c.env,
     client: getControlPlaneClient(c.env),
     communityId: decodePublicCommunityId(c.req.query("community_id") ?? ""),
     postId: decodePublicPostId(c.req.query("post_id") ?? ""),
+    objective: objectiveValue as "study" | "karaoke" | undefined,
   })
   return c.json(result, 200, { "cache-control": "no-store" })
 })

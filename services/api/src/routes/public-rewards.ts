@@ -9,6 +9,7 @@ import {
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import { decodePublicCommunityId, decodePublicPostId } from "../lib/public-ids"
 import { setPublicReadCacheHeaders } from "./cache-headers"
+import { badRequestError } from "../lib/errors"
 
 const publicRewards = new Hono<{ Bindings: Env }>()
 
@@ -48,11 +49,16 @@ publicRewards.get("/public/reward_campaigns/:campaignId", async (c) => {
 
 publicRewards.get("/public/reward_campaigns", async (c) => {
   await enforceOfferReadRateLimit(c.env, c.req.raw)
+  const objectiveValue = c.req.query("objective")?.trim()
+  if (objectiveValue && objectiveValue !== "study" && objectiveValue !== "karaoke") {
+    throw badRequestError("objective must be study or karaoke")
+  }
   const result = await getPublicActiveRewardCampaignForSong({
     env: c.env,
     client: getControlPlaneClient(c.env),
     communityId: decodePublicCommunityId(c.req.query("community_id") ?? ""),
     postId: decodePublicPostId(c.req.query("post_id") ?? ""),
+    objective: objectiveValue as "study" | "karaoke" | undefined,
   })
   setOfferCacheHeaders(c)
   return c.json(result, 200)

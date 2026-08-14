@@ -3174,6 +3174,8 @@ export type RewardCampaignIncidentRecoveryResponse = {
 
 export type RewardCampaignEligibleActivity = "study" | "karaoke" | "either";
 
+export type RewardCampaignObjective = "study" | "karaoke";
+
 export type RewardIdentityBindingCapability = "unavailable" | "selection_required" | "selected";
 
 export type RewardIdentityBindingDocument = {

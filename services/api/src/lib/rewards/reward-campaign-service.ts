@@ -4,6 +4,7 @@ import type {
   RewardCampaign,
   RewardCampaignCreateRequest,
   RewardCampaignEligibleActivity,
+  RewardCampaignObjective,
   RewardCampaignFundingQuote,
   RewardCampaignStatus,
 } from "@pirate/api-contracts"
@@ -71,12 +72,12 @@ const POOL_EXISTS = "pool_exists"
 export const LATE_FUNDING_ACCEPTANCE_GRACE_SECONDS = 5 * 60
 
 export function rewardSongPoolRegisterSql(postgres: boolean): string {
-  const timestamp = postgres ? "CAST(?4 AS TIMESTAMPTZ)" : "CAST(?4 AS TEXT)"
+  const timestamp = postgres ? "CAST(?5 AS TIMESTAMPTZ)" : "CAST(?5 AS TEXT)"
   return `
   INSERT INTO reward_song_pools (
-    community_id, post_id, reward_campaign_id, created_at, updated_at
-  ) VALUES (?1, ?2, ?3, ${timestamp}, ${timestamp})
-  ON CONFLICT (community_id, post_id) DO NOTHING
+    community_id, post_id, objective, reward_campaign_id, created_at, updated_at
+  ) VALUES (?1, ?2, ?4, ?3, ${timestamp}, ${timestamp})
+  ON CONFLICT (community_id, post_id, objective) DO NOTHING
   RETURNING reward_campaign_id
 `
 }
@@ -335,6 +336,9 @@ function normalizePayoutTiers(value: unknown): RewardCampaignPayoutTier[] {
 }
 
 function validateCreateInput(input: RewardCampaignCreateInput, config: RewardCampaignConfig): RewardCampaignCreateInput {
+  if (input.eligible_activity === "either") {
+    throw badRequestError("Either reward campaigns are no longer available; choose Study or Karaoke")
+  }
   if (!(["study", "karaoke", "either"] as const).includes(input.eligible_activity)) {
     throw badRequestError("eligible_activity is invalid")
   }
@@ -728,7 +732,7 @@ export async function createRewardCampaign(input: {
         sql: rewardSongPoolRegisterSql(
           isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")),
         ),
-        args: [target.communityId, target.postId, campaignId, now],
+        args: [target.communityId, target.postId, campaignId, body.eligible_activity, now],
       }))
       if (!registered || requiredString(registered, "reward_campaign_id") !== campaignId) {
         throw codedConflictError(
@@ -739,7 +743,7 @@ export async function createRewardCampaign(input: {
     } catch (error) {
       if (
         hasUniqueConstraintName(error, "reward_song_pools_pkey")
-        || (error instanceof Error && error.message.includes("reward_song_pools.community_id, reward_song_pools.post_id"))
+        || (error instanceof Error && error.message.includes("reward_song_pools.community_id, reward_song_pools.post_id, reward_song_pools.objective"))
       ) {
         throw codedConflictError(
           POOL_EXISTS,
@@ -786,23 +790,30 @@ export async function getRewardCampaignForSongPool(input: {
   client: Client
   communityId: string
   postId: string
+  objective?: RewardCampaignObjective
 }): Promise<RewardCampaign> {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const objectiveClause = input.objective ? " AND objective = ?3" : ""
   const row = queryResultRow(await executeFirst(input.client, {
     sql: `
       SELECT ${CAMPAIGN_COLUMNS}
       FROM reward_campaigns
       WHERE reward_campaign_id = (
-        SELECT reward_campaign_id
-        FROM reward_song_pools
-        WHERE community_id = ?1 AND post_id = ?2
+        SELECT pool.reward_campaign_id
+        FROM reward_song_pools AS pool
+        JOIN reward_campaigns AS candidate
+          ON candidate.reward_campaign_id = pool.reward_campaign_id
+        WHERE pool.community_id = ?1 AND pool.post_id = ?2${objectiveClause}
+          AND candidate.status NOT IN ('ended', 'canceled')
+        ORDER BY pool.objective ASC
+        LIMIT 1
       )
-        AND status NOT IN ('ended', 'canceled')
       LIMIT 1
     `,
     args: [
       nonEmpty(input.communityId, "community_id"),
       nonEmpty(input.postId, "post_id"),
+      ...(input.objective ? [input.objective] : []),
     ],
   }))
   if (!row) throw notFoundError("Reward campaign not found")
@@ -829,14 +840,17 @@ export async function getPublicActiveRewardCampaignForSong(input: {
   client: Client
   communityId: string
   postId: string
+  objective?: RewardCampaignObjective
 }): Promise<PublicRewardOffer> {
   requireCampaignsEnabled(resolveRewardCampaignConfig(input.env))
+  const objectiveClause = input.objective ? " AND (eligible_activity = ?4 OR eligible_activity = 'either')" : ""
   const result = await input.client.execute({
     sql: `
       SELECT ${CAMPAIGN_COLUMNS}
       FROM reward_campaigns
       WHERE community_id = ?1 AND post_id = ?2
         AND ${learnerVisibleRewardCampaignSql({ nowParameter: "?3" })}
+        ${objectiveClause}
       ORDER BY activated_at DESC, reward_campaign_id ASC
       LIMIT 1
     `,
@@ -844,6 +858,7 @@ export async function getPublicActiveRewardCampaignForSong(input: {
       nonEmpty(input.communityId, "community_id"),
       nonEmpty(input.postId, "post_id"),
       nowIso(),
+      ...(input.objective ? [input.objective] : []),
     ],
   })
   const row = result.rows[0]
