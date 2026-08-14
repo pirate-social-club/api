@@ -4,7 +4,6 @@ import { JSONC, sleep } from "bun"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, resolve } from "node:path"
 
-import type { DbExecutor } from "../src/lib/db-helpers"
 import { sha256Hex } from "../src/lib/crypto"
 import type { InStatement, QueryResult } from "../src/lib/sql-client"
 import {
@@ -62,6 +61,10 @@ type StagingReportArtifact = {
   songs: Array<PublishedSongFillBlankReport & { database_binding: string }>
   target: "staging"
 }
+
+type ShardReportOutcome =
+  | { binding: D1Binding; kind: "error"; error: string }
+  | { binding: D1Binding; kind: "report"; report: Awaited<ReturnType<typeof generatePublishedSongFillBlankShardReport>> }
 
 function option(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name)
@@ -147,7 +150,7 @@ function retryable(payload: D1QueryPayload, status: number): boolean {
   return status === 429 || status >= 500 || codes.includes(7429)
 }
 
-class D1RestReadClient implements DbExecutor {
+class D1RestReadClient {
   constructor(
     private readonly accountId: string,
     private readonly databaseId: string,
@@ -215,24 +218,28 @@ export async function runStagingFillBlankReport(input: {
     if (!binding) throw new Error(`allocated staging binding is absent from config: ${bindingName}`)
     return binding
   })
-  const outcomes = await mapConcurrent(allocated, input.options.concurrency, async (binding) => {
-    try {
-      const report = await generatePublishedSongFillBlankShardReport({
-        client: new D1RestReadClient(input.options.accountId, binding.database_id, input.options.token),
-        observedAt: input.observedAt,
-        servingContext: input.options.servingContext,
-      })
-      return { binding, report }
-    } catch (error) {
-      return { binding, error: error instanceof Error ? error.message : String(error) }
-    }
-  })
-  const databaseErrors = outcomes.flatMap((outcome) => "error" in outcome ? [{
+  const outcomes = await mapConcurrent<D1Binding, ShardReportOutcome>(
+    allocated,
+    input.options.concurrency,
+    async (binding) => {
+      try {
+        const report = await generatePublishedSongFillBlankShardReport({
+          client: new D1RestReadClient(input.options.accountId, binding.database_id, input.options.token),
+          observedAt: input.observedAt,
+          servingContext: input.options.servingContext,
+        })
+        return { binding, kind: "report", report }
+      } catch (error) {
+        return { binding, error: error instanceof Error ? error.message : String(error), kind: "error" }
+      }
+    },
+  )
+  const databaseErrors = outcomes.flatMap((outcome) => outcome.kind === "error" ? [{
     binding: outcome.binding.binding,
     database_id: outcome.binding.database_id,
     error: outcome.error,
   }] : [])
-  const songs = outcomes.flatMap((outcome) => "report" in outcome
+  const songs = outcomes.flatMap((outcome) => outcome.kind === "report"
     ? outcome.report.songs.map((song) => ({ ...song, database_binding: outcome.binding.binding }))
     : [])
   const reportDigest = await sha256Hex(JSON.stringify(songs))

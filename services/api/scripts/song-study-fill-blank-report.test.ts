@@ -32,14 +32,14 @@ describe("fill-blank report runner guard", () => {
     })
     expect(() => resolveReportRunnerOptions(ARGS, { ...ENV, ENVIRONMENT: "production" }))
       .toThrow("refusing_fill_blank_report_outside_staging")
-    expect(() => resolveReportRunnerOptions(
-      ARGS.with(1, "AUDIT FILL BLANK TO PROD"),
-      ENV,
-    )).toThrow("fill_blank_report_confirmation_mismatch")
-    expect(() => resolveReportRunnerOptions(
-      ARGS.with(ARGS.indexOf("false"), "sometimes"),
-      ENV,
-    )).toThrow("--include-translation must be true or false")
+    const wrongConfirmation = [...ARGS]
+    wrongConfirmation[1] = "AUDIT FILL BLANK TO PROD"
+    expect(() => resolveReportRunnerOptions(wrongConfirmation, ENV))
+      .toThrow("fill_blank_report_confirmation_mismatch")
+    const wrongBoolean = [...ARGS]
+    wrongBoolean[wrongBoolean.indexOf("false")] = "sometimes"
+    expect(() => resolveReportRunnerOptions(wrongBoolean, ENV))
+      .toThrow("--include-translation must be true or false")
   })
 
   test("accepts only read statements", () => {
