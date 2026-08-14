@@ -207,4 +207,36 @@ describe("buildStoryRoyaltyMetadataPayloads", () => {
     expect(nftPayload).not.toHaveProperty("image")
     expect(nftPayload).not.toHaveProperty("animation_url")
   })
+
+  test("keeps locked generic metadata typed without exposing a private URL", () => {
+    const { ipPayload, nftPayload } = buildStoryRoyaltyMetadataPayloads({
+      communityId: "cmt_metadata",
+      assetId: "ast_file",
+      title: "CSV download",
+      rightsBasis: "original",
+      assetKind: "download_file",
+      creatorWalletAddress: creatorWallet,
+      accessMode: "locked",
+      bundle: null,
+      media: {
+        mediaUrl: "r2://private/file.csv",
+        mediaType: "text/csv",
+        mediaHash,
+      },
+      primaryContentHash,
+      mediaHashVerified: true,
+      derivativeParentIpIds: null,
+      royaltyShares: [],
+      createdAt,
+    })
+
+    expect(ipPayload).toMatchObject({
+      asset_kind: "download_file",
+      mediaUrl: null,
+      mediaType: "text/csv",
+      mediaHash,
+      primary_content_hash: primaryContentHash,
+    })
+    expect(nftPayload).not.toHaveProperty("animation_url")
+  })
 })

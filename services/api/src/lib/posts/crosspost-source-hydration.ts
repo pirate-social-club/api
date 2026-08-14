@@ -17,6 +17,7 @@ function isSourcePostType(value: unknown): value is SourcePostType {
     || value === "video"
     || value === "link"
     || value === "song"
+    || value === "file"
 }
 
 function parseProjectedPayload(value: string): Record<string, unknown> | null {

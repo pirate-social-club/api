@@ -40,6 +40,7 @@ import {
   assertAssetNotRightsHeld,
   assertListingNotRightsHeld,
 } from "./rights-hold-gates"
+import { assertAssetDeliveryAllowed } from "./asset-read-policy"
 import {
   requireCommunityMember,
   resolveWalletAttachmentAddress,
@@ -240,6 +241,17 @@ async function finalizeLocalPurchaseSettlement(input: {
   const listing = await getListingRowById(input.client, input.communityId, input.quote.listing_id)
   if (!listing) {
     throw notFoundError("Listing not found")
+  }
+  if (listing.asset_id?.trim()) {
+    const asset = await getAssetRow(input.client, input.communityId, listing.asset_id)
+    if (!asset) {
+      throw notFoundError("Listing not found")
+    }
+    await assertAssetDeliveryAllowed({
+      client: input.client,
+      asset,
+      notFoundMessage: "Listing not found",
+    })
   }
   await assertListingNotRightsHeld({
     client: input.client,
@@ -615,6 +627,21 @@ async function reconcileStaleCommunityPurchaseSettlementAttempt(input: {
       })
       return "failed"
     }
+    try {
+      await assertAssetDeliveryAllowed({
+        client: input.client,
+        asset,
+        notFoundMessage: "Listing not found",
+      })
+    } catch {
+      await markPurchaseSettlementAttemptFailed({
+        client: input.client,
+        quoteId: input.attempt.quote_id,
+        failureReason: "Listing not found during reconciliation",
+        now: input.now,
+      })
+      return "failed"
+    }
     if (coordinatorOwned) {
       const storyEffect = effects.find((effect) => effect.effect_kind === "story_royalty_payment")
       const metadata = parseJsonValue<{ buyer_wallet_address?: string }>(storyEffect?.metadata_json ?? null, {})
@@ -880,6 +907,20 @@ async function settleCommunityPurchaseForBuyer(input: {
       })
       throw badRequestError("Purchase quote has expired")
     }
+    // Check enforcement before reserving settlement work or verifying buyer
+    // funding. Quarantined/blocked assets must not remain purchasable while
+    // the settlement saga is in flight.
+    if (quote.asset_id) {
+      const asset = await getAssetRow(db.client, input.communityId, quote.asset_id)
+      if (!asset) {
+        throw notFoundError("Listing not found")
+      }
+      await assertAssetDeliveryAllowed({
+        client: db.client,
+        asset,
+        notFoundMessage: "Listing not found",
+      })
+    }
     const createdAt = nowIso()
     const allocationSnapshot = assertExecutableQuoteAllocationSnapshot(
       parseQuoteAllocationSnapshot(quote.allocation_snapshot_json),
@@ -961,6 +1002,11 @@ async function settleCommunityPurchaseForBuyer(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      await assertAssetDeliveryAllowed({
+        client: db.client,
+        asset,
+        notFoundMessage: "Listing not found",
+      })
       await assertAssetNotRightsHeld({
         client: db.client,
         communityId: input.communityId,

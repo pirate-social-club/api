@@ -77,6 +77,8 @@ import { reconcileCommunityMembershipAndFollowProjections } from "./lib/communit
 import { refreshScheduledMaterializedPublicHomeFeeds } from "./lib/feed/materialized-public-feed"
 import { reconcileRoyaltyClaimEvents } from "./lib/royalties/royalty-claim-history"
 import { reconcileStoryRoyaltyAllocationVerifications } from "./lib/communities/commerce/royalty-allocation-verifier"
+import { expireUnclaimedContentBlobs } from "./lib/content-blobs/content-blob-repository"
+import { reconcileGenericAssetPayloads } from "./lib/content-blobs/generic-asset-reconciler"
 import { reconcileScheduledD1Provisioning } from "./lib/communities/provisioning/reconciler-host"
 import {
   checkScheduledD1PoolCapacity,
@@ -1134,6 +1136,30 @@ async function reconcileScheduledEfpFollowWrites(env: Env): Promise<void> {
   }
 }
 
+async function reconcileScheduledContentBlobs(env: Env): Promise<void> {
+  const summary = await expireUnclaimedContentBlobs({
+    client: getControlPlaneClient(env),
+    now: new Date().toISOString(),
+    limit: 100,
+  })
+  if (summary.contentBlobIds.length > 0) {
+    console.info("[scheduled] expired unclaimed content blobs", JSON.stringify({
+      count: summary.contentBlobIds.length,
+      content_blob_ids: summary.contentBlobIds,
+    }))
+  }
+}
+
+async function reconcileScheduledGenericAssetPayloads(env: Env): Promise<void> {
+  if (env.GENERIC_DIGITAL_GOODS_ENABLED !== "true") return
+  await reconcileGenericAssetPayloads({
+    env,
+    repository: getCommunityRepository(env),
+    communityLimit: 25,
+    payloadLimitPerCommunity: 100,
+  })
+}
+
 async function processScheduledCommunityJobs(env: Env): Promise<void> {
   const communityRepository = getCommunityRepository(env)
   const taskStartedAtMs = Date.now()
@@ -1192,38 +1218,13 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
         },
       )
     }
-    const reconciledPostPublishFinalize = await reconcileStuckPostPublishFinalizeJobs({
-      env,
-      communityRepository,
-      maxCommunities: 100,
-      maxPostsPerCommunity: 25,
-      deadlineAtMs: preludeDeadlineAtMs,
-    })
-    if (reconciledPostPublishFinalize.failed_posts > 0 || reconciledPostPublishFinalize.failed_communities.length > 0) {
-      console.info("[community-jobs] reconciled stuck post publish finalize jobs", JSON.stringify(reconciledPostPublishFinalize))
-      const postPublishFinalizeMessage = reconciledPostPublishFinalize.failed_posts > 0
-        ? "Post publish finalize reconciliation marked stuck posts failed"
-        : "Post publish finalize reconciliation had community routing failures"
-      await captureScheduledWarning(
-        env,
-        postPublishFinalizeMessage,
-        "community_jobs_post_publish_finalize_reconciliation",
-        reconciledPostPublishFinalize,
-        {
-          urgency: reconciledPostPublishFinalize.failed_posts > 5
-            ? "high"
-            : reconciledPostPublishFinalize.failed_posts > 0
-              ? "medium"
-              : "low",
-        },
-      )
-    }
     const summary = await processAvailableCommunityJobs({
       env,
       communityRepository,
       maxCommunities: 100,
       maxJobsPerCommunity: 25,
       priorityCommunityIds,
+      skipJobTypes: ["post_publish_finalize"],
       // Clamp the drain's tick to the task deadline; the prelude sub-budget
       // normally leaves the full 45s, but an overrun must not push the task
       // past the scheduler lease.
@@ -1291,9 +1292,6 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
       song_artifact_session_reconcile_ms: reconciledUploadSessions.reconcile_ms,
       song_artifact_session_checked_communities: reconciledUploadSessions.checked_communities,
       song_artifact_session_deferred_communities: reconciledUploadSessions.deferred_communities,
-      post_publish_finalize_reconcile_ms: reconciledPostPublishFinalize.reconcile_ms,
-      post_publish_finalize_checked_communities: reconciledPostPublishFinalize.checked_communities,
-      post_publish_finalize_deferred_communities: reconciledPostPublishFinalize.deferred_communities,
       sweep_ms: summary.sweep_ms,
       process_ms: summary.process_ms,
       ops_alerts_scan_ms: opsAlerts.scan_ms,
@@ -1303,6 +1301,65 @@ async function processScheduledCommunityJobs(env: Env): Promise<void> {
   } catch (error) {
     console.error("[community-jobs] scheduled processing failed", error)
     await captureScheduledError(env, error, "community_jobs")
+  } finally {
+    await communityRepository.close?.()
+  }
+}
+
+async function processScheduledPostPublishFinalizeJobs(env: Env): Promise<void> {
+  const communityRepository = getCommunityRepository(env)
+  const taskStartedAtMs = Date.now()
+  const taskDeadlineAtMs = taskStartedAtMs + COMMUNITY_PUBLISH_TASK_DEADLINE_MS
+  try {
+    const reconciled = await reconcileStuckPostPublishFinalizeJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxPostsPerCommunity: 25,
+      deadlineAtMs: Math.min(
+        taskDeadlineAtMs,
+        taskStartedAtMs + COMMUNITY_PUBLISH_RECONCILE_DEADLINE_MS,
+      ),
+    })
+    if (reconciled.failed_posts > 0 || reconciled.failed_communities.length > 0) {
+      console.info("[community-publish] reconciled stuck post publish finalize jobs", JSON.stringify(reconciled))
+      await captureScheduledWarning(
+        env,
+        reconciled.failed_posts > 0
+          ? "Post publish finalize reconciliation marked stuck posts failed"
+          : "Post publish finalize reconciliation had community routing failures",
+        "community_jobs_post_publish_finalize_reconciliation",
+        reconciled,
+        {
+          urgency: reconciled.failed_posts > 5
+            ? "high"
+            : reconciled.failed_posts > 0
+              ? "medium"
+              : "low",
+        },
+      )
+    }
+    const summary = await processAvailableCommunityJobs({
+      env,
+      communityRepository,
+      maxCommunities: 100,
+      maxJobsPerCommunity: 10,
+      onlyJobTypes: ["post_publish_finalize"],
+      deadlineMs: Math.max(1, taskDeadlineAtMs - Date.now()),
+      skipStaleSweep: true,
+    })
+    if (summary.processed_jobs > 0 || summary.failed_communities.length > 0 || summary.deferred_communities > 0) {
+      console.info("[community-publish] scheduled processed", JSON.stringify({
+        processed_jobs: summary.processed_jobs,
+        failed_communities: summary.failed_communities.length,
+        started_communities: summary.started_communities,
+        deferred_communities: summary.deferred_communities,
+        process_ms: summary.process_ms,
+      }))
+    }
+  } catch (error) {
+    console.error("[community-publish] scheduled processing failed", error)
+    await captureScheduledError(env, error, "community_publish_finalize")
   } finally {
     await communityRepository.close?.()
   }
@@ -1942,6 +1999,8 @@ const COMMUNITY_JOB_TASK_DEADLINE_MS = 90_000
 // split philosophy as the 15s/45s sweep/process split. 20s of 90s always
 // leaves the drain its full tick budget.
 const COMMUNITY_JOB_PRELUDE_DEADLINE_MS = 20_000
+const COMMUNITY_PUBLISH_TASK_DEADLINE_MS = 90_000
+const COMMUNITY_PUBLISH_RECONCILE_DEADLINE_MS = 15_000
 // Protect the settlement/money-path jobs, both reward watchdogs, and
 // the community job drain at the front of the ordered batch. They must receive
 // a start even when D1 pressure pushes the batch past its nominal deadline.
@@ -1963,6 +2022,7 @@ const SCHEDULED_LEASE_TTL_MS = 120_000
 // maintenance batch can never make it skip. Named separately from
 // SCHEDULED_CRON_LOCK_NAME so the two leases can never collide.
 export const SCHEDULED_COMMUNITY_JOB_LOCK_NAME = "scheduled-cron-community-jobs"
+export const SCHEDULED_COMMUNITY_PUBLISH_LOCK_NAME = "scheduled-cron-community-publish-finalize"
 // Sized to the lane's own deadline plus headroom for the slowest in-flight
 // community scan, mirroring how SCHEDULED_LEASE_TTL_MS exceeds its batch
 // deadline. Bounded so a crashed lane self-heals rather than wedging the lane
@@ -1988,6 +2048,7 @@ type ScheduledPriorityJobName =
   | "reconcile_song_artifact_head_verifications"
   | "monitor_reward_campaign_treasury_solvency"
   | "process_community_jobs"
+  | "process_community_publish_finalize"
   | "reconcile_d1_provisioning"
   | "observe_hns_roots"
   | "revalidate_hns_namespaces"
@@ -2017,6 +2078,7 @@ export function scheduledPriorityJobNames(
     // is the retry engine for every community job, so a deferred start delays
     // user-visible publishing, lyrics, and translations — not just monitoring.
     "process_community_jobs",
+    "process_community_publish_finalize",
     // When available, extend the protected prefix so cross-store provisioning
     // cannot strand bindings and root evidence cannot repeatedly miss its
     // freshness budget behind slower maintenance work.
@@ -2153,6 +2215,7 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
       reconcile_song_artifact_head_verifications: () => reconcileScheduledSongArtifactHeadVerifications(env),
       monitor_reward_campaign_treasury_solvency: () => monitorScheduledRewardCampaignTreasurySolvency(env),
       process_community_jobs: () => processScheduledCommunityJobs(env),
+      process_community_publish_finalize: () => processScheduledPostPublishFinalizeJobs(env),
       reconcile_d1_provisioning: () => reconcileScheduledD1Provisioning(env),
       observe_hns_roots: () => observeScheduledHnsRoots(env),
       revalidate_hns_namespaces: () => revalidateScheduledHnsNamespaces(env),
@@ -2248,6 +2311,12 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
         : []),
       ...(env.CONTROL_PLANE_DATABASE_URL
         ? [{ name: "reconcile_efp_follow_writes", run: () => reconcileScheduledEfpFollowWrites(env) }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL
+        ? [{ name: "reconcile_content_blob_lifecycle", run: () => reconcileScheduledContentBlobs(env) }]
+        : []),
+      ...(env.CONTROL_PLANE_DATABASE_URL && env.GENERIC_DIGITAL_GOODS_ENABLED === "true"
+        ? [{ name: "reconcile_generic_asset_payloads", run: () => reconcileScheduledGenericAssetPayloads(env) }]
         : []),
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },
       { name: "sync_community_health_counts", run: () => syncScheduledCommunityHealthCounts(env) },
@@ -2351,6 +2420,14 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
     }
 
     ctx.waitUntil(Promise.allSettled([
+      runLane({
+        lane: "community-publish",
+        lockName: SCHEDULED_COMMUNITY_PUBLISH_LOCK_NAME,
+        deadlineMs: COMMUNITY_PUBLISH_TASK_DEADLINE_MS,
+        leaseTtlMs: SCHEDULED_COMMUNITY_JOB_LEASE_TTL_MS,
+        limit: 1,
+        tasks: lanes.publishing,
+      }),
       runLane({
         lane: "community-jobs",
         lockName: SCHEDULED_COMMUNITY_JOB_LOCK_NAME,

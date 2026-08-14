@@ -53,6 +53,7 @@ describe("content blob routes", () => {
   test("creates, uploads, and reads an owned blob without making it ready", async () => {
     const ctx = await createRouteTestContext()
     cleanup = ctx.cleanup
+    ctx.env.GENERIC_DIGITAL_GOODS_ENABLED = "true"
     ctx.env.CONTENT_BLOB_UPLOADS_ENABLED = "true"
     ctx.env.CONTENT_SOURCE_BROKER_SHARED_SECRET = "fixture-broker-secret"
     ctx.env.CONTENT_SECURITY_SCAN_ENQUEUE_ENABLED = "true"

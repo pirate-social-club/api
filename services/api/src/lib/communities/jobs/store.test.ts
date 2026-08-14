@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   enqueueCommunityJob,
+  findNextRunnableCommunityJob,
   markCommunityJobSucceeded,
   recordCommunityJobCheckpoint,
   resetStaleRunningCommunityJobById,
@@ -127,6 +128,28 @@ describe("enqueueCommunityJob", () => {
     expect(job.status).toBe("queued")
     expect(statements).toHaveLength(2)
     expect(statements[1]?.sql).toContain("INSERT OR IGNORE")
+  })
+})
+
+describe("findNextRunnableCommunityJob", () => {
+  test("can claim only the publication saga without selecting other jobs", async () => {
+    const { executor, statements } = makeExecutor()
+    await findNextRunnableCommunityJob({
+      client: executor,
+      communityId: "cmt_1",
+      now: "2026-08-14T00:00:00.000Z",
+      onlyJobTypes: ["post_publish_finalize"],
+      skipJobTypes: ["telegram_post_publish"],
+    })
+    expect(statements[0]?.sql).toContain("job_type NOT IN (?4)")
+    expect(statements[0]?.sql).toContain("job_type IN (?5)")
+    expect(statements[0]?.args).toEqual([
+      "cmt_1",
+      "2026-08-14T00:00:00.000Z",
+      null,
+      "telegram_post_publish",
+      "post_publish_finalize",
+    ])
   })
 })
 

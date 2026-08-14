@@ -126,7 +126,7 @@ export async function prepareVideoPostAsset(input: {
     writeBody: {
       ...input.body,
       media_refs: accessMode === "locked" ? lockedPosterMediaRefs : publicVideoMediaRefs,
-      access_mode: input.body.access_mode,
+      access_mode: input.body.access_mode ?? accessMode,
       asset_id: input.body.access_mode ? input.body.asset_id ?? makeId("ast") : input.body.asset_id,
       rights_basis: input.body.rights_basis ?? (input.body.license_preset || accessMode === "locked" ? "original" : "none"),
     },

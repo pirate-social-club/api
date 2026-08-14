@@ -9,6 +9,7 @@ import { getSongArtifactBundle } from "../../song-artifacts/song-artifact-reposi
 import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-upload-repository"
 import type { Client } from "../../sql-client"
 import {
+  buildStoryGenericMetadataMedia,
   buildStoryVideoMetadataMedia,
   isStoryRoyaltyRegistrationConfigured,
   maybeRegisterStoryRoyaltyForAsset,
@@ -26,6 +27,13 @@ import { markStoryRoyaltyAllocationRegistrationPendingVerification } from "./roy
 import { syncStoryRoyaltyAllocationProjectionSafely } from "./royalty-allocation-projection"
 import type { AssetRow } from "./row-types"
 import { assertLegacyMediaAsset } from "./asset-kind-policy"
+import { isGenericAssetKind } from "./asset-kind-policy"
+import { getActivePrimaryAssetPayload } from "./generic-asset-repository"
+import {
+  findGenericAssetQuotaReservationByAssetId,
+  reconcileGenericAssetBytes,
+} from "./generic-asset-quota-reservation"
+import { claimOwnedReadyContentBlob } from "../../content-blobs/content-blob-repository"
 import {
   assertAssetNotBlockedByRightsHold,
   blockedRightsHoldMessage,
@@ -67,9 +75,19 @@ export async function registerLockedStoryRoyalty(input: {
     registerStoryRoyalty?: typeof maybeRegisterStoryRoyaltyForAsset
   }
 }) {
-  assertLegacyMediaAsset(input.asset)
+  const genericAsset = isGenericAssetKind(input.asset.asset_kind)
+  if (genericAsset && input.asset.asset_kind !== "download_file") {
+    throw notFoundError("Asset not found")
+  }
+  if (!genericAsset) assertLegacyMediaAsset(input.asset)
   const buildVideoMetadataMedia = input.dependencies?.buildVideoMetadataMedia ?? buildStoryVideoMetadataMedia
   const registerStoryRoyalty = input.dependencies?.registerStoryRoyalty ?? maybeRegisterStoryRoyaltyForAsset
+  const genericPayload = genericAsset
+    ? await getActivePrimaryAssetPayload(input.client, input.asset.asset_id)
+    : null
+  if (genericAsset && !genericPayload) {
+    throw notFoundError("Asset content not found")
+  }
   return await registerStoryRoyalty({
     env: input.env,
     client: input.client,
@@ -81,15 +99,24 @@ export async function registerLockedStoryRoyalty(input: {
     licensePreset: input.effectiveLicensePreset,
     commercialRevSharePct: input.effectiveCommercialRevSharePct,
     upstreamAssetRefs: input.post.upstream_asset_refs ?? null,
-    assetKind: input.asset.asset_kind,
+    assetKind: genericAsset
+      ? "download_file"
+      : input.asset.asset_kind as "song_audio" | "video_file",
     accessMode: input.asset.access_mode,
     bundle: input.bundle,
-    media: buildVideoMetadataMedia({
-      post: input.post,
-      storageRef: input.asset.primary_content_ref,
-      mimeType: input.post.media_refs?.[0]?.mime_type ?? null,
-      contentHash: input.asset.primary_content_hash,
-    }),
+    media: genericAsset
+      ? buildStoryGenericMetadataMedia({
+          assetKind: "download_file",
+          mediaType: genericPayload?.mime_type ?? null,
+          contentHash: genericPayload?.content_hash ?? input.resolvedPrimaryContentHash,
+        })
+      : buildVideoMetadataMedia({
+          post: input.post,
+          storageRef: input.asset.primary_content_ref!,
+          mimeType: input.post.media_refs?.[0]?.mime_type ?? null,
+          contentHash: input.asset.primary_content_hash,
+        }),
+    contentBlobId: genericPayload?.content_blob_ref ?? null,
     primaryContentHash: input.resolvedPrimaryContentHash,
     metadataCreatedAt: input.asset.created_at,
   })
@@ -154,7 +181,13 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   if (!asset) {
     throw notFoundError("Asset not found")
   }
-  assertLegacyMediaAsset(asset)
+  const genericAsset = isGenericAssetKind(asset.asset_kind)
+  if (genericAsset && asset.asset_kind !== "download_file") {
+    throw notFoundError("Asset not found")
+  }
+  if (!genericAsset) {
+    assertLegacyMediaAsset(asset)
+  }
   if (asset.access_mode !== "locked") {
     return serializeAsset(asset)
   }
@@ -224,19 +257,58 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   }
 
   const controlPlaneClient = getControlPlaneClient(input.env)
-  const artifactKind: SongArtifactUpload["artifact_kind"] = asset.asset_kind === "video_file"
-    ? "primary_video"
-    : "primary_audio"
-  const upload = await findUploadedSongArtifactByStorageRef({
-    client: controlPlaneClient,
-    communityId: input.communityId,
-    storageRef: asset.primary_content_ref,
-    artifactKind,
-  })
-  if (!upload) {
+  const genericPayload = genericAsset
+    ? await getActivePrimaryAssetPayload(input.client, asset.asset_id)
+    : null
+  if (genericAsset && !genericPayload) {
+    throw notFoundError("Asset content not found")
+  }
+  if (genericAsset && genericPayload) {
+    // Bidirectional reconciliation: an active shard payload is authoritative
+    // evidence that its control-plane blob must carry the same claim. A
+    // missing claim is restored only through the verified CAS path; any hash
+    // or size mismatch fails closed and leaves the asset unavailable.
+    const repairedClaim = await claimOwnedReadyContentBlob({
+      client: controlPlaneClient,
+      communityId: input.communityId,
+      uploaderUserId: asset.creator_user_id,
+      contentBlobId: genericPayload.content_blob_ref,
+      claimKind: "asset_payload",
+      claimRef: asset.asset_id,
+      claimedAt: nowIso(),
+    })
+    if (
+      repairedClaim.blob.verified_content_hash?.toLowerCase() !== genericPayload.content_hash.toLowerCase()
+      || repairedClaim.blob.verified_size_bytes !== genericPayload.size_bytes
+    ) {
+      throw providerUnavailable("Generic payload claim does not match the verified source", {
+        reason: "payload_claim_conflict",
+        asset_id: asset.asset_id,
+      }, false)
+    }
+  }
+  const artifactKind: SongArtifactUpload["artifact_kind"] | undefined = genericAsset
+    ? undefined
+    : asset.asset_kind === "video_file" ? "primary_video" : "primary_audio"
+  const upload = genericAsset
+    ? null
+    : await findUploadedSongArtifactByStorageRef({
+        client: controlPlaneClient,
+        communityId: input.communityId,
+        storageRef: asset.primary_content_ref!,
+        artifactKind: artifactKind!,
+      })
+  if (!genericAsset && !upload) {
     throw badRequestError("Primary asset upload is missing")
   }
-  const resolvedPrimaryContentHash = (asset.primary_content_hash?.trim() || `0x${await sha256Hex(asset.primary_content_ref)}`) as `0x${string}`
+  if (!genericAsset && !asset.primary_content_ref) {
+    throw badRequestError("Primary asset content reference is missing")
+  }
+  const resolvedPrimaryContentHash = (
+    genericPayload?.content_hash?.trim()
+      || asset.primary_content_hash?.trim()
+      || `0x${await sha256Hex(asset.primary_content_ref ?? "")}`
+  ) as `0x${string}`
   const bundle = asset.song_artifact_bundle_id
     ? await getSongArtifactBundle(
         controlPlaneClient,
@@ -266,11 +338,13 @@ export async function prepareRequestedLockedAssetDelivery(input: {
       communityId: input.communityId,
       assetId: asset.asset_id,
       creatorWalletAddress,
-      storageRef: asset.primary_content_ref,
-      mimeType: upload.mime_type,
-      contentHash: asset.primary_content_hash,
+      storageRef: genericPayload?.content_blob_ref ?? asset.primary_content_ref ?? "",
+      mimeType: genericPayload?.mime_type ?? upload!.mime_type,
+      contentHash: genericPayload?.content_hash ?? asset.primary_content_hash,
       artifactKind,
       bundleId: asset.song_artifact_bundle_id,
+      contentBlobId: genericPayload?.content_blob_ref ?? null,
+      contentBlobSizeBytes: genericPayload?.size_bytes ?? null,
       rightsBasis: asset.rights_basis,
       upstreamAssetRefs: post.upstream_asset_refs ?? null,
       assertDeliveryAllowed: async () => {
@@ -278,6 +352,7 @@ export async function prepareRequestedLockedAssetDelivery(input: {
           client: input.client,
           asset,
           notFoundMessage: "Asset not found",
+          allowProcessingPost: true,
         })
       },
       onProgress: input.onProgress ?? null,
@@ -303,6 +378,12 @@ export async function prepareRequestedLockedAssetDelivery(input: {
         }
         : null,
       onPreparedDelivery: async (prepared) => {
+        await assertAssetDeliveryAllowed({
+          client: input.client,
+          asset,
+          notFoundMessage: "Asset not found",
+          allowProcessingPost: true,
+        })
         await input.client.execute({
           sql: `
             UPDATE assets
@@ -395,6 +476,44 @@ export async function prepareRequestedLockedAssetDelivery(input: {
     lockedDeliveryRef = lockedDelivery.lockedDeliveryRef
     lockedDeliveryStorageRef = lockedDelivery.lockedDeliveryStorageRef
     lockedDeliveryMetadataJson = lockedDelivery.lockedDeliveryMetadataJson
+    if (genericAsset) {
+      const metadata = (() => {
+        try {
+          const parsed = JSON.parse(lockedDeliveryMetadataJson) as { ciphertext_bytes?: unknown }
+          return parsed && typeof parsed === "object" ? parsed : {}
+        } catch {
+          return {}
+        }
+      })()
+      const plaintextBytes = lockedDelivery.plaintextBytes ?? genericPayload?.size_bytes ?? null
+      const ciphertextBytes = lockedDelivery.ciphertextBytes
+        ?? (typeof metadata.ciphertext_bytes === "number" ? metadata.ciphertext_bytes : null)
+      if (plaintextBytes == null || ciphertextBytes == null) {
+        throw providerUnavailable("Generic locked delivery size reconciliation is unavailable", {
+          reason: "generic_quota_reconciliation_pending",
+          asset_id: asset.asset_id,
+        })
+      }
+      const reservation = await findGenericAssetQuotaReservationByAssetId({
+        client: controlPlaneClient,
+        assetId: asset.asset_id,
+      })
+      if (!reservation) {
+        throw providerUnavailable("Generic asset quota reservation is unavailable", {
+          reason: "generic_quota_reservation_missing",
+          asset_id: asset.asset_id,
+        })
+      }
+      await reconcileGenericAssetBytes({
+        client: controlPlaneClient,
+        reservationId: reservation.reservation_id,
+        actualBytes: plaintextBytes + ciphertextBytes,
+        plaintextBytes,
+        ciphertextBytes,
+        packageBytes: lockedDelivery.packageBytes ?? 0,
+        reconciledAt: nowIso(),
+      })
+    }
   } catch (error) {
     const lockedDeliveryError = error instanceof Error ? error.message : String(error)
     const terminalFailure = input.markFailureAsTerminal ?? true
@@ -549,6 +668,12 @@ export async function prepareRequestedLockedAssetDelivery(input: {
   }
 
   const updatedAt = nowIso()
+  await assertAssetDeliveryAllowed({
+    client: input.client,
+    asset,
+    notFoundMessage: "Asset not found",
+    allowProcessingPost: true,
+  })
   await input.client.execute({
     sql: `
       UPDATE assets

@@ -134,3 +134,50 @@ export async function markPostPublishRequestStatus(input: {
     ],
   })
 }
+
+/**
+ * Persist a small monotonic saga patch without introducing a second publisher
+ * record. The JSON is the durable idempotency envelope for allocations made by
+ * post_publish_finalize, so a retry can resume with the same IDs.
+ */
+export async function mergePostPublishRequestOptions(input: {
+  client: DbExecutor
+  communityId: string
+  postId: string
+  patch: Record<string, unknown>
+  updatedAt: string
+}): Promise<void> {
+  const existing = await getPostPublishRequest({
+    client: input.client,
+    communityId: input.communityId,
+    postId: input.postId,
+  })
+  const current = existing?.publish_options_json
+    ? JSON.parse(existing.publish_options_json) as Record<string, unknown>
+    : {}
+  const allocatedIds = current.allocated_ids && typeof current.allocated_ids === "object"
+    && !Array.isArray(current.allocated_ids)
+    ? current.allocated_ids as Record<string, unknown>
+    : {}
+  const patchAllocatedIds = input.patch.allocated_ids && typeof input.patch.allocated_ids === "object"
+    && !Array.isArray(input.patch.allocated_ids)
+    ? input.patch.allocated_ids as Record<string, unknown>
+    : null
+  const next = {
+    ...current,
+    ...input.patch,
+    allocated_ids: patchAllocatedIds
+      ? { ...allocatedIds, ...patchAllocatedIds }
+      : allocatedIds,
+  }
+  await input.client.execute({
+    sql: `
+      UPDATE post_publish_requests
+      SET publish_options_json = ?3,
+          updated_at = ?4
+      WHERE community_id = ?1
+        AND post_id = ?2
+    `,
+    args: [input.communityId, input.postId, JSON.stringify(next), input.updatedAt],
+  })
+}

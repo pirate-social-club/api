@@ -5,6 +5,16 @@ export function envFlag(value: string | undefined, fallback = false): boolean {
   return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase())
 }
 
+/**
+ * The generic-goods flag gates writers only. Upload, scanning, and already
+ * published-asset reads keep their own policies and must not use this helper.
+ */
+export function genericDigitalGoodsEnabled(env: {
+  GENERIC_DIGITAL_GOODS_ENABLED?: string
+}): boolean {
+  return envFlag(env.GENERIC_DIGITAL_GOODS_ENABLED, false)
+}
+
 export function isLocalEnvironment(environment: string | undefined): boolean {
   const normalized = String(environment || "").trim().toLowerCase()
   return normalized === "" || ["dev", "development", "local", "test"].includes(normalized)

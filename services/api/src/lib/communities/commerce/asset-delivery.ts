@@ -8,6 +8,7 @@ import {
 } from "../../song-artifacts/song-artifact-storage"
 import { sha256Hex } from "../../crypto"
 import { findUploadedSongArtifactByStorageRef } from "../../song-artifacts/song-artifact-upload-repository"
+import { readContentSource } from "../../content-blobs/content-source-broker-client"
 import {
   generateStorySignedAccessProof,
   type StoryAccessScope,
@@ -40,6 +41,7 @@ import {
 import {
   buildAssetContentPath,
 } from "./access"
+import { isGenericAssetKind } from "./asset-kind-policy"
 import {
   type AssetRow,
   parseJsonValue,
@@ -61,6 +63,7 @@ export type LockedDeliverySecret = {
   algorithm: "AES-GCM"
   iv_b64: string
   mime_type: string
+  ciphertext_bytes?: number
 }
 
 const abiCoder = AbiCoder.defaultAbiCoder()
@@ -96,6 +99,9 @@ type LockedAssetDeliveryResult = {
   lockedDeliveryRef: string
   lockedDeliveryStorageRef: string
   lockedDeliveryMetadataJson: string
+  plaintextBytes?: number
+  ciphertextBytes?: number
+  packageBytes?: number
 }
 
 export type PreparedLockedDeliveryCoordinates = {
@@ -118,7 +124,9 @@ let testLockedAssetDeliveryPreparer: ((input: {
   storageRef: string
   mimeType: string
   contentHash: string | null
-  artifactKind: SongArtifactUpload["artifact_kind"]
+  artifactKind?: SongArtifactUpload["artifact_kind"]
+  contentBlobId?: string | null
+  contentBlobSizeBytes?: number | null
   bundleId: string | null
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
@@ -137,7 +145,9 @@ export function setLockedAssetDeliveryPreparerForTests(
     storageRef: string
     mimeType: string
     contentHash: string | null
-    artifactKind: SongArtifactUpload["artifact_kind"]
+    artifactKind?: SongArtifactUpload["artifact_kind"]
+    contentBlobId?: string | null
+    contentBlobSizeBytes?: number | null
     bundleId: string | null
     rightsBasis: Post["rights_basis"]
     upstreamAssetRefs: string[] | null
@@ -402,6 +412,7 @@ export async function buildStoryCdrAccessPackage(input: {
     storyReadCondition: input.asset.story_read_condition,
     lockedDeliverySecretJson: input.asset.locked_delivery_secret_json,
     ciphertextRef: input.ciphertextRef ?? buildAssetContentPath(input.asset.community_id, input.asset.asset_id),
+    purchaseEntitlementProofMode: isGenericAssetKind(input.asset.asset_kind) ? "signed" : undefined,
   })
 }
 
@@ -413,7 +424,9 @@ export async function prepareLockedAssetDelivery(input: {
   storageRef: string
   mimeType: string
   contentHash: string | null
-  artifactKind: SongArtifactUpload["artifact_kind"]
+  artifactKind?: SongArtifactUpload["artifact_kind"]
+  contentBlobId?: string | null
+  contentBlobSizeBytes?: number | null
   bundleId: string | null
   rightsBasis: Post["rights_basis"]
   upstreamAssetRefs: string[] | null
@@ -438,6 +451,9 @@ export async function prepareLockedAssetDelivery(input: {
   lockedDeliveryRef: string
   lockedDeliveryStorageRef: string
   lockedDeliveryMetadataJson: string
+  plaintextBytes?: number
+  ciphertextBytes?: number
+  packageBytes?: number
 }> {
   await input.assertDeliveryAllowed?.()
   if (testLockedAssetDeliveryPreparer) {
@@ -445,29 +461,51 @@ export async function prepareLockedAssetDelivery(input: {
   }
 
   const controlPlaneClient = getControlPlaneClient(input.env)
-  const upload = await findUploadedSongArtifactByStorageRef({
-    client: controlPlaneClient,
-    communityId: input.communityId,
-    storageRef: input.storageRef,
-    artifactKind: input.artifactKind,
-  })
-  if (!upload?.storage_object_key) {
+  const isGenericContentSource = Boolean(input.contentBlobId?.trim())
+  const upload = isGenericContentSource
+    ? null
+    : await findUploadedSongArtifactByStorageRef({
+        client: controlPlaneClient,
+        communityId: input.communityId,
+        storageRef: input.storageRef,
+        artifactKind: input.artifactKind ?? "primary_audio",
+      })
+  if (!isGenericContentSource && !upload?.storage_object_key) {
     throw badRequestError("Primary asset upload is missing locked-delivery storage metadata")
+  }
+  if (
+    isGenericContentSource
+    && (
+      !input.contentBlobSizeBytes
+      || input.contentBlobSizeBytes <= 0
+      || !input.contentHash?.trim()
+    )
+  ) {
+    throw badRequestError("Generic locked delivery is missing verified content metadata")
   }
   await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_upload_loaded", {
     storage_ref: input.storageRef,
   })
-  const uploadObjectKey = upload.storage_object_key
+  const uploadObjectKey = upload?.storage_object_key ?? ""
 
   const objectKey = `locked-assets/${input.communityId}/${input.assetId}/payload.bin`
   let plaintext: Uint8Array<ArrayBuffer> | null = null
   async function getPlaintext(): Promise<Uint8Array<ArrayBuffer>> {
     if (plaintext) return plaintext
-    const upstream = await fetchSongArtifactBytes({
-      env: input.env,
-      objectKey: uploadObjectKey,
-    })
-    plaintext = new Uint8Array(await upstream.arrayBuffer())
+    if (isGenericContentSource) {
+      plaintext = await readContentSource({
+        env: input.env,
+        contentBlobId: input.contentBlobId!,
+        expectedSizeBytes: input.contentBlobSizeBytes!,
+        expectedSha256: input.contentHash!,
+      })
+    } else {
+      const upstream = await fetchSongArtifactBytes({
+        env: input.env,
+        objectKey: uploadObjectKey,
+      })
+      plaintext = new Uint8Array(await upstream.arrayBuffer())
+    }
     return plaintext
   }
   const primaryContentHash = (input.contentHash?.trim() || `0x${await sha256Hex(await getPlaintext())}`) as `0x${string}`
@@ -488,6 +526,9 @@ export async function prepareLockedAssetDelivery(input: {
     mime_type: input.mimeType,
   } satisfies LockedDeliverySecret)
   let lockedDeliveryPayloadUploaded = false
+  let accountedPlaintextBytes: number | undefined
+  let accountedCiphertextBytes: number | undefined
+  let accountedPackageBytes = 0
   const storyPublishRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
     ? input.rightsBasis
     : "none"
@@ -499,9 +540,9 @@ export async function prepareLockedAssetDelivery(input: {
       { name: "story-operator", minBalanceWei: storyOperatorMinimumBalanceWei },
     ])
     let cdrVaultUuid: number
-    let lockedDeliveryStorageRef = objectKey
-    let lockedDeliveryMetadataJson: string
-    const prepared = input.preparedDelivery
+  let lockedDeliveryStorageRef = objectKey
+  let lockedDeliveryMetadataJson: string
+  const prepared = input.preparedDelivery
     if (preparedLockedDeliveryMatches({
       prepared,
       expected: {
@@ -517,13 +558,23 @@ export async function prepareLockedAssetDelivery(input: {
       cdrVaultUuid = reusablePrepared.storyCdrVaultUuid
       lockedDeliveryStorageRef = reusablePrepared.lockedDeliveryStorageRef
       lockedDeliveryMetadataJson = reusablePrepared.lockedDeliveryMetadataJson
+      accountedPlaintextBytes = input.contentBlobSizeBytes ?? undefined
+      const preparedMetadata = parseJsonValue<LockedDeliverySecret>(lockedDeliveryMetadataJson, {
+        algorithm: "AES-GCM",
+        iv_b64: "",
+        mime_type: input.mimeType,
+      })
+      accountedCiphertextBytes = preparedMetadata.ciphertext_bytes
     } else {
       const plaintext = await getPlaintext()
       if (plaintext.byteLength > 50 * 1024 * 1024) {
         console.warn(`[story] locked asset ${input.assetId} is ${plaintext.byteLength} bytes; chunked encryption should replace whole-payload encryption before raising size caps`)
       }
       const { ciphertext, dataKey, metadata } = await encryptLockedPayload(plaintext)
+      accountedPlaintextBytes = plaintext.byteLength
+      accountedCiphertextBytes = ciphertext.byteLength
       metadata.mime_type = input.mimeType
+      metadata.ciphertext_bytes = ciphertext.byteLength
       lockedDeliveryMetadataJson = JSON.stringify(metadata)
       fallbackLockedDeliveryMetadataJson = lockedDeliveryMetadataJson
       await recordLockedDeliveryProgress(input.onProgress, "locked_delivery_payload_encrypted", {
@@ -645,6 +696,9 @@ export async function prepareLockedAssetDelivery(input: {
       lockedDeliveryRef,
       lockedDeliveryStorageRef,
       lockedDeliveryMetadataJson,
+      plaintextBytes: accountedPlaintextBytes,
+      ciphertextBytes: accountedCiphertextBytes,
+      packageBytes: accountedPackageBytes,
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
@@ -659,11 +713,14 @@ export async function prepareLockedAssetDelivery(input: {
       console.warn(`[story] local fallback for locked delivery: ${errorMessage}`)
       if (!lockedDeliveryPayloadUploaded) {
         const plaintext = await getPlaintext()
+        accountedPlaintextBytes = plaintext.byteLength
         if (plaintext.byteLength > 50 * 1024 * 1024) {
           console.warn(`[story] locked asset ${input.assetId} is ${plaintext.byteLength} bytes; chunked encryption should replace whole-payload encryption before raising size caps`)
         }
         const { ciphertext, metadata } = await encryptLockedPayload(plaintext)
+        accountedCiphertextBytes = ciphertext.byteLength
         metadata.mime_type = input.mimeType
+        metadata.ciphertext_bytes = ciphertext.byteLength
         fallbackLockedDeliveryMetadataJson = JSON.stringify(metadata)
         await uploadFilebaseObject({
           env: input.env,
@@ -689,6 +746,9 @@ export async function prepareLockedAssetDelivery(input: {
         lockedDeliveryRef,
         lockedDeliveryStorageRef: objectKey,
         lockedDeliveryMetadataJson: fallbackLockedDeliveryMetadataJson,
+        plaintextBytes: accountedPlaintextBytes,
+        ciphertextBytes: accountedCiphertextBytes,
+        packageBytes: accountedPackageBytes,
       }
     }
     throw error instanceof Error ? error : new Error(errorMessage)

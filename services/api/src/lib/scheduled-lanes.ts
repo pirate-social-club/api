@@ -13,6 +13,7 @@
  */
 
 export const COMMUNITY_JOB_LANE_TASK = "process_community_jobs"
+export const COMMUNITY_PUBLISH_LANE_TASK = "process_community_publish_finalize"
 export const EFP_LANE_TASKS = [
   "scan_efp_base",
   "scan_efp_optimism",
@@ -27,6 +28,8 @@ export type LaneTask = { name: string }
 export type ScheduledLanes<T extends LaneTask> = {
   /** Foreground delivery work. Gets its own lease and deadline. */
   community: T[]
+  /** Post publication saga. Kept separate from the general community drain. */
+  publishing: T[]
   /** Follow-graph freshness and confirmed-write reconciliation. */
   efp: T[]
   /** Everything else. May defer freely without blocking the community lane. */
@@ -35,10 +38,13 @@ export type ScheduledLanes<T extends LaneTask> = {
 
 export function splitScheduledLanes<T extends LaneTask>(tasks: T[]): ScheduledLanes<T> {
   const community: T[] = []
+  const publishing: T[] = []
   const efp: T[] = []
   const maintenance: T[] = []
   for (const task of tasks) {
-    if (task.name === COMMUNITY_JOB_LANE_TASK) {
+    if (task.name === COMMUNITY_PUBLISH_LANE_TASK) {
+      publishing.push(task)
+    } else if (task.name === COMMUNITY_JOB_LANE_TASK) {
       community.push(task)
     } else if (EFP_LANE_TASK_NAMES.has(task.name)) {
       efp.push(task)
@@ -46,5 +52,5 @@ export function splitScheduledLanes<T extends LaneTask>(tasks: T[]): ScheduledLa
       maintenance.push(task)
     }
   }
-  return { community, efp, maintenance }
+  return { community, publishing, efp, maintenance }
 }

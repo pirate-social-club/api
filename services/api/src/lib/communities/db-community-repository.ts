@@ -240,7 +240,7 @@ export class DatabaseCommunityRepository implements CommunityRepository {
     sourcePostId: string
     authorUserId: string | null
     identityMode: "public" | "anonymous"
-    postType: "text" | "image" | "video" | "link" | "song" | "crosspost"
+    postType: "text" | "image" | "video" | "link" | "song" | "crosspost" | "file"
     status: Post["status"]
     visibility: "public" | "members_only"
     sourceCreatedAt: string

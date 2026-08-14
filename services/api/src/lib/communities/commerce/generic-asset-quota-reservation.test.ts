@@ -49,14 +49,44 @@ function fakeLedger() {
       }
       if (/^\s*UPDATE/i.test(statement.sql)) {
         const isRelease = statement.sql.includes("status = 'released'")
-        const row = rows.get(String(statement.args?.[isRelease ? 2 : 5]))
-        if (!row || row.status !== "reserved") return { rows: [], rowsAffected: 0 }
+        const isResume = statement.sql.includes("status IN ('released', 'failed')")
+        const row = rows.get(String(statement.args?.[isRelease ? 2 : isResume ? 4 : 5]))
+        if (!row) return { rows: [], rowsAffected: 0 }
+        if (isResume && (row.status === "released" || row.status === "failed")) {
+          row.status = "reserved"
+          row.actual_bytes = null
+          row.failure_code = null
+          row.plaintext_bytes = statement.args?.[0] ?? 0
+          row.ciphertext_bytes = statement.args?.[1] ?? 0
+          row.package_bytes = statement.args?.[2] ?? 0
+          row.updated_at = statement.args?.[3]
+          row.reconciled_at = null
+          return { rows: [], rowsAffected: 1 }
+        }
+        if (row.status !== "reserved") return { rows: [], rowsAffected: 0 }
         if (isRelease) {
           row.status = "released"
           row.failure_code = statement.args?.[0]
           row.updated_at = statement.args?.[1]
           return { rows: [], rowsAffected: 1 }
         }
+        const userId = statement.args?.[6]
+        const communityId = statement.args?.[7]
+        const maxAccountedBytes = statement.args?.[8] as number | undefined
+        const communityMax = statement.args?.[9] as number | undefined
+        const actualBytes = statement.args?.[0] as number
+        const otherUserBytes = [...rows.values()]
+          .filter((candidate) => candidate !== row && candidate.user_id === userId && candidate.community_id === communityId)
+          .filter((candidate) => candidate.status === "reserved" || candidate.status === "reconciled")
+          .reduce((sum, candidate) => sum + Number(candidate.status === "reserved" ? candidate.reserved_bytes : candidate.actual_bytes ?? 0), 0)
+        const otherCommunityBytes = [...rows.values()]
+          .filter((candidate) => candidate !== row && candidate.community_id === communityId)
+          .filter((candidate) => candidate.status === "reserved" || candidate.status === "reconciled")
+          .reduce((sum, candidate) => sum + Number(candidate.status === "reserved" ? candidate.reserved_bytes : candidate.actual_bytes ?? 0), 0)
+        if (
+          (maxAccountedBytes != null && otherUserBytes + actualBytes > maxAccountedBytes)
+          || (communityMax != null && otherCommunityBytes + actualBytes > communityMax)
+        ) return { rows: [], rowsAffected: 0 }
         row.status = "reconciled"
         row.actual_bytes = statement.args?.[0]
         row.plaintext_bytes = statement.args?.[1]
@@ -138,5 +168,61 @@ describe("generic asset quota reservations", () => {
     })
     expect(released.status).toBe("released")
     expect(released.failure_code).toBe("asset_materialization_failed")
+  })
+
+  test("reopens the same released reservation on retry instead of allocating a second row", async () => {
+    const ledger = fakeLedger()
+    const input = {
+      client: ledger.client,
+      reservationId: "gar_retry_original",
+      communityId: "com_1",
+      userId: "usr_1",
+      assetId: "ast_1",
+      contentBlobId: "cbl_1",
+      reservationKey: "post_retry",
+      reservedBytes: 100,
+      policyVersion: "generic_v1",
+      createdAt: "2026-08-14T00:00:00.000Z",
+    }
+    await reserveGenericAssetBytes(input)
+    await releaseGenericAssetBytes({
+      client: ledger.client,
+      reservationId: input.reservationId,
+      releasedAt: "2026-08-14T01:00:00.000Z",
+      failureCode: "asset_materialization_failed",
+    })
+    const resumed = await reserveGenericAssetBytes({
+      ...input,
+      reservationId: "gar_retry_duplicate",
+      createdAt: "2026-08-14T02:00:00.000Z",
+    })
+    expect(resumed.reservation_id).toBe(input.reservationId)
+    expect(resumed.status).toBe("reserved")
+    expect(ledger.rows.size).toBe(1)
+  })
+
+  test("fails closed when final physical bytes exceed the requested ceiling", async () => {
+    const ledger = fakeLedger()
+    await reserveGenericAssetBytes({
+      client: ledger.client,
+      reservationId: "gar_cap",
+      communityId: "com_1",
+      userId: "usr_1",
+      reservationKey: "post_cap",
+      reservedBytes: 100,
+      policyVersion: "generic_v1",
+      createdAt: "2026-08-14T00:00:00.000Z",
+      maxAccountedBytes: 100,
+    })
+    await expect(reconcileGenericAssetBytes({
+      client: ledger.client,
+      reservationId: "gar_cap",
+      actualBytes: 101,
+      plaintextBytes: 50,
+      ciphertextBytes: 51,
+      packageBytes: 0,
+      maxAccountedBytes: 100,
+      reconciledAt: "2026-08-14T01:00:00.000Z",
+    })).rejects.toThrow("quota would be exceeded")
   })
 })
