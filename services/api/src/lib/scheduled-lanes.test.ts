@@ -91,6 +91,43 @@ describe("scheduler lane isolation", () => {
     expect(acquisitions).toEqual(["community"])
   })
 
+  test("a slow maintenance lane does not defer post-publish-finalize work", async () => {
+    const started: string[] = []
+
+    // Model the production failure mode directly: maintenance still owns its
+    // lease from a slow prior tick while the publish-finalize lane receives a
+    // fresh tick. The publish lane has its own lock and must start the durable
+    // saga regardless of maintenance overlap.
+    const maintenance = runScheduledBatch({
+      deadlineMs: 30_000,
+      leaseTtlMs: 120_000,
+      limit: 2,
+      lock: heldLock(),
+      owner: "tick",
+      tasks: [{
+        name: "reconcile_reward_campaigns",
+        run: async () => { started.push("reconcile_reward_campaigns") },
+      }],
+    })
+
+    const publishing = runScheduledBatch({
+      deadlineMs: 90_000,
+      leaseTtlMs: 150_000,
+      limit: 1,
+      lock: freeLock([], "publishing"),
+      owner: "tick",
+      tasks: [{
+        name: COMMUNITY_PUBLISH_LANE_TASK,
+        run: async () => { started.push(COMMUNITY_PUBLISH_LANE_TASK) },
+      }],
+    })
+
+    const [maintenanceResult, publishingResult] = await Promise.all([maintenance, publishing])
+    expect(maintenanceResult.acquired).toBe(false)
+    expect(publishingResult.acquired).toBe(true)
+    expect(started).toContain(COMMUNITY_PUBLISH_LANE_TASK)
+  })
+
   test("a maintenance task exceeding 90s does not consume the community lane's budget", async () => {
     const started: string[] = []
     let clock = 0
