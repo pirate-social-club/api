@@ -2012,7 +2012,7 @@ const COMMUNITY_PUBLISH_RECONCILE_DEADLINE_MS = 15_000
 // 13% waited more than ten minutes and the worst waited ~8 hours. A song whose
 // publish-finalize attempt fails backs off 30s and then waits on this job to get
 // a start, which is why "Preparing song features" could linger for half an hour.
-export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 13
+export const SCHEDULED_MINIMUM_PRIORITY_STARTS = 14
 const SCHEDULED_SLOW_JOB_WARNING_MS = 5_000
 // Lease longer than the worst-case batch (deadline + slowest in-flight job) so we
 // never expire mid-batch, but bounded so a crashed batch self-heals. Released
