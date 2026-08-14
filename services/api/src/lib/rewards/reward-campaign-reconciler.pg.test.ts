@@ -1699,7 +1699,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     }
   })
 
-  test("a later campaign cannot pay the other activity for the same human, song, and UTC day", async () => {
+  test("objective-scoped campaigns can pay both activities for the same human, song, and UTC day", async () => {
     const results = await withProductionPostgresClient(async (client) => {
       const study = await creditRewardCampaignQualification({
         env: PG_ENV,
@@ -1765,7 +1765,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
       { reward_campaign_id: "rcp_sequential_karaoke_pg", qualification_basis: "karaoke" },
       { reward_campaign_id: "rcp_sequential_study_pg", qualification_basis: "study" },
     ])
-    expect(laterCampaign).toEqual([{ reserved_cents: 40, credited_cents: 0 }])
+    expect(laterCampaign).toEqual([{ reserved_cents: 0, credited_cents: 40 }])
     await removeCampaignTestPost("pst_sequential_pg")
   })
 
