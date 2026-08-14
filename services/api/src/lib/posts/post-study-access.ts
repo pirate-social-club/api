@@ -23,6 +23,11 @@ export type StudyPost = {
   song_title: string | null
   source_language: string | null
   source_language_reliable: boolean
+  lyrics_language?: string | null
+  lyrics_language_reliable?: boolean
+  lyrics_language_detector?: string | null
+  lyrics_language_detected_at?: string | null
+  lyrics_language_source_hash?: string | null
   stored_source_language?: string | null
   status: string
   title: string | null
@@ -30,12 +35,28 @@ export type StudyPost = {
 }
 
 export async function getStudyPostById(client: ReadClient, postId: string): Promise<StudyPost | null> {
+  // 1143 is transitional on shards during rollout. Keep Study reads fail-closed
+  // when the lyrics-language family is not present instead of preparing a query
+  // that names missing columns.
+  const schema = await client.execute({ sql: "PRAGMA table_info(posts)" })
+  const columns = new Set(schema.rows.map((row) => String((row as Record<string, unknown>).name ?? "")))
+  const lyricsLanguageProjection = [
+    "lyrics_language",
+    "lyrics_language_reliable",
+    "lyrics_language_detector",
+    "lyrics_language_detected_at",
+    "lyrics_language_source_hash",
+  ].every((column) => columns.has(column))
+    ? "lyrics_language, lyrics_language_reliable, lyrics_language_detector, lyrics_language_detected_at, lyrics_language_source_hash"
+    : "NULL AS lyrics_language, 0 AS lyrics_language_reliable, NULL AS lyrics_language_detector, NULL AS lyrics_language_detected_at, NULL AS lyrics_language_source_hash"
   const row = await executeFirst(client, {
     sql: `
       SELECT post_id, community_id, author_user_id, post_type, status, visibility,
              lyrics,
              title, song_title, song_cover_art_ref, song_artifact_bundle_id,
-             source_language, source_language_reliable, access_mode, age_gate_policy, asset_id
+             source_language, source_language_reliable,
+             ${lyricsLanguageProjection},
+             access_mode, age_gate_policy, asset_id
       FROM posts
       WHERE post_id = ?1
       LIMIT 1
@@ -63,6 +84,11 @@ export async function getStudyPostById(client: ReadClient, postId: string): Prom
       lyrics,
     ]),
     source_language_reliable: Number(row.source_language_reliable ?? 0) === 1,
+    lyrics_language: readString(row.lyrics_language),
+    lyrics_language_reliable: Number(row.lyrics_language_reliable ?? 0) === 1,
+    lyrics_language_detector: readString(row.lyrics_language_detector),
+    lyrics_language_detected_at: readString(row.lyrics_language_detected_at),
+    lyrics_language_source_hash: readString(row.lyrics_language_source_hash),
     stored_source_language: storedSourceLanguage,
     status: readString(row.status) ?? "",
     title: readString(row.title),

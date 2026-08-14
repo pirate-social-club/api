@@ -6,32 +6,38 @@ import {
   readExerciseType,
   type StudyExerciseRow,
 } from "./post-study-attempt-store"
-import { hasStudyClozeSchema, STUDY_CLOZE_GENERATION_VERSION } from "./post-study-cloze-service"
+import {
+  hasStudyClozeSchema,
+  hasStudyLyricsLanguageSchema,
+  STUDY_CLOZE_GENERATION_VERSION,
+} from "./post-study-cloze-service"
 
 const FILL_BLANK_EXERCISE_SELECT = `
       UNION ALL
       SELECT ('stu:' || u.id || ':fill_blank:v' || c.cloze_version || ':'
-                 || c.source_fingerprint || ':' || u.source_language) AS id,
+                 || c.source_fingerprint || ':' || p.lyrics_language) AS id,
              u.line_id, u.line_index, 'fill_blank' AS exercise_type,
              '${FILL_BLANK_PROMPT_TEXT}' AS prompt_text, NULL AS question,
              NULL AS reference_text, NULL AS translation_text,
              NULL AS options_json, NULL AS correct_option_id,
              c.segments_json, c.tokens_json, c.correct_placements_json,
              c.max_attempts,
-             COALESCE(u.source_language, 'source') AS review_language,
+             p.lyrics_language AS review_language,
              c.cloze_version AS study_pack_version,
              2 AS sort_order, 0 AS qualifies_for_reward,
              CASE WHEN ?7 = 1 AND s.user_id IS NOT NULL AND s.due_at <= ?8 THEN 0 ELSE 1 END AS due_rank
       FROM song_study_unit u
       JOIN song_study_unit_cloze c ON c.unit_id = u.id
+      JOIN posts p ON p.post_id = u.post_id
       LEFT JOIN song_study_review_state s
         ON s.user_id = ?6
        AND s.post_id = u.post_id
        AND s.line_id = u.line_id
        AND s.exercise_type = 'fill_blank'
-       AND s.target_language = COALESCE(u.source_language, 'source')
+       AND s.target_language = p.lyrics_language
       WHERE u.post_id = ?1
-        AND u.source_language IS NOT NULL
+        AND p.lyrics_language IS NOT NULL
+        AND p.lyrics_language_reliable = 1
         AND c.cloze_version = ?10
         AND c.status = 'ready'
         AND c.segments_json IS NOT NULL
@@ -52,12 +58,19 @@ const FILL_BLANK_DUE_SELECT = `
           ON u.post_id = s.post_id
          AND u.line_id = s.line_id
         JOIN song_study_unit_cloze c ON c.unit_id = u.id
+        JOIN posts p ON p.post_id = u.post_id
         WHERE s.user_id = ?1
           AND s.post_id = ?2
           AND s.exercise_type = 'fill_blank'
-          AND s.target_language = COALESCE(u.source_language, 'source')
+          AND s.target_language = p.lyrics_language
+          AND p.lyrics_language IS NOT NULL
+          AND p.lyrics_language_reliable = 1
           AND s.due_at > ?4
           AND c.status = 'ready'
+          AND c.cloze_version = ?7
+          AND c.segments_json IS NOT NULL
+          AND c.tokens_json IS NOT NULL
+          AND c.correct_placements_json IS NOT NULL
 `
 
 export async function listExercises(input: {
@@ -72,7 +85,9 @@ export async function listExercises(input: {
   userId?: string | null
   limit?: number
 }): Promise<{ rows: StudyExerciseRow[]; totalCount: number }> {
-  const includeFillBlank = input.includeFillBlank && await hasStudyClozeSchema(input.client)
+  const includeFillBlank = input.includeFillBlank
+    && await hasStudyClozeSchema(input.client)
+    && await hasStudyLyricsLanguageSchema(input.client)
   const result = await input.client.execute({
     sql: `
       SELECT exercises.*, COUNT(*) OVER () AS total_count
@@ -189,7 +204,9 @@ export async function getNextDueAt(input: {
   targetLanguage: string
   userId: string
 }): Promise<string | null> {
-  const includeFillBlank = input.includeFillBlank && await hasStudyClozeSchema(input.client)
+  const includeFillBlank = input.includeFillBlank
+    && await hasStudyClozeSchema(input.client)
+    && await hasStudyLyricsLanguageSchema(input.client)
   const row = await executeFirst(input.client, {
     sql: `
       SELECT MIN(due_at) AS next_due_at
@@ -235,7 +252,7 @@ export async function getNextDueAt(input: {
       input.now,
       input.includeSayItBack ? 1 : 0,
       input.includeTranslation ? 1 : 0,
-      ...(includeFillBlank ? [1] : []),
+      ...(includeFillBlank ? [STUDY_CLOZE_GENERATION_VERSION] : []),
     ],
   }) as Record<string, unknown> | null
   return readString(row?.next_due_at)

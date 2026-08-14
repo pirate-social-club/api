@@ -7,6 +7,7 @@ import {
   parseCommunityTextMaterializePayload,
 } from "../../localization/community-localization-service"
 import { materializePostTranslation } from "../../localization/post-translation-materializer"
+import { materializePostLyricsLanguageDetection } from "../../localization/lyrics-language-detection-materializer"
 import { computeCommentSourceHash, computePostSourceHash } from "../../localization/content-source-hash"
 import { getPostById } from "../../posts/community-post-query-store"
 import { materializePostLabel } from "../../posts/post-label-materializer"
@@ -73,6 +74,23 @@ export async function runPostTranslationMaterialize(input: CommunityJobHandlerIn
       })
     }
     return result
+  } finally {
+    db.close()
+  }
+}
+
+export async function runPostLyricsLanguageDetectionMaterialize(input: CommunityJobHandlerInput): Promise<string | null> {
+  const db = await openCommunityWriteClient(input.env, input.communityRepository, input.job.community_id)
+  try {
+    const payload = parseJobPayload<{ post_id?: string }>(input.job.payload_json)
+    const postId = payload?.post_id ?? input.job.subject_id
+    const post = await getPostById(db.client, postId)
+    if (!post) throw internalError("Post is missing for lyrics-language detection")
+    return await materializePostLyricsLanguageDetection({
+      client: db.client,
+      env: input.env,
+      post,
+    })
   } finally {
     db.close()
   }
