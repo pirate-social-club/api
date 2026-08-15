@@ -5,6 +5,7 @@ import {
   ensureStudySession,
   getStudySessionSummary,
   interleaveStudySessionCandidates,
+  parseStudyFillBlankReservedSlots,
   selectStudySessionCandidates,
   recordStudySessionPresentation as recordStudySessionPresentationRaw,
   requireStudySessionForAttempt,
@@ -138,7 +139,7 @@ describe("server-owned study sessions", () => {
     ])
   })
 
-  test("does not let non-reward enrichment displace ten qualifying cards", () => {
+  test("keeps fill-blank exposure at zero when reservation defaults to zero", () => {
     const qualifying = Array.from({ length: 12 }, (_, index) => exercise(index))
     const enrichment = Array.from({ length: 4 }, (_, index) => ({
       ...exercise(index),
@@ -149,6 +150,70 @@ describe("server-owned study sessions", () => {
     const selected = selectStudySessionCandidates([...qualifying, ...enrichment])
     expect(selected).toHaveLength(10)
     expect(selected.every((candidate) => candidate.qualifies_for_reward !== false)).toBe(true)
+  })
+
+  test("reserves two cloze slots and computes the reward threshold over eight qualifying cards", async () => {
+    const qualifying = Array.from({ length: 12 }, (_, index) => exercise(index))
+    const enrichment = Array.from({ length: 4 }, (_, index) => ({
+      ...exercise(index),
+      exercise_type: "fill_blank" as const,
+      id: `fill_${index}`,
+      qualifies_for_reward: false,
+    }))
+    const created = await ensureStudySession({
+      available: [...qualifying, ...enrichment],
+      candidates: [...qualifying, ...enrichment],
+      client,
+      communityId: "cmt_1",
+      dueCount: 0,
+      fillBlankReservedSlots: 2,
+      now: "2026-07-20T10:00:00.000Z",
+      postId: "pst_1",
+      targetLanguage: "en",
+      totalUnits: 12,
+      userId: "usr_1",
+    })
+
+    expect(created.exercises).toHaveLength(10)
+    expect(created.exercises.filter(({ row }) => row.qualifies_for_reward !== false)).toHaveLength(8)
+    expect(created.exercises.filter(({ row }) => row.exercise_type === "fill_blank")).toHaveLength(2)
+    expect(created.summary.required_correct_count).toBe(6)
+  })
+
+  test("reclaims unavailable cloze slots without exceeding available enrichment", () => {
+    const qualifying = Array.from({ length: 12 }, (_, index) => exercise(index))
+    const enrichment = [{
+      ...exercise(0),
+      exercise_type: "fill_blank" as const,
+      id: "fill_0",
+      qualifies_for_reward: false,
+    }]
+
+    const selected = selectStudySessionCandidates([...qualifying, ...enrichment], 2)
+    expect(selected).toHaveLength(10)
+    expect(selected.filter((candidate) => candidate.qualifies_for_reward !== false)).toHaveLength(9)
+    expect(selected.filter((candidate) => candidate.exercise_type === "fill_blank")).toHaveLength(1)
+  })
+
+  test("fails invalid or out-of-bounds reservation values closed to zero exposure", () => {
+    expect(parseStudyFillBlankReservedSlots(undefined)).toBe(0)
+    expect(parseStudyFillBlankReservedSlots("two")).toBe(0)
+    expect(parseStudyFillBlankReservedSlots("2.5")).toBe(0)
+    expect(parseStudyFillBlankReservedSlots("-1")).toBe(0)
+    expect(parseStudyFillBlankReservedSlots("10")).toBe(0)
+    expect(parseStudyFillBlankReservedSlots("11")).toBe(0)
+    expect(parseStudyFillBlankReservedSlots("9")).toBe(9)
+    expect(parseStudyFillBlankReservedSlots("2")).toBe(2)
+
+    const enrichment = [{
+      ...exercise(0),
+      exercise_type: "fill_blank" as const,
+      id: "fill_0",
+      qualifies_for_reward: false,
+    }]
+    expect(selectStudySessionCandidates([...Array.from({ length: 10 }, (_, index) => exercise(index)), ...enrichment], -1))
+      .toHaveLength(10)
+    expect(selectStudySessionCandidates(enrichment, 11)).toHaveLength(0)
   })
 
   test("serves every unseen card before returning an incorrect card", async () => {

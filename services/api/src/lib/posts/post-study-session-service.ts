@@ -90,6 +90,16 @@ function requiredCorrectCount(exerciseCount: number): number {
   return Math.max(1, Math.ceil(exerciseCount * 0.7))
 }
 
+export function parseStudyFillBlankReservedSlots(value: unknown): number {
+  if (typeof value !== "string" && typeof value !== "number") return 0
+  const parsed = typeof value === "number" ? value : Number(value.trim())
+  return Number.isInteger(parsed)
+    && parsed >= 0
+    && parsed < STUDY_SESSION_DISTINCT_EXERCISE_LIMIT
+    ? parsed
+    : 0
+}
+
 function maxPresentationCount(exerciseCount: number): number {
   return Math.min(STUDY_SESSION_PRESENTATION_LIMIT, exerciseCount * STUDY_SESSION_MAX_CARD_PRESENTATIONS)
 }
@@ -127,22 +137,19 @@ export function interleaveStudySessionCandidates(candidates: StudyExerciseRow[])
   return ordered
 }
 
-export function selectStudySessionCandidates(candidates: StudyExerciseRow[]): StudyExerciseRow[] {
-  const enrichment = candidates.filter((candidate) => candidate.qualifies_for_reward === false)
-  // Preserve the shipped line-first selection exactly when no enrichment type
-  // is present. The fill-blank flag is the only path that supplies non-reward
-  // candidates, so flag-off lessons retain their prior composition and order.
-  if (enrichment.length === 0) {
-    return interleaveStudySessionCandidates(
-      candidates.slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT),
-    )
-  }
+export function selectStudySessionCandidates(
+  candidates: StudyExerciseRow[],
+  fillBlankReservedSlots = 0,
+): StudyExerciseRow[] {
+  const reservedSlots = parseStudyFillBlankReservedSlots(fillBlankReservedSlots)
+  const enrichment = candidates
+    .filter((candidate) =>
+      candidate.exercise_type === "fill_blank" && candidate.qualifies_for_reward === false)
+    .slice(0, reservedSlots)
   const qualifying = candidates
     .filter((candidate) => candidate.qualifies_for_reward !== false)
-    .slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT)
-  const remaining = STUDY_SESSION_DISTINCT_EXERCISE_LIMIT - qualifying.length
-  if (remaining <= 0) return interleaveStudySessionCandidates(qualifying)
-  return interleaveStudySessionCandidates([...qualifying, ...enrichment.slice(0, remaining)])
+    .slice(0, STUDY_SESSION_DISTINCT_EXERCISE_LIMIT - enrichment.length)
+  return interleaveStudySessionCandidates([...qualifying, ...enrichment])
 }
 
 function mapSummary(row: SessionRow, dueCount: number, totalUnits: number): StudySessionSummary {
@@ -384,6 +391,7 @@ export async function ensureStudySession(input: {
   dueCount: number
   now: string
   postId: string
+  fillBlankReservedSlots?: number
   targetLanguage: string
   totalUnits: number
   userId: string
@@ -394,7 +402,10 @@ export async function ensureStudySession(input: {
   await expireStaleSession(input)
   let session = await activeSession(input)
   if (!session) {
-    const candidates = selectStudySessionCandidates(input.candidates)
+    const candidates = selectStudySessionCandidates(
+      input.candidates,
+      input.fillBlankReservedSlots,
+    )
     if (candidates.length === 0) {
       return {
         exercises: [],

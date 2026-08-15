@@ -269,7 +269,7 @@ function analyzeStudyClozeFromParts(
   return { cloze: { correctPlacements, segments, tokens }, unavailableReason: null }
 }
 
-async function clozeSourceFingerprint(input: {
+export async function studyClozeSourceFingerprint(input: {
   detector: string | null
   language: string | null
   languageReliable: boolean
@@ -351,7 +351,7 @@ export async function ensureStudyClozeRows(input: {
   // which caller happened to provide the first in-memory slice.
   const units = await selectStudyUnits(input.client, input.postId)
   if (units.length === 0) return
-  const fingerprint = await clozeSourceFingerprint({
+  const fingerprint = await studyClozeSourceFingerprint({
     detector: input.lyricsLanguageDetector ?? null,
     language: input.lyricsLanguage,
     languageReliable: input.lyricsLanguageReliable,

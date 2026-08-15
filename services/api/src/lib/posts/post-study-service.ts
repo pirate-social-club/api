@@ -59,6 +59,7 @@ import {
   getStudyLessonTransitionState,
   getStudySessionSummary,
   loadStudyTransitionSessionState,
+  parseStudyFillBlankReservedSlots,
   requireStudySessionForAttempt,
   STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
   STUDY_SESSION_MAX_CARD_PRESENTATIONS,
@@ -407,6 +408,10 @@ function fillBlankEnabled(env: Env | null | undefined): boolean {
   return envFlag(env.SONG_STUDY_FILL_BLANK_ENABLED, false)
 }
 
+function fillBlankReservedSlots(env: Env | null | undefined): number {
+  return parseStudyFillBlankReservedSlots(env?.SONG_STUDY_FILL_BLANK_RESERVED_SLOTS)
+}
+
 function fillBlankAvailableForPost(env: Env | null | undefined, post: {
   lyrics_language?: string | null
   lyrics_language_reliable?: boolean
@@ -743,16 +748,28 @@ export async function resolvePostStudyCapability(input: {
 }
 
 function parseOptions(raw: string | null): Array<{ id: string; text: string }> {
-  if (!raw) return []
-  const parsed = JSON.parse(raw) as unknown
-  if (!Array.isArray(parsed)) return []
-  return parsed.flatMap((option) => {
+  return parseOptionsStrict(raw) ?? []
+}
+
+function parseOptionsStrict(raw: string | null): Array<{ id: string; text: string }> | null {
+  if (!raw) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw) as unknown
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed)) return null
+  const options = parsed.flatMap((option) => {
     if (!option || typeof option !== "object") return []
     const record = option as Record<string, unknown>
     const id = readString(record.id)
     const text = readString(record.text)
     return id && text ? [{ id, text }] : []
   })
+  if (options.length !== parsed.length) return null
+  if (new Set(options.map((option) => option.id)).size !== options.length) return null
+  return options
 }
 
 function stableHash(value: string): number {
@@ -772,29 +789,35 @@ function orderOptionsForLearner(options: Array<{ id: string; text: string }>, se
   })
 }
 
-function parseClozeSegments(value: string | null): StudyClozeSegment[] {
-  if (!value) return []
+function parseClozeSegments(value: string | null): StudyClozeSegment[] | null {
+  if (!value) return null
   let parsed: unknown
   try {
     parsed = JSON.parse(value) as unknown
   } catch {
-    return []
+    return null
   }
-  if (!Array.isArray(parsed)) return []
+  if (!Array.isArray(parsed) || parsed.length === 0) return null
   const segments: StudyClozeSegment[] = []
+  const blankIds = new Set<string>()
   for (const item of parsed) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) return []
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null
     const record = item as Record<string, unknown>
     if (record.kind === "text") {
-      if (typeof record.text === "string") segments.push({ kind: "text", text: record.text })
+      if (typeof record.text !== "string") return null
+      segments.push({ kind: "text", text: record.text })
       continue
     }
     if (record.kind === "blank") {
       const id = readString(record.id)
-      if (id) segments.push({ id, kind: "blank" })
+      if (!id || blankIds.has(id)) return null
+      blankIds.add(id)
+      segments.push({ id, kind: "blank" })
+      continue
     }
+    return null
   }
-  return segments
+  return blankIds.size > 0 ? segments : null
 }
 
 function parseClozePlacements(value: unknown): StudyClozePlacement[] | null {
@@ -818,6 +841,26 @@ function parseClozePlacements(value: unknown): StudyClozePlacement[] | null {
   if (new Set(placements.map((placement) => placement.blank_id)).size !== placements.length) return null
   if (new Set(placements.map((placement) => placement.token_id)).size !== placements.length) return null
   return placements.sort((left, right) => left.blank_id.localeCompare(right.blank_id, undefined, { numeric: true }))
+}
+
+function parsePersistedFillBlankPayload(row: Pick<StudyExerciseRow, "correct_placements_json" | "segments_json" | "tokens_json">): {
+  placements: StudyClozePlacement[]
+  segments: StudyClozeSegment[]
+  tokens: Array<{ id: string; text: string }>
+} | null {
+  const segments = parseClozeSegments(row.segments_json ?? null)
+  const tokens = parseOptionsStrict(row.tokens_json ?? null)
+  const placements = parseClozePlacements(row.correct_placements_json ?? null)
+  if (!segments || !tokens || tokens.length === 0 || !placements) return null
+  const segmentBlankIds = new Set(
+    segments.flatMap((segment) => segment.kind === "blank" ? [segment.id] : []),
+  )
+  const tokenIds = new Set(tokens.map((token) => token.id))
+  if (segmentBlankIds.size !== placements.length
+    || placements.some((placement) => !segmentBlankIds.has(placement.blank_id) || !tokenIds.has(placement.token_id))) {
+    return null
+  }
+  return { placements, segments, tokens }
 }
 
 function toExercise(
@@ -849,6 +892,8 @@ function toExercise(
     }
   }
   if (row.exercise_type === "fill_blank") {
+    const payload = parsePersistedFillBlankPayload(row)
+    if (!payload) throw notFoundError("Study exercise not found")
     return {
       first_outcome: progress.firstOutcome,
       id: row.id,
@@ -858,8 +903,8 @@ function toExercise(
       max_attempts: STUDY_SESSION_MAX_CARD_PRESENTATIONS,
       presentation_count: progress.presentationCount,
       prompt_text: row.prompt_text,
-      segments: parseClozeSegments(row.segments_json ?? null),
-      tokens: orderOptionsForLearner(parseOptions(row.tokens_json ?? null), `${learnerSeed}:${row.id}`),
+      segments: payload.segments,
+      tokens: orderOptionsForLearner(payload.tokens, `${learnerSeed}:${row.id}`),
       type: "fill_blank",
     }
   }
@@ -1148,6 +1193,7 @@ export async function getPostStudyPayload(input: {
       client: db.client,
       communityId: input.communityId,
       dueCount: eligibleExerciseResult.totalCount,
+      fillBlankReservedSlots: fillBlankReservedSlots(input.env),
       now,
       postId: input.postId,
       targetLanguage,
@@ -1937,12 +1983,18 @@ export async function submitPostStudyAttempt(input: {
       if (readString(input.body.selected_option_id) || readString(input.body.transcript)) {
         throw badRequestError("only placements is valid for fill_blank")
       }
+      const persisted = parsePersistedFillBlankPayload(exercise)
+      if (!persisted) throw notFoundError("Study exercise not found")
       placements = parseClozePlacements(input.body.placements)
-      const expected = parseClozePlacements(exercise.correct_placements_json ?? null)
+      const expected = persisted.placements
       if (!placements || !expected || placements.length !== expected.length) {
         throw badRequestError("placements must assign every fill_blank slot exactly once")
       }
-      const allowedTokens = new Set(parseOptions(exercise.tokens_json ?? null).map((token) => token.id))
+      const expectedBlankIds = new Set(expected.map((placement) => placement.blank_id))
+      if (placements.some((placement) => !expectedBlankIds.has(placement.blank_id))) {
+        throw badRequestError("placements contains an unknown blank")
+      }
+      const allowedTokens = new Set(persisted.tokens.map((token) => token.id))
       if (placements.some((placement) => !allowedTokens.has(placement.token_id))) {
         throw badRequestError("placements contains an unknown token")
       }

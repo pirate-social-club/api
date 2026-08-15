@@ -569,6 +569,7 @@ export type Env = {
   SONG_STUDY_ATTEMPT_TIMING_LOGS?: string
   SONG_STUDY_DUE_REVIEW_SERVING_ENABLED?: string
   SONG_STUDY_FILL_BLANK_ENABLED?: string
+  SONG_STUDY_FILL_BLANK_RESERVED_SLOTS?: string
   /** Additive orchestration-v2 rollout gate; remains off until each study surface renders ungradable retries. */
   SONG_STUDY_UNGRADABLE_RERECORD_ENABLED?: string
   SONG_STUDY_STREAK_WRITES_ENABLED?: string

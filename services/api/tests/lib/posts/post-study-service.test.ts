@@ -729,7 +729,10 @@ async function seedReadyPack(): Promise<void> {
 }
 
 async function reachFillBlankExercise(idempotencyPrefix: string) {
-  const featureEnv = env({ SONG_STUDY_FILL_BLANK_ENABLED: "true" })
+  const featureEnv = env({
+    SONG_STUDY_FILL_BLANK_ENABLED: "true",
+    SONG_STUDY_FILL_BLANK_RESERVED_SLOTS: "2",
+  })
   await seedSongPost()
   await seedReadyPack()
   const payload = await getPostStudyPayload({
@@ -1155,6 +1158,25 @@ describe("post study service", () => {
     ])
   })
 
+  test("keeps generated fill-blank cards out of the lesson when reserved slots default to zero", async () => {
+    await seedSongPost()
+    await seedReadyPack()
+
+    const payload = await getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: env({ SONG_STUDY_FILL_BLANK_ENABLED: "true" }),
+      postId: POST_ID,
+      targetLanguage: "es",
+    })
+
+    expect(payload.access).toBe("ready")
+    expect(payload.exercises.every((exercise) => exercise.type !== "fill_blank")).toBe(true)
+    expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_unit_cloze")).rows[0]?.count))
+      .toBeGreaterThan(0)
+  })
+
   test("caps long first-learn study sessions while reporting total eligible exercises", async () => {
     await seedSongPost()
     await seedLongReadyPack()
@@ -1527,6 +1549,10 @@ describe("post study service", () => {
       ...placement,
       token_id: "unknown_token",
     })))).rejects.toMatchObject({ status: 400 })
+    await expect(submit(context.correctPlacements.map((placement, index) => ({
+      ...placement,
+      blank_id: index === 0 ? "unknown_blank" : placement.blank_id,
+    })))).rejects.toMatchObject({ status: 400 })
     expect(Number((await client!.execute("SELECT COUNT(*) AS count FROM song_study_attempt WHERE exercise_type = 'fill_blank'")).rows[0]?.count)).toBe(0)
   })
 
@@ -1575,7 +1601,7 @@ describe("post study service", () => {
     )).rows[0]?.count)).toBe(0)
   })
 
-  test("degrades malformed persisted fill-blank segments without a study 500", async () => {
+  test("rejects malformed persisted fill-blank segments instead of serving an empty card", async () => {
     const context = await reachFillBlankExercise("fill-malformed-segments")
     const unitId = /^stu:([^:]+):/u.exec(context.prompt.id)?.[1] ?? ""
     await client!.execute({
@@ -1583,18 +1609,27 @@ describe("post study service", () => {
       args: [unitId],
     })
 
-    const payload = await getPostStudyPayload({
+    await expect(getPostStudyPayload({
       actor: learnerActor,
       communityId: COMMUNITY_ID,
       communityRepository: repo,
       env: context.featureEnv,
       postId: POST_ID,
       targetLanguage: "es",
+    })).rejects.toMatchObject({ status: 404 })
+
+    await client!.execute({
+      sql: "UPDATE song_study_unit_cloze SET segments_json = ?2, tokens_json = ?3 WHERE unit_id = ?1",
+      args: [unitId, JSON.stringify([{ kind: "blank", id: "blank_1" }]), "{broken"],
     })
-    const fill = payload.exercises.find((exercise) => exercise.id === context.prompt.id)
-    expect(payload.access).toBe("ready")
-    expect(fill?.type).toBe("fill_blank")
-    expect(fill?.type === "fill_blank" ? fill.segments : null).toEqual([])
+    await expect(getPostStudyPayload({
+      actor: learnerActor,
+      communityId: COMMUNITY_ID,
+      communityRepository: repo,
+      env: context.featureEnv,
+      postId: POST_ID,
+      targetLanguage: "es",
+    })).rejects.toMatchObject({ status: 404 })
   })
 
   test("rejects idempotency-key reuse with different fill-blank placements", async () => {
