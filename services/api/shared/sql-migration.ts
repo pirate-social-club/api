@@ -1254,6 +1254,7 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
       "",
     )
   }
+  sqliteCompat = sqliteCompat.replace(/\bjsonb_typeof\(/gi, "json_type(")
   sqliteCompat = sqliteCompat.replace(/\bJSONB\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
@@ -1273,6 +1274,22 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
         : `${column} NOT GLOB '*[^${globClass}]*'`
       if (!prefix) return `length(${column}) = ${expectedLength} AND ${hexCheck}`
       return `length(${column}) = ${expectedLength} AND substr(${column}, 1, ${prefix.length}) = '${prefix}' AND ${hexCheck}`
+    },
+  )
+  // Variable-length hex checks (`+` instead of `{n}`) need a minimum-length
+  // guard because NOT GLOB accepts the empty string.
+  sqliteCompat = sqliteCompat.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^([a-z0-9:]*)\[(0-9a-f|a-f0-9|0-9a-fA-F|a-fA-F0-9)\]\+\$'/g,
+    (_match, column: string, prefix: string, hexClass: string) => {
+      const globClass = hexClass.includes("A") ? "0-9a-fA-F" : "0-9a-f"
+      if (!prefix) {
+        return `length(${column}) >= 1 AND ${column} NOT GLOB '*[^${globClass}]*'`
+      }
+      return [
+        `length(${column}) >= ${prefix.length + 1}`,
+        `substr(${column}, 1, ${prefix.length}) = '${prefix}'`,
+        `substr(${column}, ${prefix.length + 1}) NOT GLOB '*[^${globClass}]*'`,
+      ].join(" AND ")
     },
   )
 

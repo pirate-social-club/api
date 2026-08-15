@@ -448,6 +448,8 @@ export type Env = {
   REWARDS_CAMPAIGN_RPC_URL?: string
   /** Dark rollout gate. When true, stale/unknown/insolvent observations stop new funding and credits. */
   REWARDS_SOLVENCY_FREEZE_ENABLED?: string
+  /** Registry-authority gate. When true, settlement initiation fails closed on missing, suspended, retired, or mismatched registry evidence; while false the registry is diagnostic-only shadow. */
+  REWARDS_SETTLEMENT_REGISTRY_AUTHORITY_ENABLED?: string
   /** Maximum age of the last successful treasury observation. Defaults to 15 minutes. */
   REWARDS_SOLVENCY_MAX_OBSERVATION_AGE_SECONDS?: string
   /** Maximum age of the last block-pinned vault capacity observation. */

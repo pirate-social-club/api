@@ -19,6 +19,8 @@ import { requiredString, rowValue, stringOrNull } from "../sql-row"
 import type { Client, QueryResultRow, Transaction } from "../sql-client"
 import { withTransaction } from "../transactions"
 import { resolveRewardCampaignConfig, type RewardCampaignConfig } from "./reward-campaign-config"
+import { assertRegistryAllowsSettlementInitiation } from "./reward-settlement-asset-registry"
+import { observeSettlementRegistryShadow } from "./reward-settlement-registry-shadow"
 import { assertRewardCampaignSettlementReadiness } from "./reward-campaign-settlement-readiness"
 import { isPostgresControlPlaneUrl } from "../runtime-deps"
 import { decodePublicCommunityId, decodePublicPostId } from "../public-ids"
@@ -674,6 +676,8 @@ export async function createRewardCampaign(input: {
   if (config.postAllowlist && !config.postAllowlist.has(body.post)) {
     throw eligibilityFailed("Reward campaigns are not enabled for this post")
   }
+  await assertRegistryAllowsSettlementInitiation({ env: input.env, exec: input.client, asset: config })
+  await observeSettlementRegistryShadow({ env: input.env, exec: input.client, site: "campaign_create", asset: config })
   const now = input.now ?? nowIso()
   await advanceRewardCampaignLifecycle({
     client: input.client,
@@ -945,6 +949,8 @@ export async function createRewardCampaignFundingQuote(input: {
   requireCampaignsEnabled(config)
   assertRewardCampaignSettlementReadiness(input.env)
   await assertRewardSolvencyAdmission({ env: input.env, client: input.client, now: new Date(input.now ?? Date.now()) })
+  await assertRegistryAllowsSettlementInitiation({ env: input.env, exec: input.client, asset: config })
+  await observeSettlementRegistryShadow({ env: input.env, exec: input.client, site: "funding_quote", asset: config })
   const amountCents = cents(input.amountCents, "amount_cents", false)
   const idempotencyKey = nonEmpty(input.idempotencyKey, "idempotency_key")
   const assertedProvider = input.rewardIdentityProvider === undefined

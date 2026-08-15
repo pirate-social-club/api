@@ -558,6 +558,34 @@ describe("sql migration helpers", () => {
     expect(statement).not.toContain(" ~ ")
   })
 
+  test("rewrites variable-length hex regex checks for sqlite", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_ticket_evm_submissions (
+        signed_transaction TEXT NOT NULL CHECK (signed_transaction ~ '^0x[0-9a-fA-F]+$'),
+        raw_digest TEXT NOT NULL CHECK (raw_digest ~ '^[0-9a-f]+$')
+      );
+    `)
+
+    expect(statement).toContain("length(signed_transaction) >= 3")
+    expect(statement).toContain("substr(signed_transaction, 1, 2) = '0x'")
+    expect(statement).toContain("substr(signed_transaction, 3) NOT GLOB '*[^0-9a-fA-F]*'")
+    expect(statement).toContain("length(raw_digest) >= 1")
+    expect(statement).toContain("raw_digest NOT GLOB '*[^0-9a-f]*'")
+    expect(statement).not.toContain(" ~ ")
+  })
+
+  test("maps jsonb_typeof onto sqlite json_type", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_ticket_automation_evidence (
+        evidence_json JSONB NOT NULL CHECK (jsonb_typeof(evidence_json) = 'object')
+      );
+    `)
+
+    expect(statement).toContain("evidence_json TEXT NOT NULL")
+    expect(statement).toContain("json_type(evidence_json) = 'object'")
+    expect(statement).not.toContain("jsonb_typeof")
+  })
+
   test("builds the local reward funding mirror with the refund-pending custody state", () => {
     const statement = toSqliteCompatibleStatement(`
       CREATE TABLE reward_campaign_funding_effects (
