@@ -15,3 +15,9 @@ The API service binding is intentionally added only after the target broker
 environment has its private bucket, secrets, scanner binding, and deployment
 proof. Until then, generic content uploads remain feature-gated and fail closed
 if an operator enables them without the binding.
+
+Production provisioning uses two independent secrets: set
+`CONTENT_SOURCE_BROKER_SHARED_SECRET` on this Worker and the API Worker, and
+set `CONTENT_MALWARE_SCANNER_SHARED_SECRET` on this Worker and the scanner
+Worker. Provision them through the hosted scanner promotion workflow; do not
+place either value in `vars` or a workstation checkout.

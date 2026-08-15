@@ -270,6 +270,10 @@
         {
           "binding": "SONG_PREVIEW_SERVICE",
           "service": "pirate-song-preview-container-staging"
+        },
+        {
+          "binding": "CONTENT_SOURCE_BROKER",
+          "service": "pirate-content-source-broker-staging"
         }
       ],
       "kv_namespaces": [
@@ -512,6 +516,10 @@
         {
           "binding": "SONG_PREVIEW_SERVICE",
           "service": "pirate-song-preview-container-staging"
+        },
+        {
+          "binding": "CONTENT_SOURCE_BROKER",
+          "service": "pirate-content-source-broker-staging"
         }
       ],
       "kv_namespaces": [
@@ -811,6 +819,10 @@
         {
           "binding": "SONG_PREVIEW_SERVICE",
           "service": "song-preview-container"
+        },
+        {
+          "binding": "CONTENT_SOURCE_BROKER",
+          "service": "content-source-broker"
         }
       ],
       "kv_namespaces": [
