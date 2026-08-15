@@ -10,6 +10,7 @@ import { Wallet } from "ethers"
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client"
 import { RewardTicketCycleJournal } from "./reward-ticket-cycle-journal"
 import { DurableRewardTicketTransactionCoordinator } from "./reward-ticket-transaction-coordinator"
+import { splitSqlStatements } from "../../../shared/sql-migration"
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
 if (process.env.REWARD_TICKET_JOURNAL_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
@@ -29,18 +30,19 @@ function connect(database?: string): SQL {
   return new SQL({ url: urlFor(database), tls: false, max: 1, connectionTimeout: 5 } as Record<string, unknown>)
 }
 
+let database: SQL
+
 function clientFactory(): Client {
-  const connection = connect(TEST_DB)
   const toPostgres = (sql: string) => sql.replace(/\?(\d+)/gu, (_match, index: string) => `$${index}`)
   return {
     async execute(statement: InStatement | string): Promise<QueryResult> {
       const input = typeof statement === "string" ? { sql: statement, args: [] } : statement
-      const rows = await connection.unsafe(toPostgres(input.sql), input.args ?? []) as Record<string, unknown>[]
+      const rows = await database.unsafe(toPostgres(input.sql), input.args ?? []) as Record<string, unknown>[]
       return { rows: Array.from(rows) }
     },
     async batch(): Promise<QueryResult[]> { throw new Error("batch not expected") },
     async transaction(): Promise<Transaction> { throw new Error("transaction not expected") },
-    async close() { await connection.end() },
+    close() {},
   }
 }
 
@@ -49,8 +51,6 @@ const jackpot = "0x465dA3c859f193A3807386387bEE941B2A4c3279"
 const target = "0x98E9Ce3bEaEEc3abCdBc2bD5F8495C55a14FA334"
 
 describe.skipIf(!RUN)("reward ticket cycle journal (real Postgres)", () => {
-  let database: SQL
-
   beforeAll(async () => {
     const root = connect()
     await root.unsafe(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`)
@@ -64,7 +64,9 @@ describe.skipIf(!RUN)("reward ticket cycle journal (real Postgres)", () => {
       coreRoot,
       "db/control-plane/migrations/0235_control_plane_reward_ticket_cycle_journal.sql",
     ), "utf8")
-    await database.unsafe(migration)
+    for (const statement of splitSqlStatements(migration)) {
+      await database.unsafe(statement)
+    }
     for (const [cycleId, drawingId] of [["cycle_a", 1], ["cycle_b", 2]] as const) {
       await database.unsafe(`
         INSERT INTO reward_ticket_automation_cycles (
