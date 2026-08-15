@@ -64,6 +64,7 @@ bun scripts/bootstrap-reward-settlement-rail.ts \
   --database-url-env REWARD_RAIL_BOOTSTRAP_DATABASE_URL \
   --environment staging \
   --backend eoa_vault \
+  --executor <operator-principal> \
   --chain-id 84532 \
   --token-address 0x036cbd53842c5426634e7929541ec2318f3dcf7e \
   --treasury-address <REWARDS_CAMPAIGN_TREASURY_ADDRESS> \
@@ -75,9 +76,10 @@ bun scripts/bootstrap-reward-settlement-rail.ts \
 1. Review the dry-run output: the plan must match the deployed configuration
    field for field.
 2. Re-run without `--dry-run`.
-3. Archive the emitted JSON (the read-back binding, database target, and
-   timestamp) as the environment's rail-bootstrap evidence, following the
-   existing fixture-audit conventions.
+3. Archive the emitted JSON (the read-back binding, executor principal,
+   database target, and timestamp) as the environment's rail-bootstrap
+   evidence, following the existing fixture-audit conventions. The executor
+   value is an operator identity, never a credential.
 4. After a Worker containing the registry reader (api `b79297f3` or later)
    is deployed, confirm the shadow diagnostics report `outcome: "match"`
    with a zero mismatch map for the environment.

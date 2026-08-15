@@ -22,6 +22,7 @@ function usage(): never {
     --backend local|eoa_vault|lit_vault \\
     --chain-id N --token-address 0x... \\
     --treasury-address 0x... --operator-address 0x... \\
+    --executor PRINCIPAL \\
     [--vault-address 0x...] [--policy-version v1] [--dry-run]
 
 The database URL is read from the named environment variable so credentials
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
     "token-address",
     "treasury-address",
     "operator-address",
+    "executor",
   ]) {
     if (!values[required]) {
       console.error(`missing --${required}`)
@@ -69,6 +71,11 @@ async function main(): Promise<void> {
   const databaseUrl = String(process.env[values["database-url-env"] as string] ?? "").trim()
   if (!databaseUrl) {
     console.error(`environment variable ${values["database-url-env"]} is empty; refusing to run`)
+    process.exit(1)
+  }
+  const executor = String(values.executor ?? "").trim()
+  if (!executor || executor.length > 200 || /[\u0000-\u001f\u007f]/.test(executor)) {
+    console.error("--executor must be a non-empty principal of at most 200 printable characters")
     process.exit(1)
   }
 
@@ -99,7 +106,7 @@ async function main(): Promise<void> {
     await sql.unsafe(dryRun ? "ROLLBACK" : "COMMIT")
     console.log(
       JSON.stringify(
-        { ...outcome, database: describeDatabaseTarget(databaseUrl), executed_at: new Date().toISOString() },
+        { ...outcome, executor, database: describeDatabaseTarget(databaseUrl), executed_at: new Date().toISOString() },
         null,
         2,
       ),

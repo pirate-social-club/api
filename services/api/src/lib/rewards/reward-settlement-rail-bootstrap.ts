@@ -232,7 +232,7 @@ export async function executeSettlementRailBootstrap(
   const inserted = await tx.unsafe(
     `SELECT reward_settlement_rail_id, environment, backend, chain_id, token_address,
         treasury_address, vault_address, operator_address, policy_version, status, created_at
-      FROM reward_settlement_rails WHERE reward_settlement_rail_id = $1`,
+      FROM reward_settlement_rails WHERE reward_settlement_rail_id = $1 FOR UPDATE`,
     [plan.railId],
   )
   if (!inserted[0]) {
