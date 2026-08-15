@@ -12,6 +12,7 @@ import { buildS3PresignedUrl } from "../storage/s3-signing"
 import { assertDanceStorageObjectKey } from "./choreography-reference-storage"
 import { resolveFilebaseConfig } from "../storage/filebase-config"
 import { signDanceGraderRequest } from "./grader-callback-auth"
+import { isDanceGradingEnabled } from "./capture-policy"
 
 const CLAIM_TTL_MS = 2 * 60_000
 const CALLBACK_DEADLINE_MS = 10 * 60_000
@@ -40,6 +41,7 @@ function config(env: Env): {
 }
 
 export function isDanceAttemptDispatchConfigured(env: Env): boolean {
+  if (!isDanceGradingEnabled(env)) return false
   try {
     config(env)
     return Boolean(

@@ -450,6 +450,107 @@ describe("sql migration helpers", () => {
     `)).toContain("length(dance_attempt_session_id) % 3")
   })
 
+  test("keeps Telegram dance session columns when SQLite skips PostgreSQL constraints", () => {
+    expect(toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'api' CHECK (
+          source_channel IN ('api', 'telegram')
+        ),
+        ADD COLUMN telegram_bot_user_id TEXT,
+        ADD COLUMN telegram_chat_id TEXT,
+        ADD COLUMN telegram_sender_id TEXT,
+        ADD COLUMN telegram_prompt_message_id BIGINT,
+        ADD COLUMN telegram_file_id TEXT,
+        ADD COLUMN telegram_file_unique_id TEXT,
+        ADD COLUMN telegram_delivery_mode TEXT CHECK (
+          telegram_delivery_mode IS NULL
+          OR telegram_delivery_mode IN ('video', 'document')
+        ),
+        ADD CONSTRAINT dance_attempt_session_telegram_binding_check CHECK (
+          source_channel = 'api'
+        );
+    `)).toEqual([
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'api' CHECK (source_channel IN ('api', 'telegram'));",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_bot_user_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_chat_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_sender_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_prompt_message_id INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_file_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_file_unique_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_delivery_mode TEXT CHECK (telegram_delivery_mode IS NULL OR telegram_delivery_mode IN ('video', 'document'));",
+    ])
+  })
+
+  test("widens the dance capture-mode mirror before Telegram migrations run", async () => {
+    const database = new Database(":memory:")
+    try {
+      const source = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations/0170_control_plane_dance_attempt_sessions.sql",
+      ), "utf8")
+      const [createTable] = splitSqlStatements(source)
+      for (const sqliteStatement of toSqliteCompatibleStatements(createTable!)) {
+        database.exec(sqliteStatement)
+      }
+
+      const telegramSchema = await readFile(resolve(
+        import.meta.dir,
+        "../test-fixtures/db/control-plane/migrations/0238_control_plane_dance_telegram_session_binding.sql",
+      ), "utf8")
+      for (const statement of splitSqlStatements(telegramSchema)) {
+        for (const sqliteStatement of toSqliteCompatibleStatements(statement)) {
+          database.exec(sqliteStatement)
+        }
+      }
+
+      database.exec(`
+        INSERT INTO dance_attempt_sessions (
+          dance_attempt_session_id, dance_attempt_id, subject_user_id,
+          community_id, host_post_id, referenced_song_post_id,
+          song_artifact_bundle_id, dance_choreography_id,
+          dance_choreography_revision_id, reference_content_sha256,
+          reference_feature_ref, reference_feature_sha256,
+          reference_feature_size_bytes, pose_model_version, pose_model_sha256,
+          feature_schema_version, scorer_version, artifact_version,
+          required_calibration_version, required_calibration_checksum,
+          required_fingerprint_policy_version, required_integrity_policy_version,
+          mirror_policy, status, activity_date, activity_timezone,
+          creation_idempotency_key, upload_object_key, expected_mime_type,
+          maximum_bytes, observed_size_bytes, observed_etag,
+          observed_content_sha256, capture_mode, submitted_at, source_channel,
+          telegram_bot_user_id, telegram_chat_id, telegram_sender_id,
+          telegram_file_id, telegram_file_unique_id, telegram_delivery_mode,
+          telegram_prompt_message_id, cleanup_status, cleanup_attempt_count,
+          expires_at
+        ) VALUES (
+          'das_test', 'dat_test', 'usr_test', 'cmty_test', 'post_host',
+          'post_song', 'sab_test', 'dch_test', 'dcr_test',
+          '${"a".repeat(64)}', 'r2://feature', '${"b".repeat(64)}', 1,
+          'pose_v1', '${"c".repeat(64)}', 'features_v1', 'scorer_v1',
+          'artifact_v1', 'calibration_v1', '${"d".repeat(64)}',
+          'fingerprint_v1', 'integrity_v1', 'strict', 'submitted',
+          '2026-08-15', 'UTC', 'idem_test', 'r2://upload', 'video/mp4',
+          67108864, 1024, 'etag', '${"e".repeat(64)}', 'telegram_video',
+          '2026-08-15T00:00:00Z', 'telegram', 'bot_test', 'chat_test',
+          'sender_test', 'file_test', 'unique_test', 'video', 42, 'pending', 1,
+          '2026-08-16T00:00:00Z'
+        );
+      `)
+      expect(database.query("SELECT COUNT(*) AS count FROM dance_attempt_sessions").get()).toEqual({ count: 1 })
+      expect(database.query(`
+        SELECT capture_mode, source_channel, telegram_delivery_mode
+        FROM dance_attempt_sessions
+        WHERE dance_attempt_session_id = 'das_test'
+      `).get()).toEqual({
+        capture_mode: "telegram_video",
+        source_channel: "telegram",
+        telegram_delivery_mode: "video",
+      })
+    } finally {
+      database.close()
+    }
+  })
+
   test("translates EFP recovery state and review deadlines for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       ALTER TABLE efp_follow_write_intents
