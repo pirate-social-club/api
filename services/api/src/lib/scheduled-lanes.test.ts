@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   COMMUNITY_JOB_LANE_TASK,
+  COMMUNITY_PUBLISH_LANE_TASK,
   EFP_LANE_TASKS,
   splitScheduledLanes,
 } from "./scheduled-lanes"
@@ -11,10 +12,12 @@ describe("splitScheduledLanes", () => {
     const lanes = splitScheduledLanes([
       { name: "reconcile_reward_payouts" },
       { name: COMMUNITY_JOB_LANE_TASK },
+      { name: COMMUNITY_PUBLISH_LANE_TASK },
       ...EFP_LANE_TASKS.map((name) => ({ name })),
       { name: "monitor_reward_campaigns" },
     ])
     expect(lanes.community.map((t) => t.name)).toEqual([COMMUNITY_JOB_LANE_TASK])
+    expect(lanes.publishing.map((t) => t.name)).toEqual([COMMUNITY_PUBLISH_LANE_TASK])
     expect(lanes.efp.map((t) => t.name)).toEqual(EFP_LANE_TASKS)
     expect(lanes.maintenance.map((t) => t.name)).toEqual([
       "reconcile_reward_payouts",
@@ -25,7 +28,7 @@ describe("splitScheduledLanes", () => {
   test("loses no task and never duplicates one across lanes", () => {
     const names = ["a", COMMUNITY_JOB_LANE_TASK, "scan_efp_base", "b", "c"]
     const lanes = splitScheduledLanes(names.map((name) => ({ name })))
-    expect([...lanes.community, ...lanes.efp, ...lanes.maintenance].map((t) => t.name).sort()).toEqual([...names].sort())
+    expect([...lanes.community, ...lanes.publishing, ...lanes.efp, ...lanes.maintenance].map((t) => t.name).sort()).toEqual([...names].sort())
   })
 })
 
@@ -86,6 +89,43 @@ describe("scheduler lane isolation", () => {
     expect(c.acquired).toBe(true)
     expect(started).toContain(COMMUNITY_JOB_LANE_TASK)
     expect(acquisitions).toEqual(["community"])
+  })
+
+  test("a slow maintenance lane does not defer post-publish-finalize work", async () => {
+    const started: string[] = []
+
+    // Model the production failure mode directly: maintenance still owns its
+    // lease from a slow prior tick while the publish-finalize lane receives a
+    // fresh tick. The publish lane has its own lock and must start the durable
+    // saga regardless of maintenance overlap.
+    const maintenance = runScheduledBatch({
+      deadlineMs: 30_000,
+      leaseTtlMs: 120_000,
+      limit: 2,
+      lock: heldLock(),
+      owner: "tick",
+      tasks: [{
+        name: "reconcile_reward_campaigns",
+        run: async () => { started.push("reconcile_reward_campaigns") },
+      }],
+    })
+
+    const publishing = runScheduledBatch({
+      deadlineMs: 90_000,
+      leaseTtlMs: 150_000,
+      limit: 1,
+      lock: freeLock([], "publishing"),
+      owner: "tick",
+      tasks: [{
+        name: COMMUNITY_PUBLISH_LANE_TASK,
+        run: async () => { started.push(COMMUNITY_PUBLISH_LANE_TASK) },
+      }],
+    })
+
+    const [maintenanceResult, publishingResult] = await Promise.all([maintenance, publishing])
+    expect(maintenanceResult.acquired).toBe(false)
+    expect(publishingResult.acquired).toBe(true)
+    expect(started).toContain(COMMUNITY_PUBLISH_LANE_TASK)
   })
 
   test("a maintenance task exceeding 90s does not consume the community lane's budget", async () => {

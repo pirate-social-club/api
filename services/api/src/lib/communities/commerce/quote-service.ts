@@ -28,6 +28,7 @@ import {
   getCommunityPricingPolicy,
 } from "./policy-service"
 import { ensureAssetReadyForStoryRoyaltyCommerce } from "./story-royalty"
+import { assertAssetDeliveryAllowed } from "./asset-read-policy"
 import {
   assertAssetNotRightsHeld,
   assertListingNotRightsHeld,
@@ -183,6 +184,17 @@ export async function preflightCommunityPurchaseQuote(input: {
         communityId: input.communityId,
         listing,
       })
+      if (listing.asset_id?.trim()) {
+        const asset = await getAssetRow(db.client, input.communityId, listing.asset_id)
+        if (!asset) {
+          throw notFoundError("Listing not found")
+        }
+        await assertAssetDeliveryAllowed({
+          client: db.client,
+          asset,
+          notFoundMessage: "Listing not found",
+        })
+      }
     }
     const serializedListing = listing ? serializeListing(listing) : null
     const resolvedPrice = serializedListing
@@ -288,6 +300,11 @@ async function createCommunityPurchaseQuoteRowForBuyer(input: {
       if (!asset) {
         throw notFoundError("Asset not found")
       }
+      await assertAssetDeliveryAllowed({
+        client: db.client,
+        asset,
+        notFoundMessage: "Listing not found",
+      })
       await assertAssetNotRightsHeld({
         client: db.client,
         communityId: input.communityId,

@@ -10,6 +10,16 @@ const RECENCY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
 
 type BoardReadPostVisibility = "public" | "members_only"
 
+const SUPPORTED_BOARD_POST_TYPES = new Set([
+  "text",
+  "image",
+  "video",
+  "link",
+  "song",
+  "crosspost",
+  "file",
+])
+
 export type BoardReadPost = {
   authorUserId: string | null
   bodyExcerpt: string
@@ -88,6 +98,10 @@ function excerptText(value: unknown, maxChars = DEFAULT_EXCERPT_CHARS): string {
 
 function requiredText(row: unknown, key: string): string {
   return stringOrNull(rowValue(row, key)) ?? ""
+}
+
+function isSupportedBoardPostType(value: string): boolean {
+  return SUPPORTED_BOARD_POST_TYPES.has(value)
 }
 
 function optionalText(row: unknown, key: string): string | null {
@@ -265,6 +279,7 @@ export async function searchPublishedPosts(
 
   const nowMs = Date.now()
   return result.rows
+    .filter((row) => isSupportedBoardPostType(requiredText(row, "post_type")))
     .map((row) => {
       const post = postFromRow(row, excerptChars)
       const keywordScore = keywordScoreForPost(row, tokens)
@@ -313,7 +328,9 @@ export async function listUserPostsInCommunity(
     `,
     args: [communityId, userId, limit],
   })
-  return result.rows.map((row) => postFromRow(row, excerptChars))
+  return result.rows
+    .filter((row) => isSupportedBoardPostType(requiredText(row, "post_type")))
+    .map((row) => postFromRow(row, excerptChars))
 }
 
 export async function listUserCommentsInCommunity(
@@ -375,6 +392,17 @@ export async function getThreadWithComments(
   if (!postRow) return null
 
   const post = postFromRow(postRow, excerptChars)
+  if (!isSupportedBoardPostType(post.postType)) {
+    return {
+      post: {
+        ...post,
+        postType: "unsupported_post",
+        bodyExcerpt: "",
+        captionExcerpt: "",
+      },
+      comments: [],
+    }
+  }
   const comments = await client.execute({
     sql: `
       SELECT comments.comment_id, comments.community_id, comments.thread_root_post_id,

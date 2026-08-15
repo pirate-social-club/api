@@ -10,9 +10,16 @@ export function shouldAttemptStoryRoyaltyRegistration(input: {
   rightsBasis: Post["rights_basis"] | null
   hasSongBundle: boolean
 }): boolean {
-  const isStoryAsset = input.assetKind === "song_audio" || input.assetKind === "video_file"
+  const isStoryAsset = input.assetKind === "song_audio"
+    || input.assetKind === "video_file"
+    || input.assetKind === "download_file"
   const hasRoyaltyRightsBasis = input.rightsBasis === "original" || input.rightsBasis === "derivative"
   if (!isStoryAsset || !hasRoyaltyRightsBasis) return false
+  if (input.assetKind === "download_file") {
+    // Generic derivatives are not supported in v1; original licensing still
+    // requires the same durable Story IP registration as legacy assets.
+    return input.rightsBasis === "original"
+  }
   return input.assetKind !== "song_audio" || input.hasSongBundle
 }
 
@@ -44,10 +51,12 @@ type StoryRegisteredProjectionCandidate = {
 }
 
 function isRegisteredStoryAsset(input: StoryRegisteredProjectionCandidate): input is StoryRegisteredProjectionCandidate & {
-  assetKind: "song_audio" | "video_file"
+  assetKind: Asset["asset_kind"]
   storyIpId: string
 } {
-  return (input.assetKind === "song_audio" || input.assetKind === "video_file")
+  return (input.assetKind === "song_audio"
+      || input.assetKind === "video_file"
+      || input.assetKind === "download_file")
     && input.publicationStatus === "story_published"
     && input.storyStatus === "published"
     && input.storyRoyaltyRegistrationStatus === "registered"
@@ -57,7 +66,7 @@ function isRegisteredStoryAsset(input: StoryRegisteredProjectionCandidate): inpu
 export function isCatalogProjectableStoryRegisteredAsset(
   input: StoryRegisteredProjectionCandidate,
 ): input is StoryRegisteredProjectionCandidate & {
-  assetKind: "song_audio" | "video_file"
+  assetKind: Asset["asset_kind"]
   storyIpId: string
   storyLicenseTermsId: string
 } {
@@ -68,7 +77,7 @@ export function isCatalogProjectableStoryRegisteredAsset(
 export function isRoyaltyProjectableStoryRegisteredAsset(
   input: StoryRegisteredProjectionCandidate,
 ): input is StoryRegisteredProjectionCandidate & {
-  assetKind: "song_audio" | "video_file"
+  assetKind: Asset["asset_kind"]
   storyIpId: string
   ipRoyaltyVault: string
 } {

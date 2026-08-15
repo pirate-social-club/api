@@ -501,6 +501,7 @@ export async function processNextCommunityJob(input: {
   communityId: string
   communityRepository: CommunityJobRepository
   skipJobTypes?: CommunityJobType[] | null
+  onlyJobTypes?: CommunityJobType[] | null
 }): Promise<CommunityJobRow | null> {
   const db = await openCommunityWriteClient(input.env, input.communityRepository, input.communityId)
   try {
@@ -510,6 +511,7 @@ export async function processNextCommunityJob(input: {
       now: nowIso(),
       maxAttempts: COMMUNITY_JOB_MAX_ATTEMPTS,
       skipJobTypes: input.skipJobTypes,
+      onlyJobTypes: input.onlyJobTypes,
     })
     if (!next) {
       return null
@@ -531,6 +533,7 @@ export async function processCommunityJobsForCommunity(input: {
   communityRepository: CommunityJobRepository
   maxJobs?: number
   skipJobTypes?: CommunityJobType[] | null
+  onlyJobTypes?: CommunityJobType[] | null
   deadlineAtMs?: number | null
   now?: () => number
 }): Promise<CommunityJobCommunityProcessingSummary> {
@@ -547,6 +550,7 @@ export async function processCommunityJobsForCommunity(input: {
       communityId: input.communityId,
       communityRepository: input.communityRepository,
       skipJobTypes: input.skipJobTypes,
+      onlyJobTypes: input.onlyJobTypes,
     })
     if (!processed) {
       break
@@ -619,6 +623,8 @@ export async function processAvailableCommunityJobs(input: {
   maxCommunities?: number
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
+  onlyJobTypes?: CommunityJobType[] | null
+  skipStaleSweep?: boolean
   priorityCommunityIds?: string[] | null
   deadlineMs?: number | null
   sweepDeadlineMs?: number | null
@@ -648,15 +654,17 @@ export async function processAvailableCommunityJobs(input: {
     )
   const communities: CommunityJobCommunityProcessingSummary[] = []
   const sweepStartedAt = now()
-  const sweep = await sweepStaleRunningCommunityJobs({
-    env: input.env,
-    communityRepository: input.communityRepository,
-    // Keep all per-tick database work within maxCommunities. Sweeping every
-    // active community here made a bounded polling tick perform unbounded I/O.
-    communityIds,
-    deadlineAtMs: sweepDeadlineAtMs,
-    nowMs: now,
-  })
+  const sweep = input.skipStaleSweep
+    ? { failures: [], sweptCommunityIds: [] }
+    : await sweepStaleRunningCommunityJobs({
+        env: input.env,
+        communityRepository: input.communityRepository,
+        // Keep all per-tick database work within maxCommunities. Sweeping every
+        // active community here made a bounded polling tick perform unbounded I/O.
+        communityIds,
+        deadlineAtMs: sweepDeadlineAtMs,
+        nowMs: now,
+      })
   const sweepFinishedAt = now()
   const failedCommunities = sweep.failures
   const sweptCommunities = sweep.sweptCommunityIds.length
@@ -702,6 +710,7 @@ export async function processAvailableCommunityJobs(input: {
         communityRepository: input.communityRepository,
         maxJobs: input.maxJobsPerCommunity ?? 25,
         skipJobTypes: input.skipJobTypes,
+        onlyJobTypes: input.onlyJobTypes,
         deadlineAtMs,
         now,
       })
@@ -740,6 +749,7 @@ export async function runCommunityJobWorkerLoop(input: {
   maxCommunities?: number
   maxJobsPerCommunity?: number
   skipJobTypes?: CommunityJobType[] | null
+  onlyJobTypes?: CommunityJobType[] | null
   pollIntervalMs?: number
   stopWhenIdle?: boolean
   signal?: AbortSignal
@@ -755,6 +765,7 @@ export async function runCommunityJobWorkerLoop(input: {
       maxCommunities: input.maxCommunities ?? 100,
       maxJobsPerCommunity: input.maxJobsPerCommunity ?? 25,
       skipJobTypes: input.skipJobTypes,
+      onlyJobTypes: input.onlyJobTypes,
     })
 
     await input.onTick?.(summary)

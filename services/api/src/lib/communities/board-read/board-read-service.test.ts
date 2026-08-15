@@ -320,4 +320,28 @@ describe("board-read service", () => {
     })
     expect(thread?.comments.map((comment) => comment.commentId)).toEqual(["cmt_top"])
   })
+
+  test("skips unknown post types in collections and shells them on detail", async () => {
+    const db = await createTestClient()
+    await insertPost({
+      createdAt: isoDaysAgo(1),
+      postId: "pst_future_collection",
+      postType: "future_post",
+      title: "Future post",
+    })
+    await insertPost({
+      createdAt: isoDaysAgo(2),
+      postId: "pst_known_collection",
+      postType: "file",
+      title: "Known file",
+    })
+
+    const results = await searchPublishedPosts(db, "com_test", { limit: 10 })
+    expect(results.map((post) => post.postId)).toEqual(["pst_known_collection"])
+
+    const detail = await getThreadWithComments(db, "pst_future_collection")
+    expect(detail?.post.postType).toBe("unsupported_post")
+    expect(detail?.post.bodyExcerpt).toBe("")
+    expect(detail?.comments).toEqual([])
+  })
 })
