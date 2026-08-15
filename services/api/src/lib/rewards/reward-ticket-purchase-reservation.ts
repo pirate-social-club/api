@@ -85,7 +85,7 @@ export async function reserveRewardTicketPurchase(input: {
     const drawing = await executeFirst(tx, {
       sql: `
         SELECT d.reward_ticket_pool_drawing_id, d.reward_ticket_pool_id, d.status,
-          d.commitment_batch_id, b.status AS commitment_status,
+          d.commitment_batch_id, d.committed_at, b.status AS commitment_status,
           p.status AS pool_status, p.funded_cents, p.reserved_cents,
           p.fulfilled_cents, p.refunded_cents
         FROM reward_ticket_pool_drawings d
@@ -103,6 +103,9 @@ export async function reserveRewardTicketPurchase(input: {
     }
     if (requiredString(drawing, "commitment_status") !== "published") {
       throw new Error("reward ticket beneficiary commitment is not published")
+    }
+    if (!requiredString(drawing, "committed_at")) {
+      throw new Error("reward ticket beneficiary commitment timestamp is missing")
     }
     if (!["active", "scheduled"].includes(requiredString(drawing, "pool_status"))) {
       throw new Error("reward ticket pool is not payable")

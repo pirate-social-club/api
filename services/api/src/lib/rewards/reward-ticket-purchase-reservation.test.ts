@@ -8,6 +8,7 @@ const drawingRow = (commitmentStatus: string) => ({
   reward_ticket_pool_id: "rtp_1",
   status: "commit_pending",
   commitment_batch_id: "rtcb_1",
+  committed_at: "2026-08-13T23:02:00.000Z",
   commitment_status: commitmentStatus,
   pool_status: "active",
   funded_cents: "100",
