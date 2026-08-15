@@ -1258,6 +1258,7 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMPTZ\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bTIMESTAMP\b/gi, "TEXT")
   sqliteCompat = sqliteCompat.replace(/\bNOW\(\)/gi, "CURRENT_TIMESTAMP")
+  sqliteCompat = sqliteCompat.replace(/\bjsonb_typeof\s*\(/gi, "json_type(")
   sqliteCompat = sqliteCompat.replace(/\bADD COLUMN IF NOT EXISTS\b/gi, "ADD COLUMN")
   sqliteCompat = sqliteCompat.replace(/::(?:jsonb|text)\b/gi, "")
   // PostgreSQL's `~` operator is unavailable in the SQLite test mirror. Preserve
@@ -1273,6 +1274,17 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
         : `${column} NOT GLOB '*[^${globClass}]*'`
       if (!prefix) return `length(${column}) = ${expectedLength} AND ${hexCheck}`
       return `length(${column}) = ${expectedLength} AND substr(${column}, 1, ${prefix.length}) = '${prefix}' AND ${hexCheck}`
+    },
+  )
+  sqliteCompat = sqliteCompat.replace(
+    /\b([A-Za-z_][A-Za-z0-9_]*)\s*~\s*'\^([a-z0-9:]*)\[(0-9a-f|a-f0-9|0-9a-fA-F|a-fA-F0-9)\]\+\$'/g,
+    (_match, column: string, prefix: string, hexClass: string) => {
+      const globClass = hexClass.includes("A") ? "0-9a-fA-F" : "0-9a-f"
+      const hexCheck = prefix
+        ? `substr(${column}, ${prefix.length + 1}) NOT GLOB '*[^${globClass}]*'`
+        : `${column} NOT GLOB '*[^${globClass}]*'`
+      if (!prefix) return `length(${column}) > 0 AND ${hexCheck}`
+      return `length(${column}) > ${prefix.length} AND substr(${column}, 1, ${prefix.length}) = '${prefix}' AND ${hexCheck}`
     },
   )
 
