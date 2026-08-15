@@ -11,6 +11,8 @@ import {
   type PublishedSongFillBlankReport,
   type StudyFillBlankReportServingContext,
 } from "../src/lib/posts/post-study-fill-blank-report"
+import { STUDY_CLOZE_GENERATION_VERSION } from "../src/lib/posts/post-study-cloze-service"
+import { parseStudyFillBlankReservedSlots } from "../src/lib/posts/post-study-session-service"
 
 const CONFIRMATION = "AUDIT FILL BLANK TO STAGING"
 const MAX_CONCURRENCY = 8
@@ -27,6 +29,11 @@ type RunnerOptions = {
   outputPath: string
   servingContext: StudyFillBlankReportServingContext
   token: string
+}
+
+export type FillBlankRolloutConfig = {
+  enabled: boolean
+  reservedSlots: number
 }
 
 type D1Error = { code?: number; message?: string }
@@ -50,6 +57,7 @@ type StagingReportArtifact = {
     error: string
   }>
   format_version: 1
+  generator_version: typeof STUDY_CLOZE_GENERATION_VERSION
   observed_at: string
   read_only: true
   report_digest: string
@@ -87,6 +95,7 @@ function booleanOption(argv: string[], name: string): boolean {
 export function resolveReportRunnerOptions(
   argv: string[],
   env: Record<string, string | undefined>,
+  configuredRollout: FillBlankRolloutConfig,
 ): RunnerOptions {
   if (String(env.ENVIRONMENT ?? "").trim().toLowerCase() !== "staging") {
     throw new Error("refusing_fill_blank_report_outside_staging")
@@ -98,6 +107,18 @@ export function resolveReportRunnerOptions(
   const token = String(env.CLOUDFLARE_D1_API_TOKEN ?? "").trim()
   if (!accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID is required")
   if (!token) throw new Error("CLOUDFLARE_D1_API_TOKEN is required")
+  if (!configuredRollout.enabled) throw new Error("fill_blank_report_feature_disabled")
+  const runtimeEnabled = env.SONG_STUDY_FILL_BLANK_ENABLED?.trim()
+  if (runtimeEnabled !== undefined
+    && (runtimeEnabled !== "true" && runtimeEnabled !== "false"
+      || (runtimeEnabled === "true") !== configuredRollout.enabled)) {
+    throw new Error("fill_blank_report_existence_config_mismatch")
+  }
+  const runtimeReservation = env.SONG_STUDY_FILL_BLANK_RESERVED_SLOTS?.trim()
+  if (runtimeReservation !== undefined
+    && parseStudyFillBlankReservedSlots(runtimeReservation) !== configuredRollout.reservedSlots) {
+    throw new Error("fill_blank_report_reservation_config_mismatch")
+  }
   const concurrency = Number(option(argv, "--concurrency") ?? "2")
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) {
     throw new Error(`--concurrency must be an integer from 1 to ${MAX_CONCURRENCY}`)
@@ -107,12 +128,38 @@ export function resolveReportRunnerOptions(
     concurrency,
     outputPath: resolve(requiredOption(argv, "--output")),
     servingContext: {
+      fill_blank_enabled: configuredRollout.enabled,
+      fill_blank_reserved_slots: configuredRollout.reservedSlots,
       include_say_it_back: booleanOption(argv, "--include-say-it-back"),
       include_translation: booleanOption(argv, "--include-translation"),
       target_language: requiredOption(argv, "--target-language"),
     },
     token,
   }
+}
+
+export function parseFillBlankRolloutConfig(
+  configText: string,
+  target: "production" | "staging",
+): FillBlankRolloutConfig {
+  const parsed = JSONC.parse(configText) as {
+    env?: { production?: { vars?: Record<string, unknown> }; staging?: { vars?: Record<string, unknown> } }
+    vars?: Record<string, unknown>
+  }
+  const vars = target === "production"
+    ? parsed.env?.production?.vars
+    : parsed.env?.staging?.vars ?? parsed.vars
+  const enabled = vars?.SONG_STUDY_FILL_BLANK_ENABLED
+  const reserved = vars?.SONG_STUDY_FILL_BLANK_RESERVED_SLOTS
+  if (enabled !== "true" && enabled !== "false") {
+    throw new Error(`fill-blank existence flag is missing for ${target}`)
+  }
+  if (typeof reserved !== "string"
+    || !/^\d+$/u.test(reserved)
+    || parseStudyFillBlankReservedSlots(reserved) !== Number(reserved)) {
+    throw new Error(`fill-blank reservation is missing or invalid for ${target}`)
+  }
+  return { enabled: enabled === "true", reservedSlots: Number(reserved) }
 }
 
 export function parseStagingD1Bindings(configText: string): D1Binding[] {
@@ -133,6 +180,9 @@ export function assertReadOnlyReportSql(statement: InStatement | string): void {
   const sql = (typeof statement === "string" ? statement : statement.sql)
     .replace(/^\s*(?:--[^\n]*(?:\n|$)|\/\*[\s\S]*?\*\/\s*)*/u, "")
     .trimStart()
+  if (sql.includes(";")) {
+    throw new Error("fill_blank_report_rejected_multiple_statements")
+  }
   if (!/^(?:SELECT|PRAGMA\s+table_info\s*\()/iu.test(sql)) {
     throw new Error("fill_blank_report_rejected_non_read_query")
   }
@@ -243,15 +293,19 @@ export async function runStagingFillBlankReport(input: {
     ? outcome.report.songs.map((song) => ({ ...song, database_binding: outcome.binding.binding }))
     : [])
   const reportDigest = await sha256Hex(JSON.stringify(songs))
+  const scannedDatabaseCount = outcomes.length - databaseErrors.length
   return {
     allocated_database_count: allocated.length,
-    complete: databaseErrors.length === 0,
+    complete: allocated.length > 0
+      && databaseErrors.length === 0
+      && scannedDatabaseCount === allocated.length,
     database_errors: databaseErrors,
     format_version: 1,
+    generator_version: STUDY_CLOZE_GENERATION_VERSION,
     observed_at: input.observedAt,
     read_only: true,
     report_digest: reportDigest,
-    scanned_database_count: outcomes.length - databaseErrors.length,
+    scanned_database_count: scannedDatabaseCount,
     serving_context: {
       ...input.options.servingContext,
       mode: "first_learn_without_review_state",
@@ -263,7 +317,9 @@ export async function runStagingFillBlankReport(input: {
 }
 
 async function main(): Promise<void> {
-  const options = resolveReportRunnerOptions(process.argv.slice(2), process.env)
+  const apiConfigText = await readFile(resolve(import.meta.dir, "../wrangler.jsonc"), "utf8")
+  const configuredRollout = parseFillBlankRolloutConfig(apiConfigText, "staging")
+  const options = resolveReportRunnerOptions(process.argv.slice(2), process.env, configuredRollout)
   const configPath = resolve(import.meta.dir, "../../community-d1-shard/wrangler.jsonc")
   const bindings = parseStagingD1Bindings(await readFile(configPath, "utf8"))
   const artifact = await runStagingFillBlankReport({

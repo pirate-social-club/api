@@ -80,6 +80,7 @@ describe("published song fill-blank report", () => {
       const units = unitsForSong(song)
       return await buildPublishedSongFillBlankReport({
         canonicalCandidates: units.map(sayItBackCandidate),
+        fillBlankReservedSlots: 2,
         post: reportPost(song),
         units,
       })
@@ -98,26 +99,36 @@ describe("published song fill-blank report", () => {
     expect(reports.reduce(
       (total, report) => total + report.session_inclusion.included_fill_blank_candidates,
       0,
-    )).toBe(26)
+    )).toBe(14)
     expect(reports.find((report) => report.post.post_id === "post_english")?.eligible_lines.slice(0, 3))
       .toMatchObject([
         { session_included: true, session_ordinal: 8 },
         { session_included: true, session_ordinal: 9 },
-        { session_exclusion_reason: "session_capacity", session_included: false },
+        { session_exclusion_reason: "reserved_slot_capacity", session_included: false },
       ])
     expect(reports.find((report) => report.post.post_id === "post_missing-language")?.rejection_counts)
       .toMatchObject({ lyrics_language_missing: 2 })
     expect(reports.find((report) => report.post.post_id === "post_unsupported-japanese")?.rejection_counts)
       .toMatchObject({ unsupported_language: 2 })
+    const englishReport = reports.find((report) => report.post.post_id === "post_english")
+    expect(englishReport).toMatchObject({
+      generator_version: 3,
+      source_fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/u),
+    })
+    expect(englishReport?.eligible_lines[0]).toMatchObject({
+      generator_version: 3,
+      source_fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/u),
+    })
   })
 
-  test("matches the route's thirty-candidate window and makes enrichment invisible at capacity", async () => {
+  test("matches the route's thirty-candidate window and reports reserved exposure at capacity", async () => {
     const corpus = await corpusFixture()
     const sourceLines = corpus.flatMap((song) => song.lines).slice(0, 20)
     const song: CorpusSong = { id: "long-fixture", language: "en", lines: sourceLines }
     const units = unitsForSong(song)
     const report = await buildPublishedSongFillBlankReport({
       canonicalCandidates: units.map(sayItBackCandidate),
+      fillBlankReservedSlots: 2,
       post: reportPost(song),
       units,
     })
@@ -125,11 +136,12 @@ describe("published song fill-blank report", () => {
     expect(report.eligible_line_count).toBeGreaterThan(0)
     expect(report.session_inclusion.qualifying_candidates).toBe(20)
     expect(report.session_inclusion.candidate_window_count).toBe(30)
-    expect(report.session_inclusion.included_fill_blank_candidates).toBe(0)
+    expect(report.session_inclusion.included_fill_blank_candidates).toBe(2)
+    expect(report.session_inclusion.reserved_fill_blank_slots).toBe(2)
     expect(report.eligible_lines.some((line) => line.session_exclusion_reason === "outside_candidate_window"))
       .toBe(true)
-    expect(report.eligible_lines.every((line) =>
-      line.session_exclusion_reason === "qualifying_capacity"
+    expect(report.eligible_lines.filter((line) => !line.session_included).every((line) =>
+      line.session_exclusion_reason === "reserved_slot_capacity"
         || line.session_exclusion_reason === "outside_candidate_window")).toBe(true)
   })
 
@@ -183,6 +195,8 @@ describe("published song fill-blank report", () => {
         client,
         observedAt: "2026-08-14T00:00:00.000Z",
         servingContext: {
+          fill_blank_enabled: true,
+          fill_blank_reserved_slots: 2,
           include_say_it_back: true,
           include_translation: false,
           target_language: "en",
@@ -195,6 +209,8 @@ describe("published song fill-blank report", () => {
         read_only: true,
         song_count: 1,
         serving_context: {
+          fill_blank_enabled: true,
+          fill_blank_reserved_slots: 2,
           include_say_it_back: true,
           include_translation: false,
           mode: "first_learn_without_review_state",

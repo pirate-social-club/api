@@ -3,6 +3,7 @@ import { sha256Hex } from "../crypto"
 import {
   analyzeStudyCloze,
   STUDY_CLOZE_GENERATION_VERSION,
+  studyClozeSourceFingerprint,
   type StudyClozeUnavailableReason,
 } from "./post-study-cloze-service"
 import {
@@ -11,6 +12,7 @@ import {
 } from "./post-study-attempt-store"
 import { listExercises } from "./post-study-exercise-query"
 import {
+  parseStudyFillBlankReservedSlots,
   selectStudySessionCandidates,
   STUDY_SESSION_DISTINCT_EXERCISE_LIMIT,
 } from "./post-study-session-service"
@@ -35,6 +37,8 @@ export type StudyFillBlankReportPost = {
 }
 
 export type StudyFillBlankReportServingContext = {
+  fill_blank_enabled: boolean
+  fill_blank_reserved_slots: number
   include_say_it_back: boolean
   include_translation: boolean
   target_language: string
@@ -54,13 +58,15 @@ type ReportWordBankToken = {
 
 export type StudyFillBlankEligibleLineReport = {
   candidate_id: string
+  generator_version: number
   line_id: string
   line_index: number
   prompt_text: string
   selected_blanks: ReportBlank[]
-  session_exclusion_reason: "outside_candidate_window" | "qualifying_capacity" | "session_capacity" | null
+  session_exclusion_reason: "outside_candidate_window" | "reserved_slot_capacity" | "session_capacity" | null
   session_included: boolean
   session_ordinal: number | null
+  source_fingerprint: string
   word_bank: ReportWordBankToken[]
 }
 
@@ -80,6 +86,7 @@ export type PublishedSongFillBlankReport = {
     reliable: boolean
     source_hash: string | null
   }
+  generator_version: number
   eligible_line_count: number
   eligible_lines: StudyFillBlankEligibleLineReport[]
   post: {
@@ -95,8 +102,10 @@ export type PublishedSongFillBlankReport = {
     generated_fill_blank_candidates: number
     included_fill_blank_candidates: number
     qualifying_candidates: number
+    reserved_fill_blank_slots: number
     selected_exercises: number
   }
+  source_fingerprint: string
   total_lines: number
 }
 
@@ -185,6 +194,7 @@ function lineRejectionReason(post: StudyFillBlankReportPost): StudyFillBlankRepo
  */
 export async function buildPublishedSongFillBlankReport(input: {
   canonicalCandidates: StudyExerciseRow[]
+  fillBlankReservedSlots?: unknown
   post: StudyFillBlankReportPost
   units: StudyUnitRow[]
 }): Promise<PublishedSongFillBlankReport> {
@@ -192,6 +202,13 @@ export async function buildPublishedSongFillBlankReport(input: {
   const eligibleLines: Array<Omit<StudyFillBlankEligibleLineReport,
     "session_exclusion_reason" | "session_included" | "session_ordinal">> = []
   const postRejection = lineRejectionReason(input.post)
+  const sourceFingerprint = await studyClozeSourceFingerprint({
+    detector: input.post.lyrics_language_detector,
+    language: input.post.lyrics_language,
+    languageReliable: input.post.lyrics_language_reliable,
+    sourceHash: input.post.lyrics_language_source_hash,
+    units: input.units,
+  })
 
   for (const unit of input.units) {
     const analysis = postRejection
@@ -213,6 +230,7 @@ export async function buildPublishedSongFillBlankReport(input: {
     const tokensById = new Map(cloze.tokens.map((token) => [token.id, token]))
     eligibleLines.push({
       candidate_id: fillBlankCandidateId(input.post.post_id, unit.id),
+      generator_version: STUDY_CLOZE_GENERATION_VERSION,
       line_id: unit.line_id,
       line_index: unit.line_index,
       prompt_text: unit.prompt_text,
@@ -226,6 +244,7 @@ export async function buildPublishedSongFillBlankReport(input: {
         text: token.text,
         token_id: token.id,
       })),
+      source_fingerprint: sourceFingerprint,
     })
   }
 
@@ -243,10 +262,11 @@ export async function buildPublishedSongFillBlankReport(input: {
     // `/study` requests this exact larger window whenever fill blank is on,
     // before selectStudySessionCandidates freezes the ten-card lesson.
     .slice(0, STUDY_FILL_BLANK_CANDIDATE_WINDOW)
-  const selected = selectStudySessionCandidates(candidateWindow)
+  const reservedFillBlankSlots = parseStudyFillBlankReservedSlots(input.fillBlankReservedSlots)
+  const selected = selectStudySessionCandidates(candidateWindow, reservedFillBlankSlots)
   const selectedOrdinalById = new Map(selected.map((candidate, index) => [candidate.id, index]))
   const candidateWindowIds = new Set(candidateWindow.map((candidate) => candidate.id))
-  const selectedQualifyingCount = selected.filter((candidate) => candidate.qualifies_for_reward !== false).length
+  const selectedFillBlankCount = selected.filter((candidate) => candidate.exercise_type === "fill_blank").length
   const reportEligibleLines = eligibleLines.map((line): StudyFillBlankEligibleLineReport => {
     const sessionOrdinal = selectedOrdinalById.get(line.candidate_id)
     const included = sessionOrdinal !== undefined
@@ -254,8 +274,8 @@ export async function buildPublishedSongFillBlankReport(input: {
     if (!included) {
       exclusionReason = !candidateWindowIds.has(line.candidate_id)
         ? "outside_candidate_window"
-        : selectedQualifyingCount >= STUDY_SESSION_DISTINCT_EXERCISE_LIMIT
-          ? "qualifying_capacity"
+        : selectedFillBlankCount >= reservedFillBlankSlots
+          ? "reserved_slot_capacity"
           : "session_capacity"
     }
     return {
@@ -284,6 +304,7 @@ export async function buildPublishedSongFillBlankReport(input: {
       reliable: input.post.lyrics_language_reliable,
       source_hash: input.post.lyrics_language_source_hash,
     },
+    generator_version: STUDY_CLOZE_GENERATION_VERSION,
     eligible_line_count: reportEligibleLines.length,
     eligible_lines: reportEligibleLines,
     post: {
@@ -299,8 +320,10 @@ export async function buildPublishedSongFillBlankReport(input: {
       generated_fill_blank_candidates: diagnosticCandidates.length,
       included_fill_blank_candidates: selected.filter((candidate) => candidate.exercise_type === "fill_blank").length,
       qualifying_candidates: qualifyingCandidates.length,
+      reserved_fill_blank_slots: reservedFillBlankSlots,
       selected_exercises: selected.length,
     },
+    source_fingerprint: sourceFingerprint,
     total_lines: input.units.length,
   }
 }
@@ -364,6 +387,7 @@ export async function generatePublishedSongFillBlankShardReport(input: {
     })
     songs.push(await buildPublishedSongFillBlankReport({
       canonicalCandidates: canonicalCandidates.rows,
+      fillBlankReservedSlots: input.servingContext.fill_blank_reserved_slots,
       post,
       units,
     }))
