@@ -571,10 +571,34 @@ describe("sql migration helpers", () => {
     expect(statement).not.toContain(" ~ ")
   })
 
+  test("rewrites unprefixed variable-length hex regex checks for sqlite", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_ticket_evm_submissions (
+        raw_digest TEXT NOT NULL CHECK (raw_digest ~ '^[0-9a-f]+$')
+      );
+    `)
+
+    expect(statement).toContain("length(raw_digest) > 0")
+    expect(statement).toContain("raw_digest NOT GLOB '*[^0-9a-f]*'")
+    expect(statement).not.toContain(" ~ ")
+  })
+
   test("rewrites PostgreSQL JSON object checks for sqlite", () => {
     expect(toSqliteCompatibleStatement(
       "CREATE TABLE evidence (payload JSONB NOT NULL CHECK (jsonb_typeof(payload) = 'object'));",
     )).toContain("payload TEXT NOT NULL CHECK (json_type(payload) = 'object')")
+  })
+
+  test("maps jsonb_typeof onto sqlite json_type inside surviving tables", () => {
+    const statement = toSqliteCompatibleStatement(`
+      CREATE TABLE reward_ticket_automation_evidence (
+        evidence_json JSONB NOT NULL CHECK (jsonb_typeof(evidence_json) = 'object')
+      );
+    `)
+
+    expect(statement).toContain("evidence_json TEXT NOT NULL")
+    expect(statement).toContain("json_type(evidence_json) = 'object'")
+    expect(statement).not.toContain("jsonb_typeof")
   })
 
   test("builds the local reward funding mirror with the refund-pending custody state", () => {

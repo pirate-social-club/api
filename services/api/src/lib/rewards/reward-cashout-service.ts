@@ -24,7 +24,10 @@ import {
   assertRewardsCampaignAndSettlementChainsMatch,
   resolveRewardsSettlementChainId,
   resolveRewardsSettlementOperatorAddress,
+  resolveRewardsSettlementUsdcTokenAddress,
 } from "../communities/bookings/booking-chain-config"
+import { assertRegistryAllowsSettlementInitiation } from "./reward-settlement-asset-registry"
+import { observeSettlementRegistryShadow } from "./reward-settlement-registry-shadow"
 import type { RewardCashoutResponse, RewardPayoutStatus, UpstreamIdentity } from "../../types"
 import { rewardPayoutPublicStage } from "./reward-payout-public-stage"
 import { captureScheduledWarning } from "../ops-alerts/scheduled"
@@ -856,6 +859,15 @@ export async function cashOutRewards(input: {
       min_cents: minCashoutCents,
     })
   }
+
+  const settlementAsset = {
+    chainId,
+    tokenAddress: resolveRewardsSettlementUsdcTokenAddress(input.env),
+    tokenDecimals: 6,
+    tokenSymbol: "USDC",
+  }
+  await assertRegistryAllowsSettlementInitiation({ env: input.env, exec: client, asset: settlementAsset })
+  await observeSettlementRegistryShadow({ env: input.env, exec: client, site: "cashout", asset: settlementAsset })
 
   const reserved = await reserveCashoutEffect({
     env: input.env,
