@@ -84,18 +84,20 @@ anything:
 
 ## Current holds
 
-- **ACTIVE — 2026-08-10T12:56:32Z — `lit_rewards_cutover_session`** — Do not
-  deploy `pirate-api-staging` or run the Web `Release` workflow. Staging is
-  intentionally left on API `bdae8fe70247fc9e9b1f68d581963864c98b4d3b`
-  with the EOA settlement backend and EOA vault operator. API main
-  `967d5f6c7e2680e80b9266abd75c9e6cb11dc1da` contains the prepared
-  `lit_vault` configuration while the on-chain operator is still the EOA, so
-  an unbracketed deploy would park reward settlement. This hold remains until
-  either the prepared config is reverted or the bracketed cutover completes:
-  disable Web `Release` after confirming no in-flight run, pause the vault,
-  rotate the operator to the PKP, deploy the prepared API SHA, preflight, and
-  deliberately unpause. Do not begin that cutover before the Lit billing
-  T+24h reading due after `2026-08-11T10:26:10Z`.
+- **RESOLVED — 2026-08-15T08:37:14Z — `lit_rewards_cutover_session`** — The
+  prepared Lit configuration was reverted to the EOA settlement backend in API
+  `cd692adff699803864705d53182a78e0f29b3844`. A read-only Base Sepolia
+  preflight confirmed the deployed vault's settlement operator and the
+  Infisical staging signer both resolve to the configured EOA. Staging remains
+  on `f6f61fbd31a22d65eb526375ec78d607260b5f8d` until the explicitly scoped
+  remediation deploy below; no Lit cutover or production change is authorized.
+
+- **ACTIVE — 2026-08-15T08:37:14Z — `fill_blank_eoa_restore`** — User-authorized
+  deployment of API `cd692adff699803864705d53182a78e0f29b3844` to staging, to
+  restore the EOA settlement backend while retaining the merged fill-blank and
+  language-materializer code. Verify `/__version` and release this hold after
+  the deployed SHA and reward backend are confirmed. Do not run a canary or
+  change production.
 
 ## Hold history
 
