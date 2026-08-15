@@ -371,6 +371,8 @@ export async function prepareCommunityListingWrite(input: {
   userRepository: UserRepository
   client: ListingExecutor
   liveRoomTarget?: "validate" | "create-in-tx"
+  /** Generic post publication creates its listing before the post status flips to published. */
+  allowProcessingPost?: boolean
 }): Promise<PreparedCommunityListingWrite> {
   const creatingLiveRoomInTx = input.liveRoomTarget === "create-in-tx"
   let assetId: string | null = null
@@ -403,6 +405,7 @@ export async function prepareCommunityListingWrite(input: {
       client: input.client,
       asset,
       notFoundMessage: "Asset not found",
+      allowProcessingPost: input.allowProcessingPost,
     })
     await assertSongAssetRightsReadyForListing({
       client: input.client,
@@ -569,6 +572,7 @@ export async function createCommunityListingInTransaction(input: {
   communityRepository: CommunityListingRepository
   userRepository: UserRepository
   client: ListingExecutor
+  allowProcessingPost?: boolean
 }): Promise<CommunityListing> {
   const prepared = await prepareCommunityListingWrite(input)
   await insertCommunityListingRow(input.client, input.communityId, prepared)
