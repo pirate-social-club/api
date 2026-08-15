@@ -104,6 +104,10 @@ const FUNDING_RETIREMENT_HARDENING_MIGRATION_URL = new URL(
   "../../../test-fixtures/db/control-plane/migrations/0196_control_plane_reward_funding_retirement_hardening.sql",
   import.meta.url,
 )
+const ASSET_DESCRIPTOR_MIGRATION_URL = new URL(
+  "../../../test-fixtures/db/control-plane/migrations/0231_control_plane_reward_campaign_asset_descriptor.sql",
+  import.meta.url,
+)
 const NOW = "2026-07-10T12:00:00.000Z"
 const PG_ENV = {
   CONTROL_PLANE_DATABASE_URL: `postgres://rewards@localhost:5432/${TEST_DB}`,
@@ -626,6 +630,7 @@ describe.skipIf(!RUN)("reward campaign credit (real Postgres)", () => {
     // mirrored nor modified in this harness.
     await db.unsafe(await readFile(SCHEDULE_REANCHOR_MIGRATION_URL, "utf8"))
     await db.unsafe(await readFile(TOPUP_BUDGET_MIGRATION_URL, "utf8"))
+    await db.unsafe(await readFile(ASSET_DESCRIPTOR_MIGRATION_URL, "utf8"))
     await db.end()
   })
 

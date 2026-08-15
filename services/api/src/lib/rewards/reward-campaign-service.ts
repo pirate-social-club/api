@@ -110,6 +110,7 @@ const CAMPAIGN_COLUMNS = `
   default_amount_cents, max_claim_cents, payout_tiers_json,
   reward_period_cap_cents, budget_cents, funded_cents, reserved_cents,
   credited_cents, paid_cents, refunded_cents, starts_at, ends_at,
+  asset_chain_id, asset_token_address, asset_token_decimals, asset_token_symbol,
   activated_at, exhausted_at, ended_at, canceled_at, created_at,
   (SELECT chain_id FROM reward_campaign_funding_effects
     WHERE reward_campaign_id = reward_campaigns.reward_campaign_id
@@ -415,7 +416,35 @@ async function sha256(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("")
 }
 
-function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTarget): string {
+// The settlement-asset descriptor snapshotted into campaign terms. Included in
+// the terms-hash preimage from terms_version 5 onward so the asset a campaign
+// settles in is covered by the same immutability guarantee as its rates and
+// budget, instead of being re-resolved from deployment config at funding time.
+export type RewardCampaignTermsAsset = {
+  chain_id: number
+  token_address: string
+  token_decimals: number
+  token_symbol: string
+}
+
+export function rewardCampaignTermsAsset(
+  config: Pick<RewardCampaignConfig, "chainId" | "tokenAddress" | "tokenDecimals" | "tokenSymbol">,
+): RewardCampaignTermsAsset {
+  return {
+    chain_id: config.chainId,
+    // Stored and hashed lowercase, matching the funding-edge address
+    // conventions (observed_funding_receipts, asset retirements).
+    token_address: config.tokenAddress.toLowerCase(),
+    token_decimals: config.tokenDecimals,
+    token_symbol: config.tokenSymbol,
+  }
+}
+
+function termsPayload(
+  input: RewardCampaignCreateInput,
+  target: RewardCampaignTarget,
+  asset?: RewardCampaignTermsAsset,
+): string {
   const legacyTerms = {
     community: target.communityId,
     post: target.postId,
@@ -432,12 +461,15 @@ function termsPayload(input: RewardCampaignCreateInput, target: RewardCampaignTa
     starts_at: input.starts_at,
     ends_at: input.ends_at,
   }
-  if (!input.payout_tiers?.length) return JSON.stringify(legacyTerms)
-  return JSON.stringify({
-    ...legacyTerms,
-    default_amount_cents: input.default_amount_cents,
-    payout_tiers: input.payout_tiers,
-  })
+  const base = input.payout_tiers?.length
+    ? {
+      ...legacyTerms,
+      default_amount_cents: input.default_amount_cents,
+      payout_tiers: input.payout_tiers,
+    }
+    : legacyTerms
+  if (!asset) return JSON.stringify(base)
+  return JSON.stringify({ ...base, asset })
 }
 
 async function selectCampaign(exec: Pick<Client | Transaction, "execute">, campaignId: string, lock = false): Promise<CampaignRow | null> {
@@ -659,16 +691,22 @@ export async function createRewardCampaign(input: {
   ) {
     throw eligibilityFailed(`Karaoke reward campaigns require at least ${KARAOKE_MIN_MEASURED_LINES} timed lyric lines`)
   }
-  const termsHash = await sha256(termsPayload(body, target))
+  const asset = rewardCampaignTermsAsset(config)
+  const termsHash = await sha256(termsPayload(body, target, asset))
+  // Campaigns written before terms_version 5 hashed terms without the asset
+  // descriptor; replays of their creation requests must still verify.
+  const legacyTermsHash = await sha256(termsPayload(body, target))
   const lockClause = isPostgresControlPlaneUrl(String(input.env.CONTROL_PLANE_DATABASE_URL ?? "")) ? " FOR UPDATE" : ""
+  const expectedTermsHash = (row: QueryResultRow): string =>
+    integer(rowValue(row, "terms_version")) >= 5 ? termsHash : legacyTermsHash
 
   return await withTransaction(input.client, "write", async (tx) => {
     const replay = queryResultRow(await executeFirst(tx, {
-      sql: `SELECT ${CAMPAIGN_COLUMNS}, terms_hash FROM reward_campaigns WHERE rewarder_user_id = ?1 AND creation_idempotency_key = ?2 LIMIT 1${lockClause}`,
+      sql: `SELECT ${CAMPAIGN_COLUMNS}, terms_version, terms_hash FROM reward_campaigns WHERE rewarder_user_id = ?1 AND creation_idempotency_key = ?2 LIMIT 1${lockClause}`,
       args: [input.userId, body.idempotency_key],
     }))
     if (replay) {
-      if (requiredString(replay, "terms_hash") !== termsHash) {
+      if (requiredString(replay, "terms_hash") !== expectedTermsHash(replay)) {
         throw conflictError("Reward campaign idempotency key was reused with different terms")
       }
       return campaignResource(replay)
@@ -709,11 +747,12 @@ export async function createRewardCampaign(input: {
           milestone_30_cents, reward_period_cap_cents, budget_cents,
           default_amount_cents, max_claim_cents, payout_tiers_json,
           terms_version, terms_hash, starts_at, ends_at,
+          asset_chain_id, asset_token_address, asset_token_decimals, asset_token_symbol,
           requested_starts_at, requested_ends_at, created_at, updated_at
         ) VALUES (
           ?1, 'song_practice', ?2, ?3, ?4, ?5, ?6, ?7, 'draft', ?8, ?9, ?10,
           ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18,
-          ?19, ?20, ?21, ?22, ?21, ?22, ?23, ?23
+          ?19, ?20, ?21, ?22, ?24, ?25, ?26, ?27, ?21, ?22, ?23, ?23
         )
         ON CONFLICT (rewarder_user_id, creation_idempotency_key) DO NOTHING
       `,
@@ -724,8 +763,9 @@ export async function createRewardCampaign(input: {
         body.milestone_7_cents, body.milestone_30_cents,
         body.reward_period_cap_cents, body.budget_cents, body.default_amount_cents,
         Math.max(body.default_amount_cents ?? body.daily_reward_cents, ...body.payout_tiers!.map((tier) => tier.amount_cents)),
-        JSON.stringify(body.payout_tiers), 4, termsHash,
+        JSON.stringify(body.payout_tiers), 5, termsHash,
         new Date(body.starts_at * 1000).toISOString(), new Date(body.ends_at * 1000).toISOString(), now,
+        asset.chain_id, asset.token_address, asset.token_decimals, asset.token_symbol,
         ],
       })
       const registered = queryResultRow(await executeFirst(tx, {
@@ -753,11 +793,11 @@ export async function createRewardCampaign(input: {
       throw error
     }
     const created = queryResultRow(await executeFirst(tx, {
-      sql: `SELECT ${CAMPAIGN_COLUMNS}, terms_hash FROM reward_campaigns WHERE rewarder_user_id = ?1 AND creation_idempotency_key = ?2 LIMIT 1`,
+      sql: `SELECT ${CAMPAIGN_COLUMNS}, terms_version, terms_hash FROM reward_campaigns WHERE rewarder_user_id = ?1 AND creation_idempotency_key = ?2 LIMIT 1`,
       args: [input.userId, body.idempotency_key],
     }))
     if (!created) throw new Error("reward campaign insert did not return a row")
-    if (requiredString(created, "terms_hash") !== termsHash) {
+    if (requiredString(created, "terms_hash") !== expectedTermsHash(created)) {
       throw conflictError("Reward campaign idempotency key was reused with different terms")
     }
     return campaignResource(created)
@@ -968,6 +1008,18 @@ export async function createRewardCampaignFundingQuote(input: {
     const campaign = await requireCampaign(tx, input.campaignId, rowLocks)
     if (assertedProvider !== null && assertedProvider !== requiredString(campaign, "reward_identity_provider")) {
       throw conflictError("Funding provider assertion does not match the permanent song pool")
+    }
+    // Campaigns with a snapshotted settlement-asset descriptor (terms v5+) only
+    // accept new funding in that exact asset. This turns an environment
+    // token/chain cutover into a hard error for stranded pools instead of
+    // silently re-denominating them (same class as the api#989/api#1114
+    // retired-chain guards).
+    const campaignAssetToken = stringOrNull(rowValue(campaign, "asset_token_address"))
+    if (campaignAssetToken !== null && (
+      integer(rowValue(campaign, "asset_chain_id")) !== config.chainId
+      || campaignAssetToken !== config.tokenAddress.toLowerCase()
+    )) {
+      throw conflictError("Reward pool settles in a retired asset and cannot accept new contributions")
     }
     if (input.userId !== requiredString(campaign, "song_owner_user_id")) {
       await requireThirdPartyRewardsAllowed(
