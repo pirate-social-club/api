@@ -88,8 +88,10 @@ function parseUpstreamRef(sourceRef: string): ParsedUpstreamRef {
   return { sourceRef: normalized, kind: "unknown" }
 }
 
-function derivativeSourceKindFromAssetKind(assetKind: Asset["asset_kind"]): DerivativeSourceKind {
-  return assetKind === "video_file" ? "video" : "song"
+function derivativeSourceKindFromAssetKind(assetKind: Asset["asset_kind"]): DerivativeSourceKind | null {
+  if (assetKind === "video_file") return "video"
+  if (assetKind === "song_audio") return "song"
+  return null
 }
 
 function sourceRefForRow(row: Pick<UpstreamSourceRow, "story_ip_id" | "story_license_terms_id" | "asset_id">): string {
@@ -334,6 +336,7 @@ export async function hydrateDerivativeSourcesForResponses(input: {
       }
       const profile = profilesByUserId.get(row.creator_user_id) ?? null
       const kind = derivativeSourceKindFromAssetKind(row.asset_kind)
+      if (!kind) return null
       return {
         source_ref: sourceRefForRow(row),
         title: row.display_title?.trim() || "Untitled asset",

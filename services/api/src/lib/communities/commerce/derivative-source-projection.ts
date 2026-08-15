@@ -9,7 +9,7 @@ export type StoryRegisteredAssetProjection = {
   assetId: string
   displayTitle: string | null
   creatorUserId: string
-  assetKind: "song_audio" | "video_file"
+  assetKind: Asset["asset_kind"]
   licensePreset: Asset["license_preset"] | null
   commercialRevSharePct: number | null
   storyIpId: string
@@ -56,6 +56,7 @@ function escapeLikePattern(value: string): string {
 }
 
 const ELIGIBLE_STORY_PARENT_FILTERS = [
+  "asset_kind IN ('song_audio', 'video_file')",
   "source_post_status = 'published'",
   "license_preset = 'commercial-remix'",
   "commercial_rev_share_pct > 0",

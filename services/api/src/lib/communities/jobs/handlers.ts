@@ -30,6 +30,7 @@ import { runSongPreviewGenerate } from "./song-preview-handler"
 import { runSongStudyGenerate } from "../../posts/post-study-service"
 import { runVideoAudioCatalogUnenroll, runVideoMediaAnalysis } from "./video-media-analysis-handler"
 import { runTelegramPostPublish } from "./telegram-post-publish-handler"
+import { runLearningDeckImportParse } from "./learning-deck-import-handler"
 import type { CommunityJobHandlerInput } from "./handler-types"
 
 export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<string | null> {
@@ -79,6 +80,8 @@ export async function runCommunityJob(input: CommunityJobHandlerInput): Promise<
       return runVideoAudioCatalogUnenroll(input)
     case "telegram_post_publish":
       return runTelegramPostPublish(input)
+    case "learning_deck_import_parse":
+      return runLearningDeckImportParse(input)
     default:
       throw internalError(`Unsupported community job type: ${input.job.job_type}`)
   }

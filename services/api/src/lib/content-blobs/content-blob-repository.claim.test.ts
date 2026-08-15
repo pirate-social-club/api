@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { claimOwnedReadyContentBlob } from "./content-blob-repository"
+import { claimOwnedReadyContentBlob, releaseOwnedContentBlobClaim } from "./content-blob-repository"
 import type { ContentBlobRow } from "./content-blob-types"
 import type { Client } from "../sql-client"
 
@@ -89,6 +89,17 @@ function clientFor(initial: Record<string, unknown>): { client: Client; current:
         return { rows: [current], rowsAffected: 0 }
       }
       updates += 1
+      if (statement.sql.includes("claim_kind = NULL")) {
+        if (
+          current.claim_kind !== statement.args?.[4]
+          || current.claim_ref !== statement.args?.[5]
+        ) return { rows: [], rowsAffected: 0 }
+        current.claim_kind = null
+        current.claim_ref = null
+        current.claimed_at = null
+        current.updated_at = statement.args?.[0] ?? null
+        return { rows: [], rowsAffected: 1 }
+      }
       if (current.security_scan_state !== "clean") return { rows: [], rowsAffected: 0 }
       current.claim_kind = statement.args?.[0] ?? null
       current.claim_ref = statement.args?.[1] ?? null
@@ -164,5 +175,20 @@ describe("claimOwnedReadyContentBlob", () => {
       claimedAt: "2026-08-14T04:00:00.000Z",
     })).rejects.toThrow("no longer ready to claim")
     expect(state.updates).toBe(0)
+  })
+
+  test("releases only the exact claim reference for compensation", async () => {
+    const state = clientFor(row({ claim_kind: "asset_payload", claim_ref: "ast_1" }))
+    await releaseOwnedContentBlobClaim({
+      client: state.client,
+      communityId: "com_1",
+      uploaderUserId: "usr_1",
+      contentBlobId: "cbl_1",
+      claimKind: "asset_payload",
+      claimRef: "ast_1",
+      releasedAt: "2026-08-14T05:00:00.000Z",
+    })
+    expect(state.current.claim_kind).toBeNull()
+    expect(state.current.claim_ref).toBeNull()
   })
 })

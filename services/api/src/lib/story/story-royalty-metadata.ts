@@ -2,7 +2,7 @@ import type { SongArtifactBundle } from "../../types"
 import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-allocations"
 
 export type StoryRoyaltyMetadataAccessMode = "public" | "locked"
-export type StoryRoyaltyMetadataAssetKind = "song_audio" | "video_file"
+export type StoryRoyaltyMetadataAssetKind = "song_audio" | "video_file" | "download_file" | "learning_deck"
 export type StoryRoyaltyMetadataRightsBasis = "none" | "original" | "derivative"
 export type StoryRoyaltyMetadataMedia = {
   mediaUrl: string | null
@@ -82,7 +82,13 @@ export function buildStoryRoyaltyMetadataPayloads(input: {
   const coverArtHash = sha256MetadataHash(input.media?.imageHash)
     ?? sha256MetadataHash(input.bundle?.cover_art?.content_hash)
   const title = input.title?.trim() || input.bundle?.title?.trim() || `Pirate Asset ${input.assetId}`
-  const assetLabel = input.assetKind === "song_audio" ? "music" : "video"
+  const assetLabel = input.assetKind === "song_audio"
+    ? "music"
+    : input.assetKind === "video_file"
+      ? "video"
+      : input.assetKind === "download_file"
+        ? "digital download"
+        : "learning deck"
   const description = input.rightsBasis === "derivative"
     ? `Derivative ${assetLabel} registered by Pirate.`
     : `Original ${assetLabel} registered by Pirate.`
@@ -94,12 +100,26 @@ export function buildStoryRoyaltyMetadataPayloads(input: {
     ? publicMetadataUri(input.media?.mediaUrl) ?? (input.assetKind === "song_audio" ? songMediaUri(input.bundle) : null)
     : null
   const mediaHash = input.mediaHashVerified
-    ? sha256MetadataHash(input.media?.mediaHash) ?? sha256MetadataHash(input.bundle?.primary_audio?.content_hash)
+    ? sha256MetadataHash(input.media?.mediaHash)
+      ?? sha256MetadataHash(input.bundle?.primary_audio?.content_hash)
+      ?? ((input.assetKind === "download_file" || input.assetKind === "learning_deck")
+        ? sha256MetadataHash(input.primaryContentHash)
+        : null)
     : null
-  const mediaType = storyMediaType(input.media?.mediaType ?? input.bundle?.primary_audio?.mime_type)
-  const canonicalMedia = mediaUri && mediaHash && mediaType
-    ? { mediaUrl: mediaUri, mediaHash, mediaType }
-    : {}
+  const mediaType = storyMediaType(
+    input.media?.mediaType
+      ?? input.bundle?.primary_audio?.mime_type
+      ?? (input.assetKind === "learning_deck" ? "application/vnd.pirate.learning-deck+json" : null),
+  )
+  const canonicalMedia = input.assetKind === "download_file" || input.assetKind === "learning_deck"
+    ? {
+        mediaUrl: mediaUri,
+        mediaHash,
+        mediaType,
+      }
+    : mediaUri && mediaHash && mediaType
+      ? { mediaUrl: mediaUri, mediaHash, mediaType }
+      : {}
 
   return {
     ipPayload: {

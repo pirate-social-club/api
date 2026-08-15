@@ -526,7 +526,7 @@ type CrosspostSource = {
   post_id: string
   community_id: string
   captured_at?: string | null
-  post_type?: "text" | "image" | "video" | "link" | "song" | null
+  post_type?: "text" | "image" | "video" | "link" | "song" | "file" | "deck" | null
   title?: string | null
   community_label?: string | null
   community_route_slug?: string | null
@@ -586,7 +586,7 @@ export type Post = {
   agent_ownership_provider_snapshot?: string | null
   disclosed_qualifiers_json?: Array<DisclosedQualifierSnapshot> | null
   label_id?: string | null
-  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost"
+  post_type: "text" | "image" | "video" | "link" | "song" | "crosspost" | "file" | "deck"
   status: "draft" | "processing" | "published" | "failed" | "hidden" | "removed" | "deleted"
   comments_locked?: boolean
   comments_locked_at?: string | null
@@ -624,6 +624,8 @@ export type Post = {
   translation_policy?: "none" | "machine_allowed" | "human_only" | "hybrid" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
+  file_upload?: string | null
+  learning_deck?: string | null
   anchor_live_room_id?: string | null
   anchor_live_room_status?: "scheduled" | "live" | "ended" | "canceled" | null
   song_artifact_bundle_id?: string | null
@@ -694,6 +696,8 @@ type CreatePostRequestBase = {
   age_gate_policy?: "none" | "18_plus" | null
   access_mode?: "public" | "locked" | null
   asset_id?: string | null
+  file_upload?: string | null
+  learning_deck?: string | null
   song_artifact_bundle?: string | null
   song_mode?: "original" | "remix" | null
   rights_basis?: "none" | "original" | "derivative" | "attribution_only" | null
@@ -718,6 +722,8 @@ export type CreatePostRequest = CreatePostRequestBase & {
   | { post_type: "video"; media_refs: Array<MediaDescriptor> }
   | { post_type: "link"; link_url: string }
   | { post_type: "song"; media_refs?: Array<MediaDescriptor> }
+  | { post_type: "file"; title: string; file_upload: string; access_mode: "public" | "locked" }
+  | { post_type: "deck"; title: string; learning_deck: string; access_mode: "public" | "locked" }
   | { post_type: "crosspost"; title: string; source_post: string; source_community: string }
 )
 

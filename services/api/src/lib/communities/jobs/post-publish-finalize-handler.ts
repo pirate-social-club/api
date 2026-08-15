@@ -1,7 +1,7 @@
 import { getUserRepository } from "../../auth/repositories"
 import { openCommunityWriteClient } from "../community-read-access"
 import { nowIso } from "../../helpers"
-import { HttpError, internalError, notFoundError, providerUnavailable } from "../../errors"
+import { HttpError, conflictError, internalError, notFoundError, providerUnavailable } from "../../errors"
 import type { DbExecutor } from "../../db-helpers"
 import { createCommunityListingInTransaction } from "../commerce/listing-service"
 import { getListingRowByAssetId } from "../commerce/shared"
@@ -18,6 +18,7 @@ import {
 } from "../../posts/community-post-mutation-store"
 import {
   getPostPublishRequest,
+  mergePostPublishRequestOptions,
   markPostPublishRequestStatus,
 } from "../../posts/community-post-publish-request-store"
 import { logPipelineError, logPipelineInfo } from "../../observability/pipeline-log"
@@ -38,6 +39,18 @@ import { rotateCommunityJobTickIds } from "./tick-rotation"
 import { COMMUNITY_JOB_MAX_ATTEMPTS, type CommunityJobRepository } from "./runner-types"
 import { enqueueCommunityJob } from "./store"
 import { parseJobPayload } from "./payload"
+import { publishGenericAssetClaim } from "../commerce/generic-asset-publication"
+import { getAssetRow } from "../commerce/queries"
+import { getActivePrimaryAssetPayload } from "../commerce/generic-asset-repository"
+import { assertAssetDeliveryAllowed } from "../commerce/asset-read-policy"
+import { genericDigitalGoodsEnabled, learningDecksEnabled } from "../../helpers"
+import { requireOwnedContentBlob } from "../../content-blobs/content-blob-repository"
+import { materializeGeneratedContentBlob } from "../../content-blobs/content-blob-service"
+import { findCurrentContentPolicyDecision } from "../../content-security/content-security-repository"
+import { canonicalLearningDeckPackage } from "../../learning/deck-package"
+import { getLearningDeckDraft } from "../../learning/deck-authoring-service"
+import { withTransaction } from "../../transactions"
+import type { Client } from "../../sql-client"
 
 type PostPublishFinalizeDependencies = {
   getControlPlaneClient: typeof getControlPlaneClient
@@ -71,9 +84,23 @@ function skippedResult(postId: string): string {
 export const POST_PUBLISH_FINALIZE_STUCK_AGE_MS = 15 * 60 * 1000
 
 type PublishOptions = {
+  post_id?: string | null
   commercial_rev_share_pct?: number | null
   license_preset?: CreatePostRequest["license_preset"] | null
   royalty_allocations?: RoyaltyAllocationRequest[] | null
+  file_upload?: string | null
+  learning_deck?: string | null
+  access_mode?: CreatePostRequest["access_mode"] | null
+  rights_basis?: CreatePostRequest["rights_basis"] | null
+  allocated_ids?: {
+    post_id?: string | null
+    asset_id?: string | null
+    content_blob_id?: string | null
+    listing_id?: string | null
+    reservation_id?: string | null
+    reservation_key?: string | null
+    generated_content_blob_id?: string | null
+  } | null
 }
 
 function parseJsonRecord(value: string | null): Record<string, unknown> | null {
@@ -605,6 +632,498 @@ async function enqueueSongPreviewIfPending(input: {
   })
 }
 
+const GENERIC_LOCKED_PAYLOAD_MAX_BYTES = 50 * 1024 * 1024
+const DOWNLOAD_FILE_EXTENSIONS_BY_MIME: Readonly<Record<string, string>> = {
+  "text/csv": "csv",
+  "text/tab-separated-values": "tsv",
+  "text/plain": "txt",
+  "application/json": "json",
+}
+
+function genericFilenameMatchesMime(filename: string, mimeType: string): boolean {
+  const expectedExtension = DOWNLOAD_FILE_EXTENSIONS_BY_MIME[mimeType]
+  if (!expectedExtension) return false
+  const lastDot = filename.lastIndexOf(".")
+  return lastDot > 0 && filename.slice(lastDot + 1).toLowerCase() === expectedExtension
+}
+
+async function finalizeGenericDigitalGoodsPost(input: {
+  jobInput: CommunityJobHandlerInput
+  dependencies: PostPublishFinalizeDependencies
+  client: Parameters<typeof markPostPublishRequestStatus>[0]["client"]
+  post: Post
+  publishOptions: PublishOptions
+  listingDraft: CreatePostRequest["listing_draft"] | null
+}): Promise<string> {
+  const { jobInput, dependencies, client, post, publishOptions, listingDraft } = input
+  const communityId = jobInput.job.community_id
+  const now = nowIso()
+  if (!genericDigitalGoodsEnabled(jobInput.env)) {
+    return await markPostPublishFinalizeFailed({
+      client,
+      communityRepository: jobInput.communityRepository,
+      communityId,
+      postId: post.post_id,
+      failureCode: "payload_claim_failed",
+      failureMessage: "Generic digital goods are not enabled",
+      retryable: false,
+      now,
+    })
+  }
+  const postModerationFailure = postModerationPublishFailure({
+    analysisState: post.analysis_state,
+  })
+  if (postModerationFailure) {
+    return await markPostPublishFinalizeFailed({
+      client,
+      communityRepository: jobInput.communityRepository,
+      communityId,
+      postId: post.post_id,
+      failureCode: postModerationFailure.code,
+      failureMessage: postModerationFailure.message,
+      retryable: postModerationFailure.retryable,
+      now,
+    })
+  }
+
+  const controlPlaneClient = dependencies.getControlPlaneClient(jobInput.env)
+  let contentBlobId = post.post_type === "file"
+    ? publishOptions.file_upload?.trim()
+    : publishOptions.learning_deck?.trim()
+  let deckPackage: Awaited<ReturnType<typeof canonicalLearningDeckPackage>> | null = null
+  let deckId: string | null = null
+  if (post.post_type === "deck") {
+    if (!learningDecksEnabled(jobInput.env)) {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "deck_package_generation_failed",
+        failureMessage: "Learning decks are not enabled",
+        retryable: false,
+        now,
+      })
+    }
+    deckId = publishOptions.learning_deck?.trim() ?? null
+    if (!deckId) {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "deck_package_generation_failed",
+        failureMessage: "Learning deck draft is missing",
+        retryable: false,
+        now,
+      })
+    }
+    const draft = await getLearningDeckDraft({ client, communityId, deckId, userId: post.author_user_id ?? "" })
+    deckPackage = await canonicalLearningDeckPackage({
+      title: draft.deck.title,
+      description: draft.deck.description,
+      cards: draft.cards.filter((card) => card.retiredAt == null).map((card) => ({
+        cardId: card.cardId,
+        cardType: card.cardType,
+        prompt: card.prompt,
+        answer: card.answer,
+        tags: card.tags,
+      })),
+    })
+    const generatedContentBlobId = publishOptions.allocated_ids?.generated_content_blob_id?.trim() || `cbl_${post.post_id}_deck`
+    await mergePostPublishRequestOptions({
+      client,
+      communityId,
+      postId: post.post_id,
+      patch: { allocated_ids: { generated_content_blob_id: generatedContentBlobId } },
+      updatedAt: nowIso(),
+    })
+    const generated = await materializeGeneratedContentBlob({
+      env: jobInput.env,
+      client: controlPlaneClient,
+      communityId,
+      uploaderUserId: post.author_user_id ?? "",
+      contentBlobId: generatedContentBlobId,
+      bytes: deckPackage.bytes,
+      filename: `learning-deck-${post.post_id}.json`,
+      mimeType: "application/json",
+      now,
+    })
+    contentBlobId = generated.blob.content_blob_id
+  }
+  if (!contentBlobId) {
+    return await markPostPublishFinalizeFailed({
+      client,
+      communityRepository: jobInput.communityRepository,
+      communityId,
+      postId: post.post_id,
+      failureCode: "payload_claim_failed",
+      failureMessage: "Generic post is missing its content blob",
+      retryable: false,
+      now,
+    })
+  }
+  if (post.access_mode !== "locked") {
+    return await markPostPublishFinalizeFailed({
+      client,
+      communityRepository: jobInput.communityRepository,
+      communityId,
+      postId: post.post_id,
+      failureCode: "payload_claim_failed",
+      failureMessage: "Public generic publication is not enabled",
+      retryable: false,
+      now,
+    })
+  }
+
+  const assetKind = post.post_type === "file" ? "download_file" as const : "learning_deck" as const
+  let postWithAsset = await assignPostAssetIdIfMissing({
+    executor: client,
+    postId: post.post_id,
+    now,
+  })
+  const reservationId = publishOptions.allocated_ids?.reservation_id?.trim() || `gar_${post.post_id}`
+  const reservationKey = publishOptions.allocated_ids?.reservation_key?.trim() || `post:${post.post_id}:generic_asset`
+  await mergePostPublishRequestOptions({
+    client,
+    communityId,
+    postId: post.post_id,
+    patch: {
+      allocated_ids: {
+        post_id: post.post_id,
+        asset_id: postWithAsset.asset_id,
+        content_blob_id: contentBlobId,
+        reservation_id: reservationId,
+        reservation_key: reservationKey,
+      },
+    },
+    updatedAt: now,
+  })
+
+  let asset = postWithAsset.asset_id
+    ? await getAssetRow(client, communityId, postWithAsset.asset_id)
+    : null
+  if (!asset) {
+    const owned = await requireOwnedContentBlob({
+      client: controlPlaneClient,
+      communityId,
+      uploaderUserId: post.author_user_id ?? "",
+      contentBlobId,
+    })
+    const blob = owned.blob
+    if (blob.status === "rejected" || blob.security_scan_state === "malicious" || blob.security_scan_state === "suspicious") {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "payload_safety_blocked",
+        failureMessage: "Content safety checks blocked publication",
+        retryable: false,
+        now: nowIso(),
+      })
+    }
+    if (
+      blob.status !== "ready"
+      || blob.security_scan_state !== "clean"
+      || blob.verified_size_bytes == null
+      || !blob.verified_content_hash
+    ) {
+      throw providerUnavailable("Content blob verification is still pending", {
+        reason: "payload_verification_pending",
+        content_blob_id: contentBlobId,
+      })
+    }
+    const policyDecision = await findCurrentContentPolicyDecision({
+      executor: controlPlaneClient,
+      contentBlobId: blob.content_blob_id,
+      contentHash: blob.verified_content_hash,
+      sizeBytes: blob.verified_size_bytes,
+      scanResultRef: blob.security_scan_result_ref,
+      securityScanProfile: blob.security_scan_profile,
+    })
+    if (!policyDecision) {
+      throw providerUnavailable("Content policy decision is unavailable", {
+        reason: "content_policy_decision_pending",
+        content_blob_id: blob.content_blob_id,
+      })
+    }
+    if (blob.verified_size_bytes > GENERIC_LOCKED_PAYLOAD_MAX_BYTES) {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "payload_verification_failed",
+        failureMessage: "Locked generic payloads are limited to 50 MiB",
+        retryable: false,
+        now: nowIso(),
+      })
+    }
+    const displayFilename = blob.declared_filename?.trim() ?? ""
+    const mimeType = blob.detected_mime_type?.trim().toLowerCase() ?? ""
+    if (
+      blob.validation_profile !== "download_file_v1"
+      || !displayFilename
+      || !genericFilenameMatchesMime(displayFilename, mimeType)
+    ) {
+      return await markPostPublishFinalizeFailed({
+        client,
+        communityRepository: jobInput.communityRepository,
+        communityId,
+        postId: post.post_id,
+        failureCode: "payload_verification_failed",
+        failureMessage: "Content blob format verification failed",
+        retryable: false,
+        now: nowIso(),
+      })
+    }
+    const estimatedCiphertextBytes = blob.verified_size_bytes + 32
+    const reservedBytes = blob.verified_size_bytes + estimatedCiphertextBytes
+    const publication = await publishGenericAssetClaim({
+      env: jobInput.env,
+      shardClient: client as unknown as Parameters<typeof publishGenericAssetClaim>[0]["shardClient"],
+      controlPlaneClient,
+      communityId,
+      sourcePostId: post.post_id,
+      assetId: postWithAsset.asset_id!,
+      creatorUserId: post.author_user_id ?? "",
+      contentBlobId,
+      assetKind,
+      accessMode: "locked",
+      rightsBasis: post.rights_basis === "none" && publishOptions.license_preset
+        ? "original"
+        : post.rights_basis ?? (publishOptions.license_preset ? "original" : "none"),
+      licensePreset: publishOptions.license_preset ?? null,
+      commercialRevSharePct: publishOptions.commercial_rev_share_pct ?? null,
+      displayTitle: post.title,
+      displayFilename,
+      mimeType,
+      contentHash: blob.verified_content_hash,
+      verifiedSizeBytes: blob.verified_size_bytes,
+      reservationId,
+      reservationKey,
+      reservedBytes,
+      quotaPolicyVersion: "generic_assets_v1",
+      createdAt: now,
+    })
+    await mergePostPublishRequestOptions({
+      client,
+      communityId,
+      postId: post.post_id,
+      patch: {
+        allocated_ids: {
+          asset_id: publication.assetId,
+          quota_reservation_id: publication.quotaReservation.reservation_id,
+          asset_payload_id: `ap_${publication.assetId}`,
+        },
+      },
+      updatedAt: nowIso(),
+    })
+    asset = await getAssetRow(client, communityId, publication.assetId)
+  }
+  if (!asset) {
+    throw internalError("Generic asset is missing after finalize claim")
+  }
+  const activePayload = await getActivePrimaryAssetPayload(client, asset.asset_id)
+  if (!activePayload) {
+    throw providerUnavailable("Generic asset payload is unavailable", {
+      reason: "payload_policy_projection_pending",
+      asset_id: asset.asset_id,
+    })
+  }
+  const ownedPayloadBlob = await requireOwnedContentBlob({
+    client: controlPlaneClient,
+    communityId,
+    uploaderUserId: post.author_user_id ?? "",
+    contentBlobId: activePayload.content_blob_ref,
+  })
+  const payloadBlob = ownedPayloadBlob.blob
+  if (
+    payloadBlob.status !== "ready"
+    || payloadBlob.security_scan_state !== "clean"
+    || payloadBlob.verified_size_bytes == null
+    || !payloadBlob.verified_content_hash
+    || payloadBlob.verified_content_hash !== activePayload.content_hash
+    || payloadBlob.verified_size_bytes !== activePayload.size_bytes
+  ) {
+    throw providerUnavailable("Generic asset safety evidence is unavailable", {
+      reason: "payload_safety_evidence_pending",
+      asset_id: asset.asset_id,
+    })
+  }
+  const currentPolicyDecision = await findCurrentContentPolicyDecision({
+    executor: controlPlaneClient,
+    contentBlobId: payloadBlob.content_blob_id,
+    contentHash: payloadBlob.verified_content_hash,
+    sizeBytes: payloadBlob.verified_size_bytes,
+    scanResultRef: payloadBlob.security_scan_result_ref,
+    securityScanProfile: payloadBlob.security_scan_profile,
+  })
+  if (!currentPolicyDecision) {
+    throw providerUnavailable("Generic asset content policy evidence is unavailable", {
+      reason: "content_policy_decision_pending",
+      asset_id: asset.asset_id,
+    })
+  }
+
+  if (post.post_type === "deck" && deckId && deckPackage) {
+    await withTransaction(client as unknown as Client, "write", async (tx) => {
+      const deckRow = await tx.execute({
+        sql: `
+          SELECT learning_deck_id, active_draft_version, status, published_version, asset_id
+          FROM learning_decks
+          WHERE community_id = ?1 AND learning_deck_id = ?2
+          LIMIT 1
+        `,
+        args: [communityId, deckId],
+      })
+      const deck = deckRow.rows[0]
+      if (!deck) throw notFoundError("Learning deck not found")
+      const status = String(deck.status)
+      const activeVersion = Number(deck.active_draft_version)
+      if (status === "published") {
+        if (String(deck.asset_id) !== asset.asset_id) throw internalError("Published learning deck asset does not match post asset")
+        return
+      }
+      const versionUpdate = await tx.execute({
+        sql: `
+          UPDATE learning_deck_versions
+          SET status = 'published', content_hash = ?1, card_count = ?2,
+              canonical_blob_ref = ?3, validation_error_json = NULL,
+              published_at = ?4, updated_at = ?4
+          WHERE learning_deck_id = ?5 AND version = ?6 AND status IN ('draft', 'ready')
+        `,
+        args: [deckPackage.contentHash, deckPackage.deck.cards.length, contentBlobId, now, deckId, activeVersion],
+      })
+      if ((versionUpdate.rowsAffected ?? 0) !== 1) {
+        const existingVersion = await tx.execute({
+          sql: `SELECT status, content_hash, canonical_blob_ref FROM learning_deck_versions WHERE learning_deck_id = ?1 AND version = ?2 LIMIT 1`,
+          args: [deckId, activeVersion],
+        })
+        const version = existingVersion.rows[0]
+        if (!version || String(version.status) !== "published" || String(version.canonical_blob_ref) !== contentBlobId) {
+          throw conflictError("Learning deck version is not publishable")
+        }
+      }
+      const deckUpdate = await tx.execute({
+        sql: `
+          UPDATE learning_decks
+          SET status = 'published', source_post_id = ?1, asset_id = ?2,
+              published_version = ?3, updated_at = ?4
+          WHERE learning_deck_id = ?5 AND community_id = ?6 AND status = 'draft'
+        `,
+        args: [post.post_id, asset.asset_id, activeVersion, now, deckId, communityId],
+      })
+      if ((deckUpdate.rowsAffected ?? 0) !== 1) throw conflictError("Learning deck publication changed; retry")
+    })
+  }
+
+  await enqueueLockedAssetDeliveryIfRequested({
+    env: jobInput.env,
+    client,
+    communityRepository: jobInput.communityRepository as unknown as CommunityJobRepository,
+    communityId,
+    postId: post.post_id,
+    assetId: asset.asset_id,
+    lockedDeliveryStatus: asset.locked_delivery_status,
+    createdAt: nowIso(),
+  })
+  if (asset.locked_delivery_status === "requested") {
+    throw providerUnavailable("Locked generic delivery is still being prepared", {
+      reason: "locked_delivery_pending",
+      asset_id: asset.asset_id,
+    })
+  }
+  if (asset.locked_delivery_status !== "ready") {
+    return await markPostPublishFinalizeFailed({
+      client,
+      communityRepository: jobInput.communityRepository,
+      communityId,
+      postId: post.post_id,
+      failureCode: "story_locked_delivery_failed",
+      failureMessage: "Locked generic delivery could not be prepared",
+      retryable: true,
+      now: nowIso(),
+    })
+  }
+  await assertAssetDeliveryAllowed({
+    client,
+    asset,
+    notFoundMessage: "Asset not found",
+    allowProcessingPost: true,
+  })
+
+  if (listingDraft) {
+    const existingListing = await getListingRowByAssetId(client, communityId, asset.asset_id)
+    if (!existingListing) {
+      try {
+        await createCommunityListingInTransaction({
+          env: jobInput.env,
+          userId: post.author_user_id ?? "",
+          communityId,
+          body: {
+            ...listingDraft,
+            asset: `asset_${asset.asset_id}`,
+            live_room: null,
+            replay_asset: null,
+          },
+          communityRepository: jobInput.communityRepository as unknown as Parameters<typeof createCommunityListingInTransaction>[0]["communityRepository"],
+          userRepository: getUserRepository(jobInput.env),
+          client,
+        })
+      } catch (error) {
+        const failure = publishFailureFromError(error, {
+          code: "listing_creation_failed",
+          message: "Listing creation failed",
+          retryable: false,
+        })
+        return await markPostPublishFinalizeFailed({
+          client,
+          communityRepository: jobInput.communityRepository,
+          communityId,
+          postId: post.post_id,
+          failureCode: failure.code,
+          failureMessage: failure.message,
+          retryable: failure.retryable,
+          now: nowIso(),
+        })
+      }
+    }
+  }
+  const persistedListing = await getListingRowByAssetId(client, communityId, asset.asset_id)
+  if (persistedListing) {
+    await mergePostPublishRequestOptions({
+      client,
+      communityId,
+      postId: post.post_id,
+      patch: { allocated_ids: { listing_id: persistedListing.listing_id } },
+      updatedAt: nowIso(),
+    })
+  }
+  const published = await markPostPublished({
+    executor: client,
+    postId: post.post_id,
+    analysisState: post.analysis_state,
+    contentSafetyState: post.content_safety_state,
+    ageGatePolicy: post.age_gate_policy,
+    now: nowIso(),
+  })
+  await convergePublishedPostProjection({
+    client,
+    communityRepository: jobInput.communityRepository,
+    env: jobInput.env,
+    post: published,
+    now: nowIso(),
+  })
+  await schedulePublicPostCachePurge({
+    env: jobInput.env,
+    communityId,
+    postId: post.post_id,
+  })
+  return post.post_id
+}
+
 export async function runPostPublishFinalize(
   input: CommunityJobHandlerInput,
   dependencies: PostPublishFinalizeDependencies = postPublishFinalizeDependencies,
@@ -652,6 +1171,17 @@ export async function runPostPublishFinalize(
     })
     const publishOptions = parsePublishOptions(publishRequest?.publish_options_json ?? null)
     const listingDraft = parseListingDraft(publishRequest?.listing_draft_json ?? null)
+
+    if (post.post_type === "file" || post.post_type === "deck") {
+      return await finalizeGenericDigitalGoodsPost({
+        jobInput: input,
+        dependencies,
+        client: db.client,
+        post,
+        publishOptions,
+        listingDraft,
+      })
+    }
 
     if (post.post_type !== "song" || !post.song_artifact_bundle_id) {
       return await markPostPublishFinalizeFailed({

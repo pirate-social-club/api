@@ -16,6 +16,15 @@ import {
 } from "../lib/operator-credential-auth"
 import { getControlPlaneClient } from "../lib/runtime-deps"
 import type { Client } from "../lib/sql-client"
+import {
+  clearGenericEmergencyControl,
+  createGenericEmergencyControl,
+  type GenericEmergencyControlScope,
+} from "../lib/communities/commerce/generic-asset-emergency-controls"
+import {
+  GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE,
+  type OperatorScope,
+} from "../lib/operator-credential-scopes"
 
 type ContentSecurityOpsEnv = { Bindings: Env }
 const contentSecurityOps = new Hono<ContentSecurityOpsEnv>()
@@ -83,12 +92,16 @@ function serialize(release: ContentSecurityScannerReleaseRecord) {
   }
 }
 
-async function operator(c: Context<ContentSecurityOpsEnv>, services: Dependencies) {
+async function operator(
+  c: Context<ContentSecurityOpsEnv>,
+  services: Dependencies,
+  requiredScope: OperatorScope = CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE,
+) {
   const actor = await services.authenticate({
     env: c.env,
     authorization: c.req.header("authorization"),
   })
-  requireOperatorScope(actor, CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE)
+  requireOperatorScope(actor, requiredScope)
   return actor
 }
 
@@ -184,6 +197,45 @@ contentSecurityOps.post("/scanner-releases", async (c) => {
     corpusEvidenceRef: text(request, "corpus_evidence_ref", 512),
   })
   return c.json(serialize(release), 201)
+})
+
+contentSecurityOps.post("/emergency-controls", async (c) => {
+  const services = dependencies()
+  const actor = await operator(c, services, GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE)
+  const request = await body(c, ["scope", "target_ref", "reason"] as const)
+  const scope = request.scope
+  if (scope !== "all" && scope !== "content_hash" && scope !== "asset" && scope !== "uploader"
+    && scope !== "community" && scope !== "validation_profile") {
+    throw badRequestError("Invalid emergency control scope")
+  }
+  const targetRef = request.target_ref == null ? null : text(request, "target_ref", 256)
+  if ((scope === "all" && targetRef !== null) || (scope !== "all" && targetRef === null)) {
+    throw badRequestError("target_ref does not match emergency control scope")
+  }
+  const control = await createGenericEmergencyControl({
+    client: services.getClient(c.env),
+    scope: scope as GenericEmergencyControlScope,
+    targetRef,
+    reason: text(request, "reason", 500),
+    actorRef: actor.operatorActorId,
+    now: services.now(),
+  })
+  return c.json(control, 201)
+})
+
+contentSecurityOps.post("/emergency-controls/:controlId/clear", async (c) => {
+  const services = dependencies()
+  const actor = await operator(c, services, GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE)
+  const controlId = c.req.param("controlId")
+  if (!/^gac_[a-z0-9_]+$/u.test(controlId)) throw badRequestError("Invalid emergency control id")
+  const cleared = await clearGenericEmergencyControl({
+    client: services.getClient(c.env),
+    controlId,
+    actorRef: actor.operatorActorId,
+    now: services.now(),
+  })
+  if (!cleared) throw badRequestError("Emergency control is missing or already cleared")
+  return c.json({ control_id: controlId, state: "cleared" as const }, 200)
 })
 
 for (const [action, run] of [

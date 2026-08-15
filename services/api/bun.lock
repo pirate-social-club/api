@@ -27,6 +27,7 @@
         "hono": "^4.12.25",
         "jose": "^6.2.2",
         "pg": "^8.16.3",
+        "ts-fsrs": "6.0.0-beta.2",
         "viem": "^2.48.1",
       },
       "devDependencies": {
@@ -355,6 +356,8 @@
     "@noble/secp256k1": ["@noble/secp256k1@2.3.0", "", {}, "sha512-0TQed2gcBbIrh7Ccyw+y/uZQvbJwm7Ao4scBUxqpBCcsOlZG0O4KGfjtNAy/li4W8n1xt3dxrwJ0beZ2h2G6Kw=="],
 
     "@obsidion/bridge": ["@obsidion/bridge@0.11.2", "", { "dependencies": { "@noble/ciphers": "^1.2.1", "@noble/hashes": "^1.8.0", "@noble/secp256k1": "^2.2.3", "@types/pako": "^2.0.3", "debug": "^4.3.4", "pako": "^2.1.0", "ws": "^8.16.0" }, "peerDependencies": { "typescript": "^5.0.0" } }, "sha512-IX5g2c6TF9xKGFgnQBAq4TJLns+W2SfDgndE1orsLIQCRJ8UKsu5Mt+RwbI6sDu7PxVveZvmLEaiXhJl7NhJaQ=="],
+
+    "@open-spaced-repetition/srs-kit": ["@open-spaced-repetition/srs-kit@0.1.0-beta.2", "", {}, "sha512-De7v/3jvkcxC94PBgwQSxXM8brJ7mQtVCyxDYhCQk8QLzs5r983o1IQ8d4wM3F2KuymOr/epf5WWw00yq3klzQ=="],
 
     "@openpassport/zk-kit-imt": ["@openpassport/zk-kit-imt@0.0.5", "", { "dependencies": { "@openpassport/zk-kit-utils": "0.0.1" } }, "sha512-edri5tUh7SFSOxZCzNGz+2ZqAG6mqOT4EMOw4gh66sBiWU6E6twKrOztx7h2J4HmZjz3hA/LDyL/F4QTUAB2Qg=="],
 
@@ -1319,6 +1322,8 @@
     "tr46": ["tr46@0.0.3", "", {}, "sha512-N3WMsuqV66lT30CrXNbEjx4GEwlow3v6rr4mCcv6prnfwhS01rkgyFdjPNBYd9br7LpXV1+Emh01fHnq2Gdgrw=="],
 
     "tryer": ["tryer@1.0.1", "", {}, "sha512-c3zayb8/kWWpycWYg87P71E1S1ZL6b6IJxfb5fvsUgsf0S2MVGaDhDXXjDMpdCpfWXqptc+4mXwmiy1ypXqRAA=="],
+
+    "ts-fsrs": ["ts-fsrs@6.0.0-beta.2", "", { "dependencies": { "@open-spaced-repetition/srs-kit": "0.1.0-beta.2" } }, "sha512-Dw39xoXDjjfgNN3w7lRLatJzuody5IQ22jLdc0YLSf7ihz3j63QownC1OuxnKAuX+PEadlS4/1nKva58FYUlBQ=="],
 
     "tslib": ["tslib@2.8.1", "", {}, "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w=="],
 

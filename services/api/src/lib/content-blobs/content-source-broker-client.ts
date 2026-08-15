@@ -9,6 +9,7 @@ import type {
   ContentSourceReadOutcome,
 } from "../content-security/content-security-types"
 import { conflictError, providerUnavailable } from "../errors"
+import { sha256Hex } from "../crypto"
 
 export const CONTENT_SOURCE_STORAGE_PROVIDER = "cloudflare_r2_private"
 export { CONTENT_SOURCE_STORAGE_NAMESPACE }
@@ -106,6 +107,82 @@ export async function storeContentSource(input: {
     storageEndpoint: CONTENT_SOURCE_STORAGE_ENDPOINT,
     contentHash: `0x${input.sha256}`,
   }
+}
+
+/** Read a verified plaintext source for server-side encryption or rescanning. */
+export async function readContentSource(input: {
+  env: Env
+  contentBlobId: string
+  expectedSizeBytes: number
+  expectedSha256: string
+}): Promise<Uint8Array<ArrayBuffer>> {
+  const { service, secret } = requireContentSourceBroker(input.env)
+  let response: Response
+  try {
+    response = await service.fetch(new Request(
+      `https://content-source-broker.internal/objects/${encodeURIComponent(input.contentBlobId)}`,
+      {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "x-content-sha256": input.expectedSha256.replace(/^0x/, "").toLowerCase(),
+          "x-content-size": String(input.expectedSizeBytes),
+        },
+      },
+    ))
+  } catch {
+    throw providerUnavailable("Content source storage is unavailable")
+  }
+  if (!response.ok) {
+    throw providerUnavailable(`Content source storage read failed with status ${response.status}`)
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength !== input.expectedSizeBytes) {
+    throw conflictError("Content source storage returned an unexpected byte count")
+  }
+  const actualSha256 = await sha256Hex(bytes)
+  if (actualSha256 !== input.expectedSha256.replace(/^0x/, "").toLowerCase()) {
+    throw conflictError("Content source storage returned a hash mismatch")
+  }
+  return bytes
+}
+
+/**
+ * Delete one hash-bound plaintext source through the private broker.
+ *
+ * The broker confirms absence with a HEAD after the delete. A missing source
+ * is therefore treated as already absent, while every other non-success
+ * response remains retryable or a conflict at the caller's boundary.
+ */
+export async function deleteContentSource(input: {
+  env: Env
+  contentBlobId: string
+  expectedSizeBytes: number
+  expectedSha256: string
+}): Promise<"deleted" | "absent"> {
+  const { service, secret } = requireContentSourceBroker(input.env)
+  let response: Response
+  try {
+    response = await service.fetch(new Request(
+      `https://content-source-broker.internal/objects/${encodeURIComponent(input.contentBlobId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${secret}`,
+          "x-content-sha256": input.expectedSha256.replace(/^0x/, "").toLowerCase(),
+          "x-content-size": String(input.expectedSizeBytes),
+        },
+      },
+    ))
+  } catch {
+    throw providerUnavailable("Content source storage is unavailable")
+  }
+  if (response.status === 204) return "deleted"
+  if (response.status === 404) return "absent"
+  if (response.status === 409) {
+    throw conflictError("Content source storage metadata does not match")
+  }
+  throw providerUnavailable(`Content source deletion failed with status ${response.status}`)
 }
 
 function boundedText(value: unknown, maxLength = 256): string | null {

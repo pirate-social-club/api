@@ -7,6 +7,7 @@ export const STORY_SETTLEMENT_REPAIR_SCOPE = "story:settlement:repair"
 export const STORY_SETTLEMENT_FEE_REPLACE_SCOPE = "story:settlement:fee-replace"
 export const DANCE_CHOREOGRAPHY_SEED_SCOPE = "dance:choreography:seed"
 export const CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE = "content-security:scanner-releases:manage"
+export const GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE = "generic-assets:emergency-controls:manage"
 export const ADMIN_USERS_ACT_AS_SCOPE = "admin:users:act_as"
 export const ADMIN_USERS_MANAGE_SCOPE = "admin:users:manage"
 export const ADMIN_OPERATIONS_MANAGE_SCOPE = "admin:operations:manage"
@@ -22,6 +23,7 @@ export const OPERATOR_SCOPES = [
   STORY_SETTLEMENT_FEE_REPLACE_SCOPE,
   DANCE_CHOREOGRAPHY_SEED_SCOPE,
   CONTENT_SECURITY_SCANNER_RELEASE_MANAGE_SCOPE,
+  GENERIC_ASSET_EMERGENCY_CONTROLS_MANAGE_SCOPE,
   ADMIN_USERS_ACT_AS_SCOPE,
   ADMIN_USERS_MANAGE_SCOPE,
   ADMIN_OPERATIONS_MANAGE_SCOPE,

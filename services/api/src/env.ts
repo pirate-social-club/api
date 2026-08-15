@@ -315,6 +315,10 @@ export type Env = {
   COMMUNITY_JOB_HEARTBEAT_INTERVAL_MS?: string
   // Defaults to async outside local/test. Set false as a production kill switch; set true in tests to opt into the async path.
   STORY_LOCKED_DELIVERY_ASYNC?: string
+  /** Writer gate for first-class downloadable files and learning decks. */
+  GENERIC_DIGITAL_GOODS_ENABLED?: string
+  /** Separate activation gate for deck authoring, publication, and study. */
+  LEARNING_DECKS_ENABLED?: string
   CONTENT_BLOB_UPLOADS_ENABLED?: string
   CONTENT_BLOB_UPLOAD_COMMUNITY_IDS?: string
   CONTENT_SOURCE_BROKER?: Fetcher

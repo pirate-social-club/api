@@ -3,6 +3,7 @@ import { createControlPlaneTestClient } from "../../../tests/helpers"
 import type { Client } from "../sql-client"
 import {
   cancelContentSecurityScanJobsForRevokedReleases,
+  findCurrentContentPolicyDecision,
   findActiveContentSecurityScannerRelease,
   finishContentSecurityScanFailure,
   finishContentSecurityScanResult,
@@ -19,6 +20,43 @@ const cleanups: Array<() => Promise<void>> = []
 
 afterEach(async () => {
   while (cleanups.length > 0) await cleanups.pop()?.()
+})
+
+describe("findCurrentContentPolicyDecision", () => {
+  test("requires an exact active clean malware and format decision", async () => {
+    const statements: Array<{ sql: string; args?: unknown[] }> = []
+    const executor = {
+      async execute(statement: { sql: string; args?: unknown[] }) {
+        statements.push(statement)
+        return {
+          rows: [{ scan_result_id: "scr_1", content_format_policy_version: "format_v1" }],
+        }
+      },
+    }
+    await expect(findCurrentContentPolicyDecision({
+      executor,
+      contentBlobId: "cbl_1",
+      contentHash: `0x${"a".repeat(64)}`,
+      sizeBytes: 42,
+      scanResultRef: "scr_1",
+      securityScanProfile: "download_file_v1",
+    })).resolves.toEqual({ scanResultId: "scr_1", formatPolicyVersion: "format_v1" })
+    expect(statements[0]?.sql).toContain("results.outcome = 'clean'")
+    expect(statements[0]?.sql).toContain("results.content_format_outcome = 'allow'")
+    expect(statements[0]?.sql).toContain("releases.status = 'active'")
+  })
+
+  test("fails closed when the blob has no projected scan reference", async () => {
+    const executor = { execute: async () => { throw new Error("must not query") } }
+    await expect(findCurrentContentPolicyDecision({
+      executor,
+      contentBlobId: "cbl_1",
+      contentHash: `0x${"a".repeat(64)}`,
+      sizeBytes: 42,
+      scanResultRef: null,
+      securityScanProfile: "download_file_v1",
+    })).resolves.toBeNull()
+  })
 })
 
 async function setup() {

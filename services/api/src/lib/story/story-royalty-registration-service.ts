@@ -25,6 +25,7 @@ import { assertStoryRuntimeSignerFunding } from "./story-runtime-funding"
 import { resolveDirectTxGasPolicy, type DirectTxGasPolicy } from "../evm-direct-tx"
 import { loadStoryRoyaltySharesForAsset } from "../communities/commerce/royalty-allocations"
 import type { StoryRoyaltyShareRow } from "../communities/commerce/royalty-allocations"
+import { findOwnedContentBlob } from "../content-blobs/content-blob-repository"
 import { getControlPlaneClient } from "../runtime-deps"
 import { assertDerivativeParentRevenueShare } from "../communities/commerce/derivative-parent-revenue-share"
 import {
@@ -50,7 +51,7 @@ import {
 type StoryRoyaltyClient = Pick<Client, "execute">
 type StoryRoyaltyRightsBasis = "none" | "original" | "derivative"
 export type StoryLicensePreset = "non-commercial" | "commercial-use" | "commercial-remix"
-type StoryRoyaltyAssetKind = "song_audio" | "video_file"
+type StoryRoyaltyAssetKind = "song_audio" | "video_file" | "download_file" | "learning_deck"
 
 export function buildStoryVideoMetadataMedia(input: {
   post: Post
@@ -66,6 +67,20 @@ export function buildStoryVideoMetadataMedia(input: {
     mediaType: input.mimeType ?? video?.mime_type?.trim() ?? null,
     mediaHash: input.contentHash,
     imageUrl: video?.poster_ref?.trim() || null,
+  }
+}
+
+export function buildStoryGenericMetadataMedia(input: {
+  assetKind: "download_file" | "learning_deck"
+  mediaType: string | null
+  contentHash: string | null
+}): StoryRoyaltyMetadataMedia {
+  return {
+    mediaUrl: null,
+    mediaType: input.assetKind === "learning_deck"
+      ? "application/vnd.pirate.learning-deck+json"
+      : input.mediaType,
+    mediaHash: input.contentHash,
   }
 }
 
@@ -824,7 +839,31 @@ async function isStoryMediaHashServerVerified(input: {
   assetKind: StoryRoyaltyAssetKind
   bundle: SongArtifactBundle | null
   media?: StoryRoyaltyMetadataMedia | null
+  assetId?: string
+  uploaderUserId?: string
+  contentBlobId?: string | null
 }): Promise<boolean> {
+  if (input.assetKind === "download_file" || input.assetKind === "learning_deck") {
+    if (!input.contentBlobId || !input.uploaderUserId || !input.media?.mediaHash) return false
+    try {
+      const owned = await findOwnedContentBlob({
+        client: getControlPlaneClient(input.env),
+        communityId: input.communityId,
+        uploaderUserId: input.uploaderUserId,
+        contentBlobId: input.contentBlobId,
+      })
+      return owned?.blob.security_scan_state === "clean"
+        && owned.blob.status === "ready"
+        && owned.blob.verified_content_hash?.toLowerCase() === input.media.mediaHash.toLowerCase()
+    } catch (error) {
+      console.warn("[story] generic content hash provenance lookup failed", {
+        community_id: input.communityId,
+        asset_id: input.assetId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      return false
+    }
+  }
   const storageRef = input.media?.verificationStorageRef?.trim()
     || input.media?.mediaUrl?.trim()
     || input.bundle?.primary_audio?.storage_ref?.trim()
@@ -868,6 +907,7 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
   accessMode: StoryRoyaltyMetadataAccessMode
   bundle: SongArtifactBundle | null
   media?: StoryRoyaltyMetadataMedia | null
+  contentBlobId?: string | null
   primaryContentHash: `0x${string}`
   metadataCreatedAt: string
   royaltyShares?: StoryRoyaltyShareRow[] | null
@@ -951,6 +991,9 @@ export async function maybeRegisterStoryRoyaltyForAsset(input: {
     assetKind: input.assetKind,
     bundle: input.bundle,
     media: input.media,
+    assetId: input.assetId,
+    uploaderUserId: existingAsset?.creator_user_id,
+    contentBlobId: input.contentBlobId,
   })
 
   const metadata = await buildStoryRoyaltyMetadata({

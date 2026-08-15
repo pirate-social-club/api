@@ -275,6 +275,27 @@ async function headSourceObject(
   })
 }
 
+async function readSourceObject(
+  request: Request,
+  env: ContentSourceBrokerEnv,
+  blobId: string,
+): Promise<Response> {
+  const expected = expectedMetadata(request)
+  const object = await env.CONTENT_SOURCE_OBJECTS.get(contentSourceObjectKey(blobId))
+  if (!object) throw new BrokerRequestError(404, "source_missing", "Source object is missing")
+  if (!matchesExpectedObject(object, blobId, expected)) {
+    throw new BrokerRequestError(409, "source_metadata_mismatch", "Source object metadata does not match")
+  }
+  return new Response(object.body, {
+    status: 200,
+    headers: {
+      "content-type": "application/octet-stream",
+      "content-length": String(expected.sizeBytes),
+      "x-content-sha256": expected.sha256,
+    },
+  })
+}
+
 async function deleteSourceObject(
   request: Request,
   env: ContentSourceBrokerEnv,
@@ -323,6 +344,7 @@ export async function handleContentSourceBrokerRequest(
       return await scanSourceObject(request, env, blobId)
     }
     if (request.method === "PUT") return await storeSourceObject(request, env, blobId)
+    if (request.method === "GET") return await readSourceObject(request, env, blobId)
     if (request.method === "HEAD") return await headSourceObject(request, env, blobId)
     if (request.method === "DELETE") return await deleteSourceObject(request, env, blobId)
     return jsonResponse({ code: "method_not_allowed", message: "Method not allowed" }, 405)
