@@ -317,6 +317,8 @@ export type Env = {
   STORY_LOCKED_DELIVERY_ASYNC?: string
   /** Writer gate for first-class downloadable files. */
   GENERIC_DIGITAL_GOODS_ENABLED?: string
+  /** Explicit launch attestation for scanner, broker, cost, and freshness gates. */
+  GENERIC_DIGITAL_GOODS_ENABLEMENT_READY?: string
   CONTENT_BLOB_UPLOADS_ENABLED?: string
   CONTENT_BLOB_UPLOAD_COMMUNITY_IDS?: string
   CONTENT_SOURCE_BROKER?: Fetcher

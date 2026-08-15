@@ -90,6 +90,7 @@ import {
   resolveCommunityAllocationShard,
 } from "./lib/communities/community-shard-registry"
 import { getControlPlaneClient, withRequestControlPlaneClients } from "./lib/runtime-deps"
+import { genericDigitalGoodsEnabled } from "./lib/helpers"
 import {
   configuredCorsOrigin as configuredCorsOriginForEnv,
   importedHnsAppRoot,
@@ -1151,7 +1152,7 @@ async function reconcileScheduledContentBlobs(env: Env): Promise<void> {
 }
 
 async function reconcileScheduledGenericAssetPayloads(env: Env): Promise<void> {
-  if (env.GENERIC_DIGITAL_GOODS_ENABLED !== "true") return
+  if (!genericDigitalGoodsEnabled(env)) return
   await reconcileGenericAssetPayloads({
     env,
     repository: getCommunityRepository(env),
@@ -2315,7 +2316,7 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
       ...(env.CONTROL_PLANE_DATABASE_URL
         ? [{ name: "reconcile_content_blob_lifecycle", run: () => reconcileScheduledContentBlobs(env) }]
         : []),
-      ...(env.CONTROL_PLANE_DATABASE_URL && env.GENERIC_DIGITAL_GOODS_ENABLED === "true"
+      ...(env.CONTROL_PLANE_DATABASE_URL && genericDigitalGoodsEnabled(env)
         ? [{ name: "reconcile_generic_asset_payloads", run: () => reconcileScheduledGenericAssetPayloads(env) }]
         : []),
       { name: "flush_analytics", run: () => flushScheduledAnalytics(env) },

@@ -8,11 +8,22 @@ export function envFlag(value: string | undefined, fallback = false): boolean {
 /**
  * The generic-goods flag gates writers only. Upload, scanning, and already
  * published-asset reads keep their own policies and must not use this helper.
+ *
+ * The enablement attestation is a deliberate release latch: it may only be
+ * set after the scanner freshness/cost gates and source-broker deployment are
+ * complete. Requiring the binding and secret here makes a missing broker
+ * configuration fail closed even if the feature flag is accidentally changed.
  */
 export function genericDigitalGoodsEnabled(env: {
   GENERIC_DIGITAL_GOODS_ENABLED?: string
+  GENERIC_DIGITAL_GOODS_ENABLEMENT_READY?: string
+  CONTENT_SOURCE_BROKER?: unknown
+  CONTENT_SOURCE_BROKER_SHARED_SECRET?: string
 }): boolean {
   return envFlag(env.GENERIC_DIGITAL_GOODS_ENABLED, false)
+    && envFlag(env.GENERIC_DIGITAL_GOODS_ENABLEMENT_READY, false)
+    && Boolean(env.CONTENT_SOURCE_BROKER)
+    && Boolean(env.CONTENT_SOURCE_BROKER_SHARED_SECRET?.trim())
 }
 
 export function isLocalEnvironment(environment: string | undefined): boolean {

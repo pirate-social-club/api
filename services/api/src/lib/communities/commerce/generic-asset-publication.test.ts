@@ -89,7 +89,12 @@ const dependencies = {
 
 function input(overrides: Record<string, unknown> = {}) {
   return {
-    env: { GENERIC_DIGITAL_GOODS_ENABLED: "true" },
+    env: {
+      GENERIC_DIGITAL_GOODS_ENABLED: "true",
+      GENERIC_DIGITAL_GOODS_ENABLEMENT_READY: "true",
+      CONTENT_SOURCE_BROKER: {},
+      CONTENT_SOURCE_BROKER_SHARED_SECRET: "fixture-broker-secret",
+    },
     shardClient: {},
     controlPlaneClient: {},
     communityId: "com_1",
