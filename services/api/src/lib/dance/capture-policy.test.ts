@@ -3,6 +3,7 @@ import { describe, expect, test } from "bun:test"
 import {
   isDanceCaptureEnabled,
   isDanceChoreographyEnabled,
+  isDanceGradingEnabled,
 } from "./capture-policy"
 
 describe("dance capture rollout policy", () => {
@@ -16,5 +17,11 @@ describe("dance capture rollout policy", () => {
   test("keeps choreography reads dark unless explicitly enabled", () => {
     expect(isDanceChoreographyEnabled({})).toBe(false)
     expect(isDanceChoreographyEnabled({ DANCE_CHOREOGRAPHY_ENABLED: "true" })).toBe(true)
+  })
+
+  test("keeps grading independently dark unless explicitly enabled", () => {
+    expect(isDanceGradingEnabled({})).toBe(false)
+    expect(isDanceGradingEnabled({ DANCE_GRADING_ENABLED: "false" })).toBe(false)
+    expect(isDanceGradingEnabled({ DANCE_GRADING_ENABLED: "true" })).toBe(true)
   })
 })

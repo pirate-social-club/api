@@ -11,3 +11,9 @@ export function isDanceChoreographyEnabled(
 ): boolean {
   return String(env.DANCE_CHOREOGRAPHY_ENABLED ?? "").trim().toLowerCase() === "true"
 }
+
+export function isDanceGradingEnabled(
+  env: Pick<Env, "DANCE_GRADING_ENABLED">,
+): boolean {
+  return String(env.DANCE_GRADING_ENABLED ?? "").trim().toLowerCase() === "true"
+}
