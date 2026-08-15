@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { readFile, writeFile } from "node:fs/promises"
 import { resolve } from "node:path"
 import { Wallet } from "ethers"
+import { Client as PgClient } from "pg"
 
 import type { Client, InStatement, QueryResult, Transaction } from "../sql-client"
 import { RewardTicketCycleJournal } from "./reward-ticket-cycle-journal"
@@ -126,14 +127,20 @@ describe.skipIf(!RUN)("reward ticket cycle journal (real Postgres)", () => {
   })
 
   test("database rejects append-only evidence deletion", async () => {
-    await database.unsafe(`
-      INSERT INTO reward_ticket_automation_evidence (
-        reward_ticket_automation_evidence_id, reward_ticket_automation_cycle_id,
-        sequence_number, evidence_kind, evidence_json, evidence_hash, observed_at
-      ) VALUES ('evidence_pg', 'cycle_a', 0, 'cycle_started', '{}'::jsonb, $1, NOW())
-    `, ["3".repeat(64)])
-    await expect(database.unsafe(
-      "DELETE FROM reward_ticket_automation_evidence WHERE reward_ticket_automation_evidence_id = 'evidence_pg'",
-    )).rejects.toThrow("append-only")
+    const constraintClient = new PgClient({ connectionString: urlFor(TEST_DB) })
+    await constraintClient.connect()
+    try {
+      await constraintClient.query(`
+        INSERT INTO reward_ticket_automation_evidence (
+          reward_ticket_automation_evidence_id, reward_ticket_automation_cycle_id,
+          sequence_number, evidence_kind, evidence_json, evidence_hash, observed_at
+        ) VALUES ('evidence_pg', 'cycle_a', 0, 'cycle_started', '{}'::jsonb, $1, NOW())
+      `, ["3".repeat(64)])
+      await expect(constraintClient.query(
+        "DELETE FROM reward_ticket_automation_evidence WHERE reward_ticket_automation_evidence_id = 'evidence_pg'",
+      )).rejects.toThrow("append-only")
+    } finally {
+      await constraintClient.end()
+    }
   })
 })
