@@ -489,6 +489,22 @@ export type Env = {
   MEGAPOT_SWEEP_STALE_SECONDS?: string
   MEGAPOT_ALERT_OWNER?: string
   MEGAPOT_ALERT_DESTINATION?: string
+  // Contract-pinned Megapot execution controls. These are resolved separately
+  // from the public pool configuration so every signing path can fail closed
+  // on an unexpected deployment, bytecode hash, or operational role.
+  REWARD_TICKET_MEGAPOT_ENVIRONMENT?: "mainnet" | "staging" | "testnet"
+  REWARD_TICKET_MEGAPOT_RPC_URL?: string
+  REWARD_TICKET_PURCHASE_SAFETY_MARGIN_SECONDS?: string
+  REWARD_TICKET_FINALITY_CONFIRMATIONS?: string
+  REWARD_TICKET_CUSTODY_ADDRESS?: string
+  REWARD_TICKET_PURCHASE_OPERATOR_ADDRESS?: string
+  REWARD_TICKET_PLATFORM_REVENUE_ADDRESS?: string
+  REWARD_TICKET_PURCHASE_ESCROW_ADDRESS?: string
+  REWARD_TICKET_COMMITMENT_REGISTRY_ADDRESS?: string
+  REWARD_TICKET_CLAIM_MODULE_ADDRESS?: string
+  REWARD_TICKET_PURCHASE_ESCROW_CODE_HASH?: string
+  REWARD_TICKET_COMMITMENT_REGISTRY_CODE_HASH?: string
+  REWARD_TICKET_CLAIM_MODULE_CODE_HASH?: string
   // One provider namespace per payout pilot. Missing/invalid = no user is payout eligible.
   REWARDS_IDENTITY_PROVIDER?: string
   /**
