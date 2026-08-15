@@ -27,7 +27,7 @@ function urlFor(database?: string): string {
 }
 
 function connect(database?: string): SQL {
-  return new SQL({ url: urlFor(database), tls: false, max: 1, connectionTimeout: 5 } as Record<string, unknown>)
+  return new SQL({ url: urlFor(database), tls: false, max: 4, connectionTimeout: 5 } as Record<string, unknown>)
 }
 
 let database: SQL
@@ -111,7 +111,7 @@ describe.skipIf(!RUN)("reward ticket cycle journal (real Postgres)", () => {
     expect(broadcasts).toBe(1)
   })
 
-  test("database and adapter reject cross-cycle and append-only violations", async () => {
+  test("adapter rejects cross-cycle reads and updates", async () => {
     const wrongCycle = new RewardTicketCycleJournal(clientFactory, "cycle_b")
     const row = await database.unsafe(
       "SELECT transaction_hash FROM reward_ticket_evm_submissions WHERE operation_id = 'purchase:pg'",
@@ -123,6 +123,9 @@ describe.skipIf(!RUN)("reward ticket cycle journal (real Postgres)", () => {
     await expect(wrongCycle.markBroadcast(transactionHash, new Date().toISOString())).rejects.toThrow(
       "crossed cycle boundary",
     )
+  })
+
+  test("database rejects append-only evidence deletion", async () => {
     await database.unsafe(`
       INSERT INTO reward_ticket_automation_evidence (
         reward_ticket_automation_evidence_id, reward_ticket_automation_cycle_id,
