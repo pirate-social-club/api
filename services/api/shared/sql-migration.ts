@@ -1100,6 +1100,29 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  // Migration 0238 adds Telegram session binding columns and a PostgreSQL
+  // table CHECK in one ALTER TABLE. SQLite cannot add a table constraint after
+  // creation, and its ALTER TABLE supports one ADD COLUMN clause at a time.
+  // Keep every column in the local mirror while PostgreSQL remains authoritative
+  // for the cross-column binding invariant.
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN SOURCE_CHANNEL ")
+    && normalized.includes("ADD COLUMN TELEGRAM_BOT_USER_ID ")
+    && normalized.includes("ADD CONSTRAINT DANCE_ATTEMPT_SESSION_TELEGRAM_BINDING_CHECK")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'api' CHECK (source_channel IN ('api', 'telegram'));",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_bot_user_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_chat_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_sender_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_prompt_message_id INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_file_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_file_unique_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_delivery_mode TEXT CHECK (telegram_delivery_mode IS NULL OR telegram_delivery_mode IN ('video', 'document'));",
+    ]
+  }
+
   if (normalized.startsWith("ALTER TABLE") && normalized.includes(" ADD CONSTRAINT ")) {
     if (
       normalized.includes("CONTENT_SECURITY_SCANNER_RELEASE_LIFECYCLE_CHECK")
@@ -1171,6 +1194,16 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
   }
 
   let sqliteCompat = statement
+  // Migration 0170 creates the original browser-only capture-mode CHECK.
+  // Migration 0237 widens that domain for Telegram, but SQLite cannot alter an
+  // existing table CHECK. Build the local mirror with the widened domain up
+  // front so Telegram inserts exercise the same accepted values.
+  if (normalized.startsWith("CREATE TABLE DANCE_ATTEMPT_SESSIONS ")) {
+    sqliteCompat = sqliteCompat.replace(
+      /capture_mode\s+TEXT\s+CHECK\s*\(\s*capture_mode\s+IS\s+NULL\s+OR\s+capture_mode\s*=\s*'in_app_camera'\s*\)/iu,
+      "capture_mode TEXT CHECK (capture_mode IS NULL OR capture_mode IN ('in_app_camera', 'telegram_video', 'telegram_document'))",
+    )
+  }
   if (
     normalized.startsWith("INSERT INTO COMMUNITY_HEALTH_SYNC_STATE ")
     && normalized.includes("ON CONFLICT (PROJECTION_KEY) DO NOTHING")
