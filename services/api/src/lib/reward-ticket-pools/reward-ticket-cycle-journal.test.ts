@@ -61,7 +61,7 @@ function fakeDatabase() {
           const row = rows.find((candidate) => candidate.cycleId === String(args[0])
             && candidate.transactionHash === String(args[1]))
           if (row) row.status = "broadcast"
-          return { rows: [], rowsAffected: row ? 1 : 0 }
+          return { rows: row ? [{ reward_ticket_evm_submission_id: "submission" }] : [], rowsAffected: row ? 1 : 0 }
         }
         if (sql.includes("INSERT INTO reward_ticket_automation_evidence")) {
           events.push(`evidence:${String(args[1])}`)

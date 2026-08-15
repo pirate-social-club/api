@@ -147,10 +147,11 @@ export class RewardTicketCycleJournal {
           SET status = 'broadcast', broadcast_at = COALESCE(broadcast_at, ?3), updated_at = ?3
           WHERE reward_ticket_automation_cycle_id = ?1 AND chain_id = 84532
             AND transaction_hash = ?2 AND status IN ('prepared', 'broadcast', 'needs_review')
+          RETURNING reward_ticket_evm_submission_id
         `,
         args: [this.cycleId, transactionHash, now],
       })
-      if (result.rowsAffected !== 1) throw new Error("reward ticket broadcast crossed cycle boundary")
+      if (result.rows.length !== 1) throw new Error("reward ticket broadcast crossed cycle boundary")
     })
   }
 

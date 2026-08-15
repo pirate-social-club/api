@@ -334,6 +334,8 @@ jobs:
           BOOKINGS_PG_CI_REQUIRED: "true"
           REWARD_CAMPAIGN_PG_CI_REQUIRED: "true"
           REWARD_CAMPAIGN_PG_SENTINEL_PATH: "/tmp/reward-campaign-pg-suite-complete"
+          REWARD_TICKET_JOURNAL_PG_CI_REQUIRED: "true"
+          REWARD_TICKET_JOURNAL_PG_SENTINEL_PATH: "/tmp/reward-ticket-cycle-journal-pg-suite-complete"
         run: |
           echo "::group::host-config repository PG"
           rm -f "/tmp/host-config-repository-pg-suite-complete"
@@ -399,6 +401,11 @@ jobs:
           rm -f "$REWARD_CAMPAIGN_PG_SENTINEL_PATH"
           timeout 120s bun test src/lib/rewards/reward-campaign-reconciler.pg.test.ts
           test "$(cat "$REWARD_CAMPAIGN_PG_SENTINEL_PATH")" = "reward-campaign-postgres-suite-complete"
+          echo "::endgroup::"
+          echo "::group::reward ticket cycle journal PG"
+          rm -f "$REWARD_TICKET_JOURNAL_PG_SENTINEL_PATH"
+          timeout 120s bun test src/lib/reward-ticket-pools/reward-ticket-cycle-journal.pg.test.ts
+          test "$(cat "$REWARD_TICKET_JOURNAL_PG_SENTINEL_PATH")" = "reward-ticket-cycle-journal-postgres-suite-complete"
           echo "::endgroup::"
 
   api-top-level-tests:
