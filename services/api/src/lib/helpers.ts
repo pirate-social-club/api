@@ -7,7 +7,8 @@ export function envFlag(value: string | undefined, fallback = false): boolean {
 
 /**
  * The generic-goods flag gates writers only. Upload, scanning, and already
- * published-asset reads keep their own policies and must not use this helper.
+ * published-asset reads retain their own additional policies; this latch is
+ * not a substitute for those checks.
  *
  * The enablement attestation is a deliberate release latch: it may only be
  * set after the scanner freshness/cost gates and source-broker deployment are
