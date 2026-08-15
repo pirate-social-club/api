@@ -92,12 +92,12 @@ anything:
   on `f6f61fbd31a22d65eb526375ec78d607260b5f8d` until the explicitly scoped
   remediation deploy below; no Lit cutover or production change is authorized.
 
-- **ACTIVE — 2026-08-15T08:37:14Z — `fill_blank_eoa_restore`** — User-authorized
-  deployment of API `cd692adff699803864705d53182a78e0f29b3844` to staging, to
-  restore the EOA settlement backend while retaining the merged fill-blank and
-  language-materializer code. Verify `/__version` and release this hold after
-  the deployed SHA and reward backend are confirmed. Do not run a canary or
-  change production.
+- **RELEASED — 2026-08-15T09:17:09Z — `fill_blank_eoa_restore`** — User-authorized
+  deployment completed at merged API `9f79104d9b7eb8c507581465006378ea104df011`.
+  `/__version` confirms that SHA, `source_state: clean`, and karaoke runtime
+  `0.2.2`; Wrangler's deployment bindings show the staging settlement backend
+  is `eoa_vault`. Production was not changed. The staging hold is released;
+  no canary is authorized by this entry.
 
 ## Hold history
 
