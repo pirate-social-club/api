@@ -949,6 +949,7 @@ async function finalizeGenericDigitalGoodsPost(input: {
           communityRepository: jobInput.communityRepository as unknown as Parameters<typeof createCommunityListingInTransaction>[0]["communityRepository"],
           userRepository: getUserRepository(jobInput.env),
           client,
+          allowProcessingPost: true,
         })
       } catch (error) {
         const failure = publishFailureFromError(error, {

@@ -407,6 +407,9 @@ export async function uploadCdrEncryptedDataKey(params: {
 }
 
 export async function estimateStoryCdrLockedPublishMinimumBalanceWei(env: Env): Promise<bigint> {
+  // The upload hook already replaces the CDR transaction path in route tests;
+  // avoid probing the live Story RPC just to estimate fees for that mocked path.
+  if (testUploader) return 0n
   const chainIdRaw = String(env.STORY_CHAIN_ID || "").trim()
   const chainId = chainIdRaw ? Number(chainIdRaw) : DEFAULT_STORY_CHAIN_ID
   if (!Number.isInteger(chainId) || chainId <= 0) {
