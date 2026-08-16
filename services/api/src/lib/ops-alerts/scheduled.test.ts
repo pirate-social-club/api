@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { Env } from "../../env"
 import {
+  beginScheduledAlertTick,
   captureScheduledError,
   captureScheduledWarning,
   captureScheduledWarningWithEvidence,
+  flushScheduledAlertTick,
   setScheduledAlertEvidenceStoreForTests,
 } from "./scheduled"
 
@@ -142,7 +144,7 @@ describe("scheduled alert capture", () => {
     expect(sent[0]?.text).toContain("- cmt_b: Community has no database routing entry")
   })
 
-  test("treats low urgency as low severity and dedupes it with the low bucket", async () => {
+  test("does not email low-severity warnings and strips urgency from the key", async () => {
     const sent: Array<{ text?: string; subject?: string }> = []
     const kv = new Map<string, string>()
     const env = {
@@ -187,9 +189,48 @@ describe("scheduled alert capture", () => {
       { urgency: "low" },
     )
 
+    expect(sent).toHaveLength(0)
+    expect([...kv.keys()]).toHaveLength(0)
+  })
+
+  test("collects one tick and sends one aggregated email", async () => {
+    const sent: Array<{ text?: string; subject?: string }> = []
+    const events: string[] = []
+    setScheduledAlertEvidenceStoreForTests({
+      begin: async (input) => { events.push(`begin:${input.alertKey}`) },
+      finish: async (input) => { events.push(`finish:${input.delivery.providerMessageId}`) },
+    })
+    const baseEnv = {
+      ENVIRONMENT: "staging",
+      OPS_ALERT_EMAIL_FROM: "alerts@pirate.sc",
+      OPS_ALERT_EMAIL_TO: "piratesocialclub@proton.me",
+      OPS_ALERT_EMAIL: {
+        send: async (message: { text?: string; subject?: string }) => {
+          sent.push(message)
+          events.push("send")
+          return { messageId: "msg_tick" }
+        },
+      },
+    } as unknown as Env
+    const env = beginScheduledAlertTick(baseEnv)
+
+    await captureScheduledError(env, new Error("first"), "first_task")
+    await captureScheduledWarning(env, "Second task needs attention", "second_task", undefined, { urgency: "high" })
+
+    expect(sent).toHaveLength(0)
+    await flushScheduledAlertTick(env)
+
     expect(sent).toHaveLength(1)
-    expect(sent[0]?.text).toContain("[LOW][staging] Post publish finalize reconciliation had community routing failures")
-    expect([...kv.keys()][0]).toContain("scheduled_warning:community_jobs_post_publish_finalize_reconciliation:low")
+    expect(sent[0]?.subject).toBe("[Pirate staging] 2 ops alerts")
+    expect(sent[0]?.text).toContain("Scheduled task failed: first_task")
+    expect(sent[0]?.text).toContain("Second task needs attention")
+    expect(events).toEqual([
+      "begin:scheduled_error:first_task",
+      "begin:scheduled_warning:second_task",
+      "send",
+      "finish:msg_tick",
+      "finish:msg_tick",
+    ])
   })
 
   test("delivers one actionable reward incident email per dedupe bucket", async () => {
