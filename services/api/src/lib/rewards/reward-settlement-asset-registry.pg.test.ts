@@ -17,6 +17,9 @@ import {
 // of hand-written fake rows.
 
 const ADMIN_URL = process.env.BOOKINGS_REPO_TEST_ADMIN_URL
+if (process.env.REWARD_SETTLEMENT_REGISTRY_PG_CI_REQUIRED === "true" && !ADMIN_URL) {
+  throw new Error("REWARD_SETTLEMENT_REGISTRY_PG_CI_REQUIRED is set but BOOKINGS_REPO_TEST_ADMIN_URL is missing")
+}
 const RUN = Boolean(ADMIN_URL)
 const TEST_DB = "reward_settlement_registry_reader_test"
 
