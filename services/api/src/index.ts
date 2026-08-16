@@ -166,7 +166,12 @@ import { runOpsAlerts } from "./lib/ops-alerts/run"
 import { runRuntimeWalletFundingWatchdog } from "./lib/ops-alerts/runtime-wallet-funding-watchdog"
 import { monitorRewardCampaignTreasurySolvency } from "./lib/rewards/reward-campaign-solvency-monitor"
 import { enforceRewardNationalityDecisionRetention } from "./lib/rewards/reward-nationality-retention"
-import { captureScheduledError, captureScheduledWarning } from "./lib/ops-alerts/scheduled"
+import {
+  beginScheduledAlertTick,
+  captureScheduledError,
+  captureScheduledWarning,
+  flushScheduledAlertTick,
+} from "./lib/ops-alerts/scheduled"
 import {
   runPublicReadCacheCanary,
   shouldRunPublicReadCacheCanary,
@@ -2113,9 +2118,26 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
     })
   }),
 
-  scheduled: (controller, env, ctx) => {
-    if (shouldRunPublicReadCacheCanary(env, controller.scheduledTime || Date.now())) {
+  scheduled: (controller, originalEnv, ctx) => {
+    const env = beginScheduledAlertTick(originalEnv)
+    const scheduledTasks: Promise<unknown>[] = []
+    const trackScheduledTask = (promise: Promise<unknown>): void => {
+      scheduledTasks.push(promise)
+      ctx.waitUntil(promise)
+    }
+    const finalizeScheduledAlertTick = (): void => {
+      const tasks = scheduledTasks.slice()
       ctx.waitUntil(
+        Promise.allSettled(tasks)
+          .then(() => flushScheduledAlertTick(env))
+          .catch((error) => {
+            console.error("[scheduled] alert aggregation flush failed", error)
+          }),
+      )
+    }
+
+    if (shouldRunPublicReadCacheCanary(env, controller.scheduledTime || Date.now())) {
+      trackScheduledTask(
         runPublicReadCacheCanary(env)
           .then((result) => console.info(JSON.stringify({
             component: "public_read_cache",
@@ -2144,17 +2166,17 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
     // Story signer funding watchdog. Read-only RPC (no control-plane connection),
     // internally rate-limited and fully fail-soft, so it runs independently of the
     // DO-leased batch below and cannot destabilise it.
-    ctx.waitUntil(
+    trackScheduledTask(
       runStoryRuntimeFundingWatchdog(env).catch((error) => {
         console.error("[scheduled] story funding watchdog crashed (fail-soft)", error)
       }),
     )
-    ctx.waitUntil(
+    trackScheduledTask(
       runStorySettlementCoordinatorWatchdog(env).catch((error) => {
         console.error("[scheduled] Story settlement coordinator watchdog crashed (fail-soft)", error)
       }),
     )
-    ctx.waitUntil(
+    trackScheduledTask(
       withRequestControlPlaneClients(() => redispatchStaleContentSecurityScanJobs({ env }))
         .then((result) => {
           if (result.enabled && (result.cancelled > 0 || result.selected > 0 || result.failed > 0)) {
@@ -2174,17 +2196,17 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
           }))
         }),
     )
-    ctx.waitUntil(
+    trackScheduledTask(
       runRuntimeWalletFundingWatchdog(env).catch((error) => {
         console.error("[scheduled] runtime wallet funding watchdog crashed (fail-soft)", error)
       }),
     )
-    ctx.waitUntil(
+    trackScheduledTask(
       withRequestControlPlaneClients(() => checkScheduledD1PoolCapacity(env)).catch((error) => {
         console.error("[scheduled] community D1 pool capacity watchdog crashed (fail-soft)", error)
       }),
     )
-    ctx.waitUntil(
+    trackScheduledTask(
       checkHnsEdgeHeartbeatFreshness(env).catch((error) => {
         console.error("[scheduled] HNS edge heartbeat watchdog crashed (fail-soft)", error)
       }),
@@ -2358,7 +2380,8 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
     if (!env.SCHEDULED_CRON_LOCK) {
       const error = new Error("SCHEDULED_CRON_LOCK durable object binding is missing; refusing to run the scheduled batch without overlap protection")
       console.error("[scheduled]", error.message)
-      ctx.waitUntil(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
+      trackScheduledTask(captureScheduledError(env, error, "scheduled_cron_lock_binding_missing"))
+      finalizeScheduledAlertTick()
       return
     }
     // Three lanes, three leases, run concurrently.
@@ -2419,7 +2442,7 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
       }
     }
 
-    ctx.waitUntil(Promise.allSettled([
+    trackScheduledTask(Promise.allSettled([
       runLane({
         lane: "community-publish",
         lockName: SCHEDULED_COMMUNITY_PUBLISH_LOCK_NAME,
@@ -2461,6 +2484,7 @@ const handler: ExportedHandler<Env, RewardQualificationWakeup | ContentSecurityS
         tasks: lanes.maintenance,
       }),
     ]).then(() => undefined))
+    finalizeScheduledAlertTick()
   },
 }
 

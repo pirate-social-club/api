@@ -7,7 +7,7 @@ import {
   createOpsAlertDeliveryEvidenceStore,
   type OpsAlertDeliveryEvidenceStore,
 } from "./delivery-evidence"
-import { bucketStartMs } from "./emit"
+import { bucketStartMs, dedupeOpsAlerts, markOpsAlertsSent } from "./emit"
 import { opsAlertBucketMs, opsAlertDedupeTtlSeconds } from "./policy"
 import { sendOpsAlerts } from "./sink"
 import type { OpsAlert, OpsAlertSeverity } from "./types"
@@ -21,6 +21,27 @@ export type ScheduledAlertDeliveryResult = {
 }
 
 let testEvidenceStore: OpsAlertDeliveryEvidenceStore | null | undefined
+
+type ScheduledAlertTick = {
+  alerts: OpsAlert[]
+}
+
+const scheduledAlertTicks = new WeakMap<Env, ScheduledAlertTick>()
+
+export type ScheduledAlertTickFlushResult = {
+  collected: number
+  suppressed: number
+  deduplicated: number
+  delivered: boolean
+  sent: number
+  sink: "none" | "log" | "email" | "webhook"
+}
+
+export function beginScheduledAlertTick(env: Env): Env {
+  const tickEnv = Object.create(env) as Env
+  scheduledAlertTicks.set(tickEnv, { alerts: [] })
+  return tickEnv
+}
 
 export function setScheduledAlertEvidenceStoreForTests(
   store: OpsAlertDeliveryEvidenceStore | null | undefined,
@@ -86,7 +107,108 @@ function evidenceStore(env: Env): OpsAlertDeliveryEvidenceStore | null {
   return createOpsAlertDeliveryEvidenceStore(getControlPlaneClient(env))
 }
 
+function suppressedScheduledAlertResult(): ScheduledAlertDeliveryResult {
+  return {
+    delivered: true,
+    deduplicated: true,
+    evidenceRecorded: false,
+    deliveryAttemptId: null,
+    sink: "none",
+  }
+}
+
+export async function flushScheduledAlertTick(env: Env): Promise<ScheduledAlertTickFlushResult> {
+  const tick = scheduledAlertTicks.get(env)
+  scheduledAlertTicks.delete(env)
+  const collected = tick?.alerts.length ?? 0
+  const alerts = tick?.alerts.filter((alert) => alert.severity !== "low") ?? []
+  const suppressed = collected - alerts.length
+  if (alerts.length === 0) {
+    return { collected, suppressed, deduplicated: 0, delivered: true, sent: 0, sink: "none" }
+  }
+
+  const nowMs = Date.now()
+  const bucketMs = (alert: OpsAlert) => opsAlertBucketMs(env, alert.severity)
+  const kv = env.OPS_ALERT_DEDUPE
+  const longestBucketMs = Math.max(...alerts.map(bucketMs))
+  const deduper = kv ? new KvAlertDeduper(kv, opsAlertDedupeTtlSeconds(longestBucketMs)) : null
+  const toSend = deduper
+    ? await dedupeOpsAlerts({ alerts, deduper, nowMs, bucketMs })
+    : alerts
+
+  const store = evidenceStore(env)
+  const evidenceAttempts: Array<{ attemptId: string; alert: OpsAlert }> = []
+  if (store) {
+    for (const alert of toSend) {
+      const attemptId = makeId("oad")
+      const bucket = bucketStartMs(nowMs, bucketMs(alert))
+      try {
+        await store.begin({
+          attemptId,
+          alertKey: alert.key,
+          environment: env.ENVIRONMENT || "development",
+          severity: alert.severity,
+          alertCount: alert.count,
+          bucketStartMs: bucket,
+        })
+        evidenceAttempts.push({ attemptId, alert })
+      } catch (error) {
+        console.error("[ops-alerts] durable evidence begin failed", {
+          alert_key: alert.key,
+          error: errorMessage(error),
+        })
+      }
+    }
+  }
+
+  const delivery = await sendOpsAlerts(env, toSend)
+  if (store) {
+    for (const { attemptId } of evidenceAttempts) {
+      try {
+        await store.finish({
+          attemptId,
+          delivery: {
+            ...delivery,
+            sent: delivery.delivered ? 1 : 0,
+          },
+        })
+      } catch (error) {
+        console.error("[ops-alerts] durable evidence finish failed", {
+          delivery_attempt_id: attemptId,
+          error: errorMessage(error),
+        })
+      }
+    }
+  }
+  if (delivery.delivered && deduper) {
+    await markOpsAlertsSent({ alerts: toSend, deduper, nowMs, bucketMs })
+  }
+
+  return {
+    collected,
+    suppressed,
+    deduplicated: alerts.length - toSend.length,
+    delivered: delivery.delivered,
+    sent: delivery.sent,
+    sink: delivery.sink,
+  }
+}
+
 async function deliverScheduledAlert(env: Env, alert: OpsAlert): Promise<ScheduledAlertDeliveryResult> {
+  if (alert.severity === "low") return suppressedScheduledAlertResult()
+
+  const tick = scheduledAlertTicks.get(env)
+  if (tick) {
+    tick.alerts.push(alert)
+    return {
+      delivered: true,
+      deduplicated: false,
+      evidenceRecorded: false,
+      deliveryAttemptId: null,
+      sink: "none",
+    }
+  }
+
   const kv = env.OPS_ALERT_DEDUPE
   const bucketMs = opsAlertBucketMs(env, alert.severity)
   const bucket = bucketStartMs(Date.now(), bucketMs)
@@ -185,7 +307,7 @@ export async function captureScheduledWarningWithEvidence(
       ? "low"
       : "medium"
   return deliverScheduledAlert(env, {
-    key: `scheduled_warning:${task}:${tags?.urgency ?? "normal"}`,
+    key: `scheduled_warning:${task}`,
     severity,
     title: message,
     count: scheduledWarningCount(extra),
