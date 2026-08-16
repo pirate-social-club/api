@@ -183,11 +183,12 @@ describe("reward campaign asset descriptor", () => {
     cleanup = ctx.cleanup
     const session = await exchangeJwt(ctx.env, "reward-asset-descriptor-owner")
     await seedCampaignSong(ctx, session.userId)
+    const body = campaignBody()
 
     const created = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody()),
+      body: JSON.stringify(body),
     }, ctx.env)
     expect(created.status).toBe(201)
     const campaign = await json(created) as { id: string }
@@ -210,7 +211,7 @@ describe("reward campaign asset descriptor", () => {
     const replay = await app.request("http://pirate.test/reward_campaigns", {
       method: "POST",
       headers: { ...authHeaders(session.accessToken), "content-type": "application/json" },
-      body: JSON.stringify(campaignBody()),
+      body: JSON.stringify(body),
     }, ctx.env)
     expect(replay.ok).toBe(true)
     const replayed = await json(replay) as { id: string }
