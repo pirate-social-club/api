@@ -70,11 +70,33 @@ export async function verifyPirateAccessToken(params: {
     throw authError("Authentication failed")
   })
 
+  if (verification.protectedHeader.typ !== "JWT") {
+    throw authError("Authentication failed")
+  }
+
+  const { iat, exp } = verification.payload
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  if (
+    typeof iat !== "number"
+    || typeof exp !== "number"
+    || !Number.isSafeInteger(iat)
+    || !Number.isSafeInteger(exp)
+    || iat < 0
+    || exp <= iat
+    || iat > nowSeconds
+    || exp <= nowSeconds
+  ) {
+    throw authError("Authentication failed")
+  }
+
   const userId = typeof verification.payload.sub === "string" ? verification.payload.sub.trim() : ""
   if (!userId) {
     throw authError("Authentication failed")
   }
 
+  if (verification.payload.scope !== undefined && typeof verification.payload.scope !== "string") {
+    throw authError("Authentication failed")
+  }
   const scope = typeof verification.payload.scope === "string" && verification.payload.scope.trim()
     ? verification.payload.scope.trim()
     : DEFAULT_PIRATE_APP_SCOPE

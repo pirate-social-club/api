@@ -44,17 +44,32 @@ export function requireBearerToken(headerValue: string | undefined): string {
 export async function authenticateUserToken(input: {
   env: Env
   token: string
+  requiredClassification?: "user" | "device"
 }): Promise<ActorContext> {
   const session = await verifyPirateAccessToken({ env: input.env, token: input.token })
-  const user = await getUserRepository(input.env).getUserById(session.userId)
+  const userRepository = getUserRepository(input.env)
+  const user = await userRepository.getUserById(session.userId)
   if (!user) {
     throw authError("Authentication failed")
   }
-  const userId = await resolveCanonicalUserId({ env: input.env, userId: session.userId })
+  let userId: string
+  try {
+    userId = await resolveCanonicalUserId({ env: input.env, userId: session.userId })
+  } catch {
+    throw authError("Authentication failed")
+  }
+  if (!(await userRepository.getUserById(userId))) {
+    throw authError("Authentication failed")
+  }
+
+  const authType = session.scope === DEFAULT_PIRATE_APP_SCOPE ? "user" : "device"
+  if (input.requiredClassification && input.requiredClassification !== authType) {
+    throw authError("Authentication failed")
+  }
 
   return {
     userId,
-    authType: session.scope === DEFAULT_PIRATE_APP_SCOPE ? "user" : "device",
+    authType,
     scope: session.scope,
   }
 }
