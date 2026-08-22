@@ -2,6 +2,10 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "pirate-api-core",
   "main": "src/index.ts",
+  "minify": true,
+  "alias": {
+    "@story-protocol/core-sdk": "./node_modules/@story-protocol/core-sdk/dist/story-protocol-core-sdk.esm.js"
+  },
   "compatibility_date": "2026-04-09",
   "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "rules": [

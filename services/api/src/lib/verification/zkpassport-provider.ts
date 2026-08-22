@@ -1,4 +1,4 @@
-import { ZKPassport, type ProofResult, type Query, type QueryResult } from "@zkpassport/sdk"
+import type { ProofResult, Query, QueryResult } from "@zkpassport/sdk"
 import { badRequestError, providerUnavailable } from "../errors"
 import { isProductionEnv, makeId } from "../helpers"
 import { trimEnv } from "../env-strings"
@@ -147,11 +147,6 @@ function zkPassportVerifierEndpoint(env: Env): string | null {
   return url.toString()
 }
 
-function zkPassportLocalVerifyWritingDirectory(env: Env): string {
-  return trimEnv((env as Env & { ZKPASSPORT_LOCAL_VERIFY_WRITING_DIRECTORY?: string }).ZKPASSPORT_LOCAL_VERIFY_WRITING_DIRECTORY)
-    || "/tmp"
-}
-
 function normalizeZkPassportRequestedCapabilities(
   requested: readonly RequestedVerificationCapability[],
   verificationRequirements: readonly VerificationRequirement[],
@@ -258,29 +253,33 @@ function decodeSessionRef(value: string): ZkPassportSessionRef | null {
 }
 
 function buildOriginalQuery(input: {
-  domain: string
   binding: string
   requestedCapabilities: readonly ZkPassportCapability[]
   verificationRequirements: readonly VerificationRequirement[]
 }): Query {
-  const zkPassport = new ZKPassport(input.domain)
-  let builder = zkPassport.createQuery().bind("custom_data", input.binding)
+  // Keep the API Worker on the lightweight query contract. Importing the SDK
+  // as a runtime value pulls its Barretenberg verifier into the Worker bundle,
+  // even though production proof verification is delegated to the dedicated
+  // verifier container.
+  const query: Record<string, unknown> = {
+    bind: { custom_data: input.binding },
+  }
 
   if (input.requestedCapabilities.includes("nationality")) {
-    builder = builder.disclose("nationality")
+    query.nationality = { disclose: true }
   }
   if (input.requestedCapabilities.includes("gender")) {
-    builder = builder.disclose("gender")
+    query.gender = { disclose: true }
   }
   if (input.requestedCapabilities.includes("minimum_age")) {
     const minimumAge = requiredMinimumAge(input.verificationRequirements)
     if (minimumAge == null) {
       throw badRequestError("ZKPassport minimum_age verification requires a minimum_age verification requirement")
     }
-    builder = builder.gte("age", minimumAge)
+    query.age = { gte: minimumAge }
   }
 
-  return builder.done().query
+  return query as Query
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {
@@ -413,29 +412,6 @@ async function verifyWithRemoteZkPassportVerifier(input: {
   return result
 }
 
-async function verifyWithLocalZkPassportSdk(input: {
-  env: Env
-  sessionRef: ZkPassportSessionRef
-  originalQuery: Query
-  payload: ZkPassportProofPayload
-}): Promise<ZkPassportProofVerificationResult> {
-  const zkPassport = new ZKPassport(input.sessionRef.domain)
-  const result = await zkPassport.verify({
-    proofs: input.payload.proofs,
-    originalQuery: input.originalQuery,
-    queryResult: input.payload.queryResult,
-    validity: input.sessionRef.validitySeconds,
-    scope: input.sessionRef.scope,
-    devMode: input.sessionRef.devMode,
-    writingDirectory: zkPassportLocalVerifyWritingDirectory(input.env),
-  })
-  return {
-    verified: result.verified,
-    uniqueIdentifier: result.uniqueIdentifier ?? null,
-    queryResultErrors: result.queryResultErrors,
-  }
-}
-
 async function verifyZkPassportProof(input: {
   env: Env
   sessionRef: ZkPassportSessionRef
@@ -448,10 +424,6 @@ async function verifyZkPassportProof(input: {
       ...input,
       endpoint: verifierEndpoint,
     })
-  }
-
-  if (truthyEnv((input.env as Env & { ZKPASSPORT_LOCAL_VERIFY_ENABLED?: string }).ZKPASSPORT_LOCAL_VERIFY_ENABLED)) {
-    return verifyWithLocalZkPassportSdk(input)
   }
 
   throw providerUnavailable("ZKPassport verifier is not configured for this runtime", {
@@ -473,7 +445,7 @@ function createConfiguredZkPassportProvider(env: Env): ZkPassportProvider {
       })
       const devMode = zkPassportDevMode(env)
       const validitySeconds = zkPassportValiditySeconds(env)
-      buildOriginalQuery({ domain, binding, requestedCapabilities, verificationRequirements })
+      buildOriginalQuery({ binding, requestedCapabilities, verificationRequirements })
 
       return {
         upstreamSessionRef: encodeSessionRef({
@@ -522,7 +494,6 @@ function createConfiguredZkPassportProvider(env: Env): ZkPassportProvider {
       }
 
       const originalQuery = buildOriginalQuery({
-        domain: sessionRef.domain,
         binding: sessionRef.binding,
         requestedCapabilities: sessionRef.requestedCapabilities,
         verificationRequirements: sessionRef.verificationRequirements,
