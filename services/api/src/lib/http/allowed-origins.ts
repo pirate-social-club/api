@@ -39,6 +39,8 @@ function normalizeExactOrigin(value: string): string | null {
   }
 }
 
+const HNS_LABEL_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u
+const HNS_HOSTNAME_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/u
 export function importedHnsAppRoot(origin: string): string | null {
   let url: URL
   try {
@@ -49,9 +51,7 @@ export function importedHnsAppRoot(origin: string): string | null {
   if (url.protocol !== "https:" || url.username || url.password || url.port) return null
   const labels = url.hostname.toLowerCase().split(".")
   if (labels.length !== 2 || labels[0] !== "app") return null
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(labels[1] ?? "")
-    ? labels[1]!
-    : null
+  return HNS_LABEL_PATTERN.test(labels[1] ?? "") ? labels[1]! : null
 }
 
 export function importedHnsRootLabel(origin: string): string | null {
@@ -63,12 +63,33 @@ export function importedHnsRootLabel(origin: string): string | null {
   }
   if (url.protocol !== "https:" || url.username || url.password || url.port) return null
   const hostname = url.hostname.toLowerCase()
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(hostname)
-    ? hostname
-    : null
+  return HNS_LABEL_PATTERN.test(hostname) ? hostname : null
 }
 
-function isTrustedHnsWebOrigin(origin: string, importedOriginAllowed: boolean): boolean {
+function isTrustedHnsHostname(hostname: string, importedOriginAllowed: boolean): boolean {
+  if (!HNS_HOSTNAME_PATTERN.test(hostname)) {
+    return false
+  }
+
+  if (!hostname.includes(".")) {
+    return importedOriginAllowed && HNS_LABEL_PATTERN.test(hostname)
+  }
+
+  if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) {
+    return true
+  }
+
+  // Imported HNS roots use the dashboard-compatible app.<root> origin. The
+  // activation decision is supplied by the request path; it must never be
+  // inferred from an attacker-controlled Origin header alone.
+  const labels = hostname.split(".")
+  return importedOriginAllowed
+    && labels.length === 2
+    && labels[0] === "app"
+    && HNS_LABEL_PATTERN.test(labels[1] ?? "")
+}
+
+function isTrustedHnsWebOrigin(origin: string, importedOriginAllowed = false): boolean {
   let url: URL
   try {
     url = new URL(origin)
@@ -81,22 +102,22 @@ function isTrustedHnsWebOrigin(origin: string, importedOriginAllowed: boolean): 
   }
 
   const hostname = url.hostname.toLowerCase()
-  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/u.test(hostname)) {
+  return isTrustedHnsHostname(hostname, importedOriginAllowed)
+}
+
+export function isAllowedHnsHttpReadOrigin(origin: string, importedOriginAllowed = false): boolean {
+  let url: URL
+  try {
+    url = new URL(origin)
+  } catch {
     return false
   }
 
-  if (!hostname.includes(".")) {
-    return importedOriginAllowed && importedHnsRootLabel(origin) !== null
+  if (url.protocol !== "http:" || url.username || url.password || url.port) {
+    return false
   }
 
-  if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) {
-    return true
-  }
-
-  // Imported HNS roots use the dashboard-compatible app.<root> origin. The
-  // API remains the canonical HNS service, so these origins need the same
-  // CORS treatment as app.pirate without requiring one config entry per root.
-  return importedOriginAllowed && importedHnsAppRoot(origin) !== null
+  return isTrustedHnsHostname(url.hostname.toLowerCase(), importedOriginAllowed)
 }
 
 export function configuredCorsOrigin(

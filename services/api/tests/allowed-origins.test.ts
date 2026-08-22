@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 
 import {
   configuredCorsOrigin,
+  isAllowedHnsHttpReadOrigin,
   isAllowedKaraokeWebSocketOrigin,
 } from "../src/lib/http/allowed-origins"
 
@@ -50,13 +51,35 @@ describe("allowed origins", () => {
     }, true)).toBe("https://app.xn--pokmon-dva")
   })
 
-  test("does not treat arbitrary nested origins as imported HNS apps", () => {
+  test("does not trust unactivated roots or arbitrary nested origins", () => {
+    expect(configuredCorsOrigin("https://app.dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+    expect(configuredCorsOrigin("https://dankmeme", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
     expect(configuredCorsOrigin("https://www.dankmeme", {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",
     })).toBeNull()
     expect(configuredCorsOrigin("https://app.dankmeme.example", {
       CORS_ALLOWED_ORIGINS: "https://pirate.sc",
     })).toBeNull()
+  })
+
+  test("does not trust arbitrary single-label HTTPS origins", () => {
+    expect(configuredCorsOrigin("https://evil", {
+      CORS_ALLOWED_ORIGINS: "https://pirate.sc",
+    })).toBeNull()
+  })
+
+  test("allows only anonymous safe reads from canonical HTTP HNS origins", () => {
+    expect(isAllowedHnsHttpReadOrigin("http://app.pirate")).toBe(true)
+    expect(isAllowedHnsHttpReadOrigin("http://king.bitcoin")).toBe(false)
+    expect(isAllowedHnsHttpReadOrigin("http://app.dankmeme")).toBe(false)
+    expect(isAllowedHnsHttpReadOrigin("https://app.pirate")).toBe(false)
+    expect(isAllowedHnsHttpReadOrigin("http://app.pirate:8080")).toBe(false)
+    expect(isAllowedHnsHttpReadOrigin("http://dankmeme", true)).toBe(true)
+    expect(isAllowedHnsHttpReadOrigin("http://app.dankmeme", true)).toBe(true)
   })
 
   test("rejects malformed or null karaoke origins", () => {

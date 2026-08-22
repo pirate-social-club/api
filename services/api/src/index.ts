@@ -94,6 +94,7 @@ import {
   configuredCorsOrigin as configuredCorsOriginForEnv,
   importedHnsAppRoot,
   importedHnsRootLabel,
+  isAllowedHnsHttpReadOrigin,
 } from "./lib/http/allowed-origins"
 import {
   hnsWalletOriginAuthorityStub,
@@ -202,7 +203,6 @@ import {
   requestCorrelationMiddleware,
   type RequestCorrelationEnv,
 } from "./lib/request-correlation"
-
 export { LiveRoomRuntimeDO, KaraokeSessionRuntimeDO }
 export { ScheduledCronLockDO }
 export { OperatorSigningCoordinatorDO }
@@ -443,15 +443,21 @@ function routingSnapshotFromRead(input: {
 async function resolveHnsOriginAllowed(origin: string | null, env: Env): Promise<boolean> {
   if (!origin) return false
   let hostname: string
+  let protocol: string
   try {
-    hostname = new URL(origin).hostname.toLowerCase()
+    const parsedOrigin = new URL(origin)
+    hostname = parsedOrigin.hostname.toLowerCase()
+    protocol = parsedOrigin.protocol
   } catch {
     return false
   }
   // Canonical Pirate/Clawitzer hosts remain configured platform origins. They
   // are not imported sovereign roots and therefore do not consult HNS state.
   if (hostname.endsWith(".pirate") || hostname.endsWith(".clawitzer")) return false
-  const rootLabel = importedHnsAppRoot(origin) ?? importedHnsRootLabel(origin)
+  const httpRootLabel = protocol === "http:" && isAllowedHnsHttpReadOrigin(origin, true)
+    ? (hostname.startsWith("app.") ? hostname.slice(4) : hostname)
+    : null
+  const rootLabel = importedHnsAppRoot(origin) ?? importedHnsRootLabel(origin) ?? httpRootLabel
   if (!rootLabel) return false
   const now = new Date()
   const nowMs = now.getTime()
@@ -468,7 +474,7 @@ async function resolveHnsOriginAllowed(origin: string | null, env: Env): Promise
     // Compatibility for test doubles and an old authority binding during a
     // staged rollout. The current DO always exposes the routing methods, so
     // production requests never use wallet registration as root activation.
-    if (!hasRoutingProjection && importedHnsAppRoot(origin)) {
+    if (!hasRoutingProjection && (importedHnsAppRoot(origin) || hostname === `app.${rootLabel}`)) {
       const walletSnapshot = await stub?.readSnapshot(rootLabel)
       if (
         walletSnapshot?.effective === true
@@ -517,11 +523,53 @@ app.use("/*", async (c, next) => {
   await next()
 })
 
+function isPlaintextHnsReadRequest(request: Request): boolean {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    return false
+  }
+
+  // A plaintext HNS page must never be given a CORS response for a request
+  // carrying credentials. In particular, Authorization triggers a browser
+  // preflight; this policy intentionally does not answer that preflight.
+  return !request.headers.has("Authorization")
+    && !request.headers.has("Cookie")
+    && !request.headers.has("Proxy-Authorization")
+}
+
+function applyPlaintextHnsReadCorsHeaders(
+  request: Request,
+  response: Response,
+  importedOriginAllowed: boolean,
+): Response {
+  const origin = request.headers.get("Origin")
+  if (
+    !origin
+    || !isAllowedHnsHttpReadOrigin(origin, importedOriginAllowed)
+    || !isPlaintextHnsReadRequest(request)
+  ) {
+    return response
+  }
+
+  const next = new Response(response.body, response)
+  next.headers.set("Access-Control-Allow-Origin", origin)
+  appendCommaSeparatedHeader(next.headers, "Access-Control-Expose-Headers", REQUEST_ID_HEADER)
+  appendVaryHeader(next.headers, "Origin")
+  return next
+}
+
 app.use(
   "/*",
   async (c, next) => {
     if (isPublicReadCacheRequest(c.req.raw)) {
       await next()
+      return
+    }
+
+    const origin = c.req.header("Origin")
+    const importedOriginAllowed = Boolean(c.get("hnsOriginAllowed"))
+    if (origin && isAllowedHnsHttpReadOrigin(origin, importedOriginAllowed)) {
+      await next()
+      c.res = applyPlaintextHnsReadCorsHeaders(c.req.raw, c.res, importedOriginAllowed)
       return
     }
 
@@ -987,6 +1035,10 @@ async function applyCorsHeaders(
   const origin = request.headers.get("Origin")
   if (!origin) {
     return response
+  }
+
+  if (isAllowedHnsHttpReadOrigin(origin, hnsOriginAllowed)) {
+    return applyPlaintextHnsReadCorsHeaders(request, response, hnsOriginAllowed)
   }
 
   const allowedOrigin = configuredCorsOriginForEnv(
