@@ -13,6 +13,16 @@ type RouteContext = Awaited<ReturnType<typeof createRouteTestContext>>
 
 setDefaultTimeout(15_000)
 
+const DAY_MS = 86_400_000
+
+function recentCampaignWindow(): { campaignEndsAt: string; qualifiedAt: string } {
+  const qualifiedAtMs = Date.now() - DAY_MS
+  return {
+    campaignEndsAt: new Date(qualifiedAtMs + (2 * DAY_MS)).toISOString(),
+    qualifiedAt: new Date(qualifiedAtMs).toISOString(),
+  }
+}
+
 let cleanup: (() => Promise<void>) | null = null
 
 afterEach(async () => {
@@ -291,7 +301,7 @@ describe("reward qualification wake-up integration", () => {
     const lockCalls: string[] = []
     const namespace = permissiveLockNamespace(lockCalls)
     const communityId = "cmt_wakeup_race"
-    const qualifiedAt = "2026-08-10T12:00:00.000Z"
+    const { campaignEndsAt, qualifiedAt } = recentCampaignWindow()
     const ctx = await createRouteTestContext(rewardEnv({
       REWARD_QUALIFICATION_WAKEUP_COMMUNITY_IDS: communityId,
       SCHEDULED_CRON_LOCK: namespace,
@@ -300,11 +310,16 @@ describe("reward qualification wake-up integration", () => {
     const session = await exchangeJwt(ctx.env, "reward-wakeup-race-user")
     await verifyUser(ctx, session.userId, "wakeup_race", qualifiedAt)
     await seedCampaignCommunity({
-      campaignEndsAt: "2026-08-12T12:00:00.000Z",
+      campaignEndsAt,
       campaignStartsAt: qualifiedAt,
       communityId,
       ctx,
-      events: [{ activity: "study", eventId: "rqo_wakeup_race", periodKey: "2026-08-10", qualifiedAt }],
+      events: [{
+        activity: "study",
+        eventId: "rqo_wakeup_race",
+        periodKey: qualifiedAt.slice(0, 10),
+        qualifiedAt,
+      }],
       key: "wakeup_race",
       postId: "pst_wakeup_race",
       userId: session.userId,
@@ -355,7 +370,8 @@ describe("reward qualification wake-up integration", () => {
 
   test("a target deeper than one 100-row ingestion page retries then drains", async () => {
     const communityId = "cmt_wakeup_backlog"
-    const targetAt = Date.parse("2026-08-10T12:00:00.000Z")
+    const { campaignEndsAt, qualifiedAt } = recentCampaignWindow()
+    const targetAt = Date.parse(qualifiedAt)
     const events: OutboxFixture[] = Array.from({ length: 101 }, (_, index) => {
       const qualifiedAt = new Date(targetAt - ((100 - index) * 86_400_000)).toISOString()
       return {
@@ -374,7 +390,7 @@ describe("reward qualification wake-up integration", () => {
     const session = await exchangeJwt(ctx.env, "reward-wakeup-backlog-user")
     await verifyUser(ctx, session.userId, "wakeup_backlog", target.qualifiedAt)
     await seedCampaignCommunity({
-      campaignEndsAt: "2026-08-12T12:00:00.000Z",
+      campaignEndsAt,
       campaignStartsAt: target.qualifiedAt,
       communityId,
       ctx,
