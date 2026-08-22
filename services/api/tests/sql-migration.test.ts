@@ -399,6 +399,27 @@ describe("sql migration helpers", () => {
     `)).toHaveLength(6)
   })
 
+  test("splits Telegram dance binding columns from the PostgreSQL table constraint", () => {
+    const statements = toSqliteCompatibleStatements(`
+      ALTER TABLE dance_attempt_sessions
+        ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'api',
+        ADD COLUMN telegram_bot_user_id TEXT,
+        ADD COLUMN telegram_chat_id TEXT,
+        ADD COLUMN telegram_sender_id TEXT,
+        ADD COLUMN telegram_prompt_message_id BIGINT,
+        ADD COLUMN telegram_file_id TEXT,
+        ADD COLUMN telegram_file_unique_id TEXT,
+        ADD COLUMN telegram_delivery_mode TEXT,
+        ADD CONSTRAINT dance_attempt_session_telegram_binding_check CHECK (
+          source_channel = 'api' OR telegram_bot_user_id IS NOT NULL
+        );
+    `)
+
+    expect(statements).toHaveLength(8)
+    expect(statements).toContain("ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_bot_user_id TEXT;")
+    expect(statements.join("\n")).not.toContain("ADD CONSTRAINT")
+  })
+
   test("splits PostgreSQL multi-column projection state changes for sqlite", () => {
     expect(toSqliteCompatibleStatements(`
       ALTER TABLE efp_follow_projection_state

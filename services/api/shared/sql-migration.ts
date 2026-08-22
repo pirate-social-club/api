@@ -1046,6 +1046,26 @@ export function toSqliteCompatibleStatements(statement: string): string[] {
     ]
   }
 
+  // Migration 0238 adds Telegram binding columns and a PostgreSQL table CHECK
+  // in one ALTER TABLE. Preserve the columns in SQLite's local/test mirror;
+  // production PostgreSQL remains authoritative for the cross-column check.
+  if (
+    normalized.startsWith("ALTER TABLE DANCE_ATTEMPT_SESSIONS ")
+    && normalized.includes("ADD COLUMN TELEGRAM_BOT_USER_ID ")
+    && normalized.includes("ADD CONSTRAINT DANCE_ATTEMPT_SESSION_TELEGRAM_BINDING_CHECK")
+  ) {
+    return [
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN source_channel TEXT NOT NULL DEFAULT 'api' CHECK (source_channel IN ('api', 'telegram'));",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_bot_user_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_chat_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_sender_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_prompt_message_id INTEGER;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_file_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_file_unique_id TEXT;",
+      "ALTER TABLE dance_attempt_sessions ADD COLUMN telegram_delivery_mode TEXT CHECK (telegram_delivery_mode IS NULL OR telegram_delivery_mode IN ('video', 'document'));",
+    ]
+  }
+
   // The production backfill uses PostgreSQL's md5/decode/get_byte functions
   // to spread legacy sessions across cue kinds. SQLite has no equivalents;
   // retain deterministic assignment in the mirror using the session-id length.
