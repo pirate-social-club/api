@@ -367,12 +367,6 @@
     },
     "staging": {
       "name": "pirate-api-staging",
-      "r2_buckets": [
-        {
-          "binding": "TELEGRAM_STUDY_TTS_CACHE",
-          "bucket_name": "telegram-study-tts-cache-staging"
-        }
-      ],
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
@@ -662,12 +656,6 @@
     },
     "production": {
       "name": "api-core",
-      "r2_buckets": [
-        {
-          "binding": "TELEGRAM_STUDY_TTS_CACHE",
-          "bucket_name": "telegram-study-tts-cache"
-        }
-      ],
       "triggers": {
         "crons": ["*/1 * * * *"]
       },
