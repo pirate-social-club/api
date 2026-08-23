@@ -15,9 +15,10 @@
       "fallthrough": true
     }
   ],
-  "triggers": {
-    "crons": []
-  },
+  // Cron triggers are intentionally omitted. The Workers Free account is at
+  // its five-trigger limit, where Cloudflare rejects even no-op/reducing PUTs.
+  // Keep the existing api-core `*/1 * * * *` trigger live and unmanaged until
+  // account capacity is freed; staging currently has no scheduled trigger.
   "observability": {
     "enabled": true
   },
@@ -178,9 +179,6 @@
       // hits this worker; it's a deploy-and-verify surface for step 1-7 of
       // the D1-native workstream.
       "name": "pirate-api-d1-staging",
-      "triggers": {
-        "crons": ["*/1 * * * *"]
-      },
       "ratelimits": [
         {
           "name": "LINK_PREVIEW_RATE_LIMITER",
@@ -371,9 +369,6 @@
     },
     "staging": {
       "name": "pirate-api-staging",
-      "triggers": {
-        "crons": ["*/1 * * * *"]
-      },
       // Provisioned dormant: the enqueue/consumer flags and canary allowlist
       // remain absent until a separately reviewed staging rollout.
       "queues": {
@@ -660,9 +655,6 @@
     },
     "production": {
       "name": "api-core",
-      "triggers": {
-        "crons": ["*/1 * * * *"]
-      },
       // Provisioned dormant: the enqueue/consumer flags and canary allowlist
       // remain absent until a separately reviewed production rollout.
       "queues": {
