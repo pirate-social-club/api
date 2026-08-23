@@ -2117,6 +2117,10 @@ export function scheduledPriorityJobNames(
   canRunHnsRootObserver = false,
 ): ScheduledPriorityJobName[] {
   return [
+    // Root trust evidence has a short freshness budget and requires external
+    // verifier fetches. Start it before the shared cron invocation spends its
+    // external-subrequest allowance on the broader maintenance batch.
+    ...(canRunHnsRootObserver ? ["observe_hns_roots" as const] : []),
     "reconcile_reward_payouts",
     "reconcile_royalty_claims",
     "reverify_booking_payments",
@@ -2140,7 +2144,6 @@ export function scheduledPriorityJobNames(
     // cannot strand bindings and root evidence cannot repeatedly miss its
     // freshness budget behind slower maintenance work.
     ...(canRunD1Reconciler ? ["reconcile_d1_provisioning" as const] : []),
-    ...(canRunHnsRootObserver ? ["observe_hns_roots" as const] : []),
     ...(canRunHnsNamespaceRevalidation ? ["revalidate_hns_namespaces" as const] : []),
   ]
 }

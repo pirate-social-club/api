@@ -51,7 +51,7 @@ describe("scheduled priority ordering", () => {
   test("guarantees enabled root observation a start inside its freshness budget", () => {
     const names = scheduledPriorityJobNames(true, false, true)
     const observerIndex = names.indexOf("observe_hns_roots")
-    expect(observerIndex).toBeGreaterThanOrEqual(0)
+    expect(observerIndex).toBe(0)
     expect(observerIndex).toBeLessThan(scheduledMinimumPriorityStarts(true, true))
     expect(scheduledMinimumPriorityStarts(true, true)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS + 2)
     expect(scheduledMinimumPriorityStarts(false, true)).toBe(SCHEDULED_MINIMUM_PRIORITY_STARTS + 1)
@@ -119,6 +119,7 @@ describe("scheduled priority ordering", () => {
 
   test("schedules root observation before latency-tolerant monitoring and revalidation", () => {
     expect(scheduledPriorityJobNames(true, true, true)).toEqual([
+      "observe_hns_roots",
       "reconcile_reward_payouts",
       "reconcile_royalty_claims",
       "reverify_booking_payments",
@@ -134,7 +135,6 @@ describe("scheduled priority ordering", () => {
       "process_community_jobs",
       "process_community_publish_finalize",
       "reconcile_d1_provisioning",
-      "observe_hns_roots",
       "revalidate_hns_namespaces",
     ])
   })
