@@ -396,6 +396,11 @@ operators seed a fresh v2 revision. Migration 0216 is the cutover boundary for e
 it expires every nonterminal session, so it must run before any consented staff recording or pilot
 capture begins.
 
+There is no in-place v1-to-v2 reprocessing job in the current rollout. Operators must seed a fresh
+v2 revision (and verify its dispatch through the deployed scorer) before making a choreography
+selectable; adding a reviewed reprocessing path is a prerequisite for rehabilitating older
+processing or ready references.
+
 Only one nonterminal dance session may exist per Telegram account. `/cancel` expires it and releases
 the slot. Sessions also expire automatically. Telegram webhook redelivery, repeated button presses,
 repeated media updates, dispatch retry, and result delivery are idempotent.
