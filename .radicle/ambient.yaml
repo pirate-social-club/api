@@ -1,0 +1,30 @@
+plan:
+  - action: shell
+    shell: |
+      set -euo pipefail
+      grep -q 'shell-only' /ci/src/.radicle/ambient.yaml
+
+      # This is intentionally a source/repository gate. The API service has
+      # file: dependencies on sibling packages and a large Bun toolchain;
+      # hosted CI owns typechecking, tests, builds, and integration checks.
+      test -f /ci/src/package.json
+      grep -q '"name": "@pirate/api-repo"' /ci/src/package.json
+      test ! -e /ci/src/node_modules
+
+      for package in services/api services/shared services/contracts; do
+        test -f "/ci/src/$package/package.json"
+        test -f "/ci/src/$package/bun.lock"
+        test -d "/ci/src/$package/src"
+        test ! -e "/ci/src/$package/node_modules"
+      done
+
+      grep -q '"name": "@pirate/api-service"' /ci/src/services/api/package.json
+      grep -q '"name": "@pirate/api-shared"' /ci/src/services/shared/package.json
+      grep -q '"name": "@pirate/api-contracts"' /ci/src/services/contracts/package.json
+      grep -q '"type": "module"' /ci/src/services/api/package.json
+      grep -q '"private": true' /ci/src/services/api/package.json
+
+      find /ci/src/services/api/src -type f -name '*.ts' -print -quit | grep -q .
+      find /ci/src/services/shared/src -type f -name '*.ts' -print -quit | grep -q .
+      find /ci/src/services/contracts/src -type f -name '*.ts' -print -quit | grep -q .
+      echo 'shell-only API gate passed'
